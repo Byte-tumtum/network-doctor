@@ -548,7 +548,7 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "y":
 		notice, ok := "output copied to clipboard", true
-		if err := copyReport(m.jobOutput()); err != nil {
+		if err := copyReport(strings.Join(m.cur.lines, "\n")); err != nil {
 			notice, ok = "copy failed: "+err.Error(), false
 		}
 		return m, m.setNotice(notice, ok)
@@ -855,11 +855,7 @@ func (m model) jobContent() string {
 	if len(m.cur.lines) == 0 {
 		return lipgloss.NewStyle().Width(w).Render(faintStyle.Render("(no output yet)"))
 	}
-	return lipgloss.NewStyle().Width(w).Render(m.jobOutput())
-}
-
-func (m model) jobOutput() string {
-	return strings.Join(m.cur.lines, "\n")
+	return lipgloss.NewStyle().Width(w).Render(strings.Join(m.cur.lines, "\n"))
 }
 
 // refreshViewport resizes and re-renders the open viewport, sticking to the
@@ -1018,7 +1014,7 @@ func (m model) bodyView(deferred bool) string {
 		probe := m.probes[m.selected]
 		right.WriteString(panelTitleStyle.Render("Details — "+probe.Name) + "\n")
 		if r, ok := m.results[probe.ID]; ok {
-			right.WriteString(styled(r.Status) + " — " + r.Detail + "\n")
+			right.WriteString(statusStyles[r.Status].Render(r.Status.String()) + " — " + r.Detail + "\n")
 			if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 				right.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
 			}
@@ -1395,15 +1391,11 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 	return ""
 }
 
-func styled(s fmt.Stringer) string {
-	return statusStyles[s].Render(s.String())
-}
-
 // jobStatusLine is the "name — status" line shared by the job pane and the
 // output viewer: a live spinner + timer while running, the total duration
 // once the job has finished.
 func (m model) jobStatusLine() string {
-	s := faintStyle.Render(m.cur.name+" — ") + styled(m.cur.status)
+	s := faintStyle.Render(m.cur.name+" — ") + statusStyles[m.cur.status].Render(m.cur.status.String())
 	if len(m.otherJobs) > 0 {
 		s += faintStyle.Render(fmt.Sprintf(" · %d jobs · tab to switch", len(m.otherJobs)+1))
 	}
