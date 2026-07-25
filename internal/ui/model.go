@@ -124,6 +124,8 @@ type model struct {
 	// showing the exact command until 'y' runs it or any other key cancels.
 	confirmTool *Tool
 
+	helping bool // ?: full-screen key cheatsheet; any key closes it
+
 	toolbox bool // --toolbox: chain deferred until 'r'
 
 	// notice is one-line feedback from export or the Ctrl+C quit hint.
@@ -232,6 +234,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.helping {
+			m.helping = false
+			return m, nil
+		}
 		// Ctrl+C while the confirm gate is up cancels the gate, not the app.
 		if msg.Type == tea.KeyCtrlC && m.confirmTool != nil {
 			return m.handleConfirmKey(msg)
@@ -512,6 +518,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		notice, ok := exportReport(m.report(), msg.String() == "w")
 		return m, m.setNotice(notice, ok)
+	case "?":
+		m.helping = true
+		return m, nil
 	}
 	// Tool hotkeys (contextual toolbox).
 	for _, tool := range m.tools {
@@ -924,6 +933,9 @@ func (m model) networkLine() string {
 }
 
 func (m model) View() string {
+	if m.helping {
+		return m.helpOverlay()
+	}
 	if m.viewing {
 		return m.outputView()
 	}
@@ -1265,7 +1277,7 @@ func (m model) helpView(deferred bool) string {
 			if len(m.otherJobs) > 0 {
 				kv = append(kv, "tab", "switch job")
 			}
-			return helpKeys(m.width, append(kv, "r", "run the checks", "q", "quit")...)
+			return helpKeys(m.width, append(kv, "r", "run the checks", "?", "help", "q", "quit")...)
 		}
 		kv := []string{"r", "run the checks", "v", "network map"}
 		if len(m.tools) > 0 {
@@ -1277,7 +1289,7 @@ func (m model) helpView(deferred bool) string {
 		if len(m.otherJobs) > 0 {
 			kv = append(kv, "tab", "switch job")
 		}
-		return helpKeys(m.width, append(kv, "q", "quit")...)
+		return helpKeys(m.width, append(kv, "?", "help", "q", "quit")...)
 	}
 	kv := []string{"↑/↓", "scroll", "v", "network map"}
 	if m.networkMap {
@@ -1295,12 +1307,46 @@ func (m model) helpView(deferred bool) string {
 	if m.reportReady() {
 		kv = append(kv, "y", "copy report", "w", "save report")
 	}
-	kv = append(kv, "r", "restart", "q", "quit")
+	kv = append(kv, "r", "restart", "?", "help", "q", "quit")
 	help := helpKeys(m.width, kv...)
 	if notice := m.noticeView(); notice != "" {
 		help = notice + "\n" + help
 	}
 	return help
+}
+
+// helpOverlay is the full-screen key cheatsheet (?). It lists every binding
+// unconditionally — simpler than mirroring the help bar's context rules, and
+// a key that currently does nothing is still worth knowing about.
+func (m model) helpOverlay() string {
+	row := func(k, desc string) string {
+		// fmt widths count runes, so ↑/↓ pads the same as ASCII keys.
+		return "  " + keyStyle.Render(fmt.Sprintf("%-10s", k)) + faintStyle.Render(desc) + "\n"
+	}
+	var b strings.Builder
+	b.WriteString(panelTitleStyle.Render("Keys") + "\n")
+	b.WriteString(row("↑/↓ j/k", "select check — or device on the network map"))
+	b.WriteString(row("enter", "full output — or set target on the network map"))
+	b.WriteString(row("tab", "switch job"))
+	b.WriteString(row("v", "toggle network map"))
+	b.WriteString(row("r", "restart with a new target"))
+	b.WriteString(row("y", "copy report"))
+	b.WriteString(row("w", "save report"))
+	for _, tool := range m.tools {
+		b.WriteString(row(tool.Key, "run "+tool.Name))
+	}
+	b.WriteString(row("q", "quit"))
+	b.WriteString("\n" + panelTitleStyle.Render("Output viewer") + "\n")
+	b.WriteString(row("↑/↓", "scroll"))
+	b.WriteString(row("pgup/pgdn", "page"))
+	b.WriteString(row("home/end", "jump to top / bottom"))
+	b.WriteString(row("y", "copy full output"))
+	b.WriteString(row("esc/q", "back"))
+	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
+	if m.height > 0 {
+		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
+	}
+	return out
 }
 
 func (m model) noticeView() string {

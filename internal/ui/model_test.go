@@ -48,6 +48,19 @@ func TestFixShortcutRemoved(t *testing.T) {
 	}
 }
 
+func TestHelpOverlay(t *testing.T) {
+	m := newModel(nil, false)
+	u, _ := m.Update(keyMsg("?"))
+	hm := asModel(t, u)
+	if !hm.helping || !strings.Contains(hm.View(), "Output viewer") {
+		t.Fatal("? must show the key cheatsheet")
+	}
+	u, _ = hm.Update(keyMsg("x"))
+	if asModel(t, u).helping {
+		t.Error("any key must close the cheatsheet")
+	}
+}
+
 func TestNetworkMapToggle(t *testing.T) {
 	oldLookPath := toolLookPath
 	toolLookPath = func(string) (string, error) { return "nmap", nil }
