@@ -520,6 +520,32 @@ func TestTabSwitchNotice(t *testing.T) {
 	}
 }
 
+func TestEscCancelsFocusedJob(t *testing.T) {
+	m := newModel(nil, false)
+	canceled := false
+	m.cur.active = &job{cancel: func() { canceled = true }}
+	otherCanceled := false
+	m.otherJobs = []jobState{{name: "other", active: &job{cancel: func() { otherCanceled = true }}}}
+
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	nm := asModel(t, u)
+	if !canceled {
+		t.Error("esc must cancel the focused job")
+	}
+	if otherCanceled {
+		t.Error("esc must not cancel background jobs")
+	}
+	if !strings.Contains(nm.View(), "canceling") {
+		t.Error("esc must show a canceling notice")
+	}
+
+	// No job running: esc is a no-op, not a crash.
+	nm.cur.active = nil
+	if _, cmd := nm.Update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
+		t.Error("esc with no active job must do nothing")
+	}
+}
+
 func TestCtrlCWarnsThenQuits(t *testing.T) {
 	m := newModel(nil, false)
 	canceled := false

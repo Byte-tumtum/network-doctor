@@ -458,6 +458,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		t := tool
 		m.confirmTool = &t
 		return m, nil
+	case "esc":
+		// Cancel only the focused job (tab picks which); q remains the
+		// nuke-everything path. The terminal event arrives as JobCanceled.
+		if m.cur.active != nil && m.cur.active.cancel != nil {
+			m.cur.active.cancel()
+			return m, m.setNotice("canceling "+m.cur.name, true)
+		}
+		return m, nil
 	case "tab":
 		return m, m.switchJob()
 	case "up", "k":
@@ -1381,6 +1389,9 @@ func (m model) helpView(deferred bool) string {
 	if hasJob && (!m.networkMap || len(m.networkHosts()) == 0) {
 		kv = append(kv, "enter", "full output")
 	}
+	if m.cur.active != nil {
+		kv = append(kv, "esc", "cancel job")
+	}
 	if len(m.otherJobs) > 0 {
 		kv = append(kv, "tab", "switch job")
 	}
@@ -1408,6 +1419,7 @@ func (m model) helpOverlay() string {
 	b.WriteString(row("↑/↓ j/k", "select check — or device on the network map"))
 	b.WriteString(row("enter", "full output — or set target on the network map"))
 	b.WriteString(row("tab", "switch job"))
+	b.WriteString(row("esc", "cancel the focused job"))
 	b.WriteString(row("v", "toggle network map"))
 	b.WriteString(row("r", "restart with a new target"))
 	b.WriteString(row("y", "copy report"))
