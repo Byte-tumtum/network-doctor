@@ -113,6 +113,53 @@ func TestNetworkMapToggle(t *testing.T) {
 	}
 }
 
+func TestNetworkMapPrefersResolvedNames(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:22"), false)
+	m.networkMap = true
+	m.networkCIDR = "192.168.12.0/24"
+	m.cur.name, m.cur.status = lanDiscoveryName, JobDone
+	m.cur.lines = []string{
+		"Host: 192.168.12.1 (isp-cpe-4471.example)\tStatus: Up",
+		"Host: 192.168.12.50 ()\tStatus: Up",
+		"Host: 192.168.12.60 (asleep.lan)\tStatus: Down",
+	}
+
+	if got := discoveredIPs(m.cur.lines); len(got) != 2 || got[0] != "192.168.12.1" || got[1] != "192.168.12.50" {
+		t.Fatalf("discoveredIPs = %v, want the two Up addresses", got)
+	}
+
+	u, _ := m.Update(lanNamesMsg{gen: 0, names: map[string]string{"192.168.12.1": "pihole"}})
+	m = asModel(t, u)
+	if hosts := m.networkHosts(); len(hosts) != 2 || hosts[0] != "192.168.12.1 (pihole)" || hosts[1] != "192.168.12.50" {
+		t.Fatalf("networkHosts = %v, want the resolved name to beat nmap's", hosts)
+	}
+
+	u, _ = m.Update(lanNamesMsg{gen: 1, names: map[string]string{"192.168.12.50": "stale"}})
+	m = asModel(t, u)
+	if hosts := m.networkHosts(); hosts[1] != "192.168.12.50" {
+		t.Fatalf("stale-generation names must be ignored: %v", hosts)
+	}
+}
+
+func TestNetworkMapDomainIgnoresBareAliases(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:22"), false)
+	m.width = 100
+	m.networkMap = true
+	m.networkCIDR = "192.168.1.0/24"
+	m.cur.name, m.cur.status = lanDiscoveryName, JobDone
+	m.cur.lines = []string{
+		"Host: 192.168.1.1 ()\tStatus: Up",
+		"Host: 192.168.1.7 (unknownaabbcc.attlocal.net)\tStatus: Up",
+		"Host: 192.168.1.8 (unknownddeeff.attlocal.net)\tStatus: Up",
+	}
+	m.hostNames = map[string]string{"192.168.1.1": "pihole"}
+
+	view := m.View()
+	if !strings.Contains(view, "Domain: attlocal.net") || !strings.Contains(view, "192.168.1.7 (unknownaabbcc)") || !strings.Contains(view, "192.168.1.1 (pihole)") || strings.Contains(view, "attlocal.net)") {
+		t.Fatalf("bare aliases must not veto domain stripping:\n%s", view)
+	}
+}
+
 func TestNetworkMapSelectsNewTarget(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:22"), false)
 	m.networkMap = true

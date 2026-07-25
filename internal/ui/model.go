@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"runtime"
 	"strconv"
@@ -31,6 +32,13 @@ type probeDoneMsg struct {
 	id  diagnostic.ProbeID
 	gen int
 	res diagnostic.ProbeResult
+}
+
+// lanNamesMsg carries OS-resolver hostnames for LAN-scan IPs. They override
+// nmap's own reverse-DNS guesses in the network map (see networkHosts).
+type lanNamesMsg struct {
+	gen   int
+	names map[string]string
 }
 
 // pendingAction is a state change deferred until the active job's terminal event
@@ -83,7 +91,10 @@ type model struct {
 	networkMap  bool
 	mapSelected int
 	networkCIDR string
-	spinner     spinner.Model
+	// hostNames maps discovered IPs to OS-resolved names; entries beat the
+	// names nmap printed.
+	hostNames map[string]string
+	spinner   spinner.Model
 
 	generation int
 	// Generation context; cancel kills all in-flight probes and the active job on
@@ -339,29 +350,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Generation != m.generation {
 			return m, nil
 		}
-		found := false
+		var done *jobState
 		if m.cur.active != nil && msg.JobID == m.cur.active.id {
 			m.cur.status, m.cur.dropped, m.cur.active = msg.Status, msg.Dropped, nil
 			m.cur.dur = time.Since(m.cur.start)
-			found = true
+			done = &m.cur
 		} else {
 			for i := range m.otherJobs {
 				j := &m.otherJobs[i]
 				if j.active != nil && msg.JobID == j.active.id {
 					j.status, j.dropped, j.active = msg.Status, msg.Dropped, nil
 					j.dur = time.Since(j.start)
-					found = true
+					done = j
 					break
 				}
 			}
 		}
-		if !found {
+		if done == nil {
 			return m, nil
 		}
 		if m.pending != nil && !m.jobsRunning() {
 			p := m.pending
 			m.pending = nil
 			return m.runPending(p)
+		}
+		if done.name == lanDiscoveryName && msg.Status == JobDone {
+			if ips := discoveredIPs(done.lines); len(ips) > 0 {
+				ctx, gen := m.ctx, m.generation
+				return m, func() tea.Msg {
+					names := diagnostic.ResolveNames(ctx, ips)
+					// The user's own ssh aliases outrank whatever DNS thinks.
+					maps.Copy(names, diagnostic.SSHHostAliases())
+					return lanNamesMsg{gen: gen, names: names}
+				}
+			}
+		}
+		return m, nil
+
+	case lanNamesMsg:
+		if msg.gen != m.generation {
+			return m, nil
+		}
+		if m.hostNames == nil {
+			m.hostNames = msg.names
+		} else {
+			maps.Copy(m.hostNames, msg.names)
 		}
 		return m, nil
 
@@ -1039,28 +1072,55 @@ func (m model) networkHosts() []string {
 			continue
 		}
 		host = strings.TrimSuffix(host, " ()")
+		// An OS-resolved name beats whatever nmap's raw PTR race printed.
+		if ip, _, _ := strings.Cut(host, " "); m.hostNames[ip] != "" {
+			host = ip + " (" + m.hostNames[ip] + ")"
+		}
 		hosts = append(hosts, host)
 	}
 	return hosts
+}
+
+// discoveredIPs pulls the addresses of Up hosts out of nmap -oG output lines.
+func discoveredIPs(lines []string) []string {
+	var ips []string
+	for _, line := range lines {
+		host, ok := strings.CutPrefix(line, "Host: ")
+		if !ok {
+			continue
+		}
+		host, status, ok := strings.Cut(host, "Status: ")
+		if !ok || strings.TrimSpace(status) != "Up" {
+			continue
+		}
+		ip, _, _ := strings.Cut(strings.TrimSpace(host), " ")
+		if net.ParseIP(ip) == nil {
+			continue
+		}
+		ips = append(ips, ip)
+	}
+	return ips
 }
 
 // networkMapView renders hosts found by the LAN scan.
 func (m model) networkMapView() string {
 	source, _ := m.discoveryNetwork()
 	hosts := m.networkHosts()
+	// Only names that carry a domain vote here: a bare ssh alias like
+	// "pihole" shouldn't veto stripping ".attlocal.net" off its neighbors.
 	domains := map[string]int{}
-	namedHosts := 0
+	domainedHosts := 0
 	for _, host := range hosts {
 		if _, name, ok := strings.Cut(host, " ("); ok {
-			namedHosts++
 			if _, domain, ok := strings.Cut(strings.TrimSuffix(name, ")"), "."); ok {
+				domainedHosts++
 				domains[strings.ToLower(domain)]++
 			}
 		}
 	}
 	commonDomain := ""
 	for domain, count := range domains {
-		if namedHosts > 1 && count == namedHosts {
+		if count == domainedHosts {
 			commonDomain = domain
 		}
 	}
