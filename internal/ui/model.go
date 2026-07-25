@@ -1233,20 +1233,25 @@ func (m model) bodyView(deferred bool) string {
 		panelStyle.Width(rightW).Height(h).Render(rightStr))
 }
 
+// upHostLine pulls the host field out of an nmap -oG "Host: … Status: Up" line.
+func upHostLine(line string) (string, bool) {
+	host, ok := strings.CutPrefix(line, "Host: ")
+	if !ok {
+		return "", false
+	}
+	host, status, ok := strings.Cut(host, "Status: ")
+	if !ok || strings.TrimSpace(status) != "Up" {
+		return "", false
+	}
+	return strings.TrimSpace(host), true
+}
+
 func (m model) networkHosts() []string {
 	source, _ := m.discoveryNetwork()
 	var hosts []string
 	for _, line := range m.cur.lines {
-		host, ok := strings.CutPrefix(line, "Host: ")
-		if !ok {
-			continue
-		}
-		host, status, ok := strings.Cut(host, "Status: ")
-		if !ok {
-			continue
-		}
-		host = strings.TrimSpace(host)
-		if strings.TrimSpace(status) != "Up" || source != nil && strings.HasPrefix(host, source.String()+" ") {
+		host, ok := upHostLine(line)
+		if !ok || source != nil && strings.HasPrefix(host, source.String()+" ") {
 			continue
 		}
 		host = strings.TrimSuffix(host, " ()")
@@ -1263,15 +1268,11 @@ func (m model) networkHosts() []string {
 func discoveredIPs(lines []string) []string {
 	var ips []string
 	for _, line := range lines {
-		host, ok := strings.CutPrefix(line, "Host: ")
+		host, ok := upHostLine(line)
 		if !ok {
 			continue
 		}
-		host, status, ok := strings.Cut(host, "Status: ")
-		if !ok || strings.TrimSpace(status) != "Up" {
-			continue
-		}
-		ip, _, _ := strings.Cut(strings.TrimSpace(host), " ")
+		ip, _, _ := strings.Cut(host, " ")
 		if net.ParseIP(ip) == nil {
 			continue
 		}
