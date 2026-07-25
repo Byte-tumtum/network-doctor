@@ -634,6 +634,22 @@ func TestSelectionClamp(t *testing.T) {
 	}
 }
 
+// Completion jumps to the first failure only if the user never moved the cursor.
+func TestCompletionKeepsMovedSelection(t *testing.T) {
+	m := newModel(nil, false)
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = asModel(t, u)
+	for _, p := range m.probes {
+		m.started[p.ID] = true
+		m.results[p.ID] = diagnostic.ProbeResult{Status: diagnostic.StatusFail}
+	}
+	last := m.probes[len(m.probes)-1]
+	u, _ = m.Update(probeDoneMsg{id: last.ID, gen: 0, res: diagnostic.ProbeResult{Status: diagnostic.StatusFail}})
+	if got := asModel(t, u).selected; got != 1 {
+		t.Errorf("selected = %d, want 1 (user cursor kept)", got)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	m := newModel(nil, false)
 	if ExitCode(m) != 1 {

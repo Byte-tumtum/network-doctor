@@ -87,7 +87,10 @@ type model struct {
 	results map[diagnostic.ProbeID]diagnostic.ProbeResult
 	started map[diagnostic.ProbeID]bool
 
-	selected    int
+	selected int
+	// selMoved: the user touched the cursor this run, so completion must not
+	// yank it to the first failure.
+	selMoved    bool
 	networkMap  bool
 	mapSelected int
 	networkCIDR string
@@ -315,10 +318,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := m.scheduleStep()
 		if m.allDone() {
 			diagnostic.DowngradeEgress(m.results)
-			for i, p := range m.probes {
-				if m.results[p.ID].Status == diagnostic.StatusFail {
-					m.selected = i
-					break
+			if !m.selMoved && !m.viewing {
+				for i, p := range m.probes {
+					if m.results[p.ID].Status == diagnostic.StatusFail {
+						m.selected = i
+						break
+					}
 				}
 			}
 		}
@@ -478,6 +483,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected > 0 {
 			m.selected--
 		}
+		m.selMoved = true
 		return m, nil
 	case "down", "j":
 		if m.networkMap {
@@ -489,6 +495,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selected < len(m.probes)-1 {
 			m.selected++
 		}
+		m.selMoved = true
 		return m, nil
 	case "enter":
 		if hosts := m.networkHosts(); m.networkMap && len(hosts) > 0 {
@@ -718,6 +725,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.ctx = nil
 	m.tools = toolsFor(m.target, runtime.GOOS)
 	m.generation++
+	m.selMoved = false
 	m.results = map[diagnostic.ProbeID]diagnostic.ProbeResult{}
 	m.started = map[diagnostic.ProbeID]bool{}
 	m.pending, m.confirmTool = nil, nil
