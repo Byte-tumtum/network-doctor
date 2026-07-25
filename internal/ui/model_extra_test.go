@@ -588,6 +588,28 @@ func TestViewportEvictionKeepsPausedReader(t *testing.T) {
 	}
 }
 
+func TestViewportEvictionIgnoresFilteredOutLine(t *testing.T) {
+	m := newModel(nil, false)
+	m.width, m.height = 20, 10
+	m.generation = 1
+	m.cur.active = &job{id: "j", ch: make(chan tea.Msg, 1)}
+	m.cur.lines = make([]string, maxJobLines)
+	m.cur.lines[0] = "noise" // hidden by the filter
+	for i := 1; i < maxJobLines; i++ {
+		m.cur.lines[i] = fmt.Sprintf("line %d", i)
+	}
+	m.viewing, m.follow = true, false
+	m.filter = "line"
+	m.refreshViewport()
+	m.vp.SetYOffset(10)
+
+	u, _ := m.Update(ToolOutputMsg{JobID: "j", Generation: 1, Line: "line new"})
+	nm := asModel(t, u)
+	if nm.vp.YOffset != 10 {
+		t.Fatalf("offset = %d, want 10 — filtered view lost nothing at the top", nm.vp.YOffset)
+	}
+}
+
 func TestEscClearsCommittedFilterBeforeClosing(t *testing.T) {
 	m := newModel(nil, false)
 	m.width, m.height = 40, 10

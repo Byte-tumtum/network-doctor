@@ -989,7 +989,9 @@ func (m *model) appendJobLine(text string) {
 		evictedLine = m.cur.lines[0]
 	}
 	appendJobLine(&m.cur.lines, &m.cur.evicted, text)
-	if len(m.cur.lines) == oldLen && m.viewing && !m.follow {
+	// Only correct the offset when the evicted line was actually visible: under
+	// a filter that hides it, the filtered view lost nothing at the top.
+	if len(m.cur.lines) == oldLen && m.viewing && !m.follow && matchesFilter(evictedLine, m.filter) {
 		h := lipgloss.Height(lipgloss.NewStyle().Width(m.width).Render(evictedLine))
 		m.vp.SetYOffset(m.vp.YOffset - h)
 	}
@@ -1016,14 +1018,19 @@ func filterLines(lines []string, f string) []string {
 	if f == "" {
 		return lines
 	}
-	f = strings.ToLower(f)
 	var out []string
 	for _, ln := range lines {
-		if strings.Contains(strings.ToLower(ln), f) {
+		if matchesFilter(ln, f) {
 			out = append(out, ln)
 		}
 	}
 	return out
+}
+
+// matchesFilter reports whether ln survives the viewer filter; an empty filter
+// matches everything.
+func matchesFilter(ln, f string) bool {
+	return f == "" || strings.Contains(strings.ToLower(ln), strings.ToLower(f))
 }
 
 // jobContent renders the interleaved stream wrapped to the viewport width.
