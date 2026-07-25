@@ -507,7 +507,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.restartWithTarget(t)
 		}
 		if m.cur.active == nil && m.cur.status == JobQueued {
-			return m, nil // no job has run; nothing to view
+			return m, m.setNotice("nothing to view yet", false)
 		}
 		m.viewing, m.follow = true, true
 		m.vp = viewport.New(m.width, m.vpHeight())
@@ -522,7 +522,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "y", "w":
 		if !m.reportReady() {
-			return m, nil
+			return m, m.setNotice("report not ready until checks finish", false)
 		}
 		notice, ok := exportReport(m.report(), msg.String() == "w")
 		return m, m.setNotice(notice, ok)
