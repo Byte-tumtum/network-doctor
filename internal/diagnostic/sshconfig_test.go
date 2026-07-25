@@ -28,6 +28,10 @@ Host stray
 
 Host v6box
   HostName fd00::7
+
+Host myserver
+  HostName myserver.example.com
+  HostName 10.0.0.5
 `
 	got := parseSSHAliases(strings.NewReader(config))
 	want := map[string]string{

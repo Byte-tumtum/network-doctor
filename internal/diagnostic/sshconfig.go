@@ -46,17 +46,19 @@ func parseSSHAliases(r io.Reader) map[string]string {
 		case "host":
 			aliases = fields[1:]
 		case "hostname":
+			// ssh honors only the first HostName per block; so do we,
+			// even when it isn't an IP literal.
+			blockAliases := aliases
+			aliases = nil
 			if net.ParseIP(fields[1]) == nil {
 				continue
 			}
-			for _, a := range aliases {
+			for _, a := range blockAliases {
 				if sshAliasRe.MatchString(a) {
 					names[fields[1]] = a
 					break
 				}
 			}
-			// ssh honors only the first HostName per block; so do we.
-			aliases = nil
 		}
 	}
 	return names
