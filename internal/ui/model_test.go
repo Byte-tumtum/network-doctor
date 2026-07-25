@@ -126,6 +126,38 @@ func TestNetworkMapToggle(t *testing.T) {
 	}
 }
 
+func TestNetworkMapRecalledFromOtherJobs(t *testing.T) {
+	oldLookPath := toolLookPath
+	toolLookPath = func(string) (string, error) { return "nmap", nil }
+	t.Cleanup(func() { toolLookPath = oldLookPath })
+
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	doneResults(&m, "")
+	r := m.results[diagnostic.ProbeInternet]
+	r.Source = net.ParseIP("192.168.12.34")
+	m.results[diagnostic.ProbeInternet] = r
+	m.cur = jobState{name: lanDiscoveryName, status: JobDone, lines: []string{
+		"Host: 192.168.12.1 (router.lan.example)\tStatus: Up",
+	}}
+	m.otherJobs = []jobState{{name: "ping", status: JobDone}}
+	m.networkCIDR = "192.168.12.0/24"
+
+	// Tab parks the finished scan; v must fetch it back, not re-gate a sweep.
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	nm := asModel(t, u)
+	if nm.cur.name != "ping" {
+		t.Fatalf("tab must switch to ping, got %q", nm.cur.name)
+	}
+	u, _ = nm.Update(keyMsg("v"))
+	nm = asModel(t, u)
+	if nm.confirmTool != nil || !nm.networkMap || nm.cur.name != lanDiscoveryName {
+		t.Fatalf("v must re-show the parked scan, got cur=%q confirm=%v", nm.cur.name, nm.confirmTool != nil)
+	}
+	if len(nm.otherJobs) != 1 || nm.otherJobs[0].name != "ping" {
+		t.Fatalf("ping must stay reachable in otherJobs, got %v", nm.otherJobs)
+	}
+}
+
 func TestNetworkMapPrefersResolvedNames(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:22"), false)
 	m.networkMap = true

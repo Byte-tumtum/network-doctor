@@ -450,6 +450,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.networkMap = true
 			return m, nil
 		}
+		// A scan parked in otherJobs still has a map; re-show it instead of
+		// gating a fresh sweep.
+		for i := range m.otherJobs {
+			if m.otherJobs[i].name != lanDiscoveryName {
+				continue
+			}
+			lan := m.otherJobs[i]
+			if m.cur.active != nil || m.cur.status != JobQueued {
+				m.otherJobs[i] = m.cur
+			} else {
+				m.otherJobs = append(m.otherJobs[:i], m.otherJobs[i+1:]...)
+			}
+			m.cur = lan
+			m.networkMap = true
+			return m, nil
+		}
 		_, cidr := m.discoveryNetwork()
 		if cidr == "" {
 			return m, m.setNotice("local private IPv4 network not available yet", false)
