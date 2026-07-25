@@ -1,5 +1,5 @@
-// Update-loop odds and ends: the output ring buffer, tool builders, actions
-// deferred behind a live job, stale-message drops, and view rendering.
+// Update-loop odds and ends: the output ring buffer, actions deferred behind
+// a live job, stale-message drops, and view rendering.
 
 package ui
 
@@ -39,31 +39,6 @@ func TestAppendJobLine(t *testing.T) {
 	}
 	if len(m.cur.lines) != maxJobLines || m.cur.evicted != 51 {
 		t.Errorf("len=%d evicted=%d, want %d and 51", len(m.cur.lines), m.cur.evicted, maxJobLines)
-	}
-}
-
-func TestToolBuildCurlScheme(t *testing.T) {
-	cases := []struct {
-		target string
-		want   string
-	}{
-		{"http://example.com", "http"},
-		{"https://example.com", "https"},
-		{"example.com:9999", "https"}, // ProtoNone defaults to https (ssh/smtp targets get their own tool)
-	}
-	for _, c := range cases {
-		target := mustTarget(t, c.target)
-		var curl Tool
-		for _, tool := range toolsFor(target, "linux") {
-			if tool.Key == "c" {
-				curl = tool
-				break
-			}
-		}
-		args, _, _ := curl.Build(target)
-		if got := args[len(args)-1]; !strings.HasPrefix(got, c.want+"://") {
-			t.Errorf("curl URL for %q = %q, want %q scheme", c.target, got, c.want)
-		}
 	}
 }
 
@@ -161,56 +136,6 @@ func TestClassifyJob(t *testing.T) {
 	if got := classifyJob(context.Background(), errors.New("boom")); got != JobFailed {
 		t.Errorf("plain err = %v, want JobFailed", got)
 	}
-}
-
-// ---- tool construction ----
-
-// toolsFor builds the curl argv with the right URL (scheme + explicit port) and
-// sets LC_ALL=C via env, never as an argv token.
-func TestToolBuildCurl(t *testing.T) {
-	tg := mustTarget(t, "https://example.com:8443")
-	var curl Tool
-	for _, tl := range toolsFor(tg, "linux") {
-		if tl.Key == "c" {
-			curl = tl
-		}
-	}
-	if curl.Key == "" {
-		t.Fatal("curl tool not offered for an https target")
-	}
-	args, env, display := curl.Build(tg)
-	if !strings.Contains(display, "https://example.com:8443") {
-		t.Errorf("display = %q, want the explicit-port https URL", display)
-	}
-	if args[len(args)-1] != "https://example.com:8443" {
-		t.Errorf("last arg = %q, want the URL", args[len(args)-1])
-	}
-	if !containsEnv(env, "LC_ALL=C") {
-		t.Error("curl must set LC_ALL=C in env, not argv")
-	}
-}
-
-func TestToolBuildPingHost(t *testing.T) {
-	tg := mustTarget(t, "example.com")
-	var ping Tool
-	for _, tl := range toolsFor(tg, "linux") {
-		if tl.Key == "p" {
-			ping = tl
-		}
-	}
-	args, _, _ := ping.Build(tg)
-	if args[len(args)-1] != "example.com" {
-		t.Errorf("ping last arg = %q, want host", args[len(args)-1])
-	}
-}
-
-func containsEnv(env []string, kv string) bool {
-	for _, e := range env {
-		if e == kv {
-			return true
-		}
-	}
-	return false
 }
 
 // ---- message routing & deferred actions ----

@@ -191,11 +191,16 @@ func TestToolsForProtocol(t *testing.T) {
 	}
 }
 
-func TestToolsBracketIPv6(t *testing.T) {
+// The c-slot's target argument: scheme carried from the parsed proto, explicit
+// ports kept, IPv6 literals bracketed.
+func TestToolsCTargetArg(t *testing.T) {
 	tests := []struct {
 		target string
 		want   string
 	}{
+		{"http://example.com", "http://example.com"},
+		{"https://example.com:8443", "https://example.com:8443"},
+		{"example.com:9999", "https://example.com:9999"}, // ProtoNone defaults to https
 		{"2001:db8::1", "https://[2001:db8::1]"},
 		{"[2001:db8::1]:443", "https://[2001:db8::1]:443"},
 		{"[2001:db8::1]:587", "[2001:db8::1]:587"},
