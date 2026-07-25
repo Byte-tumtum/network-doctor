@@ -75,7 +75,7 @@ const (
 	jobTailLines = 14   // main-screen tail fallback when the terminal height is unknown
 	ctrlCWindow  = 2 * time.Second
 	noticeWindow = 4 * time.Second
-	ctrlCNotice  = "Press Ctrl+C again (or q) to quit"
+	ctrlCNotice  = "Press Ctrl+C again to quit"
 )
 
 type model struct {
