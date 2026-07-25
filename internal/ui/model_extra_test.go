@@ -156,9 +156,10 @@ func TestDeferredQuit(t *testing.T) {
 	if !canceled {
 		t.Error("the active job must be canceled")
 	}
-	if cmd != nil {
-		t.Error("deferred quit must not quit immediately")
+	if nm.notice == "" {
+		t.Error("deferred quit must show feedback")
 	}
+	_ = cmd // notice-expiry tick, not a quit; the quit only runs on the terminal event below
 
 	u2, cmd2 := nm.Update(ToolDoneMsg{JobID: "j", Generation: 3, Status: JobCanceled})
 	nm2 := asModel(t, u2)

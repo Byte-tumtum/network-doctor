@@ -417,7 +417,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.jobsRunning() {
 			m.cancelJobs() // non-blocking; quit after every terminal event
 			m.pending = &pendingAction{kind: pendQuit}
-			return m, nil
+			return m, m.setNotice("stopping jobs, then quitting", true)
 		}
 		m.clearCancel()
 		return m, tea.Quit
