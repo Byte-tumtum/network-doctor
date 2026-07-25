@@ -113,6 +113,10 @@ type model struct {
 	viewing bool
 	follow  bool
 	vp      viewport.Model
+	// Filter (/): while filtering the input has focus; enter commits the value,
+	// which stays applied until esc while typing or leaving the viewer clears it.
+	filtering bool
+	filter    textinput.Model
 
 	// Restart prompt (r): an editable netdoc command line. Enter parses
 	// and restarts; esc closes without touching the current run.
@@ -551,13 +555,41 @@ func (m model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleViewKey handles keys while the output viewport is open. Everything not
 // handled here scrolls the viewport; leaving the bottom disables follow mode.
 func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.filtering {
+		switch msg.String() {
+		case "esc":
+			m.filtering = false
+			m.filter.SetValue("")
+			m.refreshViewport()
+			return m, nil
+		case "enter":
+			m.filtering = false
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		m.refreshViewport()
+		return m, cmd
+	}
 	switch msg.String() {
 	case "esc", "q":
 		m.viewing = false
+		m.filter.SetValue("") // a stale filter reopening as a blank screen reads as lost output
 		return m, nil
+	case "/":
+		m.filtering = true
+		ti := textinput.New()
+		ti.Prompt = "/"
+		ti.PromptStyle = keyStyle
+		ti.SetValue(m.filter.Value())
+		ti.Focus()
+		ti.CursorEnd()
+		m.filter = ti
+		m.refreshViewport()
+		return m, textinput.Blink
 	case "y":
 		notice, ok := "output copied to clipboard", true
-		if err := copyReport(strings.Join(m.cur.lines, "\n")); err != nil {
+		if err := copyReport(strings.Join(m.visibleJobLines(), "\n")); err != nil {
 			notice, ok = "copy failed: "+err.Error(), false
 		}
 		return m, m.setNotice(notice, ok)
@@ -857,14 +889,42 @@ func appendJobLine(lines *[]string, evicted *int, text string) {
 	}
 }
 
+// visibleJobLines is the selected run's output after the viewer filter:
+// what the viewport shows and what 'y' copies.
+func (m model) visibleJobLines() []string {
+	return filterLines(m.cur.lines, m.filter.Value())
+}
+
+// filterLines keeps the lines containing f, case-insensitively; an empty f
+// keeps everything.
+// ponytail: substring only — regex when someone actually asks for it.
+func filterLines(lines []string, f string) []string {
+	if f == "" {
+		return lines
+	}
+	f = strings.ToLower(f)
+	var out []string
+	for _, ln := range lines {
+		if strings.Contains(strings.ToLower(ln), f) {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
 // jobContent renders the interleaved stream wrapped to the viewport width.
 // Line numbers in the context line refer to these wrapped display lines.
 func (m model) jobContent() string {
 	w := m.width
-	if len(m.cur.lines) == 0 {
-		return lipgloss.NewStyle().Width(w).Render(faintStyle.Render("(no output yet)"))
+	lines := m.visibleJobLines()
+	if len(lines) == 0 {
+		empty := "(no output yet)"
+		if m.filter.Value() != "" {
+			empty = "(no lines match)"
+		}
+		return lipgloss.NewStyle().Width(w).Render(faintStyle.Render(empty))
 	}
-	return lipgloss.NewStyle().Width(w).Render(strings.Join(m.cur.lines, "\n"))
+	return lipgloss.NewStyle().Width(w).Render(strings.Join(lines, "\n"))
 }
 
 // refreshViewport resizes and re-renders the open viewport, sticking to the
@@ -1340,7 +1400,8 @@ func (m model) helpOverlay() string {
 	b.WriteString(row("↑/↓", "scroll"))
 	b.WriteString(row("pgup/pgdn", "page"))
 	b.WriteString(row("home/end", "jump to top / bottom"))
-	b.WriteString(row("y", "copy full output"))
+	b.WriteString(row("/", "filter lines"))
+	b.WriteString(row("y", "copy output (filtered if a filter is on)"))
 	b.WriteString(row("esc/q", "back"))
 	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
 	if m.height > 0 {
@@ -1468,10 +1529,13 @@ func (m model) outputView() string {
 }
 
 func (m model) viewerFooter() string {
+	if m.filtering {
+		return m.filter.View() + "\n" + helpKeys(m.width, "enter", "apply", "esc", "clear")
+	}
 	if notice := m.noticeView(); notice != "" {
 		return notice
 	}
-	kv := []string{"↑/↓", "scroll", "pgup/pgdn", "page", "home/end", "top/bottom"}
+	kv := []string{"↑/↓", "scroll", "pgup/pgdn", "page", "home/end", "top/bottom", "/", "filter"}
 	if len(m.otherJobs) > 0 {
 		kv = append(kv, "tab", "switch job")
 	}
@@ -1491,6 +1555,9 @@ func (m model) vpContext() string {
 		top = bot
 	}
 	s := fmt.Sprintf("lines %d–%d of %d", top, bot, total)
+	if f := m.filter.Value(); f != "" {
+		s += " · filter: " + f
+	}
 	if m.cur.evicted > 0 {
 		s += fmt.Sprintf(" · %d older lines discarded", m.cur.evicted)
 	}

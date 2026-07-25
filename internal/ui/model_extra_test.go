@@ -586,3 +586,13 @@ func TestViewportEvictionKeepsPausedReader(t *testing.T) {
 		t.Errorf("paused viewport moved after eviction\nbefore:\n%s\nafter:\n%s", want, got)
 	}
 }
+
+func TestFilterLines(t *testing.T) {
+	lines := []string{"64 bytes from 1.1.1.1", "Request timeout", "64 bytes from 8.8.8.8"}
+	if got := filterLines(lines, "TIMEOUT"); len(got) != 1 || got[0] != "Request timeout" {
+		t.Fatalf("filterLines(TIMEOUT) = %v", got)
+	}
+	if got := filterLines(lines, ""); len(got) != 3 {
+		t.Fatalf("empty filter dropped lines: %v", got)
+	}
+}
