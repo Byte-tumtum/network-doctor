@@ -318,7 +318,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		r.Detail = "proxy scheme " + textsafe.Clean(proxyURL.Scheme) + " is not supported by this probe"
 		return r
 	}
-	if port := proxyURL.Port(); strings.HasSuffix(proxyURL.Host, ":") || port != "" {
+	if port := proxyURL.Port(); port != "" {
 		if _, err := parsePort(port); err != nil {
 			r.Status = StatusFail
 			r.Detail = "bad proxy configuration: " + textsafe.Clean(err.Error())

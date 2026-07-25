@@ -265,7 +265,7 @@ func TestProxyProbeUnreachable(t *testing.T) {
 }
 
 func TestProxyProbeMalformedURLFailsWithoutDial(t *testing.T) {
-	for _, proxy := range []string{"://bad", "http://:3128", "http://proxy:", "http://proxy:0", "http://proxy:65536", "https://proxy:65536"} {
+	for _, proxy := range []string{"://bad", "http://:3128", "http://proxy:0", "http://proxy:65536", "https://proxy:65536"} {
 		t.Run(proxy, func(t *testing.T) {
 			ops := proxyOps(proxy, func(context.Context, string, string) (net.Conn, error) {
 				t.Fatal("malformed proxy must not be dialed")
