@@ -522,14 +522,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cidr == "" {
 			return m, m.setNotice("local private IPv4 network not available yet", false)
 		}
-		tool := cacheAvailability([]Tool{lanDiscoveryTool(quoterFor(runtime.GOOS), cidr)})[0]
-		if !tool.Available() {
+		tool := lanDiscoveryTool(quoterFor(runtime.GOOS), cidr)
+		if _, err := toolLookPath(tool.Bin); err != nil {
 			return m, m.setNotice("network discovery needs nmap", false)
 		}
+		tool.available = true
 		m.networkCIDR = cidr
 		// Same confirm gate as nmap: a /24 sweep is an active scan too.
-		t := tool
-		m.confirmTool = &t
+		m.confirmTool = &tool
 		return m, nil
 	case "esc":
 		// Cancel only the focused job (tab picks which); q remains the
