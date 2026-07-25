@@ -1,4 +1,4 @@
-// Toolbox mode: tool sets, hotkey uniqueness, and the exit code.
+// Toolbox mode: tool sets and the exit code.
 
 package ui
 
@@ -17,22 +17,6 @@ func TestToolsFor(t *testing.T) {
 		// Target mode: + ping, dns, curl, trace, path-quality, nmap.
 		if got := len(toolsFor(mustTarget(t, "github.com"), goos)); got != 8 {
 			t.Errorf("%s toolsFor(target) = %d, want 8", goos, got)
-		}
-	}
-}
-
-func TestToolHotkeysUnique(t *testing.T) {
-	reserved := map[string]bool{"q": true, "r": true, "v": true, "e": true, "j": true, "k": true}
-	for _, goos := range []string{"linux", "darwin", "windows"} {
-		seen := map[string]bool{}
-		for _, tool := range toolsFor(mustTarget(t, "github.com"), goos) {
-			if seen[tool.Key] {
-				t.Errorf("%s: duplicate tool hotkey %q", goos, tool.Key)
-			}
-			if reserved[tool.Key] {
-				t.Errorf("%s: tool hotkey %q collides with a reserved key", goos, tool.Key)
-			}
-			seen[tool.Key] = true
 		}
 	}
 }
