@@ -649,3 +649,21 @@ func TestPromptTargetHistory(t *testing.T) {
 		t.Fatalf("down to draft = %q, want one.test", got)
 	}
 }
+
+func TestHistoryPersistsAcrossSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "netdoc", "history")
+
+	m := New(mustTarget(t, "github.com:443"), false, path).(model)
+	u, _ := m.Update(keyMsg("r"))
+	m = asModel(t, u)
+	m.input.SetValue("one.test")
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+
+	// A fresh session relaunched with the same target loads both entries,
+	// without duplicating the launch target it already knows.
+	m2 := New(mustTarget(t, "one.test"), false, path).(model)
+	if got := strings.Join(m2.history, ","); got != "github.com:443,one.test" {
+		t.Fatalf("reloaded history = %q, want github.com:443,one.test", got)
+	}
+}

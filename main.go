@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -104,7 +105,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
-	p := tea.NewProgram(ui.New(t, *toolbox), tea.WithAltScreen())
+	histFile := ""
+	if dir, err := os.UserConfigDir(); err == nil {
+		histFile = filepath.Join(dir, "netdoc", "history")
+	}
+	p := tea.NewProgram(ui.New(t, *toolbox, histFile), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)

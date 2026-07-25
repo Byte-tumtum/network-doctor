@@ -22,7 +22,7 @@ func asModel(t *testing.T, m tea.Model) model {
 	return mm
 }
 
-func newModel(t *diagnostic.Target, toolbox bool) model { return New(t, toolbox).(model) }
+func newModel(t *diagnostic.Target, toolbox bool) model { return New(t, toolbox, "").(model) }
 
 func keyMsg(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 

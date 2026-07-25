@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -131,6 +133,7 @@ type model struct {
 	history   []string
 	histIdx   int
 	histDraft string
+	histPath  string // ""; disables persistence (tests, or no config dir)
 
 	// Confirm gate: a tool marked Confirm (nmap) is held here after its hotkey,
 	// showing the exact command until 'y' runs it or esc cancels.
@@ -173,26 +176,71 @@ var (
 	}
 )
 
-// New constructs the terminal application.
-func New(t *diagnostic.Target, toolbox bool) tea.Model {
+// New constructs the terminal application. histFile is where target history
+// persists across sessions; "" keeps it in-memory only.
+func New(t *diagnostic.Target, toolbox bool, histFile string) tea.Model {
 	probes := diagnostic.BuildProbes(t)
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
-		target:  t,
-		probes:  probes,
-		results: map[diagnostic.ProbeID]diagnostic.ProbeResult{},
-		started: map[diagnostic.ProbeID]bool{},
-		tools:   toolsFor(t, runtime.GOOS),
-		spinner: sp,
-		toolbox: toolbox,
-		width:   100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+		target:   t,
+		probes:   probes,
+		results:  map[diagnostic.ProbeID]diagnostic.ProbeResult{},
+		started:  map[diagnostic.ProbeID]bool{},
+		tools:    toolsFor(t, runtime.GOOS),
+		spinner:  sp,
+		toolbox:  toolbox,
+		histPath: histFile,
+		width:    100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
+	m.history = loadHistory(histFile)
 	if t != nil {
-		m.history = []string{t.Raw}
+		if n := len(m.history); n == 0 || m.history[n-1] != t.Raw {
+			m.history = append(m.history, t.Raw)
+		}
+		saveHistory(histFile, m.history) // launch targets count as history too
 	}
 	return m
+}
+
+// Target history persists as one line per target, oldest first. Everything
+// here is best-effort: history is a convenience, never worth failing a run
+// over, so errors just leave it empty.
+const histMax = 50
+
+func loadHistory(path string) []string {
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var hist []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		// Clean guards the prompt against a garbled or tampered file.
+		if line = strings.TrimSpace(textsafe.Clean(line)); line != "" {
+			hist = append(hist, line)
+		}
+	}
+	if len(hist) > histMax {
+		hist = hist[len(hist)-histMax:]
+	}
+	return hist
+}
+
+func saveHistory(path string, hist []string) {
+	if path == "" || len(hist) == 0 {
+		return
+	}
+	if len(hist) > histMax {
+		hist = hist[len(hist)-histMax:]
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(strings.Join(hist, "\n")+"\n"), 0o600)
 }
 
 func (m model) Init() tea.Cmd {
@@ -656,6 +704,7 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v := strings.TrimSpace(m.input.Value()); v != "" {
 			if n := len(m.history); n == 0 || m.history[n-1] != v {
 				m.history = append(m.history, v)
+				saveHistory(m.histPath, m.history)
 			}
 		}
 		m.entering = false
