@@ -130,7 +130,7 @@ type model struct {
 	histDraft string
 
 	// Confirm gate: a tool marked Confirm (nmap) is held here after its hotkey,
-	// showing the exact command until 'y' runs it or any other key cancels.
+	// showing the exact command until 'y' runs it or esc cancels.
 	confirmTool *Tool
 
 	helping bool // ?: full-screen key cheatsheet; any key closes it
@@ -551,13 +551,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleConfirmKey handles keys while an advanced tool's command is shown: 'y'
-// runs it (deferred if a job is still live), and any other key — including esc —
-// cancels without running the scan.
+// runs it (deferred if a job is still live), esc cancels, and anything else is
+// ignored — a stray j/k mid-browse shouldn't silently eat the prompt.
 func (m model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	tool := *m.confirmTool
-	m.confirmTool = nil
-	if msg.String() == "y" {
+	switch msg.String() {
+	case "y":
+		tool := *m.confirmTool
+		m.confirmTool = nil
 		return m, m.launchTool(tool)
+	case "esc", "ctrl+c":
+		m.confirmTool = nil
 	}
 	return m, nil
 }
@@ -1333,7 +1336,7 @@ func (m model) confirmView() string {
 		faintStyle.Render("Actively probes the shown scope — may trip intrusion detection.") + "\n" +
 		"$ " + display
 	w := max(min(m.width-2, 76), 24)
-	return focusPanelStyle.Width(w).Render(body) + "\n" + helpKeys(m.width, "y", "run", "any other key", "cancel")
+	return focusPanelStyle.Width(w).Render(body) + "\n" + helpKeys(m.width, "y", "run", "esc", "cancel")
 }
 
 // promptView is the restart prompt panel, shown in place of the help bar.

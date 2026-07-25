@@ -237,6 +237,18 @@ func TestNmapConfirmGate(t *testing.T) {
 	if !strings.Contains(nm.View(), "nmap ") {
 		t.Error("confirm gate must show the nmap command before running")
 	}
+	u, _ = nm.Update(keyMsg("j"))
+	nm = asModel(t, u)
+	if nm.confirmTool == nil {
+		t.Error("a stray key must not dismiss the confirm gate")
+	}
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	nm = asModel(t, u)
+	if nm.confirmTool != nil {
+		t.Error("esc must close the confirm gate")
+	}
+	u, _ = nm.Update(keyMsg("n"))
+	nm = asModel(t, u)
 	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	nm = asModel(t, u)
 	if nm.confirmTool != nil {
