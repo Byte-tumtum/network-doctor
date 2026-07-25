@@ -580,6 +580,12 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "esc", "q":
+		if msg.String() == "esc" && m.filter.Value() != "" {
+			// First esc clears the committed filter, second one leaves.
+			m.filter.SetValue("")
+			m.refreshViewport()
+			return m, nil
+		}
 		m.viewing = false
 		m.filter.SetValue("") // a stale filter reopening as a blank screen reads as lost output
 		return m, nil
@@ -1578,6 +1584,9 @@ func (m model) viewerFooter() string {
 	kv := []string{"↑/↓", "scroll", "pgup/pgdn", "page", "home/end", "top/bottom", "/", "filter"}
 	if len(m.otherJobs) > 0 {
 		kv = append(kv, "tab", "switch job")
+	}
+	if m.filter.Value() != "" {
+		return helpKeys(m.width, append(kv, "y", "copy output", "esc", "clear filter", "q", "back")...)
 	}
 	return helpKeys(m.width, append(kv, "y", "copy output", "esc/q", "back")...)
 }

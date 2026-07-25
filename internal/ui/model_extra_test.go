@@ -588,6 +588,24 @@ func TestViewportEvictionKeepsPausedReader(t *testing.T) {
 	}
 }
 
+func TestEscClearsCommittedFilterBeforeClosing(t *testing.T) {
+	m := newModel(nil, false)
+	m.width, m.height = 40, 10
+	m.viewing = true
+	m.filter.SetValue("timeout")
+	m.refreshViewport()
+
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	nm := asModel(t, u)
+	if !nm.viewing || nm.filter.Value() != "" {
+		t.Fatalf("first esc must clear the filter and stay (viewing=%v filter=%q)", nm.viewing, nm.filter.Value())
+	}
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if nm = asModel(t, u); nm.viewing {
+		t.Error("second esc must close the viewer")
+	}
+}
+
 func TestFilterLines(t *testing.T) {
 	lines := []string{"64 bytes from 1.1.1.1", "Request timeout", "64 bytes from 8.8.8.8"}
 	if got := filterLines(lines, "TIMEOUT"); len(got) != 1 || got[0] != "Request timeout" {
