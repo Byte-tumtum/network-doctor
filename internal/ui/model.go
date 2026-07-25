@@ -119,10 +119,15 @@ type model struct {
 	filter    textinput.Model
 
 	// Restart prompt (r): an editable netdoc command line. Enter parses
-	// and restarts; esc closes without touching the current run.
-	entering bool
-	input    textinput.Model
-	inputErr string
+	// and restarts; esc closes without touching the current run. Up/down
+	// walk this session's past targets, shell-style; histDraft keeps the
+	// line being typed while browsing.
+	entering  bool
+	input     textinput.Model
+	inputErr  string
+	history   []string
+	histIdx   int
+	histDraft string
 
 	// Confirm gate: a tool marked Confirm (nmap) is held here after its hotkey,
 	// showing the exact command until 'y' runs it or any other key cancels.
@@ -171,7 +176,7 @@ func New(t *diagnostic.Target, toolbox bool) tea.Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	return model{
+	m := model{
 		target:  t,
 		probes:  probes,
 		results: map[diagnostic.ProbeID]diagnostic.ProbeResult{},
@@ -181,6 +186,10 @@ func New(t *diagnostic.Target, toolbox bool) tea.Model {
 		toolbox: toolbox,
 		width:   100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
+	if t != nil {
+		m.history = []string{t.Raw}
+	}
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -443,6 +452,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.target != nil {
 			ti.SetValue(m.target.Raw)
 		}
+		m.histIdx, m.histDraft = len(m.history), ""
 		ti.Focus()
 		ti.CursorEnd()
 		m.input = ti
@@ -624,8 +634,36 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputErr = err.Error()
 			return m, nil
 		}
+		if v := strings.TrimSpace(m.input.Value()); v != "" {
+			if n := len(m.history); n == 0 || m.history[n-1] != v {
+				m.history = append(m.history, v)
+			}
+		}
 		m.entering = false
 		return m.restartWithTarget(t)
+	case "up":
+		if m.histIdx == 0 {
+			return m, nil
+		}
+		if m.histIdx == len(m.history) {
+			m.histDraft = m.input.Value()
+		}
+		m.histIdx--
+		m.input.SetValue(m.history[m.histIdx])
+		m.input.CursorEnd()
+		return m, nil
+	case "down":
+		if m.histIdx >= len(m.history) {
+			return m, nil
+		}
+		m.histIdx++
+		if m.histIdx == len(m.history) {
+			m.input.SetValue(m.histDraft)
+		} else {
+			m.input.SetValue(m.history[m.histIdx])
+		}
+		m.input.CursorEnd()
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)

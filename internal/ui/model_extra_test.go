@@ -596,3 +596,37 @@ func TestFilterLines(t *testing.T) {
 		t.Fatalf("empty filter dropped lines: %v", got)
 	}
 }
+
+func TestPromptTargetHistory(t *testing.T) {
+	up := tea.KeyMsg{Type: tea.KeyUp}
+	down := tea.KeyMsg{Type: tea.KeyDown}
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+
+	m := newModel(mustTarget(t, "github.com:443"), false)
+	step := func(msg tea.Msg) {
+		u, _ := m.Update(msg)
+		m = asModel(t, u)
+	}
+	step(keyMsg("r"))
+	m.input.SetValue("one.test")
+	step(enter) // restarts; history = [github.com:443, one.test]
+
+	step(keyMsg("r")) // prefilled with the current target, one.test
+	step(up)
+	if got := m.input.Value(); got != "one.test" {
+		t.Fatalf("first up = %q, want one.test", got)
+	}
+	step(up)
+	if got := m.input.Value(); got != "github.com:443" {
+		t.Fatalf("second up = %q, want github.com:443", got)
+	}
+	step(up) // at oldest; no-op
+	if got := m.input.Value(); got != "github.com:443" {
+		t.Fatalf("up past oldest = %q, want github.com:443", got)
+	}
+	step(down)
+	step(down) // back to the prefilled draft
+	if got := m.input.Value(); got != "one.test" {
+		t.Fatalf("down to draft = %q, want one.test", got)
+	}
+}
