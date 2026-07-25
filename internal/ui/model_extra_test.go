@@ -592,13 +592,13 @@ func TestEscClearsCommittedFilterBeforeClosing(t *testing.T) {
 	m := newModel(nil, false)
 	m.width, m.height = 40, 10
 	m.viewing = true
-	m.filter.SetValue("timeout")
+	m.filter = "timeout"
 	m.refreshViewport()
 
 	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	nm := asModel(t, u)
-	if !nm.viewing || nm.filter.Value() != "" {
-		t.Fatalf("first esc must clear the filter and stay (viewing=%v filter=%q)", nm.viewing, nm.filter.Value())
+	if !nm.viewing || nm.filter != "" {
+		t.Fatalf("first esc must clear the filter and stay (viewing=%v filter=%q)", nm.viewing, nm.filter)
 	}
 	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if nm = asModel(t, u); nm.viewing {

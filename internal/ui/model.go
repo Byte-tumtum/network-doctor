@@ -118,10 +118,12 @@ type model struct {
 	viewing bool
 	follow  bool
 	vp      viewport.Model
-	// Filter (/): while filtering the input has focus; enter commits the value,
-	// which stays applied until esc while typing or leaving the viewer clears it.
-	filtering bool
-	filter    textinput.Model
+	// Filter (/): while filtering, filterInput has focus and mirrors into
+	// filter on every keystroke; the committed value stays applied until
+	// esc while typing or leaving the viewer clears it.
+	filtering   bool
+	filter      string
+	filterInput textinput.Model
 
 	// Restart prompt (r): an editable netdoc command line. Enter parses
 	// and restarts; esc closes without touching the current run. Up/down
@@ -634,7 +636,7 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.filtering = false
-			m.filter.SetValue("")
+			m.filter = ""
 			m.refreshViewport()
 			return m, nil
 		case "enter":
@@ -642,30 +644,31 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		var cmd tea.Cmd
-		m.filter, cmd = m.filter.Update(msg)
+		m.filterInput, cmd = m.filterInput.Update(msg)
+		m.filter = m.filterInput.Value()
 		m.refreshViewport()
 		return m, cmd
 	}
 	switch msg.String() {
 	case "esc", "q":
-		if msg.String() == "esc" && m.filter.Value() != "" {
+		if msg.String() == "esc" && m.filter != "" {
 			// First esc clears the committed filter, second one leaves.
-			m.filter.SetValue("")
+			m.filter = ""
 			m.refreshViewport()
 			return m, nil
 		}
 		m.viewing = false
-		m.filter.SetValue("") // a stale filter reopening as a blank screen reads as lost output
+		m.filter = "" // a stale filter reopening as a blank screen reads as lost output
 		return m, nil
 	case "/":
 		m.filtering = true
 		ti := textinput.New()
 		ti.Prompt = "/"
 		ti.PromptStyle = keyStyle
-		ti.SetValue(m.filter.Value())
+		ti.SetValue(m.filter)
 		ti.Focus()
 		ti.CursorEnd()
-		m.filter = ti
+		m.filterInput = ti
 		m.refreshViewport()
 		return m, textinput.Blink
 	case "y":
@@ -1003,7 +1006,7 @@ func appendJobLine(lines *[]string, evicted *int, text string) {
 // visibleJobLines is the selected run's output after the viewer filter:
 // what the viewport shows and what 'y' copies.
 func (m model) visibleJobLines() []string {
-	return filterLines(m.cur.lines, m.filter.Value())
+	return filterLines(m.cur.lines, m.filter)
 }
 
 // filterLines keeps the lines containing f, case-insensitively; an empty f
@@ -1030,7 +1033,7 @@ func (m model) jobContent() string {
 	lines := m.visibleJobLines()
 	if len(lines) == 0 {
 		empty := "(no output yet)"
-		if m.filter.Value() != "" {
+		if m.filter != "" {
 			empty = "(no lines match)"
 		}
 		return lipgloss.NewStyle().Width(w).Render(faintStyle.Render(empty))
@@ -1645,7 +1648,7 @@ func (m model) outputView() string {
 
 func (m model) viewerFooter() string {
 	if m.filtering {
-		return m.filter.View() + "\n" + helpKeys(m.width, "enter", "apply", "esc", "clear")
+		return m.filterInput.View() + "\n" + helpKeys(m.width, "enter", "apply", "esc", "clear")
 	}
 	if notice := m.noticeView(); notice != "" {
 		return notice
@@ -1654,7 +1657,7 @@ func (m model) viewerFooter() string {
 	if len(m.otherJobs) > 0 {
 		kv = append(kv, "tab", "switch job")
 	}
-	if m.filter.Value() != "" {
+	if m.filter != "" {
 		return helpKeys(m.width, append(kv, "y", "copy output", "esc", "clear filter", "q", "back")...)
 	}
 	return helpKeys(m.width, append(kv, "y", "copy output", "esc/q", "back")...)
@@ -1673,8 +1676,8 @@ func (m model) vpContext() string {
 		top = bot
 	}
 	s := fmt.Sprintf("lines %d–%d of %d", top, bot, total)
-	if f := m.filter.Value(); f != "" {
-		s += " · filter: " + f
+	if m.filter != "" {
+		s += " · filter: " + m.filter
 	}
 	if m.cur.evicted > 0 {
 		s += fmt.Sprintf(" · %d older lines discarded", m.cur.evicted)
