@@ -107,9 +107,8 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 	go func() {
 		defer cancel()
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); streamReader(stdout, id, gen, j.ch, &dropped) }()
-		go func() { defer wg.Done(); streamReader(stderr, id, gen, j.ch, &dropped) }()
+		wg.Go(func() { streamReader(stdout, id, gen, j.ch, &dropped) })
+		wg.Go(func() { streamReader(stderr, id, gen, j.ch, &dropped) })
 		wg.Wait() // drain both pipes to EOF before Wait (no drain/wait race)
 		werr := cmd.Wait()
 		// Guaranteed (blocking) terminal send, last — never dropped.

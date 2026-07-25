@@ -236,15 +236,12 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// IPv6 egress are diagnosed separately.
 	var v4, v6 famResult
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, internetEndpoints4, 443)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		v6.conn, v6.sel, v6.attempts, v6.rtt = o.dialIPs(ctx, internetEndpoints6, 443)
-	}()
+	})
 	wg.Wait()
 
 	// IPv4 headlines the result unless it lost and IPv6 won — not a value

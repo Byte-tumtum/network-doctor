@@ -25,9 +25,7 @@ func resolveNames(ctx context.Context, ips []string, lookup func(context.Context
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	for _, ip := range ips {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -46,7 +44,7 @@ func resolveNames(ctx context.Context, ips []string, lookup func(context.Context
 			mu.Lock()
 			names[ip] = name
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	return names
