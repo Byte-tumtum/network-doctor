@@ -255,6 +255,10 @@ func (m model) chainRan() bool { return len(m.started) > 0 }
 
 func (m model) allDone() bool { return len(m.results) == len(m.probes) }
 
+// hasJob reports whether the current slot holds a job pane worth showing:
+// either a running process or a finished/failed one still displaying output.
+func (m model) hasJob() bool { return m.cur.active != nil || m.cur.status != JobQueued }
+
 // reportReady reports whether every check has a result and no tool is running.
 func (m model) reportReady() bool {
 	return m.allDone() && !m.jobsRunning() && m.cur.status != JobRunning
@@ -505,7 +509,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				continue
 			}
 			lan := m.otherJobs[i]
-			if m.cur.active != nil || m.cur.status != JobQueued {
+			if m.hasJob() {
 				m.otherJobs[i] = m.cur
 			} else {
 				m.otherJobs = append(m.otherJobs[:i], m.otherJobs[i+1:]...)
@@ -570,7 +574,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.restartWithTarget(t)
 		}
-		if m.cur.active == nil && m.cur.status == JobQueued {
+		if !m.hasJob() {
 			return m, m.setNotice("nothing to view yet", false)
 		}
 		m.viewing, m.follow = true, true
@@ -855,7 +859,7 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 }
 
 func (m *model) stashJob() {
-	if m.cur.active != nil || m.cur.status != JobQueued {
+	if m.hasJob() {
 		m.otherJobs = append(m.otherJobs, m.cur)
 		m.cur = jobState{}
 	}
@@ -1132,8 +1136,7 @@ func (m model) View() string {
 		// The forms cheatsheet yields first: drop it when the view would
 		// overflow, or when it would starve a live job pane below jobView's
 		// 5-row minimum. m.height == 0 means size unknown — keep the forms.
-		hasJob := m.cur.active != nil || m.cur.status != JobQueued
-		if avail < 0 || (hasJob && avail < 5) {
+		if avail < 0 || (m.hasJob() && avail < 5) {
 			tail = m.promptView(false) + "\n"
 			avail = m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
 		}
@@ -1432,7 +1435,7 @@ func (m model) promptView(withForms bool) string {
 func (m model) helpView(deferred bool) string {
 	// Enter opens the output viewer whenever a job pane exists (same condition
 	// as jobView), so the hint tracks exactly when the key does something.
-	hasJob := m.cur.active != nil || m.cur.status != JobQueued
+	hasJob := m.hasJob()
 	if deferred {
 		if m.networkMap {
 			kv := []string{"v", "checks"}
@@ -1718,7 +1721,7 @@ func (m model) toolboxView() string {
 // jobView renders the job pane with an adaptive tail: avail is the screen
 // height left over for this pane; unknown height falls back to jobTailLines.
 func (m model) jobView(avail int) string {
-	if m.cur.active == nil && m.cur.status == JobQueued {
+	if !m.hasJob() {
 		return ""
 	}
 	if m.height > 0 && avail < 5 {
