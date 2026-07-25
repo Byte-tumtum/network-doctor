@@ -503,10 +503,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.viewing, m.follow = true, true
 		m.vp = viewport.New(m.width, m.vpHeight())
-		// Zero-value bindings disable everything else (j/k, b/f/space, u/d).
+		// Zero-value bindings disable everything else (b/f/space, u/d).
 		m.vp.KeyMap = viewport.KeyMap{
-			Up:       key.NewBinding(key.WithKeys("up")),
-			Down:     key.NewBinding(key.WithKeys("down")),
+			Up:       key.NewBinding(key.WithKeys("up", "k")),
+			Down:     key.NewBinding(key.WithKeys("down", "j")),
 			PageUp:   key.NewBinding(key.WithKeys("pgup")),
 			PageDown: key.NewBinding(key.WithKeys("pgdown")),
 		}
