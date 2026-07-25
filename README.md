@@ -118,13 +118,15 @@ literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
 | `y` (viewer) | copy the viewer's retained full output (up to 5,000 lines) |
 | `r` | restart — opens a prompt to edit the `netdoc` arguments (`enter` runs, `esc` backs out) |
+| `tab` | switch between running tool jobs |
 | `y` / `w` | yank / write (copy / save) a report of the chain plus the completed tool output |
 | `q` | quit |
 
 ## Drill-down tools
 
-Each row in the diagnosis is *evidence*; when you want proof, run a real tool as
-a cancellable streaming job (one at a time). The contextual toolbox shows the
+Each row in the diagnosis is *evidence*; when you want proof, run real tools as
+cancellable streaming jobs — several can run at once, and `tab` switches
+between the live ones. The contextual toolbox shows the
 tools available for the current target with their hotkeys — missing binaries are
 greyed out with an install hint. Output is bounded and sanitized (no
 terminal-escape injection from a hostile server); the last 15 output lines are
@@ -218,12 +220,12 @@ label, nslookup addresses) is parsed locale-independently.
 
 ## Roadmap
 
-Implemented: native DAG probes + diagnosis engine + two-pane UI, cancellable
-streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) +
+Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent
+cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) +
 a scrollable output viewer + `--toolbox` mode, the `Warn` state, proxy-aware
 diagnosis, `--json` output, and report copy/save.
 
-Still to come: mtr-parsed route quality and multiple concurrent jobs.
+Still to come: mtr-parsed route quality.
 
 ## Built with
 
