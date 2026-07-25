@@ -101,7 +101,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runJSON(t, stdout, stderr)
 	}
 
-	p := tea.NewProgram(ui.New(t, *toolbox), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// No mouse tracking: terminals translate the wheel to arrow keys in the
+	// alt screen (alternate scroll), and grabbing the mouse would break
+	// native text selection.
+	p := tea.NewProgram(ui.New(t, *toolbox), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)

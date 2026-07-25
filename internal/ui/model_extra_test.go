@@ -544,10 +544,10 @@ func TestViewportFollow(t *testing.T) {
 		t.Errorf("end must jump to the bottom and resume follow (follow=%v)", nm.follow)
 	}
 
-	u, _ = nm.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyUp})
 	nm = asModel(t, u)
 	if nm.follow {
-		t.Error("wheel up must pause follow mode")
+		t.Error("scrolling up must pause follow mode")
 	}
 
 	u, _ = nm.Update(ToolOutputMsg{JobID: "j", Generation: 1, Line: "boom"})

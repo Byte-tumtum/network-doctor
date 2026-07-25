@@ -606,25 +606,6 @@ func TestSelectionClamp(t *testing.T) {
 	if m.selected != 3 {
 		t.Errorf("selected = %d, want clamp at 3", m.selected)
 	}
-	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
-	m = asModel(t, u)
-	if m.selected != 2 {
-		t.Errorf("wheel up selected = %d, want 2", m.selected)
-	}
-	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
-	if selected := asModel(t, u).selected; selected != 3 {
-		t.Errorf("wheel down selected = %d, want 3", selected)
-	}
-}
-
-func TestWheelIgnoredByRestartPrompt(t *testing.T) {
-	m := newModel(nil, false)
-	u, _ := m.Update(keyMsg("r"))
-	m = asModel(t, u)
-	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
-	if selected := asModel(t, u).selected; selected != 0 {
-		t.Errorf("wheel down selected = %d, want 0 while restart prompt is open", selected)
-	}
 }
 
 func TestExitCode(t *testing.T) {
