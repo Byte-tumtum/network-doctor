@@ -4,7 +4,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -242,12 +241,11 @@ func smtpTool(quote func([]string) string, host string, port int) Tool {
 }
 
 // staticTool builds a target-independent Tool whose argv is fixed at construction
-// (a host, if any, is already baked into args). slices.Clone gives each Build call
-// independent slices, matching the per-call allocation of the literals it replaces.
+// (a host, if any, is already baked into args). Callers never mutate the argv —
+// exec.Command copies it — so Build hands out the captured slice as-is.
 func staticTool(quote func([]string) string, key, purpose, name, bin string, args ...string) Tool {
 	return Tool{Key: key, Name: name, Purpose: purpose, Bin: bin, Build: func(*diagnostic.Target) ([]string, []string, string) {
-		a := slices.Clone(args)
-		return a, nil, bin + " " + quote(a)
+		return args, nil, bin + " " + quote(args)
 	}}
 }
 

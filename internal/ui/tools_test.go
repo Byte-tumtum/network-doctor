@@ -120,13 +120,6 @@ func TestToolsForDefinitions(t *testing.T) {
 			t.Errorf("toolsFor(nil)[%d].Key = %q, want %q", i, generic[i].Key, k)
 		}
 	}
-
-	// Slice independence: two Build calls must not share a backing array (Codex r1 #3).
-	a1, _, _ := got[0].Build(tgt)
-	a2, _, _ := got[0].Build(tgt)
-	if len(a1) > 0 && &a1[0] == &a2[0] {
-		t.Error("staticTool Build returned an aliased argv slice across calls")
-	}
 }
 
 // TestToolsForProtocol pins the protocol-aware "c" slot: SSH and SMTP targets
