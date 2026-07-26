@@ -61,3 +61,22 @@ func TestParseTargetErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestProtoString(t *testing.T) {
+	cases := []struct {
+		p    Proto
+		want string
+	}{
+		{ProtoNone, "none"},
+		{ProtoTLSHTTP, "tls+http"},
+		{ProtoHTTP, "http"},
+		{ProtoSSH, "ssh"},
+		{ProtoSMTP, "smtp"},
+		{Proto(99), "none"}, // out-of-range collapses to none, not a panic
+	}
+	for _, c := range cases {
+		if got := c.p.String(); got != c.want {
+			t.Errorf("Proto(%d).String() = %q, want %q", c.p, got, c.want)
+		}
+	}
+}

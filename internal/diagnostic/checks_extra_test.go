@@ -370,3 +370,99 @@ func TestDowngradeEgress(t *testing.T) {
 		}
 	}
 }
+
+// familyNote only speaks up for the clean broken-family signature: every
+// failure in the opposite family from the winner.
+func TestFamilyNote(t *testing.T) {
+	v4, v6 := net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")
+	fail := errors.New("refused")
+	cases := []struct {
+		name     string
+		attempts []Attempt
+		sel      net.IP
+		want     string
+	}{
+		{"no winner", []Attempt{{IP: v6, Err: fail}}, nil, ""},
+		{"no failures", []Attempt{{IP: v4}}, v4, ""},
+		{"v6 broken, v4 won", []Attempt{{IP: v6, Err: fail}, {IP: v4}}, v4, " (IPv6 unreachable, connected via IPv4)"},
+		{"v4 broken, v6 won", []Attempt{{IP: v4, Err: fail}, {IP: v6}}, v6, " (IPv4 unreachable, connected via IPv6)"},
+		{"same-family failure", []Attempt{{IP: net.ParseIP("192.0.2.2"), Err: fail}, {IP: v4}}, v4, ""},
+		{"mixed failures", []Attempt{{IP: v6, Err: fail}, {IP: net.ParseIP("192.0.2.2"), Err: fail}, {IP: v4}}, v4, ""},
+	}
+	for _, c := range cases {
+		if got := familyNote(c.attempts, c.sel); got != c.want {
+			t.Errorf("%s: familyNote = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// ifaceProbe failure branches: enumeration error, and interfaces that exist
+// but none up (loopback doesn't count).
+func TestIfaceProbeFailures(t *testing.T) {
+	ops := &netops{interfaces: func() ([]net.Interface, error) {
+		return nil, errors.New("EPERM")
+	}}
+	if r := ops.ifaceProbe(context.Background(), nil); r.Status != StatusFail || !strings.Contains(r.Detail, "cannot list interfaces") {
+		t.Errorf("interfaces error = %+v, want FAIL cannot list interfaces", r)
+	}
+
+	ops = &netops{interfaces: func() ([]net.Interface, error) {
+		return []net.Interface{
+			{Name: "lo", Flags: net.FlagLoopback | net.FlagUp | net.FlagRunning},
+			{Name: "eth0", Flags: 0}, // present but down
+		}, nil
+	}}
+	if r := ops.ifaceProbe(context.Background(), nil); r.Status != StatusFail || r.Detail != "no interface up" {
+		t.Errorf("all down = %+v, want FAIL no interface up", r)
+	}
+}
+
+// targetTCPProbe against the stub dialer: empty DNS input, a clean connect
+// (with path identity resolved through the stubbed interface list), and the
+// all-addresses-failed fallback.
+func TestTargetTCPProbe(t *testing.T) {
+	dst := net.ParseIP("192.0.2.1")
+	deps := map[ProbeID]ProbeResult{ProbeDNS: {Addrs: []net.IP{dst}}}
+
+	r := (&netops{}).targetTCPProbe(443)(context.Background(), map[ProbeID]ProbeResult{})
+	if r.Status != StatusFail || r.Detail != "no resolved addresses" {
+		t.Errorf("no addrs = %+v, want FAIL no resolved addresses", r)
+	}
+
+	ops := &netops{
+		dialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+			if network != "tcp" || addr != "192.0.2.1:443" {
+				t.Errorf("dialed %s %s, want tcp 192.0.2.1:443", network, addr)
+			}
+			return fakeConn{local: &net.TCPAddr{IP: net.ParseIP("192.0.2.7"), Port: 40000}}, nil
+		},
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{{Name: "fake0"}}, nil
+		},
+		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) {
+			return []net.Addr{&net.IPNet{IP: net.ParseIP("192.0.2.7"), Mask: net.CIDRMask(24, 32)}}, nil
+		},
+	}
+	r = ops.targetTCPProbe(443)(context.Background(), deps)
+	if r.Status != StatusPass || !r.SelectedIP.Equal(dst) || r.Iface != "fake0" {
+		t.Errorf("connect = %+v, want PASS pinned to 192.0.2.1 via fake0", r)
+	}
+	if !strings.Contains(r.Detail, "connected to 192.0.2.1:443") {
+		t.Errorf("detail = %q, want it to mention the connect", r.Detail)
+	}
+
+	// Refuse both the TCP attempt and the UDP path-identity fallback.
+	ops = &netops{dialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("refused")
+	}}
+	r = ops.targetTCPProbe(443)(context.Background(), deps)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "port 443 unreachable on all 1 address(es)") {
+		t.Errorf("all refused = %+v, want FAIL port unreachable", r)
+	}
+	if !strings.Contains(r.Fix, "firewall") {
+		t.Errorf("fix = %q, want the firewall hint", r.Fix)
+	}
+	if len(r.Attempts) != 1 || r.Attempts[0].Err == nil {
+		t.Errorf("attempts = %+v, want the single failed attempt recorded", r.Attempts)
+	}
+}
