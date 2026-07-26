@@ -515,6 +515,58 @@ func TestViewerCopiesFullOutput(t *testing.T) {
 	}
 }
 
+func TestViewerFilterLifecycle(t *testing.T) {
+	m := newModel(nil, false)
+	m.cur.status = JobDone
+	m.cur.lines = []string{"alpha", "beta"}
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nm := asModel(t, u)
+
+	u, _ = nm.Update(keyMsg("/"))
+	nm = asModel(t, u)
+	if !nm.filtering {
+		t.Fatal("/ must start filtering")
+	}
+
+	u, _ = nm.Update(keyMsg("a"))
+	nm = asModel(t, u)
+	if nm.filter != "a" {
+		t.Fatalf("typing must update the live filter, got %q", nm.filter)
+	}
+
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nm = asModel(t, u)
+	if nm.filtering || nm.filter != "a" {
+		t.Fatalf("enter must commit the filter, filtering=%v filter=%q", nm.filtering, nm.filter)
+	}
+
+	// Esc is two-stage once a filter is committed: clear first, leave second.
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	nm = asModel(t, u)
+	if nm.filter != "" || !nm.viewing {
+		t.Fatalf("first esc must clear the filter and stay, filter=%q viewing=%v", nm.filter, nm.viewing)
+	}
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if asModel(t, u).viewing {
+		t.Error("second esc must leave the viewer")
+	}
+}
+
+func TestViewerFilterEscAbandonsEntry(t *testing.T) {
+	m := newModel(nil, false)
+	m.cur.status = JobDone
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nm := asModel(t, u)
+	for _, k := range []tea.KeyMsg{keyMsg("/"), keyMsg("x"), {Type: tea.KeyEsc}} {
+		u, _ = nm.Update(k)
+		nm = asModel(t, u)
+	}
+	if nm.filtering || nm.filter != "" || !nm.viewing {
+		t.Fatalf("esc mid-entry must drop the filter but stay, filtering=%v filter=%q viewing=%v",
+			nm.filtering, nm.filter, nm.viewing)
+	}
+}
+
 func TestTabSwitchNotice(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
