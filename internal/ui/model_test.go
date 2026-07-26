@@ -4,6 +4,7 @@
 package ui
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
@@ -715,6 +716,46 @@ func TestScheduleStartsRoot(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("expected a dispatch cmd")
+	}
+}
+
+func TestCancelJobsReachesOtherJobs(t *testing.T) {
+	m := newModel(nil, false)
+	var curCancelled, otherCancelled bool
+	m.cur.active = &job{cancel: func() { curCancelled = true }}
+	m.otherJobs = []jobState{
+		{}, // finished job: nil active must not panic
+		{active: &job{cancel: func() { otherCancelled = true }}},
+	}
+	m.cancelJobs()
+	if !curCancelled || !otherCancelled {
+		t.Fatalf("cancel called: cur=%v other=%v", curCancelled, otherCancelled)
+	}
+}
+
+func TestRunProbeSnapshotIndependence(t *testing.T) {
+	m := newModel(nil, false)
+	m.ctx = context.Background()
+	var seen diagnostic.ProbeResult
+	p := diagnostic.Probe{
+		ID:   "probe",
+		Deps: []diagnostic.ProbeID{"dep"},
+		Run: func(_ context.Context, deps map[diagnostic.ProbeID]diagnostic.ProbeResult) diagnostic.ProbeResult {
+			seen = deps["dep"]
+			deps["dep"] = diagnostic.ProbeResult{Detail: "scribbled"}
+			return diagnostic.ProbeResult{ID: "probe", Status: diagnostic.StatusPass}
+		},
+	}
+	m.results["dep"] = diagnostic.ProbeResult{ID: "dep", Status: diagnostic.StatusPass, Detail: "before"}
+	cmd := m.runProbe(p)
+	// Mutations after dispatch must not leak into the probe, nor its writes back.
+	m.results["dep"] = diagnostic.ProbeResult{ID: "dep", Status: diagnostic.StatusFail, Detail: "after"}
+	cmd()
+	if seen.Detail != "before" {
+		t.Errorf("probe saw %q, want pre-dispatch snapshot %q", seen.Detail, "before")
+	}
+	if m.results["dep"].Detail != "after" {
+		t.Errorf("probe write leaked into live map: %q", m.results["dep"].Detail)
 	}
 }
 
