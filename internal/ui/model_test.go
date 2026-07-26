@@ -231,6 +231,21 @@ func TestNetworkMapSelectsNewTarget(t *testing.T) {
 	}
 }
 
+func TestNetworkMapEnterClampsAfterShrink(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:22"), false)
+	m.networkMap = true
+	m.networkCIDR = "192.168.12.0/24"
+	m.cur.name, m.cur.status = lanDiscoveryName, JobDone
+	m.cur.lines = []string{"Host: 192.168.12.1 (router.lan)\tStatus: Up"}
+	m.mapSelected = 3 // list shrank under the cursor
+
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	if m.target == nil || m.target.Host != "192.168.12.1" {
+		t.Fatalf("target = %+v, want the last remaining host", m.target)
+	}
+}
+
 func TestReportReadyWithoutToolRun(t *testing.T) {
 	m := newModel(nil, false)
 	doneResults(&m, "")

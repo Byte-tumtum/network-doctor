@@ -569,6 +569,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if hosts := m.networkHosts(); m.networkMap && len(hosts) > 0 {
+			m.mapSelected = min(m.mapSelected, len(hosts)-1)
 			address, _, _ := strings.Cut(hosts[m.mapSelected], " ")
 			t, err := diagnostic.ParseTarget(address)
 			if err != nil {
