@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"strings"
@@ -72,6 +73,49 @@ func TestPrintUsageTargetForms(t *testing.T) {
 	want := "Target forms:\n" + diagnostic.TargetForms + "\n\nFlags:"
 	if !strings.Contains(buf.String(), want) {
 		t.Errorf("usage output missing the target-forms section:\n%s", buf.String())
+	}
+}
+
+// Drives the real -json path through run() with probe execution stubbed out,
+// pinning the headless contract: valid JSON on stdout, exit 1 iff a check failed.
+func TestRunJSON(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	tests := []struct {
+		name   string
+		status diagnostic.Status
+		want   int
+	}{
+		{"all pass", diagnostic.StatusPass, 0},
+		{"a failure", diagnostic.StatusFail, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+				results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+				for _, p := range probes {
+					results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: tt.status}
+				}
+				return results
+			}
+			var stdout, stderr bytes.Buffer
+			if got := run([]string{"-json", "example.com:443"}, &stdout, &stderr); got != tt.want {
+				t.Fatalf("exit = %d, want %d; stderr: %s", got, tt.want, stderr.String())
+			}
+			var rep report
+			if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+				t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+			}
+			if rep.OK != (tt.want == 0) {
+				t.Errorf("ok = %v, want %v", rep.OK, tt.want == 0)
+			}
+			if rep.Target == nil || rep.Target.Host != "example.com" {
+				t.Errorf("target = %+v", rep.Target)
+			}
+			if len(rep.Checks) == 0 {
+				t.Error("checks empty, want the probe DAG")
+			}
+		})
 	}
 }
 

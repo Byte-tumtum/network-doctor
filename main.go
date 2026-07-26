@@ -169,11 +169,14 @@ type reportAttempt struct {
 	Err string `json:"error,omitempty"`
 }
 
+// runAll is stubbed in tests so -json runs don't touch the network.
+var runAll = diagnostic.RunAll
+
 // runJSON runs the probe DAG headless and prints the JSON report. Exit code
 // mirrors the TUI contract: 1 if any check failed, else 0.
 func runJSON(t *diagnostic.Target, stdout, stderr io.Writer) int {
 	probes := diagnostic.BuildProbes(t)
-	results := diagnostic.RunAll(context.Background(), probes)
+	results := runAll(context.Background(), probes)
 	rep := buildReport(t, probes, results)
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
