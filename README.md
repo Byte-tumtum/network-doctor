@@ -113,6 +113,12 @@ scheme wins; otherwise inferred from the port — `443/8443`→HTTP+TLS+HTTPS, `
 `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6
 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 
+The TUI saves up to 50 recent targets between sessions in
+`$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on
+Linux, `~/Library/Application Support/netdoc/history` on macOS, or
+`%AppData%\netdoc\history` on Windows. Exit `netdoc` and delete that file to
+clear the history.
+
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
