@@ -12,7 +12,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
-	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
 func (m model) glyph(id diagnostic.ProbeID) string {
@@ -153,7 +152,7 @@ func (m model) bodyView(deferred bool) string {
 			for _, a := range r.Attempts {
 				st := "ok"
 				if a.Err != nil {
-					st = textsafe.Clean(a.Err.Error())
+					st = a.Err.Error()
 				}
 				right.WriteString(faintStyle.Render(fmt.Sprintf("  %s %dms %s", a.IP, a.Dur.Milliseconds(), st)) + "\n")
 			}

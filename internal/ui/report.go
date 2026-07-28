@@ -85,9 +85,9 @@ func osc52Sequence(rep string) string {
 }
 
 // report renders the finished run as plain text safe to paste into a ticket
-// or chat: no ANSI styling, and every field that can carry external bytes
-// (probe details, attempt errors, SSIDs, tool output) goes through
-// textsafe.Clean.
+// or chat: no ANSI styling, and no external bytes untamed. Probe results
+// arrive sanitized from BuildProbes; tool output is cleaned here, since it
+// comes from a subprocess this package launched.
 func (m model) report() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "network-doctor report — %s\n", time.Now().UTC().Format(time.RFC3339))
@@ -99,20 +99,20 @@ func (m model) report() string {
 	b.WriteString("verdict: " + m.verdictLine() + "\n\nchecks:\n")
 	for _, p := range m.probes {
 		r := m.results[p.ID]
-		fmt.Fprintf(&b, "  [%s] %s — %s\n", r.Status, p.Name, textsafe.Clean(r.Detail))
+		fmt.Fprintf(&b, "  [%s] %s — %s\n", r.Status, p.Name, r.Detail)
 		if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
-			b.WriteString("        fix: " + textsafe.Clean(r.Fix) + "\n")
+			b.WriteString("        fix: " + r.Fix + "\n")
 		}
 		if r.Source != nil {
-			b.WriteString("        src: " + r.Source.String() + " " + textsafe.Clean(r.Iface) + "\n")
+			b.WriteString("        src: " + r.Source.String() + " " + r.Iface + "\n")
 		}
 		if r.Network != "" {
-			b.WriteString("        wifi: " + textsafe.Clean(r.Network) + "\n")
+			b.WriteString("        wifi: " + r.Network + "\n")
 		}
 		for _, a := range r.Attempts {
 			st := "ok"
 			if a.Err != nil {
-				st = textsafe.Clean(a.Err.Error())
+				st = a.Err.Error()
 			}
 			fmt.Fprintf(&b, "        attempt: %s %dms %s\n", a.IP, a.Dur.Milliseconds(), st)
 		}

@@ -120,10 +120,13 @@ func TestReportSanitized(t *testing.T) {
 	m.results[m.probes[0].ID] = diagnostic.ProbeResult{
 		ID:     m.probes[0].ID,
 		Status: diagnostic.StatusFail,
-		Detail: "boom \x1b[31mred\x1b[0m",
-		Fix:    "restart \x1b]0;evil\x07it",
+		// No escapes here: probe results arrive sanitized from BuildProbes
+		// (see TestCleanResultScrubsEveryTextField). Tool output is the one
+		// thing report() still cleans itself.
+		Detail: "boom red",
+		Fix:    "restart it",
 		Attempts: []diagnostic.Attempt{
-			{IP: net.ParseIP("93.184.216.34"), Dur: 12 * time.Millisecond, Err: errors.New("\x1b[2Jrefused")},
+			{IP: net.ParseIP("93.184.216.34"), Dur: 12 * time.Millisecond, Err: errors.New("refused")},
 		},
 	}
 	for i := 0; i < 16; i++ {

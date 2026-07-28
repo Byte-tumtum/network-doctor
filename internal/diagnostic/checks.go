@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -151,7 +152,35 @@ var defaultOps = &netops{
 }
 
 // BuildProbes constructs the DAG for the given target (nil = generic mode).
-func BuildProbes(t *Target) []Probe { return defaultOps.buildProbes(t) }
+// Every Run is wrapped so results leave the probe already sanitized: this is
+// the one place external bytes cross into text we print, so callers render
+// ProbeResult strings as-is and a new probe can't reintroduce terminal
+// injection by forgetting to Clean at the source.
+func BuildProbes(t *Target) []Probe {
+	probes := defaultOps.buildProbes(t)
+	for i := range probes {
+		run := probes[i].Run
+		probes[i].Run = func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
+			return cleanResult(run(ctx, deps))
+		}
+	}
+	return probes
+}
+
+// cleanResult scrubs the human-readable fields of a probe result. Names and
+// IPs are not here: probe names are ours, and net.IP renders itself.
+func cleanResult(r ProbeResult) ProbeResult {
+	r.Detail, r.Fix = textsafe.Clean(r.Detail), textsafe.Clean(r.Fix)
+	r.Iface, r.Network = textsafe.Clean(r.Iface), textsafe.Clean(r.Network)
+	for i, a := range r.Attempts {
+		if a.Err != nil {
+			// Replaced, not wrapped: nothing downstream unwraps an attempt
+			// error, it only ever gets printed.
+			r.Attempts[i].Err = errors.New(textsafe.Clean(a.Err.Error()))
+		}
+	}
+	return r
+}
 
 func (o *netops) buildProbes(t *Target) []Probe {
 	iface := Probe{ID: ProbeIface, Name: "Interface", Run: o.ifaceProbe}
@@ -298,7 +327,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	if err != nil {
 		r.Status = StatusFail
-		r.Detail = "bad proxy configuration: " + textsafe.Clean(err.Error())
+		r.Detail = "bad proxy configuration: " + err.Error()
 		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
 		return r
 	}
@@ -315,13 +344,13 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	if proxyURL.Scheme != "http" && proxyURL.Scheme != "https" {
 		r.Status = StatusNA
-		r.Detail = "proxy scheme " + textsafe.Clean(proxyURL.Scheme) + " is not supported by this probe"
+		r.Detail = "proxy scheme " + proxyURL.Scheme + " is not supported by this probe"
 		return r
 	}
 	if port := proxyURL.Port(); port != "" {
 		if _, err := parsePort(port); err != nil {
 			r.Status = StatusFail
-			r.Detail = "bad proxy configuration: " + textsafe.Clean(err.Error())
+			r.Detail = "bad proxy configuration: " + err.Error()
 			r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
 			return r
 		}
@@ -343,7 +372,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	if err != nil {
 		r.Status = StatusFail
-		r.Detail = "cannot reach proxy " + textsafe.Clean(addr) + ": " + textsafe.Clean(err.Error())
+		r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
 		r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY and the proxy host"
 		return r
 	}
@@ -355,7 +384,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	if _, err := io.WriteString(conn, req+"\r\n"); err != nil {
 		r.Status = StatusFail
-		r.Detail = "proxy write failed: " + textsafe.Clean(err.Error())
+		r.Detail = "proxy write failed: " + err.Error()
 		return r
 	}
 	// net.Conn reads don't know ctx exists; the read deadline is the only leash.
@@ -365,7 +394,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	resp, err := http.ReadResponse(bufio.NewReader(io.LimitReader(conn, 4096)), &http.Request{Method: http.MethodConnect})
 	if err != nil {
 		r.Status = StatusFail
-		r.Detail = "no CONNECT response from proxy " + textsafe.Clean(addr) + ": " + textsafe.Clean(err.Error())
+		r.Detail = "no CONNECT response from proxy " + addr + ": " + err.Error()
 		r.Fix = "proxy reachable but not speaking HTTP — wrong port or scheme?"
 		return r
 	}
@@ -373,7 +402,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	rtt := time.Since(start)
 	if resp.StatusCode/100 != 2 {
 		r.Status = StatusFail
-		r.Detail = "proxy " + textsafe.Clean(addr) + " refused CONNECT: " + textsafe.Clean(resp.Status)
+		r.Detail = "proxy " + addr + " refused CONNECT: " + resp.Status
 		if resp.StatusCode == http.StatusProxyAuthRequired {
 			r.Fix = "proxy requires credentials — set user:pass@host in HTTPS_PROXY"
 		} else {
@@ -403,7 +432,7 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		ips, err := o.lookupIP(ctx, host)
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "cannot resolve " + host + ": " + textsafe.Clean(err.Error())
+			r.Detail = "cannot resolve " + host + ": " + err.Error()
 			r.Fix = dnsFix(runtime.GOOS)
 			return r
 		}
@@ -456,7 +485,7 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 		conn, err := o.dialTLS(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)), &tls.Config{ServerName: host})
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "TLS handshake failed: " + textsafe.Clean(err.Error())
+			r.Detail = "TLS handshake failed: " + err.Error()
 			r.Fix = "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
 			return r
 		}
@@ -523,7 +552,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		dialMu.Unlock()
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "no " + protocol + " response: " + textsafe.Clean(err.Error())
+			r.Detail = "no " + protocol + " response: " + err.Error()
 			r.Fix = protocol + " blocked — proxy or firewall?"
 			return r
 		}
@@ -544,7 +573,7 @@ func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
 		}
 		conn, err := o.dialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 		if err != nil {
-			r.Status, r.Detail = StatusFail, "connect failed: "+textsafe.Clean(err.Error())
+			r.Status, r.Detail = StatusFail, "connect failed: "+err.Error()
 			return r
 		}
 		defer conn.Close()
@@ -566,7 +595,7 @@ func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
 			// Port answered but the service said nothing: functional, degraded.
 			r.Status, r.Detail = StatusWarn, "connected, no banner within deadline"
 		} else {
-			r.Status, r.Detail = StatusPass, "banner: "+textsafe.Clean(line)
+			r.Status, r.Detail = StatusPass, "banner: "+line
 		}
 		return r
 	}}

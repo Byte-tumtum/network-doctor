@@ -466,3 +466,28 @@ func TestTargetTCPProbe(t *testing.T) {
 		t.Errorf("attempts = %+v, want the single failed attempt recorded", r.Attempts)
 	}
 }
+
+// Probes hand their results to BuildProbes' wrapper, which is the only place
+// external text gets sanitized — so a probe that emits raw escapes must come
+// out clean anyway.
+func TestCleanResultScrubsEveryTextField(t *testing.T) {
+	hostile := "boom\x1b[31m\x07"
+	r := cleanResult(ProbeResult{
+		Detail:   hostile,
+		Fix:      hostile,
+		Iface:    hostile,
+		Network:  hostile,
+		Attempts: []Attempt{{Err: errors.New(hostile)}},
+	})
+	for name, got := range map[string]string{
+		"Detail":  r.Detail,
+		"Fix":     r.Fix,
+		"Iface":   r.Iface,
+		"Network": r.Network,
+		"Attempt": r.Attempts[0].Err.Error(),
+	} {
+		if got != "boom" {
+			t.Errorf("%s = %q, want %q", name, got, "boom")
+		}
+	}
+}
