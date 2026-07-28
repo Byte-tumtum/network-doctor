@@ -37,18 +37,18 @@ func TestSanitize(t *testing.T) {
 		"tab\there",
 		"\x9b31m raw c1 byte",
 		"\xff\xfe invalid utf8",
-		"‮LIAF‬ row",
-		"⁦host⁩​­‎‏",
+		"\u202eLIAF\u202c row",
+		"\u2066host\u2069\u200b\u00ad\u200e\u200f",
 		"para sep here",
 	}
 	for _, in := range cases {
 		noControl(t, in, Clean(in))
 	}
 	// A right-to-left override in a banner would render "LIAF" as "FAIL".
-	if got := Clean("ok ‮LIAF‬"); got != "ok LIAF" {
+	if got := Clean("ok \u202eLIAF\u202c"); got != "ok LIAF" {
 		t.Errorf("bidi override strip = %q, want %q", got, "ok LIAF")
 	}
-	if got := Clean("goo​gle.com­"); got != "google.com" {
+	if got := Clean("goo\u200bgle.com\u00ad"); got != "google.com" {
 		t.Errorf("zero-width strip = %q, want %q", got, "google.com")
 	}
 	if got := Clean("\x1b[31mhello\x1b[0m"); got != "hello" {
@@ -66,7 +66,7 @@ func TestSanitize(t *testing.T) {
 }
 
 func FuzzSanitize(f *testing.F) {
-	for _, s := range []string{"\x1b[31mhi\x1b[0m", "\x1b]0;x\x07", "\xff\xfe", "ok", "‮abc"} {
+	for _, s := range []string{"\x1b[31mhi\x1b[0m", "\x1b]0;x\x07", "\xff\xfe", "ok", "\u202eabc"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {

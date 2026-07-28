@@ -246,7 +246,7 @@ func saveHistory(path string, hist []string) {
 	if err != nil {
 		return
 	}
-	defer os.Remove(f.Name()) // no-op once the rename lands
+	defer func() { _ = os.Remove(f.Name()) }() // no-op once the rename lands
 	if _, err := f.WriteString(strings.Join(hist, "\n") + "\n"); err != nil {
 		f.Close()
 		return
