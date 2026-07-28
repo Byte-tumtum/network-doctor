@@ -20,6 +20,14 @@ var escapeRe = regexp.MustCompile(`\x1b\[[0-9:;<=>?]*[ -/]*[@-~]|\x1b\][^\x07\x1
 // even newlines) and invalid UTF-8 gets dropped. Newlines because Clean is
 // single-line by contract — streaming callers split first, so a newline
 // showing up here is nobody's friend.
+//
+// Format runes go too. A banner carrying U+202E or an isolate from the
+// U+2066 block can flip the reading order of everything after it, so a FAIL
+// row renders as PASS and a hostname reads as somebody else's. Cf also
+// covers the invisible padding — U+200B, U+00AD — that hides text in a
+// report. ZWJ and ZWNJ are Cf as well, so emoji sequences and Arabic or
+// Indic shaping lose their joiners here; that is a rendering nit in a
+// banner, and worth less than the reordering it buys off.
 func Clean(s string) string {
 	// Whole sequences first; the rune filter would strip the ESC and
 	// leave "[31m" behind looking innocent.
@@ -31,6 +39,10 @@ func Clean(s string) string {
 		case r == unicode.ReplacementChar: // invalid UTF-8
 			return -1
 		case unicode.IsControl(r): // C0 + C1, incl. ESC and \n
+			return -1
+		case unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp):
+			// Cf: bidi overrides/isolates/marks, zero-width, soft hyphen.
+			// Zl/Zp: U+2028/2029, line breaks by another name.
 			return -1
 		default:
 			return r
