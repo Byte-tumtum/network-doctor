@@ -292,7 +292,7 @@ func (m *model) setNotice(msg string, ok bool) tea.Cmd {
 	if msg == ctrlCNotice {
 		window = ctrlCWindow
 	}
-	m.notice, m.noticeOK = msg, ok
+	m.notice, m.noticeOK = textsafe.Clean(msg), ok
 	m.noticeDeadline = time.Now().Add(window)
 	deadline := m.noticeDeadline
 	if m.viewing {

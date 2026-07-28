@@ -700,6 +700,14 @@ func TestReportNoticeExpires(t *testing.T) {
 	}
 }
 
+func TestSetNoticeSanitizesText(t *testing.T) {
+	m := newModel(nil, false)
+	m.setNotice("\x1b[31msave failed\x1b[0m: \u202eLIAF\u202c", false)
+	if got, want := m.notice, "save failed: LIAF"; got != want {
+		t.Errorf("notice = %q, want %q", got, want)
+	}
+}
+
 // scheduleMsg creates the generation context and dispatches only the root probe.
 func TestScheduleStartsRoot(t *testing.T) {
 	m := newModel(nil, false)
