@@ -2,7 +2,12 @@
 
 package diagnostic
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
 
 func mustTarget(t *testing.T, s string) *Target {
 	t.Helper()
@@ -67,5 +72,21 @@ func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
 	got := http[len(http)-1]
 	if got.ID != ProbeHTTP || got.Name != "HTTP example.com" || len(got.Deps) != 1 || got.Deps[0] != ProbeTargetTCP {
 		t.Errorf("plain HTTP application probe = %+v, want HTTP depending on target TCP", got)
+	}
+}
+
+// Every probe is timed by the same wrapper that sanitizes it, so both runners
+// report durations without either one keeping its own stopwatch.
+func TestWrapRunTimesAndCleans(t *testing.T) {
+	run := wrapRun(func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
+		time.Sleep(2 * time.Millisecond)
+		return ProbeResult{Detail: "hello\x1b[31mworld"}
+	})
+	r := run(context.Background(), nil)
+	if r.Dur < 2*time.Millisecond {
+		t.Errorf("Dur = %v, want at least 2ms", r.Dur)
+	}
+	if strings.Contains(r.Detail, "\x1b") {
+		t.Errorf("Detail = %q, want the escape sanitized away", r.Detail)
 	}
 }

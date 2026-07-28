@@ -109,6 +109,85 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) string {
 	}
 }
 
+// Verdict classifications: the machine-readable half of Diagnose, for scripts
+// that need the shape of the failure without parsing English. Stable vocabulary.
+const (
+	VerdictOK         = "ok"         // nothing failed, nothing degraded
+	VerdictDegraded   = "degraded"   // everything asked for works, some rung is impaired
+	VerdictDNS        = "dns"        // the name did not resolve
+	VerdictNetwork    = "network"    // the path is unavailable — we never got to ask the service
+	VerdictService    = "service"    // the path works, the service on the far end does not
+	VerdictIncomplete = "incomplete" // a probe has no result yet
+)
+
+// Verdict answers the question the prose summary answers, in five words instead
+// of a sentence: is this a broken path or a broken service? It reads the same
+// probe state as Diagnose and follows the same case order, so the two never
+// disagree — change one, change the other.
+//
+// The service/network split hinges on whether some other path proved the
+// network usable: an unreachable target with working direct egress is the
+// remote end's problem, the same target with no egress at all is ours.
+func Verdict(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) string {
+	degraded := false
+	for _, id := range order {
+		r, ok := res[id]
+		if !ok {
+			return VerdictIncomplete
+		}
+		degraded = degraded || r.Status == StatusWarn
+	}
+	fail := func(id ProbeID) bool { return res[id].Status == StatusFail }
+	has := func(id ProbeID) bool { _, ok := res[id]; return ok }
+	failed := func(id ProbeID) bool { return has(id) && fail(id) }
+	// Same definition as Diagnose's: a Warn that DowngradeEgress planted is a
+	// Fail wearing a nicer hat, so it doesn't count as working egress.
+	directOK := func() bool {
+		r := res[ProbeInternet]
+		return functional(r.Status) && !r.downgraded
+	}
+	proxyOK := func() bool { return has(ProbeProxy) && functional(res[ProbeProxy].Status) }
+
+	switch {
+	case fail(ProbeIface):
+		return VerdictNetwork
+
+	case t == nil:
+		// Generic mode has only two rungs to lose: egress and DNS.
+		switch {
+		case !directOK() && fail(ProbeDNS):
+			return VerdictNetwork
+		case fail(ProbeDNS):
+			return VerdictDNS
+		case !directOK() && !proxyOK():
+			return VerdictNetwork
+		case !directOK():
+			return VerdictDegraded // proxy-only network: online, just not directly
+		}
+
+	case fail(ProbeDNS):
+		return VerdictDNS
+	case fail(ProbeTargetTCP):
+		// Without working direct egress we can't tell a closed port from a
+		// dead path, so we don't guess — that's a network answer, not a
+		// service one. A working proxy proves the box is online but says
+		// nothing about the direct route this target needs.
+		if directOK() {
+			return VerdictService
+		}
+		return VerdictNetwork
+	case failed(ProbeTLS), failed(ProbeHTTPS), failed(ProbeHTTP), failed(ProbeSSH), failed(ProbeSMTP):
+		return VerdictService
+	case !directOK():
+		return VerdictDegraded // the target works; only the general internet is blocked
+	}
+
+	if degraded {
+		return VerdictDegraded
+	}
+	return VerdictOK
+}
+
 func functional(s Status) bool {
 	return s == StatusPass || s == StatusWarn
 }

@@ -89,7 +89,11 @@ IP literal). A Warn never counts as a failure.
 | **HTTPS** | The selected TLS port returns any HTTP response | HEAD against the TLS-validated IP, redirects off, proxy off |
 | **SSH/SMTP banner** | TCP connects (banner read best-effort) | bounded read; connected but silent → Warn (not a failure) |
 
-RTT is measured from the TCP-connect handshake (no ICMP, no root). The source IP
+No verdict depends on ICMP. Plenty of healthy hosts drop ping, so a failed
+`ping` proves nothing and a successful one proves less than a TCP connect
+does — RTT is measured from the TCP-connect handshake instead (no ICMP, no
+root). `ping` is available as a drill-down tool, where it's evidence for a
+human rather than input to a diagnosis. The source IP
 and interface are read from the winning connection's `LocalAddr`, with a
 UDP-connect fallback (sends no packets) for path identity on failure. Every probe
 is bounded by a 4-second timeout.
@@ -186,18 +190,42 @@ document to stdout:
   "version": "1.2.3",
   "target": {"host": "github.com", "port": 443, "protocol": "tls+http"},
   "checks": [
-    {"id": "dns", "name": "DNS github.com", "status": "PASS", "detail": "github.com → 140.82.113.3", "addrs": ["140.82.113.3"]}
+    {"id": "dns", "name": "DNS github.com", "status": "PASS", "ms": 12, "detail": "github.com → 140.82.113.3", "addrs": ["140.82.113.3"]}
   ],
   "summary": "All checks passed — github.com:443 looks healthy.",
+  "verdict": "ok",
   "ok": true
 }
 ```
 
 `status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null`
-in generic (no-target) mode. Optional per-check fields (`fix`, `addrs`,
-`selected_ip`, `source`, `iface`, `network`, `attempts`) are omitted when
-empty. Field names and the status vocabulary are stable — safe to script
-against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
+in generic (no-target) mode. `ms` is the check's wall time truncated to
+milliseconds — `0` for a check that never ran, and for one that finished in
+under a millisecond. Optional per-check fields (`fix`, `addrs`, `selected_ip`,
+`source`, `iface`, `network`, `attempts`) are omitted when empty. Field names
+and the status vocabulary are stable — safe to script against. Exit codes
+follow the table below (`ok: false` ⇒ exit `1`).
+
+`failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`,
+…) and is omitted when none did — enough to route a bug report without reading
+the prose.
+
+`verdict` is the summary as a machine-readable class, for the question a
+script actually asks: *is my network broken, or is theirs?*
+
+| `verdict` | Meaning |
+|---|---|
+| `ok` | Every check passed |
+| `degraded` | Everything asked for works, but some rung is impaired — high latency, a proxy-only network, direct egress blocked while the target is fine |
+| `dns` | The name did not resolve |
+| `network` | **The path is unavailable** — the link is down, there's no egress, or the target is unreachable with nothing else proving the network usable |
+| `service` | **The path works, the far end does not** — TCP refused while the general internet is reachable, or TLS/HTTP/banner failing on top of a good connection |
+| `incomplete` | A check has no result (the chain did not finish) |
+
+The `network`/`service` split is decided by evidence, not guesswork: an
+unreachable target is only blamed on the service when direct egress
+independently succeeded. With no working egress to compare against, netdoc
+says `network` rather than accuse a host it never reached.
 
 ### Exit codes
 

@@ -135,3 +135,82 @@ func TestDiagnoseTargetWarnings(t *testing.T) {
 		}
 	}
 }
+
+// The service/network split is the whole point of the machine-readable
+// verdict: the same target failure classifies differently depending on
+// whether anything else proved the path usable.
+func TestVerdict(t *testing.T) {
+	tg := mustTarget(t, "github.com")
+	targetOrder := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbeTLS, ProbeHTTP, ProbeHTTPS}
+	genericOrder := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS}
+
+	cases := []struct {
+		name   string
+		target *Target
+		order  []ProbeID
+		res    map[ProbeID]ProbeResult
+		want   string
+	}{
+		{"all clear", tg, targetOrder, nil, VerdictOK},
+		{"link down", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeIface: {Status: StatusFail},
+		}, VerdictNetwork},
+		{"dns failure", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeDNS: {Status: StatusFail},
+		}, VerdictDNS},
+		{"port closed, internet fine", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeTargetTCP: {Status: StatusFail},
+		}, VerdictService},
+		{"target unreachable, no egress", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeInternet:  {Status: StatusFail},
+			ProbeTargetTCP: {Status: StatusFail},
+		}, VerdictNetwork},
+		{"tls broken", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeTLS: {Status: StatusFail},
+		}, VerdictService},
+		{"http broken", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeHTTPS: {Status: StatusFail},
+		}, VerdictService},
+		{"target fine, egress blocked", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeInternet: {Status: StatusFail},
+		}, VerdictDegraded},
+		{"slow but working", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeTargetTCP: {Status: StatusWarn},
+		}, VerdictDegraded},
+		{"generic online", nil, genericOrder, nil, VerdictOK},
+		{"generic dns down", nil, genericOrder, map[ProbeID]ProbeResult{
+			ProbeDNS: {Status: StatusFail},
+		}, VerdictDNS},
+		{"generic offline", nil, genericOrder, map[ProbeID]ProbeResult{
+			ProbeInternet: {Status: StatusFail},
+			ProbeDNS:      {Status: StatusFail},
+		}, VerdictNetwork},
+		{"generic no egress", nil, genericOrder, map[ProbeID]ProbeResult{
+			ProbeInternet: {Status: StatusFail},
+			ProbeProxy:    {Status: StatusNA},
+		}, VerdictNetwork},
+		{"generic proxy-only", nil, genericOrder, map[ProbeID]ProbeResult{
+			ProbeInternet: {Status: StatusWarn, downgraded: true},
+			ProbeProxy:    {Status: StatusPass},
+		}, VerdictDegraded},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := make(map[ProbeID]ProbeResult, len(c.order))
+			for _, id := range c.order {
+				res[id] = ProbeResult{Status: StatusPass}
+			}
+			for id, r := range c.res {
+				res[id] = r
+			}
+			if got := Verdict(c.target, c.order, res); got != c.want {
+				t.Errorf("Verdict = %q, want %q (summary: %s)", got, c.want, Diagnose(c.target, c.order, res))
+			}
+		})
+	}
+
+	// An unfinished run must not claim health.
+	if got := Verdict(tg, targetOrder, map[ProbeID]ProbeResult{ProbeIface: {Status: StatusPass}}); got != VerdictIncomplete {
+		t.Errorf("Verdict on partial results = %q, want %q", got, VerdictIncomplete)
+	}
+}

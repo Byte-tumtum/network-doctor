@@ -83,6 +83,7 @@ type ProbeResult struct {
 	Iface      string
 	Network    string // connected Wi-Fi SSID, empty when wired/unknown
 	Attempts   []Attempt
+	Dur        time.Duration // wall time the probe took; zero for probes that never ran
 	Detail     string
 	Fix        string
 }
@@ -156,16 +157,24 @@ var defaultOps = &netops{
 // Every Run is wrapped so results leave the probe already sanitized: this is
 // the one place external bytes cross into text we print, so callers render
 // ProbeResult strings as-is and a new probe can't reintroduce terminal
-// injection by forgetting to Clean at the source.
+// injection by forgetting to Clean at the source. It is also the one place
+// both runners (RunAll and the ui scheduler) share, so timing lives here too.
 func BuildProbes(t *Target) []Probe {
 	probes := defaultOps.buildProbes(t)
 	for i := range probes {
-		run := probes[i].Run
-		probes[i].Run = func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
-			return cleanResult(run(ctx, deps))
-		}
+		probes[i].Run = wrapRun(probes[i].Run)
 	}
 	return probes
+}
+
+// wrapRun times and sanitizes one probe's Run.
+func wrapRun(run func(context.Context, map[ProbeID]ProbeResult) ProbeResult) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
+	return func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
+		start := time.Now()
+		r := cleanResult(run(ctx, deps))
+		r.Dur = time.Since(start)
+		return r
+	}
 }
 
 // cleanResult scrubs the human-readable fields of a probe result. Names and

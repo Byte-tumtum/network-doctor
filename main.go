@@ -139,7 +139,11 @@ type report struct {
 	Target  *reportTarget `json:"target"` // null in generic (no-target) mode
 	Checks  []reportCheck `json:"checks"`
 	Summary string        `json:"summary"`
-	OK      bool          `json:"ok"`
+	Verdict string        `json:"verdict"`
+	// FailedStage is the id of the first check that failed, omitted when none
+	// did — the one field a CI job needs to route a bug report.
+	FailedStage string `json:"failed_stage,omitempty"`
+	OK          bool   `json:"ok"`
 }
 
 type reportTarget struct {
@@ -152,6 +156,7 @@ type reportCheck struct {
 	ID         string          `json:"id"`
 	Name       string          `json:"name"`
 	Status     string          `json:"status"`
+	Ms         int64           `json:"ms"` // wall time, truncated; 0 for checks that never ran
 	Detail     string          `json:"detail"`
 	Fix        string          `json:"fix,omitempty"`
 	Addrs      []string        `json:"addrs,omitempty"`
@@ -202,10 +207,14 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		order[i] = p.ID
 		r := results[p.ID]
 		rep.OK = rep.OK && r.Status != diagnostic.StatusFail
+		if r.Status == diagnostic.StatusFail && rep.FailedStage == "" {
+			rep.FailedStage = string(p.ID)
+		}
 		c := reportCheck{
 			ID:      string(p.ID),
 			Name:    p.Name,
 			Status:  r.Status.String(),
+			Ms:      r.Dur.Milliseconds(),
 			Detail:  r.Detail,
 			Fix:     r.Fix,
 			Iface:   r.Iface,
@@ -230,5 +239,6 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		rep.Checks = append(rep.Checks, c)
 	}
 	rep.Summary = diagnostic.Diagnose(t, order, results)
+	rep.Verdict = diagnostic.Verdict(t, order, results)
 	return rep
 }

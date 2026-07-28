@@ -10,6 +10,7 @@ import (
 	"flag"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
@@ -129,8 +130,8 @@ func TestBuildReport(t *testing.T) {
 		{ID: diagnostic.ProbeDNS, Name: "DNS example.com"},
 	}
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
-		diagnostic.ProbeIface: {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Detail: "interface eth0 is up", Iface: "eth0"},
-		diagnostic.ProbeDNS:   {ID: diagnostic.ProbeDNS, Status: diagnostic.StatusFail, Detail: "cannot resolve example.com", Fix: "check DNS"},
+		diagnostic.ProbeIface: {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Detail: "interface eth0 is up", Iface: "eth0", Dur: 7 * time.Millisecond},
+		diagnostic.ProbeDNS:   {ID: diagnostic.ProbeDNS, Status: diagnostic.StatusFail, Detail: "cannot resolve example.com", Fix: "check DNS", Dur: 1200 * time.Millisecond},
 	}
 	rep := buildReport(target, probes, results)
 
@@ -149,10 +150,19 @@ func TestBuildReport(t *testing.T) {
 	if rep.Checks[1].Status != "FAIL" || rep.Checks[1].Fix != "check DNS" {
 		t.Errorf("dns check = %+v", rep.Checks[1])
 	}
+	if rep.Checks[0].Ms != 7 || rep.Checks[1].Ms != 1200 {
+		t.Errorf("timings = %d, %d ms; want 7, 1200", rep.Checks[0].Ms, rep.Checks[1].Ms)
+	}
 	if !strings.Contains(rep.Summary, "Cannot resolve example.com") {
 		t.Errorf("summary = %q", rep.Summary)
 	}
-
+	// The first failing row, not merely a failing one — scripts route on this.
+	if rep.FailedStage != string(diagnostic.ProbeDNS) {
+		t.Errorf("failed_stage = %q, want %q", rep.FailedStage, diagnostic.ProbeDNS)
+	}
+	if rep.Verdict != diagnostic.VerdictDNS {
+		t.Errorf("verdict = %q, want %q", rep.Verdict, diagnostic.VerdictDNS)
+	}
 }
 
 func TestBuildReportGenericAllPass(t *testing.T) {
@@ -187,6 +197,7 @@ func TestReportJSONContract(t *testing.T) {
 					ID:         "target_tcp",
 					Name:       "Target TCP",
 					Status:     "WARN",
+					Ms:         46,
 					Detail:     "slow",
 					Fix:        "check firewall",
 					Addrs:      []string{"192.0.2.1"},
@@ -199,15 +210,17 @@ func TestReportJSONContract(t *testing.T) {
 						{IP: "192.0.2.3", Ms: 34, Err: "timeout"},
 					},
 				}},
-				Summary: "degraded",
-				OK:      true,
+				Summary:     "degraded",
+				Verdict:     "degraded",
+				FailedStage: "tls",
+				OK:          true,
 			},
-			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","ok":true}`,
+			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
 		},
 		{
 			name: "empty",
 			rep:  report{Checks: []reportCheck{{}}},
-			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","detail":""}],"summary":"","ok":false}`,
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"","verdict":"","ok":false}`,
 		},
 	}
 	for _, tt := range tests {
