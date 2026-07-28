@@ -159,6 +159,45 @@ func TestInternetProbeFamilies(t *testing.T) {
 	}
 }
 
+// A network whose TCP handshakes all succeed is still not online if the 204
+// endpoint comes back as anything else: that's a portal answering for it.
+func TestInternetProbeCaptivePortal(t *testing.T) {
+	dialOK := func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil }
+	ifaces := func() ([]net.Interface, error) { return nil, nil }
+
+	portal := &netops{
+		dialContext: dialOK, interfaces: ifaces,
+		portalCheck: func(context.Context) (int, error) { return http.StatusFound, nil },
+	}
+	r := portal.internetProbe(context.Background(), nil)
+	if r.Status != StatusFail || !r.portal || r.Fix == "" || !strings.Contains(r.Detail, "intercepted") {
+		t.Errorf("portal network = %+v, want FAIL flagged as a portal with a fix", r)
+	}
+	// And the exemption holds: DNS answering must not launder it into a Warn.
+	res := map[ProbeID]ProbeResult{ProbeInternet: r, ProbeDNS: {Status: StatusPass}}
+	DowngradeEgress(res)
+	if res[ProbeInternet].Status != StatusFail {
+		t.Errorf("downgraded portal to %v, want FAIL to survive a passing DNS", res[ProbeInternet].Status)
+	}
+
+	clean := &netops{
+		dialContext: dialOK, interfaces: ifaces,
+		portalCheck: func(context.Context) (int, error) { return http.StatusNoContent, nil },
+	}
+	if r := clean.internetProbe(context.Background(), nil); r.Status != StatusPass || r.portal {
+		t.Errorf("204 network = %+v, want a plain PASS", r)
+	}
+
+	// An unreachable check is not evidence of a portal — the dial result stands.
+	broken := &netops{
+		dialContext: dialOK, interfaces: ifaces,
+		portalCheck: func(context.Context) (int, error) { return 0, errors.New("no route to host") },
+	}
+	if r := broken.internetProbe(context.Background(), nil); r.Status != StatusPass || r.portal {
+		t.Errorf("failed check = %+v, want the TCP verdict to stand", r)
+	}
+}
+
 // A TLS handshake error is a FAIL with the cleaned error in the detail and a
 // fix hint — not a panic and not a skip.
 func TestTLSProbeHandshakeFailure(t *testing.T) {

@@ -33,6 +33,16 @@ func TestDiagnoseTargetBranches(t *testing.T) {
 			want: "link is down",
 		},
 		{
+			// The portal makes every lower rung pass; the verdict must still
+			// name the portal rather than the first rung that looks broken.
+			name: "captive portal outranks the rungs below it",
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: {Status: StatusFail, portal: true}, ProbeDNS: pass,
+				ProbeTargetTCP: pass, ProbeTLS: fail, ProbeHTTP: skip, ProbeHTTPS: skip,
+			},
+			want: "captive portal",
+		},
+		{
 			name: "dns fails but general internet is up",
 			res: map[ProbeID]ProbeResult{
 				ProbeIface: pass, ProbeInternet: pass, ProbeDNS: fail,

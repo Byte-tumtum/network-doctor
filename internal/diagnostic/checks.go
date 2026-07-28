@@ -77,6 +77,7 @@ type ProbeResult struct {
 	ID         ProbeID
 	Status     Status
 	downgraded bool     // DowngradeEgress rewrote a direct-egress failure to Warn.
+	portal     bool     // egress failed because the path is intercepted, not dead.
 	Addrs      []net.IP // DNS publishes all A records here
 	SelectedIP net.IP   // winning/pinned IP used by this probe
 	Source     net.IP
@@ -116,6 +117,10 @@ const (
 // probeHost is the host used by the generic (no-target) DNS + egress probes.
 const probeHost = "connectivitycheck.gstatic.com"
 
+// portalProbeURL answers 204 with an empty body on an unintercepted path.
+// Plain HTTP on purpose — that's the request a captive portal grabs.
+const portalProbeURL = "http://" + probeHost + "/generate_204"
+
 // internetEndpoints4/6 are the ordered direct-egress endpoints per address
 // family; first connect wins within a family. Honestly "direct TCP egress" —
 // proxy-only networks can fail this.
@@ -136,6 +141,9 @@ type netops struct {
 	tlsRootCAs     *x509.CertPool
 	ssid           func(ctx context.Context, iface string) string
 	proxyFromEnv   func(*http.Request) (*url.URL, error)
+	// portalCheck returns the status code portalProbeURL answered with.
+	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
+	portalCheck func(ctx context.Context) (int, error)
 }
 
 var defaultOps = &netops{
@@ -151,6 +159,32 @@ var defaultOps = &netops{
 	},
 	ssid:         ssid,
 	proxyFromEnv: http.ProxyFromEnvironment,
+	portalCheck:  portalCheck,
+}
+
+// portalCheck fetches portalProbeURL and reports the status code it got.
+// Proxy and redirect following are both off: the direct-egress row must not
+// borrow the proxy's path, and an interception usually announces itself as
+// the 302 we'd otherwise chase to a sign-in page.
+func portalCheck(ctx context.Context) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalProbeURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	c := &http.Client{
+		Transport: &http.Transport{
+			Proxy:                  nil,
+			DisableKeepAlives:      true,
+			MaxResponseHeaderBytes: 64 << 10,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode, nil
 }
 
 // BuildProbes constructs the DAG for the given target (nil = generic mode).
@@ -282,6 +316,9 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// family only spends its own share of the probe deadline, and IPv4 and
 	// IPv6 egress are diagnosed separately.
 	var v4, v6 famResult
+	// portalCode stays 0 when the check is stubbed out or never answered; only
+	// a real status code is evidence either way.
+	var portalCode int
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, internetEndpoints4, 443)
@@ -289,6 +326,15 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	wg.Go(func() {
 		v6.conn, v6.sel, v6.attempts, v6.rtt = o.dialIPs(ctx, internetEndpoints6, 443)
 	})
+	if o.portalCheck != nil {
+		// Runs alongside the dials rather than after them: it costs nothing
+		// when egress is clean, and its answer is only consulted on success.
+		wg.Go(func() {
+			if code, err := o.portalCheck(ctx); err == nil {
+				portalCode = code
+			}
+		})
+	}
 	wg.Wait()
 
 	// IPv4 headlines the result unless it lost and IPv6 won — not a value
@@ -311,6 +357,18 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		sec.conn.Close()
 	}
 	src, iface := o.pathIdentity(ctx, prim.conn, prim.sel, 443)
+	// A completed handshake only proves that something answered. A captive
+	// portal or transparent filter terminates the connection itself and is
+	// indistinguishable from real egress at this layer; the 204 endpoint is
+	// what tells them apart, so ask before calling the network online.
+	if portalCode != 0 && portalCode != http.StatusNoContent {
+		r.Status, r.SelectedIP, r.Source, r.Iface = StatusFail, prim.sel, src, iface
+		r.Attempts = append(prim.attempts, sec.attempts...)
+		r.portal = true
+		r.Detail = fmt.Sprintf("TCP reaches %s but HTTP is intercepted: %s answered %d, want 204", prim.sel, portalProbeURL, portalCode)
+		r.Fix = "captive portal or transparent filter — open a browser and sign in to the network"
+		return r
+	}
 	r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, prim.sel, src, iface
 	r.Detail = fmt.Sprintf("%s egress via %s in %dms (src %s %s)", primName, prim.sel, prim.rtt.Milliseconds(), src, iface)
 	if sec.conn != nil {
