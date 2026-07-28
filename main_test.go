@@ -153,16 +153,6 @@ func TestBuildReport(t *testing.T) {
 		t.Errorf("summary = %q", rep.Summary)
 	}
 
-	// The report must round-trip as JSON with the stable field names.
-	b, err := json.Marshal(rep)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{`"version"`, `"target"`, `"checks"`, `"summary"`, `"ok"`, `"status"`} {
-		if !strings.Contains(string(b), key) {
-			t.Errorf("JSON missing %s: %s", key, b)
-		}
-	}
 }
 
 func TestBuildReportGenericAllPass(t *testing.T) {
@@ -179,5 +169,56 @@ func TestBuildReportGenericAllPass(t *testing.T) {
 	}
 	if rep.Summary == "" {
 		t.Error("summary empty, want all-clear text")
+	}
+}
+
+func TestReportJSONContract(t *testing.T) {
+	tests := []struct {
+		name string
+		rep  report
+		want string
+	}{
+		{
+			name: "populated",
+			rep: report{
+				Version: "1.2.3",
+				Target:  &reportTarget{Host: "example.com", Port: 443, Protocol: "tls+http"},
+				Checks: []reportCheck{{
+					ID:         "target_tcp",
+					Name:       "Target TCP",
+					Status:     "WARN",
+					Detail:     "slow",
+					Fix:        "check firewall",
+					Addrs:      []string{"192.0.2.1"},
+					SelectedIP: "192.0.2.1",
+					Source:     "192.0.2.2",
+					Iface:      "eth0",
+					Network:    "office",
+					Attempts: []reportAttempt{
+						{IP: "192.0.2.1", Ms: 12},
+						{IP: "192.0.2.3", Ms: 34, Err: "timeout"},
+					},
+				}},
+				Summary: "degraded",
+				OK:      true,
+			},
+			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","ok":true}`,
+		},
+		{
+			name: "empty",
+			rep:  report{Checks: []reportCheck{{}}},
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","detail":""}],"summary":"","ok":false}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.rep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("JSON = %s\nwant   %s", got, tt.want)
+			}
+		})
 	}
 }
