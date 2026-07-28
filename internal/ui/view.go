@@ -34,14 +34,18 @@ func probeGlyph(s diagnostic.Status) string {
 
 // networkLine is the connected-network label shown under the title: the Wi-Fi
 // SSID when wireless, else the wired interface name. Empty until the interface
-// probe has passed.
+// and display-only SSID probes have completed.
 func (m model) networkLine() string {
 	r, ok := m.results[diagnostic.ProbeIface]
 	if !ok || r.Status != diagnostic.StatusPass {
 		return ""
 	}
-	if r.Network != "" {
-		return "Wi-Fi: " + r.Network
+	network, ok := m.results[diagnostic.ProbeSSID]
+	if !ok {
+		return ""
+	}
+	if network.Network != "" {
+		return "Wi-Fi: " + network.Network
 	}
 	if r.Iface != "" {
 		return "Wired: " + r.Iface

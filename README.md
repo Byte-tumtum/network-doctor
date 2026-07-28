@@ -66,6 +66,8 @@ failure never hides a working one:
   proxy)`. The native probes deliberately bypass proxies, so this row reports
   the environment-configured proxy separately — a proxy-only corporate network
   reads as "online via proxy" instead of offline.
+- **Wi-Fi metadata path**: `Interface → Wi-Fi network`. SSID discovery runs
+  beside the network checks, so a slow OS lookup never delays them.
 - **Plain HTTP path**: `Interface → DNS → HTTP :80`.
 - **Selected target path**: `Interface → DNS → TCP → TLS → HTTPS` for secure
   web targets, or the applicable protocol row for other ports.

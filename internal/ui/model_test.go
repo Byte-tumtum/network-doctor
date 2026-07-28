@@ -768,7 +768,7 @@ func TestRunProbeSnapshotIndependence(t *testing.T) {
 }
 
 func TestSelectionClamp(t *testing.T) {
-	m := newModel(nil, false) // 4 rows
+	m := newModel(nil, false) // 5 rows
 	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	if asModel(t, u).selected != 0 {
 		t.Error("up at top must stay 0")
@@ -777,8 +777,8 @@ func TestSelectionClamp(t *testing.T) {
 		u, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = asModel(t, u)
 	}
-	if m.selected != 3 {
-		t.Errorf("selected = %d, want clamp at 3", m.selected)
+	if m.selected != 4 {
+		t.Errorf("selected = %d, want clamp at 4", m.selected)
 	}
 }
 

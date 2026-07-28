@@ -27,11 +27,11 @@ func TestSiblingIndependence(t *testing.T) {
 	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass}
 	m.started[diagnostic.ProbeIface] = true
 	cmds := m.scheduleStep()
-	if len(cmds) != 3 {
-		t.Fatalf("want 3 dispatched (internet, proxy, dns), got %d", len(cmds))
+	if len(cmds) != 4 {
+		t.Fatalf("want 4 dispatched (internet, proxy, dns, ssid), got %d", len(cmds))
 	}
-	if !m.started[diagnostic.ProbeInternet] || !m.started[diagnostic.ProbeProxy] || !m.started[diagnostic.ProbeDNS] {
-		t.Fatal("internet+proxy+dns should all be dispatched")
+	if !m.started[diagnostic.ProbeInternet] || !m.started[diagnostic.ProbeProxy] || !m.started[diagnostic.ProbeDNS] || !m.started[diagnostic.ProbeSSID] {
+		t.Fatal("internet+proxy+dns+ssid should all be dispatched")
 	}
 	if _, ok := m.results[diagnostic.ProbeDNS]; ok {
 		t.Error("dns must be dispatched, not skipped by an egress failure")
@@ -67,6 +67,7 @@ func TestDowngradeRunsWhenSkipsFinishRun(t *testing.T) {
 		m.started[id] = true
 	}
 	pass(diagnostic.ProbeIface)
+	pass(diagnostic.ProbeSSID)
 	fail(diagnostic.ProbeInternet)
 	pass(diagnostic.ProbeProxy)
 	pass(diagnostic.ProbeDNS)
@@ -87,6 +88,7 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 	m := newModel(mustTarget(t, "github.com:443"), false)
 	for _, id := range []diagnostic.ProbeID{
 		diagnostic.ProbeIface,
+		diagnostic.ProbeSSID,
 		diagnostic.ProbeInternet,
 		diagnostic.ProbeProxy,
 		diagnostic.ProbeDNS,

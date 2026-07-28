@@ -59,12 +59,12 @@ func TestJoinIPs(t *testing.T) {
 func TestBuildProbesProtoShapes(t *testing.T) {
 	cases := []struct {
 		target string
-		want   int // iface, internet, proxy, dns, target_tcp, + protocol rows
+		want   int // iface, internet, proxy, dns, target_tcp, ssid, + protocol rows
 	}{
-		{"http://example.com", 6}, // + http
-		{"host:25", 6},            // + smtp banner
-		{"host:587", 6},           // + smtp banner
-		{"host:9999", 5},          // ProtoNone — stops at target_tcp
+		{"http://example.com", 7}, // + http
+		{"host:25", 7},            // + smtp banner
+		{"host:587", 7},           // + smtp banner
+		{"host:9999", 6},          // ProtoNone — stops at target_tcp
 	}
 	for _, c := range cases {
 		if got := len(BuildProbes(mustTarget(t, c.target))); got != c.want {
@@ -168,8 +168,12 @@ func TestNetopsInjection(t *testing.T) {
 	}
 
 	r := ops.ifaceProbe(context.Background(), nil)
-	if r.Status != StatusPass || r.Iface != "fake0" || r.Network != "FakeNet" {
-		t.Errorf("ifaceProbe with stubs = %+v, want PASS on fake0/FakeNet", r)
+	if r.Status != StatusPass || r.Iface != "fake0" || r.Network != "" {
+		t.Errorf("ifaceProbe with stubs = %+v, want PASS on fake0 without SSID", r)
+	}
+	network := ops.ssidProbe(context.Background(), map[ProbeID]ProbeResult{ProbeIface: r})
+	if network.Status != StatusPass || network.Network != "FakeNet" {
+		t.Errorf("ssidProbe with stubs = %+v, want PASS on FakeNet", network)
 	}
 
 	r = ops.dnsProbe("example.com", nil)(context.Background(), nil)

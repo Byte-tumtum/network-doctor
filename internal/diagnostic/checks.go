@@ -59,6 +59,7 @@ type ProbeID string
 
 const (
 	ProbeIface     ProbeID = "iface"
+	ProbeSSID      ProbeID = "ssid"
 	ProbeInternet  ProbeID = "internet_tcp"
 	ProbeProxy     ProbeID = "proxy_connect"
 	ProbeDNS       ProbeID = "dns"
@@ -184,6 +185,7 @@ func cleanResult(r ProbeResult) ProbeResult {
 
 func (o *netops) buildProbes(t *Target) []Probe {
 	iface := Probe{ID: ProbeIface, Name: "Interface", Run: o.ifaceProbe}
+	network := Probe{ID: ProbeSSID, Name: "Wi-Fi network", Deps: []ProbeID{ProbeIface}, Run: o.ssidProbe}
 	internet := Probe{ID: ProbeInternet, Name: "Internet (TCP egress)", Deps: []ProbeID{ProbeIface}, Run: o.internetProbe}
 	// Direct and proxied egress are reported separately: the native probes
 	// deliberately bypass proxies, so on a proxy-only network the direct row
@@ -194,14 +196,14 @@ func (o *netops) buildProbes(t *Target) []Probe {
 		// Egress, proxy egress, and DNS are siblings: each depends only on the
 		// interface, so one failure never hides another.
 		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(probeHost, nil)}
-		return []Probe{iface, internet, proxy, dns}
+		return []Probe{iface, internet, proxy, dns, network}
 	}
 
 	host, port := t.Host, t.Port
 	hp := net.JoinHostPort(host, strconv.Itoa(port)) // brackets IPv6 literals
 	dns := Probe{ID: ProbeDNS, Name: "DNS " + host, Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(host, t.IP)}
 	ttcp := Probe{ID: ProbeTargetTCP, Name: "TCP " + hp, Deps: []ProbeID{ProbeDNS}, Run: o.targetTCPProbe(port)}
-	probes := []Probe{iface, internet, proxy, dns, ttcp}
+	probes := []Probe{iface, internet, proxy, dns, ttcp, network}
 
 	switch t.Proto {
 	case ProtoTLSHTTP:
@@ -224,7 +226,7 @@ func (o *netops) buildProbes(t *Target) []Probe {
 
 // ---- probe implementations ----
 
-func (o *netops) ifaceProbe(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
+func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 	var r ProbeResult
 	ifaces, err := o.interfaces()
 	if err != nil {
@@ -243,13 +245,20 @@ func (o *netops) ifaceProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		}
 		if ifi.Flags&net.FlagUp != 0 && ifi.Flags&net.FlagRunning != 0 {
 			r.Status, r.Iface, r.Detail = StatusPass, ifi.Name, "interface "+ifi.Name+" is up"
-			r.Network = o.ssid(ctx, ifi.Name)
 			return r
 		}
 	}
 	r.Status = StatusFail
 	r.Detail, r.Fix = "no interface up", ifaceFix(runtime.GOOS)
 	return r
+}
+
+func (o *netops) ssidProbe(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
+	network := o.ssid(ctx, deps[ProbeIface].Iface)
+	if network == "" {
+		return ProbeResult{Status: StatusNA, Detail: "Wi-Fi network unavailable"}
+	}
+	return ProbeResult{Status: StatusPass, Network: network, Detail: "connected to " + network}
 }
 
 func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {

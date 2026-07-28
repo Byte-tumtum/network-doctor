@@ -47,11 +47,16 @@ func TestNetworkLine(t *testing.T) {
 	if got := m.networkLine(); got != "" {
 		t.Errorf("no iface result → %q, want empty", got)
 	}
-	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Network: "HomeWiFi"}
+	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Iface: "en0"}
+	if got := m.networkLine(); got != "" {
+		t.Errorf("pending ssid result → %q, want empty", got)
+	}
+	m.results[diagnostic.ProbeSSID] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Network: "HomeWiFi"}
 	if got := m.networkLine(); got != "Wi-Fi: HomeWiFi" {
 		t.Errorf("wifi line = %q", got)
 	}
 	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Iface: "eth0"}
+	m.results[diagnostic.ProbeSSID] = diagnostic.ProbeResult{Status: diagnostic.StatusNA}
 	if got := m.networkLine(); got != "Wired: eth0" {
 		t.Errorf("wired line = %q", got)
 	}
@@ -502,7 +507,8 @@ func TestViewRenders(t *testing.T) {
 	}
 
 	net := newModel(nil, false)
-	net.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Network: "HomeWiFi"}
+	net.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Iface: "en0"}
+	net.results[diagnostic.ProbeSSID] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Network: "HomeWiFi"}
 	if !strings.Contains(net.View(), "Wi-Fi: HomeWiFi") {
 		t.Error("view must show the connected network")
 	}
