@@ -41,7 +41,7 @@ func TestToolAvailabilityCachedUntilRestart(t *testing.T) {
 	if calls != initialCalls+len(m.tools) {
 		t.Fatalf("restart LookPath calls = %d, want %d", calls-initialCalls, len(m.tools))
 	}
-	if m.tools[0].Available() {
+	if m.tools[0].Available {
 		t.Error("restart did not refresh cached availability")
 	}
 }

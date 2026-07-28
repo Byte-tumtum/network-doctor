@@ -78,7 +78,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if _, err := toolLookPath(tool.Bin); err != nil {
 			return m, m.setNotice("network discovery needs nmap", false)
 		}
-		tool.available = true
+		tool.Available = true
 		m.networkCIDR = cidr
 		// Same confirm gate as nmap: a /24 sweep is an active scan too.
 		m.confirmTool = &tool
@@ -379,7 +379,7 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 	if m.networkMap {
 		m.mapSelected = 0
 	}
-	if !tool.Available() {
+	if !tool.Available {
 		m.cur.name, m.cur.status = tool.Name, JobFailed
 		m.cur.lines, m.cur.dropped, m.cur.evicted = []string{tool.Bin + " not found — install it"}, 0, 0
 		m.cur.dur = 0

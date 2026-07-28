@@ -23,20 +23,17 @@ type Tool struct {
 	// inherit), and a human-display command string (shell-quoted, display only).
 	Build func(t *diagnostic.Target) (args, env []string, display string)
 
-	available bool
+	Available bool // whether the tool's binary is installed
 }
 
 var toolLookPath = exec.LookPath
 
 const lanDiscoveryName = "LAN scan"
 
-// Available reports whether the tool's binary is installed.
-func (t Tool) Available() bool { return t.available }
-
 func cacheAvailability(tools []Tool) []Tool {
 	for i := range tools {
 		_, err := toolLookPath(tools[i].Bin)
-		tools[i].available = err == nil
+		tools[i].Available = err == nil
 	}
 	return tools
 }

@@ -556,7 +556,7 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 		return ""
 	}
 	for _, t := range m.tools {
-		if t.Key == key && t.Available() {
+		if t.Key == key && t.Available {
 			return "Next: press " + selStyle.Render(key) + " — " + t.Purpose + " (" + t.Name + ")"
 		}
 	}
@@ -657,7 +657,7 @@ func (m model) toolboxView() string {
 	}
 	parts := make([]string, len(m.tools))
 	for i, t := range m.tools {
-		if t.Available() {
+		if t.Available {
 			parts[i] = keyStyle.Render("["+t.Key+"]") + " " + t.Purpose
 		} else {
 			parts[i] = faintStyle.Render("[" + t.Key + "] " + t.Purpose + " — " + t.Bin + " missing")
