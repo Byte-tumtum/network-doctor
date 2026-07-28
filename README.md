@@ -243,11 +243,21 @@ Still to come: mtr-parsed route quality.
 
 ## Tests
 
+Before submitting a change, run the complete CI gate:
+
 ```sh
-go test ./...          # unit + DAG scheduler + parser + diagnosis
-go test -race ./...    # concurrency
-go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe   # terminal-escape sanitizer
+go vet ./...
+go build ./...
+go test ./...
+go test -tags integration ./internal/diagnostic
+go test -race ./...
+go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
+golangci-lint run ./...
+go tool govulncheck ./...
+goreleaser check
 ```
+
+The race and fuzz checks run only on Linux in CI.
 
 ## Development
 
