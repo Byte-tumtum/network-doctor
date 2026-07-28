@@ -315,6 +315,7 @@ func TestRestartResets(t *testing.T) {
 	m.started[diagnostic.ProbeIface] = true
 	m.cur.status, m.cur.name, m.cur.display, m.cur.dur = JobDone, "ping", "ping example.com", 1
 	m.cur.lines = []string{"reply from example.com"}
+	m.hostNames = map[string]string{"192.168.1.1": "old-router"}
 	gen0 := m.generation
 	u, _ := m.Update(keyMsg("r"))
 	nm := asModel(t, u)
@@ -331,6 +332,9 @@ func TestRestartResets(t *testing.T) {
 	}
 	if len(nm.results) != 0 || len(nm.started) != 0 {
 		t.Error("restart must clear results/started")
+	}
+	if len(nm.hostNames) != 0 {
+		t.Error("restart must clear resolved LAN names")
 	}
 	if nm.ctx != nil {
 		t.Error("restart must reset ctx to nil")

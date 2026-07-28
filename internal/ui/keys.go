@@ -360,6 +360,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.pending, m.confirmTool = nil, nil
 	m.cur, m.otherJobs = jobState{}, nil
 	m.networkMap, m.mapSelected, m.networkCIDR = false, 0, ""
+	m.hostNames = nil
 	m.notice = ""
 	if m.viewing {
 		m.refreshViewport()
