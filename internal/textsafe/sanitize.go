@@ -1,6 +1,10 @@
 // Package textsafe removes terminal control sequences from untrusted text.
 // Anything from the network (banners, tool output) passes through Clean
 // before hitting the screen, so a hostile server can't redraw our terminal.
+//
+// One function is a thin excuse for a package, and Clean could live in
+// diagnostic — but a security boundary is easier to keep honest when it has
+// a name and an import path, and the fuzz target has somewhere to live.
 package textsafe
 
 import (
