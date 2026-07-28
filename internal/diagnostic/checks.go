@@ -336,9 +336,9 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		r.Detail = "no proxy in environment (HTTPS_PROXY/HTTP_PROXY unset)"
 		return r
 	}
-	if proxyURL.Hostname() == "" {
+	if proxyURL.Hostname() == "" || proxyURL.Path != "" || proxyURL.RawQuery != "" || proxyURL.ForceQuery || proxyURL.Fragment != "" {
 		r.Status = StatusFail
-		r.Detail = "bad proxy configuration: proxy URL has no host"
+		r.Detail = "bad proxy configuration: proxy URL must have a valid host and no path, query, or fragment"
 		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
 		return r
 	}
@@ -382,13 +382,18 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		pw, _ := u.Password()
 		req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)) + "\r\n"
 	}
+	dl, _ := ctx.Deadline()
+	if err := conn.SetWriteDeadline(dl); err != nil {
+		r.Status = StatusFail
+		r.Detail = "cannot set proxy write deadline: " + err.Error()
+		return r
+	}
 	if _, err := io.WriteString(conn, req+"\r\n"); err != nil {
 		r.Status = StatusFail
 		r.Detail = "proxy write failed: " + err.Error()
 		return r
 	}
 	// net.Conn reads don't know ctx exists; the read deadline is the only leash.
-	dl, _ := ctx.Deadline()
 	conn.SetReadDeadline(dl)
 	// Bounded read: the response is attacker-controlled.
 	resp, err := http.ReadResponse(bufio.NewReader(io.LimitReader(conn, 4096)), &http.Request{Method: http.MethodConnect})

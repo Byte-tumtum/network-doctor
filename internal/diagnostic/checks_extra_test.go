@@ -212,12 +212,14 @@ func TestApplyDialWarnings(t *testing.T) {
 // the wire in the CONNECT probe tests.
 type scriptConn struct {
 	fakeConn
-	r io.Reader
+	r             io.Reader
+	writeDeadline time.Time
 }
 
-func (c *scriptConn) Read(p []byte) (int, error)    { return c.r.Read(p) }
-func (*scriptConn) Write(p []byte) (int, error)     { return len(p), nil }
-func (*scriptConn) SetReadDeadline(time.Time) error { return nil }
+func (c *scriptConn) Read(p []byte) (int, error)         { return c.r.Read(p) }
+func (*scriptConn) Write(p []byte) (int, error)          { return len(p), nil }
+func (*scriptConn) SetReadDeadline(time.Time) error      { return nil }
+func (c *scriptConn) SetWriteDeadline(d time.Time) error { c.writeDeadline = d; return nil }
 
 func proxyOps(proxy string, dial func(context.Context, string, string) (net.Conn, error)) *netops {
 	return &netops{
@@ -265,7 +267,8 @@ func TestProxyProbeUnreachable(t *testing.T) {
 }
 
 func TestProxyProbeMalformedURLFailsWithoutDial(t *testing.T) {
-	for _, proxy := range []string{"://bad", "http://:3128", "http://proxy:0", "http://proxy:65536", "https://proxy:65536"} {
+	// The last value is net/http's fallback parse of http://proxy:65536.
+	for _, proxy := range []string{"://bad", "http://:3128", "http://proxy:0", "http://proxy:65536", "https://proxy:65536", "http://http://proxy:65536"} {
 		t.Run(proxy, func(t *testing.T) {
 			ops := proxyOps(proxy, func(context.Context, string, string) (net.Conn, error) {
 				t.Fatal("malformed proxy must not be dialed")
@@ -280,12 +283,18 @@ func TestProxyProbeMalformedURLFailsWithoutDial(t *testing.T) {
 }
 
 func TestProxyProbeConnectOK(t *testing.T) {
+	conn := &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n")}
 	ops := proxyOps("http://proxy.corp:3128", func(context.Context, string, string) (net.Conn, error) {
-		return &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n")}, nil
+		return conn, nil
 	})
-	r := ops.proxyProbe(context.Background(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	r := ops.proxyProbe(ctx, nil)
 	if r.Status != StatusPass || !strings.Contains(r.Detail, "proxy proxy.corp:3128 tunnels") {
 		t.Errorf("granted CONNECT = %+v, want PASS", r)
+	}
+	if deadline, _ := ctx.Deadline(); !conn.writeDeadline.Equal(deadline) {
+		t.Errorf("CONNECT write deadline = %v, want %v", conn.writeDeadline, deadline)
 	}
 }
 
