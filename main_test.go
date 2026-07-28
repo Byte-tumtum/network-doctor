@@ -7,7 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
+	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -128,10 +131,25 @@ func TestBuildReport(t *testing.T) {
 	probes := []diagnostic.Probe{
 		{ID: diagnostic.ProbeIface, Name: "Interface"},
 		{ID: diagnostic.ProbeDNS, Name: "DNS example.com"},
+		{ID: diagnostic.ProbeTargetTCP, Name: "TCP example.com:443"},
 	}
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
 		diagnostic.ProbeIface: {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Detail: "interface eth0 is up", Iface: "eth0", Dur: 7 * time.Millisecond},
 		diagnostic.ProbeDNS:   {ID: diagnostic.ProbeDNS, Status: diagnostic.StatusFail, Detail: "cannot resolve example.com", Fix: "check DNS", Dur: 1200 * time.Millisecond},
+		// One row carrying every address field: buildReport stringifies them the
+		// same way regardless of which probe produced them.
+		diagnostic.ProbeTargetTCP: {
+			ID:         diagnostic.ProbeTargetTCP,
+			Status:     diagnostic.StatusPass,
+			Detail:     "connected",
+			Addrs:      []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")},
+			SelectedIP: net.ParseIP("2001:db8::1"),
+			Source:     net.ParseIP("192.168.1.20"),
+			Attempts: []diagnostic.Attempt{
+				{IP: net.ParseIP("192.0.2.1"), Dur: 90 * time.Millisecond, Err: errors.New("connection refused")},
+				{IP: net.ParseIP("2001:db8::1"), Dur: 12 * time.Millisecond},
+			},
+		},
 	}
 	rep := buildReport(target, probes, results)
 
@@ -141,8 +159,8 @@ func TestBuildReport(t *testing.T) {
 	if rep.Target == nil || rep.Target.Host != "example.com" || rep.Target.Port != 443 || rep.Target.Protocol != "tls+http" {
 		t.Errorf("target = %+v", rep.Target)
 	}
-	if len(rep.Checks) != 2 {
-		t.Fatalf("got %d checks, want 2", len(rep.Checks))
+	if len(rep.Checks) != 3 {
+		t.Fatalf("got %d checks, want 3", len(rep.Checks))
 	}
 	if rep.Checks[0].Status != "PASS" || rep.Checks[0].Fix != "" {
 		t.Errorf("iface check = %+v", rep.Checks[0])
@@ -162,6 +180,21 @@ func TestBuildReport(t *testing.T) {
 	}
 	if rep.Verdict != diagnostic.VerdictDNS {
 		t.Errorf("verdict = %q, want %q", rep.Verdict, diagnostic.VerdictDNS)
+	}
+	tcp := rep.Checks[2]
+	if got, want := strings.Join(tcp.Addrs, ","), "192.0.2.1,2001:db8::1"; got != want {
+		t.Errorf("addrs = %q, want %q", got, want)
+	}
+	if tcp.SelectedIP != "2001:db8::1" || tcp.Source != "192.168.1.20" {
+		t.Errorf("selected_ip = %q, source = %q", tcp.SelectedIP, tcp.Source)
+	}
+	// Attempts keep probe order, and only a failed attempt carries an error.
+	want := []reportAttempt{
+		{IP: "192.0.2.1", Ms: 90, Err: "connection refused"},
+		{IP: "2001:db8::1", Ms: 12},
+	}
+	if !reflect.DeepEqual(tcp.Attempts, want) {
+		t.Errorf("attempts = %+v, want %+v", tcp.Attempts, want)
 	}
 }
 
