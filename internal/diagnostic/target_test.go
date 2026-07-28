@@ -62,6 +62,16 @@ func TestParseTargetErrors(t *testing.T) {
 	}
 }
 
+func TestParseTargetCanonicalRaw(t *testing.T) {
+	tg, err := ParseTarget("HTTPS://example.com:8443/ignored?query#fragment\x1b[31m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tg.Raw != "https://example.com:8443" {
+		t.Fatalf("Raw = %q, want validated endpoint only", tg.Raw)
+	}
+}
+
 func TestProtoString(t *testing.T) {
 	cases := []struct {
 		p    Proto

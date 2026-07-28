@@ -38,7 +38,7 @@ func (p Proto) String() string {
 // endpoint Port (explicit > scheme default > 443) and the Proto of the
 // protocol rows (explicit scheme wins; else inferred from the effective port).
 type Target struct {
-	Raw          string // original CLI spelling, echoed back in the restart prompt
+	Raw          string // validated endpoint spelling, echoed back in the restart prompt
 	Host         string
 	IP           net.IP // non-nil iff the target is an IP literal
 	Port         int
@@ -69,7 +69,7 @@ func ParseTarget(raw string) (*Target, error) {
 	if s == "" {
 		return nil, errors.New("empty target")
 	}
-	t := &Target{Raw: s}
+	t := &Target{}
 	var scheme string
 
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -170,6 +170,10 @@ func ParseTarget(raw string) (*Target, error) {
 		default:
 			t.Proto = ProtoNone
 		}
+	}
+	t.Raw = s
+	if scheme != "" {
+		t.Raw = scheme + "://" + s
 	}
 	return t, nil
 }
