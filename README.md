@@ -145,18 +145,18 @@ The same hotkeys map to each OS's built-in tools:
 | `c` (SMTP target) | `openssl s_client -starttls smtp` | same | same |
 | `t` | `traceroute -w 2 -q 1 -m 20` | same | `tracert -w 2000 -h 20` |
 | `m` | `mtr --report --report-cycles 5` | same (via brew) | `pathping -h 20 -q 5 -p 100 -w 500` (own 90 s budget) |
-| `n` | `nmap -sT -T2 -Pn` (the explicit target port, else top 100) | same | same |
+| `n` | `nmap -sT -Pn --host-timeout 110s` (the explicit target port, else nmap's default top 1000) | same | same |
 
-`n` is gated behind an explicit confirmation before its active probe runs. It
-uses a plain connect scan with polite timing and no version/OS detection. `v`
-runs host discovery immediately, without raw sockets or root, and caps the scope
+`n` and `v` are gated behind an explicit confirmation before their active probes
+run. `n` uses a plain connect scan with nmap's default timing and no version/OS
+detection. `v` runs host discovery without raw sockets or root and caps the scope
 at the source address's `/24`.
 
 The `c` slot is protocol-aware: HTTP(S) and unknown-port targets get `curl`,
 while SSH (port 22) and SMTP (ports 25/587) targets get a protocol-appropriate
 handshake probe — never an HTTPS-oriented `curl` line. The SSH check uses a
-throwaway known-hosts file (no prompts, no writes) and runs a bare `exit` if a
-key happens to authenticate.
+throwaway known-hosts file (no prompts, no writes) and disables authentication
+with `PreferredAuthentications=none`, stopping after the banner and key exchange.
 
 The routes/sockets tools are target-independent; the rest need a host. Tools are
 run with an argument slice (never a shell string), in their own process group on
@@ -238,7 +238,7 @@ Still to come: mtr-parsed route quality.
 ```sh
 go test ./...          # unit + DAG scheduler + parser + diagnosis
 go test -race ./...    # concurrency
-go test -fuzz=FuzzSanitize -fuzztime=10s   # terminal-escape sanitizer
+go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe   # terminal-escape sanitizer
 ```
 
 ## Development
