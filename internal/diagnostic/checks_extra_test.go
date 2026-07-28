@@ -369,6 +369,9 @@ func TestDowngradeEgress(t *testing.T) {
 		{"proxy path saves generic", map[ProbeID]ProbeResult{
 			ProbeInternet: {Status: StatusFail}, ProbeDNS: {Status: StatusFail}, ProbeProxy: {Status: StatusPass},
 		}, StatusWarn},
+		{"degraded proxy path saves generic", map[ProbeID]ProbeResult{
+			ProbeInternet: {Status: StatusFail}, ProbeDNS: {Status: StatusFail}, ProbeProxy: {Status: StatusWarn},
+		}, StatusWarn},
 		{"proxy path saves target", map[ProbeID]ProbeResult{
 			ProbeInternet: {Status: StatusFail}, ProbeDNS: {Status: StatusPass}, ProbeTargetTCP: {Status: StatusFail}, ProbeProxy: {Status: StatusPass},
 		}, StatusWarn},

@@ -45,7 +45,7 @@ func TestDiagnoseProxy(t *testing.T) {
 		downgraded           bool
 		want                 string
 	}{
-		{"proxy-only network", StatusWarn, StatusPass, StatusPass, true, "Online via the environment proxy"},
+		{"proxy-only network", StatusWarn, StatusWarn, StatusPass, true, "Online via the environment proxy"},
 		{"degraded direct with proxy", StatusWarn, StatusPass, StatusPass, false, "Online but degraded"},
 		{"proxy failed, direct fine", StatusPass, StatusFail, StatusPass, false, "proxy check failed"},
 		{"no proxy configured", StatusPass, StatusNA, StatusPass, false, "Online — direct TCP egress"},
@@ -118,5 +118,20 @@ func TestDiagnoseTarget(t *testing.T) {
 	res[ProbeInternet] = ProbeResult{Status: StatusFail}
 	if v := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is blocked") {
 		t.Errorf("got %q, want blocked-egress verdict", v)
+	}
+}
+
+func TestDiagnoseTargetWarnings(t *testing.T) {
+	tg := mustTarget(t, "github.com")
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbeTLS, ProbeHTTP, ProbeHTTPS}
+	for _, warning := range []ProbeID{ProbeProxy, ProbeTargetTCP} {
+		res := make(map[ProbeID]ProbeResult, len(order))
+		for _, id := range order {
+			res[id] = ProbeResult{Status: StatusPass}
+		}
+		res[warning] = ProbeResult{Status: StatusWarn}
+		if v := Diagnose(tg, order, res); !strings.Contains(v, "some checks are degraded") {
+			t.Errorf("%s warning: got %q, want degraded verdict", warning, v)
+		}
 	}
 }

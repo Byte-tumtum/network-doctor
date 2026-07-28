@@ -10,10 +10,13 @@ import (
 // rules. Returns "Running diagnostics…" until every probe in order has a result.
 // A completed run always returns a verdict.
 func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) string {
+	degraded := false
 	for _, id := range order {
-		if _, ok := res[id]; !ok {
+		r, ok := res[id]
+		if !ok {
 			return "Running diagnostics…"
 		}
+		degraded = degraded || r.Status == StatusWarn
 	}
 	pass := func(id ProbeID) bool { return res[id].Status == StatusPass }
 	fail := func(id ProbeID) bool { return res[id].Status == StatusFail }
@@ -24,14 +27,14 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) string {
 	// that's a Fail wearing a nicer hat.
 	directOK := func() bool {
 		r := res[ProbeInternet]
-		return r.Status == StatusPass || r.Status == StatusWarn && !r.downgraded
+		return functional(r.Status) && !r.downgraded
 	}
 
 	if fail(ProbeIface) {
 		return "No usable network interface — the link is down."
 	}
 
-	prx := has(ProbeProxy) && pass(ProbeProxy)
+	prx := has(ProbeProxy) && functional(res[ProbeProxy].Status)
 	prxDown := has(ProbeProxy) && fail(ProbeProxy)
 
 	// Generic mode (no target): the verdict is a truth table over egress, DNS,
@@ -99,9 +102,15 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) string {
 		return "The target and direct egress work, but the configured environment proxy check failed — apps that honor HTTP(S)_PROXY will fail (see the proxy row)."
 	case warn(ProbeInternet):
 		return "The target works but direct internet egress is degraded (see the ! row for details)."
+	case degraded:
+		return "The target works, but some checks are degraded (see the ! rows for details)."
 	default:
 		return "All checks passed — " + hp + " looks healthy."
 	}
+}
+
+func functional(s Status) bool {
+	return s == StatusPass || s == StatusWarn
 }
 
 // DowngradeEgress rewrites a direct-egress failure to Warn once another path
@@ -119,8 +128,8 @@ func DowngradeEgress(res map[ProbeID]ProbeResult) {
 		other = res[ProbeDNS]
 	}
 	prx, hasProxy := res[ProbeProxy]
-	otherOK := other.Status == StatusPass || other.Status == StatusWarn
-	proxyOK := hasProxy && prx.Status == StatusPass
+	otherOK := functional(other.Status)
+	proxyOK := hasProxy && functional(prx.Status)
 	if !otherOK && !proxyOK {
 		return
 	}
