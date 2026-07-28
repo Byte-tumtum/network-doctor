@@ -235,10 +235,26 @@ func saveHistory(path string, hist []string) {
 	if len(hist) > histMax {
 		hist = hist[len(hist)-histMax:]
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	_ = os.WriteFile(path, []byte(strings.Join(hist, "\n")+"\n"), 0o600)
+	// os.WriteFile would follow a symlink planted at path and truncate whatever
+	// it points at. Renaming a sibling temp file over the name replaces the link
+	// itself, and costs nothing beyond the write we were doing anyway.
+	f, err := os.CreateTemp(dir, "history-*") // 0600 by definition
+	if err != nil {
+		return
+	}
+	defer os.Remove(f.Name()) // no-op once the rename lands
+	if _, err := f.WriteString(strings.Join(hist, "\n") + "\n"); err != nil {
+		f.Close()
+		return
+	}
+	if err := f.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(f.Name(), path)
 }
 
 func (m model) Init() tea.Cmd {

@@ -689,3 +689,28 @@ func TestHistoryPersistsAcrossSessions(t *testing.T) {
 		t.Fatalf("reloaded history = %q, want github.com:443,one.test", got)
 	}
 }
+
+func TestSaveHistoryDoesNotFollowSymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("precious\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "history")
+	if err := os.Symlink(victim, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	saveHistory(path, []string{"one.test"})
+
+	if b, err := os.ReadFile(victim); err != nil || string(b) != "precious\n" {
+		t.Fatalf("symlink target = %q (err %v), want it untouched", b, err)
+	}
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("history path is still a symlink; write went through it")
+	}
+}
