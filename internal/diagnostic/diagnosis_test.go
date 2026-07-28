@@ -27,7 +27,7 @@ func TestDiagnoseGeneric(t *testing.T) {
 				ProbeInternet: {Status: c.internet},
 				ProbeDNS:      {Status: c.dns},
 			}
-			if v := Diagnose(nil, order, res); !strings.Contains(v, c.want) {
+			if v, _ := Diagnose(nil, order, res); !strings.Contains(v, c.want) {
 				t.Errorf("got %q, want substring %q", v, c.want)
 			}
 		})
@@ -58,7 +58,7 @@ func TestDiagnoseProxy(t *testing.T) {
 				ProbeProxy:    {Status: c.proxy},
 				ProbeDNS:      {Status: c.dns},
 			}
-			if v := Diagnose(nil, order, res); !strings.Contains(v, c.want) {
+			if v, _ := Diagnose(nil, order, res); !strings.Contains(v, c.want) {
 				t.Errorf("got %q, want substring %q", v, c.want)
 			}
 		})
@@ -74,12 +74,12 @@ func TestDiagnoseTargetProxyOnly(t *testing.T) {
 		ProbeTargetTCP: {Status: StatusFail},
 	}
 	DowngradeEgress(res)
-	if v := Diagnose(tg, order, res); !strings.Contains(v, "proxy-only network") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "proxy-only network") {
 		t.Errorf("got %q, want a proxy-only verdict", v)
 	}
 	res[ProbeInternet] = ProbeResult{Status: StatusWarn}
 	res[ProbeTargetTCP] = ProbeResult{Status: StatusPass}
-	if v := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is degraded") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is degraded") {
 		t.Errorf("got %q, want a degraded direct-egress verdict", v)
 	}
 }
@@ -87,7 +87,7 @@ func TestDiagnoseTargetProxyOnly(t *testing.T) {
 func TestDiagnoseIncomplete(t *testing.T) {
 	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS}
 	res := map[ProbeID]ProbeResult{ProbeIface: {Status: StatusPass}}
-	if v := Diagnose(nil, order, res); !strings.Contains(v, "Running") {
+	if v, _ := Diagnose(nil, order, res); !strings.Contains(v, "Running") {
 		t.Errorf("incomplete should report running, got %q", v)
 	}
 }
@@ -102,7 +102,7 @@ func TestDiagnoseTarget(t *testing.T) {
 		ProbeDNS: {Status: StatusPass}, ProbeTargetTCP: {Status: StatusFail},
 		ProbeTLS: {Status: StatusSkip}, ProbeHTTP: {Status: StatusPass}, ProbeHTTPS: {Status: StatusSkip},
 	}
-	if v := Diagnose(tg, order, res); !strings.Contains(v, "unreachable") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "unreachable") {
 		t.Errorf("got %q, want 'unreachable'", v)
 	}
 
@@ -110,13 +110,13 @@ func TestDiagnoseTarget(t *testing.T) {
 	for _, id := range order {
 		res[id] = ProbeResult{Status: StatusPass}
 	}
-	if v := Diagnose(tg, order, res); !strings.Contains(v, "github.com:443 looks healthy") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "github.com:443 looks healthy") {
 		t.Errorf("got %q, want target healthy verdict", v)
 	}
 
 	// A raw egress failure must never fall through to the all-clear verdict.
 	res[ProbeInternet] = ProbeResult{Status: StatusFail}
-	if v := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is blocked") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is blocked") {
 		t.Errorf("got %q, want blocked-egress verdict", v)
 	}
 }
@@ -130,7 +130,7 @@ func TestDiagnoseTargetWarnings(t *testing.T) {
 			res[id] = ProbeResult{Status: StatusPass}
 		}
 		res[warning] = ProbeResult{Status: StatusWarn}
-		if v := Diagnose(tg, order, res); !strings.Contains(v, "some checks are degraded") {
+		if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "some checks are degraded") {
 			t.Errorf("%s warning: got %q, want degraded verdict", warning, v)
 		}
 	}
@@ -203,14 +203,14 @@ func TestVerdict(t *testing.T) {
 			for id, r := range c.res {
 				res[id] = r
 			}
-			if got := Verdict(c.target, c.order, res); got != c.want {
-				t.Errorf("Verdict = %q, want %q (summary: %s)", got, c.want, Diagnose(c.target, c.order, res))
+			if summary, got := Diagnose(c.target, c.order, res); got != c.want {
+				t.Errorf("Verdict = %q, want %q (summary: %s)", got, c.want, summary)
 			}
 		})
 	}
 
 	// An unfinished run must not claim health.
-	if got := Verdict(tg, targetOrder, map[ProbeID]ProbeResult{ProbeIface: {Status: StatusPass}}); got != VerdictIncomplete {
+	if _, got := Diagnose(tg, targetOrder, map[ProbeID]ProbeResult{ProbeIface: {Status: StatusPass}}); got != VerdictIncomplete {
 		t.Errorf("Verdict on partial results = %q, want %q", got, VerdictIncomplete)
 	}
 }

@@ -99,7 +99,7 @@ func TestDiagnoseTargetBranches(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if v := Diagnose(tg, targetOrder, c.res); !strings.Contains(v, c.want) {
+			if v, _ := Diagnose(tg, targetOrder, c.res); !strings.Contains(v, c.want) {
 				t.Errorf("got %q, want substring %q", v, c.want)
 			}
 		})
@@ -115,7 +115,7 @@ func TestDiagnoseBannerFail(t *testing.T) {
 		ProbeDNS: {Status: StatusPass}, ProbeTargetTCP: {Status: StatusPass},
 		ProbeSSH: {Status: StatusFail},
 	}
-	if v := Diagnose(tg, order, res); !strings.Contains(v, "banner check failed") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "banner check failed") {
 		t.Errorf("got %q, want 'banner check failed'", v)
 	}
 }
@@ -127,7 +127,7 @@ func TestDiagnoseGenericEgressNoDNS(t *testing.T) {
 		ProbeIface: {Status: StatusPass}, ProbeInternet: {Status: StatusFail},
 		ProbeDNS: {Status: StatusPass},
 	}
-	if v := Diagnose(nil, order, res); !strings.Contains(v, "no direct TCP egress") {
+	if v, _ := Diagnose(nil, order, res); !strings.Contains(v, "no direct TCP egress") {
 		t.Errorf("got %q, want 'no direct TCP egress'", v)
 	}
 }

@@ -501,7 +501,7 @@ func (m model) banner() string {
 			progressBar(done, total, 20) + faintStyle.Render(fmt.Sprintf(" %d of %d done", done, total))
 	}
 	order, firstFail, anyWarn := m.resultState()
-	summary := diagnostic.Diagnose(m.target, order, m.results)
+	summary, _ := diagnostic.Diagnose(m.target, order, m.results)
 	if firstFail == nil {
 		if anyWarn {
 			return warnStyle.Render("! " + summary)

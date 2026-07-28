@@ -238,7 +238,6 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		}
 		rep.Checks = append(rep.Checks, c)
 	}
-	rep.Summary = diagnostic.Diagnose(t, order, results)
-	rep.Verdict = diagnostic.Verdict(t, order, results)
+	rep.Summary, rep.Verdict = diagnostic.Diagnose(t, order, results)
 	return rep
 }
