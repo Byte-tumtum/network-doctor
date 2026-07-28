@@ -12,9 +12,11 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 	done := make(chan ProbeResult)
 	running := 0
 
-	// Yes, this re-implements the ui scheduler's ready/blocked walk. No, don't
-	// unify them: ui imports diagnostic, so sharing these ten lines means a
-	// third package or an import cycle — steep rent for a DAG of ~10 nodes.
+	// Yes, this re-implements the ui scheduler's ready/blocked walk. Sharing it
+	// is cheap enough — ui already imports diagnostic, so exporting the deps
+	// predicate would do — but only the predicate is common. The halves that
+	// drive it differ (goroutines and a channel here, tea.Cmds there), so the
+	// trade is ten fewer lines for one more exported symbol. Not worth moving.
 	//
 	// schedule launches every probe whose deps all have results. Runs to a
 	// fixpoint because starting one probe can make another ready — skips
