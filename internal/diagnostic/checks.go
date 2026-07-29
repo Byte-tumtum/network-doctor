@@ -538,23 +538,6 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	start := time.Now()
 	var conn net.Conn
-	if proxyURL.Scheme == "https" {
-		conn, err = o.dialTLS(ctx, "tcp", addr, &tls.Config{ServerName: proxyURL.Hostname()})
-	} else {
-		conn, err = o.dialContext(ctx, "tcp", addr)
-	}
-	if err != nil {
-		r.Status = StatusFail
-		r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
-		r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY and the proxy host"
-		return r
-	}
-	defer conn.Close()
-	req := "CONNECT " + probeHost + ":443 HTTP/1.1\r\nHost: " + probeHost + ":443\r\n"
-	if u := proxyURL.User; u != nil {
-		pw, _ := u.Password()
-		req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)) + "\r\n"
-	}
 	// A ctx without a deadline yields the zero time, which *clears* the conn
 	// deadlines rather than setting them — the CONNECT read would then block
 	// forever. Fall back to the probe budget.
@@ -562,27 +545,62 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	if !ok {
 		dl = time.Now().Add(ProbeTimeout)
 	}
-	if err := conn.SetWriteDeadline(dl); err != nil {
-		r.Status = StatusFail
-		r.Detail = "cannot set proxy write deadline: " + err.Error()
-		return r
+	var resp *http.Response
+	auth := false
+	for {
+		if proxyURL.Scheme == "https" {
+			conn, err = o.dialTLS(ctx, "tcp", addr, &tls.Config{ServerName: proxyURL.Hostname()})
+		} else {
+			conn, err = o.dialContext(ctx, "tcp", addr)
+		}
+		if err != nil {
+			r.Status = StatusFail
+			r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
+			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY and the proxy host"
+			return r
+		}
+		req := "CONNECT " + probeHost + ":443 HTTP/1.1\r\nHost: " + probeHost + ":443\r\n"
+		if auth {
+			pw, _ := proxyURL.User.Password()
+			req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyURL.User.Username()+":"+pw)) + "\r\n"
+		}
+		if err := conn.SetWriteDeadline(dl); err != nil {
+			conn.Close()
+			r.Status = StatusFail
+			r.Detail = "cannot set proxy write deadline: " + err.Error()
+			return r
+		}
+		if _, err := io.WriteString(conn, req+"\r\n"); err != nil {
+			conn.Close()
+			r.Status = StatusFail
+			r.Detail = "proxy write failed: " + err.Error()
+			return r
+		}
+		// net.Conn reads don't know ctx exists; the read deadline is the only leash.
+		conn.SetReadDeadline(dl)
+		// Bounded read: the response is attacker-controlled.
+		resp, err = http.ReadResponse(bufio.NewReader(io.LimitReader(conn, 4096)), &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			conn.Close()
+			r.Status = StatusFail
+			r.Detail = "no CONNECT response from proxy " + addr + ": " + err.Error()
+			r.Fix = "proxy reachable but not speaking HTTP — wrong port or scheme?"
+			return r
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusProxyAuthRequired || proxyURL.User == nil || auth {
+			break
+		}
+		conn.Close()
+		if proxyURL.Scheme == "http" {
+			r.Status = StatusFail
+			r.Detail = "proxy " + addr + " requires authentication; refusing to send credentials unencrypted"
+			r.Fix = "use an https:// proxy before supplying credentials"
+			return r
+		}
+		auth = true
 	}
-	if _, err := io.WriteString(conn, req+"\r\n"); err != nil {
-		r.Status = StatusFail
-		r.Detail = "proxy write failed: " + err.Error()
-		return r
-	}
-	// net.Conn reads don't know ctx exists; the read deadline is the only leash.
-	conn.SetReadDeadline(dl)
-	// Bounded read: the response is attacker-controlled.
-	resp, err := http.ReadResponse(bufio.NewReader(io.LimitReader(conn, 4096)), &http.Request{Method: http.MethodConnect})
-	if err != nil {
-		r.Status = StatusFail
-		r.Detail = "no CONNECT response from proxy " + addr + ": " + err.Error()
-		r.Fix = "proxy reachable but not speaking HTTP — wrong port or scheme?"
-		return r
-	}
-	resp.Body.Close()
+	defer conn.Close()
 	rtt := since(start)
 	if resp.StatusCode/100 != 2 {
 		r.Status = StatusFail
@@ -597,11 +615,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	src, iface := o.pathIdentity(ctx, conn, nil, 0)
 	r.Status, r.Source, r.Iface = StatusPass, src, iface
 	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, probeHost, Ms(rtt))
-	var warns []string
-	if proxyURL.User != nil && proxyURL.Scheme == "http" {
-		warns = append(warns, "credentials sent unencrypted to http:// proxy")
-	}
-	applyDialWarnings(&r, rtt, warns...)
+	applyDialWarnings(&r, rtt)
 	return r
 }
 

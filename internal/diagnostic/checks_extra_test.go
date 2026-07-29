@@ -5,6 +5,7 @@ package diagnostic
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -219,11 +220,12 @@ func TestApplyDialWarnings(t *testing.T) {
 type scriptConn struct {
 	fakeConn
 	r             io.Reader
+	w             strings.Builder
 	writeDeadline time.Time
 }
 
 func (c *scriptConn) Read(p []byte) (int, error)         { return c.r.Read(p) }
-func (*scriptConn) Write(p []byte) (int, error)          { return len(p), nil }
+func (c *scriptConn) Write(p []byte) (int, error)        { return c.w.Write(p) }
 func (*scriptConn) SetReadDeadline(time.Time) error      { return nil }
 func (c *scriptConn) SetWriteDeadline(d time.Time) error { c.writeDeadline = d; return nil }
 
@@ -318,15 +320,39 @@ func TestProxyProbeDeadlinelessCtxStillBoundsConn(t *testing.T) {
 	}
 }
 
-// Basic auth on an http:// proxy rides the wire in cleartext; the tunnel
-// still works, but a diagnostic tool should say so.
-func TestProxyProbeCleartextCredsWarn(t *testing.T) {
+func TestProxyProbeRefusesCleartextCredentials(t *testing.T) {
+	conn := &scriptConn{r: strings.NewReader("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")}
 	ops := proxyOps("http://user:pw@proxy.corp:3128", func(context.Context, string, string) (net.Conn, error) {
-		return &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n")}, nil
+		return conn, nil
 	})
 	r := ops.proxyProbe(context.Background(), nil)
-	if r.Status != StatusWarn || !strings.Contains(r.Detail, "unencrypted") {
-		t.Errorf("creds over http proxy = %+v, want WARN about unencrypted credentials", r)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "refusing") {
+		t.Errorf("auth over http proxy = %+v, want FAIL refusing cleartext credentials", r)
+	}
+	if strings.Contains(conn.w.String(), "Proxy-Authorization") {
+		t.Errorf("CONNECT sent credentials before refusing:\n%s", conn.w.String())
+	}
+}
+
+func TestProxyProbeHTTPSCredentialsWaitForChallenge(t *testing.T) {
+	first := &scriptConn{r: strings.NewReader("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")}
+	second := &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n")}
+	conns := []*scriptConn{first, second}
+	ops := proxyOps("https://user:pw@proxy.corp:3128", nil)
+	ops.dialTLS = func(context.Context, string, string, *tls.Config) (net.Conn, error) {
+		conn := conns[0]
+		conns = conns[1:]
+		return conn, nil
+	}
+	r := ops.proxyProbe(context.Background(), nil)
+	if r.Status != StatusPass {
+		t.Fatalf("authenticated CONNECT = %+v, want PASS", r)
+	}
+	if strings.Contains(first.w.String(), "Proxy-Authorization") {
+		t.Errorf("first CONNECT sent credentials preemptively:\n%s", first.w.String())
+	}
+	if !strings.Contains(second.w.String(), "Proxy-Authorization: Basic dXNlcjpwdw==") {
+		t.Errorf("second CONNECT did not answer challenge:\n%s", second.w.String())
 	}
 }
 
