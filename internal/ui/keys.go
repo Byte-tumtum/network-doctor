@@ -142,6 +142,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case "y", "w":
+		if portalURL := m.selectedPortalURL(); portalURL != "" && msg.String() == "y" {
+			notice, ok := "portal URL copied to clipboard", true
+			if err := copyReport(portalURL); err != nil {
+				notice, ok = "copy failed: "+err.Error(), false
+			}
+			return m, m.setNotice(notice, ok)
+		}
 		if !m.reportReady() {
 			return m, m.setNotice("report not ready until checks finish", false)
 		}

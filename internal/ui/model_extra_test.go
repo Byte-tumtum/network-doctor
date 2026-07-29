@@ -67,6 +67,7 @@ func TestNetworkLine(t *testing.T) {
 }
 
 func TestPortalURLDisplayed(t *testing.T) {
+	const portalURL = "https://portal.example/signin"
 	m := newModel(nil, false)
 	for i, p := range m.probes {
 		if p.ID == diagnostic.ProbeInternet {
@@ -74,15 +75,29 @@ func TestPortalURLDisplayed(t *testing.T) {
 			m.results[p.ID] = diagnostic.ProbeResult{
 				Status: diagnostic.StatusFail,
 				Detail: "HTTP is intercepted",
-				Portal: &diagnostic.Portal{RedirectURL: "https://portal.example/signin"},
+				Portal: &diagnostic.Portal{RedirectURL: portalURL},
 			}
 			break
 		}
 	}
 	for name, got := range map[string]string{"details": m.bodyView(false), "report": m.report()} {
-		if !strings.Contains(got, "https://portal.example/signin") {
+		if !strings.Contains(got, portalURL) {
 			t.Errorf("%s missing portal URL:\n%s", name, got)
 		}
+	}
+	if help := m.helpView(false); !strings.Contains(help, "copy portal URL") {
+		t.Errorf("help missing portal copy action:\n%s", help)
+	}
+
+	t.Setenv("TMUX", "")
+	done := captureStderr(t)
+	u, cmd := m.Update(keyMsg("y"))
+	nm := asModel(t, u)
+	if got, want := done(), osc52Sequence(portalURL); got != want {
+		t.Errorf("clipboard output = %q, want %q", got, want)
+	}
+	if cmd == nil || nm.notice != "portal URL copied to clipboard" {
+		t.Fatalf("copy notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 }
 

@@ -186,6 +186,17 @@ func (m model) bodyView(deferred bool) string {
 		panelStyle.Width(rightW).Height(h).Render(rightStr))
 }
 
+func (m model) selectedPortalURL() string {
+	if m.selected < 0 || m.selected >= len(m.probes) {
+		return ""
+	}
+	r := m.results[m.probes[m.selected].ID]
+	if r.Portal == nil {
+		return ""
+	}
+	return r.Portal.RedirectURL
+}
+
 // upHostLine pulls the host field out of an nmap -oG "Host: … Status: Up" line.
 func upHostLine(line string) (string, bool) {
 	host, ok := strings.CutPrefix(line, "Host: ")
@@ -431,8 +442,13 @@ func (m model) helpView(deferred bool) string {
 	if len(m.otherJobs) > 0 {
 		kv = append(kv, "tab", "switch job")
 	}
+	if m.selectedPortalURL() != "" {
+		kv = append(kv, "y", "copy portal URL")
+	} else if m.reportReady() {
+		kv = append(kv, "y", "copy report")
+	}
 	if m.reportReady() {
-		kv = append(kv, "y", "copy report", "w", "save report")
+		kv = append(kv, "w", "save report")
 	}
 	kv = append(kv, "r", "restart", "?", "help", "q", "quit")
 	help := helpKeys(m.width, kv...)
@@ -458,7 +474,7 @@ func (m model) helpOverlay() string {
 	b.WriteString(row("esc", "cancel the focused job"))
 	b.WriteString(row("v", "toggle network map"))
 	b.WriteString(row("r", "restart with a new target"))
-	b.WriteString(row("y", "copy report"))
+	b.WriteString(row("y", "copy selected portal URL, otherwise report"))
 	b.WriteString(row("w", "save report"))
 	for _, tool := range m.tools {
 		b.WriteString(row(tool.Key, "run "+tool.Name))
