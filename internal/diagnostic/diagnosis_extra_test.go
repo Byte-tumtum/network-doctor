@@ -141,3 +141,24 @@ func TestDiagnoseGenericEgressNoDNS(t *testing.T) {
 		t.Errorf("got %q, want 'no direct TCP egress'", v)
 	}
 }
+
+// A Warn planted by DowngradeEgress isn't a degraded route, it's a dead one —
+// with no proxy to carry traffic the prose has to say so, and match the verdict.
+func TestDiagnoseGenericDowngradedNoProxy(t *testing.T) {
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS}
+	res := map[ProbeID]ProbeResult{
+		ProbeIface: {Status: StatusPass}, ProbeInternet: {Status: StatusFail},
+		ProbeDNS: {Status: StatusPass},
+	}
+	DowngradeEgress(res)
+	if res[ProbeInternet].Status != StatusWarn {
+		t.Fatalf("egress not downgraded: %v", res[ProbeInternet].Status)
+	}
+	v, verdict := Diagnose(nil, order, res)
+	if !strings.Contains(v, "no direct TCP egress") {
+		t.Errorf("got %q, want 'no direct TCP egress'", v)
+	}
+	if verdict != VerdictNetwork {
+		t.Errorf("got verdict %q, want %q", verdict, VerdictNetwork)
+	}
+}

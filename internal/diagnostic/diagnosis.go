@@ -72,7 +72,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return "Online — direct TCP egress and DNS both work.", gv
 		case warn(ProbeInternet) && res[ProbeInternet].downgraded && dn && prx:
 			return "Online via the environment proxy — direct egress is blocked (proxy-only network).", gv
-		case warn(ProbeInternet) && dn:
+		case directOK() && warn(ProbeInternet) && dn:
 			return "Online but degraded — direct egress is impaired (see the ! row for details).", gv
 		case warn(ProbeInternet) && !dn:
 			return "Internet egress works (degraded) but DNS resolution is failing.", gv
