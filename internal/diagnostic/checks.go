@@ -119,7 +119,8 @@ const probeHost = "connectivitycheck.gstatic.com"
 
 // portalProbeURL answers 204 with an empty body on an unintercepted path.
 // Plain HTTP on purpose — that's the request a captive portal grabs.
-const portalProbeURL = "http://" + probeHost + "/generate_204"
+// A var only so tests can point it at a local server; nothing reassigns it.
+var portalProbeURL = "http://" + probeHost + "/generate_204"
 
 // internetEndpoints4/6 are the ordered direct-egress endpoints per address
 // family; first connect wins within a family. Honestly "direct TCP egress" —

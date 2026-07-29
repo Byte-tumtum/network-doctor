@@ -329,3 +329,46 @@ func TestHTTPSProbeSupportsHTTP2OnlyServer(t *testing.T) {
 		t.Fatalf("HTTP/2-only HTTPS probe = %+v, want PASS", r)
 	}
 }
+
+// The real portalCheck round trip: the status comes back verbatim, a redirect
+// is reported rather than chased, and the proxy env never enters the path.
+func TestPortalCheck(t *testing.T) {
+	var chased bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/generate_204":
+			w.WriteHeader(http.StatusNoContent)
+		case "/redirect":
+			http.Redirect(w, r, "/signin", http.StatusFound)
+		case "/signin":
+			chased = true
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	defer func(orig string) { portalProbeURL = orig }(portalProbeURL)
+
+	// A proxy that would break the request if the transport honored it.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("http_proxy", "http://127.0.0.1:1")
+
+	portalProbeURL = server.URL + "/generate_204"
+	if code, err := portalCheck(context.Background()); err != nil || code != http.StatusNoContent {
+		t.Errorf("clean path = (%d, %v), want (204, nil) with the proxy env ignored", code, err)
+	}
+
+	portalProbeURL = server.URL + "/redirect"
+	if code, err := portalCheck(context.Background()); err != nil || code != http.StatusFound {
+		t.Errorf("intercepted path = (%d, %v), want the 302 itself", code, err)
+	}
+	if chased {
+		t.Error("followed the redirect to the sign-in page; the 302 is the answer")
+	}
+
+	// A dead endpoint is an error, not a zero-status verdict callers can read.
+	server.Close()
+	if code, err := portalCheck(context.Background()); err == nil || code != 0 {
+		t.Errorf("dead endpoint = (%d, %v), want (0, error)", code, err)
+	}
+}
