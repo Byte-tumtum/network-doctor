@@ -183,6 +183,40 @@ func TestInternetProbeFamilies(t *testing.T) {
 	}
 }
 
+// Same dial outcome, two verdicts: a v4-only network passes, but a machine
+// holding a global IPv6 address with no IPv6 egress is black-holed and warns.
+func TestInternetProbeBlackHoledIPv6(t *testing.T) {
+	blackholed := &netops{
+		dialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+			if strings.HasPrefix(addr, "[") {
+				return nil, errors.New("connection timed out")
+			}
+			return fakeConn{}, nil
+		},
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{{Name: "eth0", Flags: net.FlagUp | net.FlagRunning}}, nil
+		},
+		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) {
+			return []net.Addr{
+				&net.IPNet{IP: net.ParseIP("fe80::1")},     // link-local doesn't count
+				&net.IPNet{IP: net.ParseIP("2001:db8::1")}, // this does
+			}, nil
+		},
+	}
+	r := blackholed.internetProbe(context.Background(), nil)
+	if r.Status != StatusWarn || !strings.Contains(r.Detail, "black-holed") {
+		t.Errorf("black-holed IPv6 = %+v, want WARN naming it", r)
+	}
+
+	linkLocalOnly := *blackholed
+	linkLocalOnly.interfaceAddrs = func(*net.Interface) ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("fe80::1")}}, nil
+	}
+	if r := linkLocalOnly.internetProbe(context.Background(), nil); r.Status != StatusPass {
+		t.Errorf("v4-only network = %+v, want PASS — no global IPv6 means nothing is broken", r)
+	}
+}
+
 // A network whose TCP handshakes all succeed is still not online if the 204
 // endpoint comes back as anything else: that's a portal answering for it.
 func TestInternetProbeCaptivePortal(t *testing.T) {

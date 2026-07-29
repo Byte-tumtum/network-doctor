@@ -459,7 +459,14 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// family at all is normal, not degraded. The other family's attempts are
 	// appended afterwards so the details panel still shows them.
 	r.Attempts = prim.attempts
-	applyDialWarnings(&r, prim.rtt)
+	var extra []string
+	// The exception: a machine that took a global IPv6 address and still can't
+	// reach IPv6 is broken, not v4-only. Happy Eyeballs hides that from netdoc
+	// and from browsers, but not from software that dials AAAA and waits.
+	if sec.conn == nil && secName == "IPv6" && o.hasGlobalV6() {
+		extra = append(extra, "IPv6 address configured but no IPv6 egress (black-holed)")
+	}
+	applyDialWarnings(&r, prim.rtt, extra...)
 	r.Attempts = append(prim.attempts, sec.attempts...)
 	return r
 }
@@ -960,6 +967,34 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 		return nil, ""
 	}
 	return src, o.ifaceForIP(src)
+}
+
+// hasGlobalV6 reports whether any live non-loopback interface holds a global
+// unicast IPv6 address — the machine accepted a router advertisement (or was
+// configured statically), so the network claimed to carry IPv6.
+//
+// ponytail: a ULA-only network counts as configured and will be called
+// black-holed; narrow this to non-fc00::/7 if that ever produces a false alarm.
+func (o *netops) hasGlobalV6() bool {
+	ifaces, err := o.interfaces()
+	if err != nil {
+		return false
+	}
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagLoopback != 0 || ifi.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := o.interfaceAddrs(&ifi)
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() == nil && n.IP.IsGlobalUnicast() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ifaceForIP maps a source IP back to an interface name. LocalAddr gives an IP,
