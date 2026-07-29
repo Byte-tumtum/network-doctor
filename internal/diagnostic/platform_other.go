@@ -4,7 +4,7 @@ package diagnostic
 
 import "context"
 
-// Unsupported GOOSes compile with the cosmetic SSID field empty (untested
-// targets; see PLAN.md "Out of scope").
+// Unsupported GOOSes compile with the cosmetic SSID field empty; they are
+// out of scope because we cannot test them.
 
 func ssid(context.Context, string) string { return "" }

@@ -15,7 +15,7 @@
 - `go vet ./...` performs the static checks required by CI.
 - `golangci-lint run ./...` runs the configured lint suite used by CI.
 
-Use Go 1.26.4 or the version declared in `go.mod`.
+Use the Go version declared in `go.mod`.
 
 ## Coding Style & Naming Conventions
 
