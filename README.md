@@ -200,8 +200,8 @@ document to stdout:
 
 `status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null`
 in generic (no-target) mode. `ms` is the check's wall time truncated to
-milliseconds — `0` for a check that never ran, and for one that finished in
-under a millisecond. Optional per-check fields (`fix`, `addrs`, `selected_ip`,
+milliseconds but floored at `1`, so `0` means the check never ran. Optional
+per-check fields (`fix`, `addrs`, `selected_ip`,
 `source`, `iface`, `network`, `attempts`) are omitted when empty. Field names
 and the status vocabulary are stable — safe to script against. Exit codes
 follow the table below (`ok: false` ⇒ exit `1`).

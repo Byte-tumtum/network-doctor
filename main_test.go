@@ -123,6 +123,26 @@ func TestRunJSON(t *testing.T) {
 	}
 }
 
+// ms is the one field with an out-of-band meaning: 0 has to keep saying "never
+// ran", which a sub-millisecond check would otherwise steal.
+func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
+	probes := []diagnostic.Probe{
+		{ID: diagnostic.ProbeIface, Name: "Interface"},
+		{ID: diagnostic.ProbeInternet, Name: "Internet"},
+	}
+	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbeIface:    {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Dur: 120 * time.Microsecond},
+		diagnostic.ProbeInternet: {ID: diagnostic.ProbeInternet, Status: diagnostic.StatusSkip},
+	}
+	rep := buildReport(nil, probes, results)
+	if rep.Checks[0].Ms != 1 {
+		t.Errorf("sub-millisecond check ms = %d, want 1", rep.Checks[0].Ms)
+	}
+	if rep.Checks[1].Ms != 0 {
+		t.Errorf("check that never ran ms = %d, want 0", rep.Checks[1].Ms)
+	}
+}
+
 func TestBuildReport(t *testing.T) {
 	target, err := diagnostic.ParseTarget("example.com:443")
 	if err != nil {
