@@ -41,7 +41,7 @@ brew install --cask network-doctor
 
 ### Everywhere else
 
-Download a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), or install with Go 1.26+:
+Download a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), or install with Go 1.25+:
 
 ```sh
 go install github.com/heymaikol/network-doctor@latest
