@@ -516,7 +516,7 @@ func TestViewerCopiesFullOutput(t *testing.T) {
 	if got, want := done(), osc52Sequence("first\nsecond"); got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
-	if cmd == nil || nm.notice != "output copied to clipboard" {
+	if cmd == nil || nm.notice != "output sent to clipboard (OSC 52) — w saves a file" {
 		t.Fatalf("notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 }
@@ -728,7 +728,7 @@ func TestReportNoticeExpires(t *testing.T) {
 	doneResults(&m, "")
 	u, cmd := m.Update(keyMsg("y"))
 	nm := asModel(t, u)
-	if cmd == nil || nm.notice != "report copied to clipboard" {
+	if cmd == nil || nm.notice != "report sent to clipboard (OSC 52) — w saves a file" {
 		t.Fatalf("copy notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 

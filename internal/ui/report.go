@@ -45,7 +45,7 @@ func exportReport(rep string, save bool) (notice string, ok bool) {
 	if err := copyReport(rep); err != nil {
 		return "copy failed: " + err.Error(), false
 	}
-	return "report copied to clipboard", true
+	return "report sent to clipboard (OSC 52) — w saves a file", true
 }
 
 var (
@@ -71,6 +71,11 @@ func writeFileExcl(path string, data []byte, perm os.FileMode) error {
 // copyReport writes the OSC 52 escape to stderr, because Bubble Tea owns
 // stdout: both reach the tty, but only one of them is fighting the renderer
 // for it mid-frame.
+//
+// A nil error means the escape reached the terminal, not that the clipboard
+// changed: OSC 52 is fire-and-forget, and terminals without it (legacy
+// conhost) or with it switched off (tmux set-clipboard off, some SSH setups)
+// drop the sequence in silence. Callers must not promise the paste worked.
 func copyReport(rep string) error {
 	_, err := os.Stderr.WriteString(osc52Sequence(rep))
 	return err

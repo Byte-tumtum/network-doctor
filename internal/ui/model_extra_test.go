@@ -96,7 +96,7 @@ func TestPortalURLDisplayed(t *testing.T) {
 	if got, want := done(), osc52Sequence(portalURL); got != want {
 		t.Errorf("clipboard output = %q, want %q", got, want)
 	}
-	if cmd == nil || nm.notice != "portal URL copied to clipboard" {
+	if cmd == nil || nm.notice != "portal URL sent to clipboard (OSC 52)" {
 		t.Fatalf("copy notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 }

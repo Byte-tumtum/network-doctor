@@ -46,7 +46,7 @@ func TestCopyReportWritesOSC52(t *testing.T) {
 	if got, want := done(), "\x1b]52;c;aGVsbG8=\a"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
-	if !ok || notice != "report copied to clipboard" {
+	if !ok || notice != "report sent to clipboard (OSC 52) — w saves a file" {
 		t.Fatalf("exportReport() = %q, %v", notice, ok)
 	}
 }

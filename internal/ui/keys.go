@@ -143,7 +143,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "y", "w":
 		if portalURL := m.selectedPortalURL(); portalURL != "" && msg.String() == "y" {
-			notice, ok := "portal URL copied to clipboard", true
+			notice, ok := "portal URL sent to clipboard (OSC 52)", true
 			if err := copyReport(portalURL); err != nil {
 				notice, ok = "copy failed: "+err.Error(), false
 			}
@@ -230,7 +230,7 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, textinput.Blink
 	case "y":
-		notice, ok := "output copied to clipboard", true
+		notice, ok := "output sent to clipboard (OSC 52) — w saves a file", true
 		if err := copyReport(strings.Join(m.visibleJobLines(), "\n")); err != nil {
 			notice, ok = "copy failed: "+err.Error(), false
 		}
