@@ -1,5 +1,12 @@
 package diagnostic
 
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"strings"
+)
+
 // Per-GOOS fix hints for failures whose remedy is OS-specific. goos is a
 // parameter so all branches are testable from one OS.
 
@@ -23,4 +30,54 @@ func dnsFix(goos string) string {
 	default:
 		return "name resolution failing — check /etc/resolv.conf / DNS"
 	}
+}
+
+// tlsFix names what actually broke the handshake. Go's verification errors
+// carry the offending certificate, so an expiry or a name mismatch can be
+// answered with dates and names instead of a list of maybes. Unrecognized
+// failures fall back to the list.
+func tlsFix(err error) string {
+	var (
+		hostErr x509.HostnameError
+		invalid x509.CertificateInvalidError
+		unknown x509.UnknownAuthorityError
+		record  tls.RecordHeaderError
+	)
+	switch {
+	case errors.As(err, &hostErr):
+		return "cert is for " + certNames(hostErr.Certificate) + ", not " + hostErr.Host + " — wrong SNI/vhost, or the address belongs to someone else"
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
+		return certWindow(invalid.Cert) + " — renew the cert, or check this machine's clock"
+	case errors.As(err, &unknown):
+		return "cert signed by an unknown CA — MITM proxy, self-signed cert, or a missing root store"
+	case errors.As(err, &record):
+		return "the port answered but not with TLS — plaintext service or wrong port?"
+	}
+	return "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
+}
+
+// certNames renders who a cert actually claims to be. Long SAN lists get
+// truncated; the point is to recognize the wrong server, not to audit it.
+func certNames(c *x509.Certificate) string {
+	if c == nil {
+		return "another name"
+	}
+	names := c.DNSNames
+	if len(names) == 0 && c.Subject.CommonName != "" {
+		names = []string{c.Subject.CommonName}
+	}
+	if len(names) == 0 {
+		return "another name"
+	}
+	if len(names) > 3 {
+		return strings.Join(names[:3], ", ") + ", …"
+	}
+	return strings.Join(names, ", ")
+}
+
+func certWindow(c *x509.Certificate) string {
+	if c == nil {
+		return "cert is outside its validity window"
+	}
+	return "cert is only valid " + c.NotBefore.Format("2006-01-02") + " → " + c.NotAfter.Format("2006-01-02")
 }

@@ -609,7 +609,7 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			// resolver handed us, and that's often the actual culprit.
 			r.Status, r.SelectedIP = StatusFail, ip
 			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
-			r.Fix = "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
+			r.Fix = tlsFix(err)
 			return r
 		}
 		conn.Close()
