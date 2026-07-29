@@ -390,7 +390,7 @@ func (m model) promptView(withForms bool) string {
 	// 88, not 76: the longest target-form line needs ~86 content cols to
 	// render unwrapped on wide terminals.
 	w := max(min(m.width-2, 88), 24)
-	footer := helpKeys(m.width, "enter", "run", "esc", "back")
+	footer := helpKeys(m.width, "↑/↓", "history", "enter", "run", "esc", "back")
 	if m.notice == ctrlCNotice {
 		footer = m.noticeView()
 	}
