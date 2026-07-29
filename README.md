@@ -29,7 +29,10 @@ makepkg -si
 
 ### macOS (Homebrew)
 
-Installing with Homebrew avoids Gatekeeper's "unverified developer" prompt:
+The binary is unsigned, so the cask strips the quarantine attribute and
+Gatekeeper does not prompt. That removes a warning rather than adding a check;
+verifying is a separate step you run yourself ([Verify your
+download](#verify-your-download)):
 
 ```sh
 brew tap heymaikol/tap
@@ -54,6 +57,24 @@ git clone https://github.com/heymaikol/network-doctor
 cd network-doctor
 go build -o netdoc .
 ```
+
+### Verify your download
+
+Releases carry a signed attestation binding each artifact to the workflow run
+that built it. v1.8.4 and earlier were published before the release workflow
+attested anything and have none. With GitHub CLI installed and `gh auth login`
+completed:
+
+```sh
+VERSION=X.Y.Z
+gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
+  --repo heymaikol/network-doctor \
+  --signer-workflow heymaikol/network-doctor/.github/workflows/release.yml
+```
+
+This proves the bytes were built from the tagged commit by the release workflow;
+that workflow gates release on CI and an ancestor-of-`main` check. The source
+tarball AUR builds from is attested too.
 
 ## How it diagnoses
 

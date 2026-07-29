@@ -22,6 +22,9 @@ source:
   enabled: true
   prefix_template: "{{ .ProjectName }}-{{ .Version }}/"
 
+checksum:
+  name_template: "checksums.txt"
+
 aur_sources:
   - homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
