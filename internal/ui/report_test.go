@@ -141,12 +141,17 @@ func TestReportSanitized(t *testing.T) {
 
 	rep := m.report()
 	for _, want := range []string{
+		"version: test",
+		"os: ",
+		"review before sharing",
 		"target: example.com:443",
 		"verdict: FAIL",
 		"boom red",
 		"fix: restart it",
 		"attempt: 93.184.216.34 12ms refused",
 		"tool output ($ curl https://example.com)",
+		"status: done",
+		"output tail: 15 of 18 retained lines",
 		"line 03",
 		"ssh banner on stderr",
 		"result 200",
@@ -195,10 +200,49 @@ func TestReportIncludesTimedOutToolOutput(t *testing.T) {
 	m := newModel(nil, false)
 	m.cur.status = JobTimedOut
 	m.cur.display = "ping example.com"
+	m.cur.dur = 12 * time.Second
 	m.cur.lines = []string{"reply before timeout"}
 
-	if rep := m.report(); !strings.Contains(rep, "tool output ($ ping example.com):\n  reply before timeout") {
+	if rep := m.report(); !strings.Contains(rep, "tool output ($ ping example.com):\n  status: timed out\n  duration: 12s") ||
+		!strings.Contains(rep, "    reply before timeout") {
 		t.Errorf("timed-out tool output missing from report:\n%s", rep)
+	}
+}
+
+func TestReportIncludesEveryToolTail(t *testing.T) {
+	m := newModel(nil, false)
+	m.cur = jobState{
+		status: JobDone, display: "ping selected.example", dur: 1500 * time.Millisecond,
+		lines: []string{"selected output"},
+	}
+	m.otherJobs = []jobState{
+		{status: JobFailed, display: "curl other.example", dur: 2 * time.Second},
+		{status: JobCanceled, display: "mtr final.example", dur: 3 * time.Second, lines: []string{"final output"}},
+	}
+	m.otherJobs[0].lines = make([]string, 16)
+	for i := range m.otherJobs[0].lines {
+		m.otherJobs[0].lines[i] = fmt.Sprintf("tail line %02d", i)
+	}
+	m.otherJobs[0].evicted, m.otherJobs[0].dropped = 4, 2
+
+	rep := m.report()
+	for _, want := range []string{
+		"tool output ($ ping selected.example):",
+		"duration: 1.5s",
+		"tool output ($ curl other.example):",
+		"status: failed",
+		"output tail: 15 of 16 retained lines (4 evicted, 2 dropped)",
+		"tail line 01",
+		"tool output ($ mtr final.example):",
+		"status: canceled",
+		"final output",
+	} {
+		if !strings.Contains(rep, want) {
+			t.Errorf("report missing %q\n%s", want, rep)
+		}
+	}
+	if strings.Contains(rep, "tail line 00") {
+		t.Errorf("report contains output before per-job tail:\n%s", rep)
 	}
 }
 

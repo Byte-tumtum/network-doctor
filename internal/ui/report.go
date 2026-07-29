@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -93,6 +94,8 @@ func osc52Sequence(rep string) string {
 func (m model) report() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "network-doctor report — %s\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "version: %s\nos: %s/%s\n", m.version, runtime.GOOS, runtime.GOARCH)
+	b.WriteString("review before sharing: tool output may contain sensitive data\n")
 	if m.target != nil {
 		fmt.Fprintf(&b, "target: %s (%s)\n", m.targetHP(), m.target.Proto)
 	} else {
@@ -119,15 +122,25 @@ func (m model) report() string {
 			fmt.Fprintf(&b, "        attempt: %s %dms %s\n", a.IP, diagnostic.Ms(a.Dur), st)
 		}
 	}
-	if len(m.cur.lines) > 0 {
+	jobs := m.otherJobs
+	if m.hasJob() {
+		jobs = append([]jobState{m.cur}, jobs...)
+	}
+	for _, j := range jobs {
 		const reportTailLines = 15
-		lines := m.cur.lines
+		lines := j.lines
 		if len(lines) > reportTailLines {
 			lines = lines[len(lines)-reportTailLines:]
 		}
-		fmt.Fprintf(&b, "\ntool output ($ %s):\n", textsafe.Clean(m.cur.display))
+		fmt.Fprintf(&b, "\ntool output ($ %s):\n", textsafe.Clean(j.display))
+		fmt.Fprintf(&b, "  status: %s\n  duration: %s\n", j.status, j.dur.Round(time.Millisecond))
+		fmt.Fprintf(&b, "  output tail: %d of %d retained lines", len(lines), len(j.lines))
+		if j.evicted > 0 || j.dropped > 0 {
+			fmt.Fprintf(&b, " (%d evicted, %d dropped)", j.evicted, j.dropped)
+		}
+		b.WriteByte('\n')
 		for _, line := range lines {
-			b.WriteString("  " + textsafe.Clean(line) + "\n")
+			b.WriteString("    " + textsafe.Clean(line) + "\n")
 		}
 	}
 	return b.String()

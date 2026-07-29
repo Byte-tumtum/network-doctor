@@ -131,7 +131,7 @@ clear the history.
 | `y` (viewer) | copy the viewer's retained full output (up to 5,000 lines) |
 | `r` | restart — opens a prompt to edit the `netdoc` arguments (`enter` runs, `esc` backs out) |
 | `tab` | switch between running tool jobs |
-| `y` / `w` | yank / write (copy / save) a report of the chain plus the completed tool output |
+| `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
 | `q` | quit |
 
 ## Drill-down tools
@@ -141,8 +141,9 @@ cancellable streaming jobs — several can run at once, and `tab` switches
 between the live ones. The contextual toolbox shows the
 tools available for the current target with their hotkeys — missing binaries are
 greyed out with an install hint. Output is bounded and sanitized (no
-terminal-escape injection from a hostile server); the last 15 output lines are
-included in reports after a tool finishes.
+terminal-escape injection from a hostile server); reports include version/OS
+metadata plus each job's command, status, duration, and last 15 output lines.
+Review the local copy before sharing because tool evidence may contain sensitive data.
 
 The same hotkeys map to each OS's built-in tools:
 

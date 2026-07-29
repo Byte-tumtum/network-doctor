@@ -77,8 +77,9 @@ const (
 )
 
 type model struct {
-	target *diagnostic.Target
-	probes []diagnostic.Probe
+	target  *diagnostic.Target
+	probes  []diagnostic.Probe
+	version string
 
 	// results + started are owned exclusively by Update; probe goroutines get an
 	// immutable snapshot, never the live map.
@@ -176,7 +177,7 @@ var (
 
 // New constructs the terminal application. histFile is where target history
 // persists across sessions; "" keeps it in-memory only.
-func New(t *diagnostic.Target, toolbox bool, histFile string) tea.Model {
+func New(t *diagnostic.Target, toolbox bool, histFile, version string) tea.Model {
 	probes := diagnostic.BuildProbes(t)
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
@@ -190,6 +191,7 @@ func New(t *diagnostic.Target, toolbox bool, histFile string) tea.Model {
 		spinner:  sp,
 		toolbox:  toolbox,
 		histPath: histFile,
+		version:  version,
 		width:    100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
 	m.history = loadHistory(histFile)

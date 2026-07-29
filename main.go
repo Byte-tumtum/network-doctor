@@ -108,7 +108,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if dir, err := os.UserConfigDir(); err == nil {
 		histFile = filepath.Join(dir, "netdoc", "history")
 	}
-	p := tea.NewProgram(ui.New(t, *toolbox, histFile), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(t, *toolbox, histFile, version), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)
