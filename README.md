@@ -264,9 +264,9 @@ cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip
 a scrollable output viewer + `--toolbox` mode, the `Warn` state, proxy-aware
 diagnosis, `--json` output, and report copy/save.
 
-Completed `mtr` reports summarize destination loss and average latency beside
-the retained raw output. Suspect-hop attribution and `pathping` parsing remain
-deferred until their conclusions can be made reliable.
+Completed `mtr` and `pathping` reports summarize destination loss and average
+latency beside the retained raw output. Suspect-hop attribution remains deferred
+until its conclusions can be made reliable.
 
 ## Built with
 
