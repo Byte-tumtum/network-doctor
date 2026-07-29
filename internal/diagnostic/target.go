@@ -94,6 +94,15 @@ func ParseTarget(raw string) (*Target, error) {
 	}
 
 	host := u.Host
+	// Brackets belong to IPv6 literals and nothing else. Go 1.26's url.Parse
+	// enforces that itself, but go.mod still supports 1.25, where
+	// SplitHostPort happily peels the brackets off "[1.2.3.4]:80" and
+	// "[hostname]:80". Check it here so the rule doesn't depend on toolchain.
+	if strings.HasPrefix(host, "[") {
+		if h := u.Hostname(); !strings.Contains(h, ":") || net.ParseIP(h) == nil {
+			return nil, fmt.Errorf("invalid target %q: brackets are only for IPv6 literals", s)
+		}
+	}
 	if net.ParseIP(host) == nil {
 		if host == "["+u.Hostname()+"]" {
 			host = u.Hostname()
