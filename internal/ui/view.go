@@ -607,9 +607,6 @@ func (m model) outputView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("$ "+m.cur.display) + "\n")
 	b.WriteString(m.jobStatusLine() + "\n")
-	if quality, ok := m.cur.routeQuality(); ok {
-		b.WriteString(titleStyle.Render("Route quality") + " — " + quality.String() + "\n")
-	}
 	b.WriteString(m.vp.View() + "\n")
 	b.WriteString(faintStyle.Render(m.vpContext()) + "\n")
 	b.WriteString(m.viewerFooter())
@@ -698,17 +695,12 @@ func (m model) jobView(avail int) string {
 	if !m.hasJob() {
 		return ""
 	}
-	quality, hasQuality := m.cur.routeQuality()
-	overhead := 5 // rule, title, status, context note, trailing blank
-	if hasQuality {
-		overhead++
-	}
-	if m.height > 0 && avail < overhead {
+	if m.height > 0 && avail < 5 {
 		return "" // not even rule+title+status+note fit — drop the pane
 	}
 	tailN := jobTailLines
 	if m.height > 0 {
-		tailN = avail - overhead
+		tailN = avail - 5 // rule, title, status, context note, trailing blank
 		if tailN < 0 {
 			tailN = 0
 		}
@@ -717,9 +709,6 @@ func (m model) jobView(avail int) string {
 	b.WriteString(faintStyle.Render(strings.Repeat("─", m.width)) + "\n")
 	b.WriteString(titleStyle.Render("$ "+m.cur.display) + "\n")
 	b.WriteString(m.jobStatusLine() + "\n")
-	if hasQuality {
-		b.WriteString(titleStyle.Render("Route quality") + " — " + quality.String() + "\n")
-	}
 
 	shown := m.cur.lines
 	if len(shown) > tailN {

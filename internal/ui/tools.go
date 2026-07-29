@@ -109,7 +109,7 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 		tools = append(tools,
 			staticTool(quote, "t", "trace the path", "traceroute", "traceroute", "-w", "2", "-q", "1", "-m", "20", host),
 			// mtr report mode only — never curses inside our TUI.
-			staticTool(quote, "m", "path quality", "mtr", "mtr", "--report", "--report-cycles", "5", "--order", "LSNABWV", host))
+			staticTool(quote, "m", "path quality", "mtr", "mtr", "--report", "--report-cycles", "5", host))
 	}
 
 	// Targeted nmap actively scans the host, so it is gated behind a shown-command

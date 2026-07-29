@@ -440,9 +440,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if done == nil {
 			return m, nil
 		}
-		if done == &m.cur && m.viewing {
-			m.refreshViewport()
-		}
 		if m.pending != nil && !m.jobsRunning() {
 			p := m.pending
 			m.pending = nil
