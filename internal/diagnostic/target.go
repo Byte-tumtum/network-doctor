@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -71,59 +72,42 @@ func ParseTarget(raw string) (*Target, error) {
 		return nil, errors.New("empty target")
 	}
 	t := &Target{}
-	var scheme string
-
-	if i := strings.Index(s, "://"); i >= 0 {
-		scheme = strings.ToLower(s[:i])
-		switch scheme {
-		case "http", "https", "ssh", "smtp":
-		default:
-			return nil, fmt.Errorf("unsupported scheme %q (only http/https/ssh/smtp)", scheme)
-		}
-		s = s[i+3:]
+	parseable := s
+	if !strings.Contains(s, "://") {
+		parseable = "//" + s
 	}
-	// Drop any path/query/fragment.
-	if i := strings.IndexAny(s, "/?#"); i >= 0 {
-		s = s[:i]
+	u, err := url.Parse(parseable)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target %q: %w", s, err)
 	}
-	if s == "" {
+	scheme := strings.ToLower(u.Scheme)
+	switch scheme {
+	case "", "http", "https", "ssh", "smtp":
+	default:
+		return nil, fmt.Errorf("unsupported scheme %q (only http/https/ssh/smtp)", scheme)
+	}
+	if u.User != nil {
+		return nil, errors.New("userinfo is not allowed in target")
+	}
+	if u.Host == "" {
 		return nil, errors.New("missing host")
 	}
 
-	host := s
-	switch {
-	case strings.HasPrefix(s, "["):
-		// Bracketed IPv6 literal, optionally with a port: [<ipv6>][:<port>].
-		end := strings.Index(s, "]")
-		if end < 0 {
-			return nil, errors.New("missing ']' in bracketed IPv6 literal")
-		}
-		host = s[1:end]
-		if rest := s[end+1:]; rest != "" {
-			if !strings.HasPrefix(rest, ":") {
-				return nil, fmt.Errorf("unexpected %q after ']'", rest)
+	host := u.Host
+	if net.ParseIP(host) == nil {
+		if host == "["+u.Hostname()+"]" {
+			host = u.Hostname()
+		} else if strings.Contains(host, ":") {
+			var port string
+			host, port, err = net.SplitHostPort(host)
+			if err != nil {
+				return nil, fmt.Errorf("invalid target %q: %w", s, err)
 			}
-			port, err := parsePort(rest[1:])
+			t.Port, err = parsePort(port)
 			if err != nil {
 				return nil, err
 			}
-			t.Port, t.PortExplicit = port, true
-		}
-		if ip := net.ParseIP(host); ip == nil || ip.To4() != nil {
-			return nil, fmt.Errorf("brackets require an IPv6 literal, got %q", host)
-		}
-	case strings.Count(s, ":") > 1:
-		// Bare IPv6 literal — any port form must use brackets.
-	default:
-		// LastIndex, though with ≤1 colon it can only be the port separator;
-		// bare-v6 (2+ colons) was already peeled off above.
-		if i := strings.LastIndex(s, ":"); i >= 0 {
-			host = s[:i]
-			port, err := parsePort(s[i+1:])
-			if err != nil {
-				return nil, err
-			}
-			t.Port, t.PortExplicit = port, true
+			t.PortExplicit = true
 		}
 	}
 	if host == "" {
@@ -182,9 +166,9 @@ func ParseTarget(raw string) (*Target, error) {
 			t.Proto = ProtoNone
 		}
 	}
-	t.Raw = s
+	t.Raw = u.Host
 	if scheme != "" {
-		t.Raw = scheme + "://" + s
+		t.Raw = scheme + "://" + u.Host
 	}
 	return t, nil
 }

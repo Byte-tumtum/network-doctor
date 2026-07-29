@@ -58,7 +58,8 @@ func TestParseTarget(t *testing.T) {
 
 func TestParseTargetErrors(t *testing.T) {
 	bad := []string{"", "host:0", "host:99999", "ftp://host", "bad_host!",
-		"[::1", "[::1]x", "[1.2.3.4]:80", "[hostname]:80", "[]:80", "[fe80::1%eth0]", "a:b:c"}
+		"[::1", "[::1]x", "[1.2.3.4]:80", "[hostname]:80", "[]:80", "[fe80::1%eth0]", "a:b:c",
+		"https://user@example.com", "https://host:not-a-port"}
 	for _, in := range bad {
 		if tg, err := ParseTarget(in); err == nil {
 			t.Errorf("ParseTarget(%q) = %+v, want error", in, tg)
