@@ -400,7 +400,7 @@ func TestRestartPrompt(t *testing.T) {
 	}
 	// Width is 0 here, so the panel wraps hard; assert the five example
 	// targets (short tokens survive word wrap) rather than whole lines.
-	for _, form := range []string{"example.com", "example.com:8022", "https://example.com/x", "192.0.2.1", "[2001:db8::1]:443", "(nothing)"} {
+	for _, form := range []string{"example.com", "example.com:8022", "ssh://example.com:8022", "192.0.2.1", "[2001:db8::1]:443", "(nothing)"} {
 		if !strings.Contains(nm.View(), form) {
 			t.Errorf("prompt before WindowSizeMsg must show target form %q", form)
 		}
@@ -413,7 +413,7 @@ func TestRestartPrompt(t *testing.T) {
 	formLines := []string{
 		"example.com            hostname (default port 443)",
 		"example.com:8022       hostname with port (protocol inferred from the port)",
-		"https://example.com/x  URL (scheme sets protocol and default port; path ignored)",
+		"ssh://example.com:8022 URL (scheme sets protocol and default port; path ignored)",
 		"192.0.2.1, 2001:db8::1 IP literal",
 		"[2001:db8::1]:443      IP literal with port (IPv6 needs the brackets)",
 		"(nothing)              no target — runs the generic checks",

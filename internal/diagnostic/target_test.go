@@ -19,6 +19,10 @@ func TestParseTarget(t *testing.T) {
 		{"http://example.com", "example.com", 80, ProtoHTTP, false},
 		{"https://host:80", "host", 80, ProtoTLSHTTP, false}, // scheme selects proto
 		{"http://host:443", "host", 443, ProtoHTTP, false},   // scheme selects proto
+		{"ssh://host:2222", "host", 2222, ProtoSSH, false},
+		{"smtp://host:2525", "host", 2525, ProtoSMTP, false},
+		{"ssh://host", "host", 22, ProtoSSH, false},
+		{"smtp://host", "host", 25, ProtoSMTP, false},
 		{"1.1.1.1", "1.1.1.1", 443, ProtoTLSHTTP, true},
 		{"1.1.1.1:25", "1.1.1.1", 25, ProtoSMTP, true},
 		{"mail.example.com:587", "mail.example.com", 587, ProtoSMTP, false},

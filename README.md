@@ -105,6 +105,7 @@ netdoc                  # generic local + internet diagnosis
 netdoc github.com       # diagnose the path to a host (→ HTTP + TLS + HTTPS)
 netdoc github.com:22    # port selects the protocol rows (→ SSH banner)
 netdoc https://host:80  # explicit scheme selects the protocol (→ TLS + HTTPS on :80)
+netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
 ```
 
@@ -112,7 +113,7 @@ netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug 
 for the default.
 
 The target parser has two independent axes: the **port** (explicit `:port` >
-scheme default > 443) and the **protocol rows** (an explicit `http`/`https`
+scheme default > 443) and the **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp`
 scheme wins; otherwise inferred from the port — `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP,
 `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6
 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).

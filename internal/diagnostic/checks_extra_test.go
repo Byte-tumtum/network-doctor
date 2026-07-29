@@ -64,6 +64,8 @@ func TestBuildProbesProtoShapes(t *testing.T) {
 		{"http://example.com", 7}, // + http
 		{"host:25", 7},            // + smtp banner
 		{"host:587", 7},           // + smtp banner
+		{"ssh://host:2222", 7},    // + ssh banner
+		{"smtp://host:2525", 7},   // + smtp banner
 		{"host:9999", 6},          // ProtoNone — stops at target_tcp
 	}
 	for _, c := range cases {

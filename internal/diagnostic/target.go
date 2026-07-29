@@ -51,7 +51,7 @@ type Target struct {
 // the block belong to the callers.
 const TargetForms = `  example.com            hostname (default port 443)
   example.com:8022       hostname with port (protocol inferred from the port)
-  https://example.com/x  URL (scheme sets protocol and default port; path ignored)
+  ssh://example.com:8022 URL (scheme sets protocol and default port; path ignored)
   192.0.2.1, 2001:db8::1 IP literal
   [2001:db8::1]:443      IP literal with port (IPv6 needs the brackets)
   (nothing)              no target — runs the generic checks`
@@ -62,7 +62,8 @@ const TargetForms = `  example.com            hostname (default port 443)
 var hostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 
 // ParseTarget parses a CLI target: <host> | <host>:<port> | <ipv6> |
-// [<ipv6>][:<port>] | http(s)://<host>[:port][/path]. Returns a typed Target
+// [<ipv6>][:<port>] | <scheme>://<host>[:port][/path], where scheme is HTTP,
+// HTTPS, SSH, or SMTP. Returns a typed Target
 // or an error (caller exits 2 on error).
 func ParseTarget(raw string) (*Target, error) {
 	s := strings.TrimSpace(raw)
@@ -74,8 +75,10 @@ func ParseTarget(raw string) (*Target, error) {
 
 	if i := strings.Index(s, "://"); i >= 0 {
 		scheme = strings.ToLower(s[:i])
-		if scheme != "http" && scheme != "https" {
-			return nil, fmt.Errorf("unsupported scheme %q (only http/https)", scheme)
+		switch scheme {
+		case "http", "https", "ssh", "smtp":
+		default:
+			return nil, fmt.Errorf("unsupported scheme %q (only http/https/ssh/smtp)", scheme)
 		}
 		s = s[i+3:]
 	}
@@ -146,6 +149,10 @@ func ParseTarget(raw string) (*Target, error) {
 		switch scheme {
 		case "http":
 			t.Port = 80
+		case "ssh":
+			t.Port = 22
+		case "smtp":
+			t.Port = 25
 		default: // https or bare host
 			t.Port = 443
 		}
@@ -157,6 +164,10 @@ func ParseTarget(raw string) (*Target, error) {
 		t.Proto = ProtoTLSHTTP
 	case "http":
 		t.Proto = ProtoHTTP
+	case "ssh":
+		t.Proto = ProtoSSH
+	case "smtp":
+		t.Proto = ProtoSMTP
 	default:
 		switch t.Port {
 		case 443, 8443: // 8443: where HTTPS admin panels go to feel special

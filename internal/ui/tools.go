@@ -228,10 +228,9 @@ func sshTool(quote func([]string) string, host string, port int, goos string) To
 		host)
 }
 
-// smtpTool builds a bounded SMTP STARTTLS check for the "c" slot (ProtoSMTP is
-// only inferred for ports 25 and 587, both STARTTLS). In the TUI the process
-// gets an empty stdin, so s_client exits right after the handshake instead of
-// waiting for commands; the job timeout bounds the rest.
+// smtpTool builds a bounded SMTP STARTTLS check for the "c" slot. In the TUI
+// the process gets an empty stdin, so s_client exits right after the handshake
+// instead of waiting for commands; the job timeout bounds the rest.
 func smtpTool(quote func([]string) string, host string, port int) Tool {
 	return staticTool(quote, "c", "SMTP check", "openssl s_client", "openssl",
 		"s_client", "-starttls", "smtp", "-connect", net.JoinHostPort(host, strconv.Itoa(port)))
