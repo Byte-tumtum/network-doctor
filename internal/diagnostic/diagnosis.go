@@ -42,6 +42,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 
 	prx := has(ProbeProxy) && functional(res[ProbeProxy].Status)
 	prxDown := has(ProbeProxy) && fail(ProbeProxy)
+	publicResolves := has(ProbeDNSPublic) && len(res[ProbeDNSPublic].Addrs) > 0
+	bothNotFound := res[ProbeDNS].DNSNotFound && has(ProbeDNSPublic) && res[ProbeDNSPublic].DNSNotFound
 
 	// Generic mode (no target): the verdict is a truth table over egress, DNS,
 	// and proxy state. Cases are ordered most-specific first because several
@@ -66,6 +68,12 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		switch {
 		case res[ProbeInternet].Portal != nil:
 			return "Behind a captive portal — traffic is intercepted until you sign in to the network.", VerdictNetwork
+		case directOK() && fail(ProbeDNS) && publicResolves:
+			return "System DNS is failing, but public DNS resolves the name — check the configured resolver, VPN, or DNS filter.", gv
+		case directOK() && fail(ProbeDNS) && bothNotFound:
+			return "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv
+		case warn(ProbeDNSPublic) && functional(res[ProbeDNS].Status):
+			return "Online, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", gv
 		case ip && dn && prxDown:
 			return "Online directly — but the configured environment proxy check failed, so apps that honor HTTP(S)_PROXY will fail (see the proxy row).", gv
 		case ip && dn:
@@ -98,6 +106,11 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		return "Behind a captive portal — sign in to the network before trusting anything about " + host + ".", VerdictNetwork
 	case fail(ProbeDNS):
 		v := "Cannot resolve " + host + " — DNS failure."
+		if publicResolves {
+			v = "System DNS cannot resolve " + host + ", but public DNS can — the configured resolver is failing or filtering the name."
+		} else if bothNotFound {
+			v = host + " has no A/AAAA records according to either system or public DNS."
+		}
 		if directOK() {
 			v += " (The general internet is reachable.)"
 		}
@@ -133,6 +146,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		return "The target and direct egress work, but the configured environment proxy check failed — apps that honor HTTP(S)_PROXY will fail (see the proxy row).", healthy
 	case warn(ProbeInternet):
 		return "The target works but direct internet egress is degraded (see the ! row for details).", VerdictDegraded
+	case warn(ProbeDNSPublic):
+		return "The target works, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", VerdictDegraded
 	case degraded:
 		return "The target works, but some checks are degraded (see the ! rows for details).", VerdictDegraded
 	default:
@@ -155,6 +170,55 @@ const (
 
 func functional(s Status) bool {
 	return s == StatusPass || s == StatusWarn
+}
+
+// ReconcileDNS compares the independently collected system and public answers.
+// Public DNS can add context or a warning, but never fails a run on its own.
+func ReconcileDNS(res map[ProbeID]ProbeResult) {
+	system, systemOK := res[ProbeDNS]
+	public, publicOK := res[ProbeDNSPublic]
+	if !systemOK || !publicOK || public.Status != StatusPass {
+		return
+	}
+	switch {
+	case system.DNSNotFound && public.DNSNotFound:
+		system.Detail += " — public DNS agrees there are no A/AAAA records"
+		system.Fix = "check the hostname or publish the missing DNS record"
+	case system.Status == StatusPass && public.DNSNotFound:
+		public.Status = StatusWarn
+		public.Detail = "system DNS resolves the name, but 1.1.1.1 reports no records — split DNS or filtering may be intentional"
+	case system.DNSNotFound && len(public.Addrs) > 0:
+		public.Status = StatusWarn
+		public.Detail += " — system DNS reports no records; split DNS or filtering may be intentional"
+		system.Detail += " — but public DNS resolves it"
+		system.Fix = "check the configured resolver, VPN, or DNS filter"
+	case system.Status == StatusPass && len(public.Addrs) > 0 && !sameIPSet(system.Addrs, public.Addrs):
+		public.Status = StatusWarn
+		public.Detail = "answers differ — system: " + joinIPs(system.Addrs) + "; public 1.1.1.1: " + joinIPs(public.Addrs) + " (split DNS may be intentional)"
+	case system.Status == StatusFail && len(public.Addrs) > 0:
+		system.Detail += " — but public DNS resolves it"
+		system.Fix = "check the configured resolver, VPN, or DNS filter"
+	}
+	res[ProbeDNS], res[ProbeDNSPublic] = system, public
+}
+
+func sameIPSet(a, b []net.IP) bool {
+	left, right := make(map[string]struct{}, len(a)), make(map[string]struct{}, len(b))
+	for _, ip := range a {
+		left[ip.String()] = struct{}{}
+	}
+	for _, ip := range b {
+		right[ip.String()] = struct{}{}
+	}
+	if len(left) != len(right) {
+		return false
+	}
+	for ip := range left {
+		if _, ok := right[ip]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // DowngradeEgress rewrites a direct-egress failure to Warn once another path

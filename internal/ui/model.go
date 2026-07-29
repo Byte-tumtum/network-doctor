@@ -399,6 +399,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// be what completes the run.
 		cmds := m.scheduleStep()
 		if m.allDone() {
+			diagnostic.ReconcileDNS(m.results)
 			diagnostic.DowngradeEgress(m.results)
 			if !m.selMoved && !m.viewing {
 				for i, p := range m.probes {

@@ -87,6 +87,9 @@ failure never hides a working one:
   proxy)`. The native probes deliberately bypass proxies, so this row reports
   the environment-configured proxy separately — a proxy-only corporate network
   reads as "online via proxy" instead of offline.
+- **Public-DNS path** (independent of system DNS): `Interface → DNS (public
+  1.1.1.1)`. Failure to reach the third-party resolver is N/A; differing
+  answers warn about split DNS or filtering but never fail the run by themselves.
 - **Wi-Fi metadata path**: `Interface → Wi-Fi network`. SSID discovery runs
   beside the network checks, so a slow OS lookup never delays them.
 - **Plain HTTP path**: `Interface → DNS → HTTP :80`.
@@ -104,6 +107,7 @@ IP literal). A Warn never counts as a failure.
 | **Internet (TCP egress)** | A TCP connect to well-known anycast `:443` endpoints succeeds | IPv4 and IPv6 probed independently in parallel; either family passes, both are reported |
 | **Internet (env proxy)** | The `HTTPS_PROXY`/`HTTP_PROXY` proxy grants a `CONNECT` tunnel | N/A when no proxy is configured; honors `NO_PROXY` |
 | **DNS** | The host resolves to an IPv4 or IPv6 address (system resolution) | IP-literal targets are N/A; all A/AAAA records are retained |
+| **DNS (public 1.1.1.1)** | A direct query to Cloudflare provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail |
 | **TCP** | A TCP connect to the target port succeeds | races A/AAAA records Happy-Eyeballs style (RFC 8305), pins the winner |
 | **TLS** | The TLS handshake (SNI + cert verification) succeeds | bad/expired cert, clock skew, or MITM → Fail |
 | **HTTP** | Port 80 returns any HTTP response (incl. 3xx/4xx/5xx) | Independent HEAD after DNS, redirects off, proxy off |

@@ -85,6 +85,7 @@ const (
 	ProbeInternet  ProbeID = "internet_tcp"
 	ProbeProxy     ProbeID = "proxy_connect"
 	ProbeDNS       ProbeID = "dns"
+	ProbeDNSPublic ProbeID = "dns_public"
 	ProbeTargetTCP ProbeID = "target_tcp"
 	ProbeTLS       ProbeID = "tls"
 	ProbeHTTP      ProbeID = "http"
@@ -96,19 +97,20 @@ const (
 // ProbeResult is the typed contract the diagnosis engine and renderer consume.
 // Detail/Fix are derived human text, never parsed back.
 type ProbeResult struct {
-	ID         ProbeID
-	Status     Status
-	downgraded bool     // DowngradeEgress rewrote a direct-egress failure to Warn.
-	Portal     *Portal  // non-nil when egress is intercepted, not dead.
-	Addrs      []net.IP // DNS publishes all A records here
-	SelectedIP net.IP   // winning/pinned IP used by this probe
-	Source     net.IP
-	Iface      string
-	Network    string // connected Wi-Fi SSID, empty when wired/unknown
-	Attempts   []Attempt
-	Dur        time.Duration // wall time the probe took; zero for probes that never ran
-	Detail     string
-	Fix        string
+	ID          ProbeID
+	Status      Status
+	downgraded  bool     // DowngradeEgress rewrote a direct-egress failure to Warn.
+	Portal      *Portal  // non-nil when egress is intercepted, not dead.
+	Addrs       []net.IP // DNS publishes all A records here
+	DNSNotFound bool     // the resolver found no A/AAAA records
+	SelectedIP  net.IP   // winning/pinned IP used by this probe
+	Source      net.IP
+	Iface       string
+	Network     string // connected Wi-Fi SSID, empty when wired/unknown
+	Attempts    []Attempt
+	Dur         time.Duration // wall time the probe took; zero for probes that never ran
+	Detail      string
+	Fix         string
 }
 
 // Portal is structured captive-portal evidence. RedirectURL is empty when the
@@ -145,6 +147,8 @@ const (
 // probeHost is the host used by the generic (no-target) DNS + egress probes.
 const probeHost = "connectivitycheck.gstatic.com"
 
+const publicDNSServer = "1.1.1.1:53"
+
 // portalProbeURL answers 204 with an empty body on an unintercepted path.
 // Plain HTTP on purpose — that's the request a captive portal grabs.
 // A var only so tests can point it at a local server; nothing reassigns it.
@@ -166,12 +170,13 @@ type netops struct {
 	interfaceAddrs func(*net.Interface) ([]net.Addr, error)
 	// lookupIP resolves host and reports the resolver that was dialed, as a
 	// host:port string. An empty server means "couldn't tell", not "none".
-	lookupIP     func(ctx context.Context, host string) ([]net.IP, string, error)
-	dialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
-	dialTLS      func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
-	tlsRootCAs   *x509.CertPool
-	ssid         func(ctx context.Context, iface string) string
-	proxyFromEnv func(*http.Request) (*url.URL, error)
+	lookupIP       func(ctx context.Context, host string) ([]net.IP, string, error)
+	lookupPublicIP func(ctx context.Context, host string) ([]net.IP, error)
+	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialTLS        func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
+	tlsRootCAs     *x509.CertPool
+	ssid           func(ctx context.Context, iface string) string
+	proxyFromEnv   func(*http.Request) (*url.URL, error)
 	// portalCheck returns the status code portalProbeURL answered with and an
 	// optional validated HTTP(S) redirect URL.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
@@ -182,6 +187,7 @@ var defaultOps = &netops{
 	interfaces:     net.Interfaces,
 	interfaceAddrs: (*net.Interface).Addrs,
 	lookupIP:       lookupIPWithServer,
+	lookupPublicIP: lookupIPPublic,
 	dialContext:    new(net.Dialer).DialContext,
 	dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: new(net.Dialer), Config: cfg}
@@ -222,6 +228,18 @@ func lookupIPWithServer(ctx context.Context, host string) ([]net.IP, string, err
 	mu.Lock()
 	defer mu.Unlock()
 	return ips, server, err
+}
+
+// lookupIPPublic bypasses the configured resolver for a second opinion.
+// Unavailability is reported as N/A by publicDNSProbe, never as a failure.
+func lookupIPPublic(ctx context.Context, host string) ([]net.IP, error) {
+	r := net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return new(net.Dialer).DialContext(ctx, network, publicDNSServer)
+		},
+	}
+	return r.LookupIP(ctx, "ip", host)
 }
 
 // dnsServerLabel shortens a resolver dial address for a probe row: the bare host
@@ -325,17 +343,19 @@ func (o *netops) buildProbes(t *Target) []Probe {
 	proxy := Probe{ID: ProbeProxy, Name: "Internet (env proxy)", Deps: []ProbeID{ProbeIface}, Run: o.proxyProbe}
 
 	if t == nil {
-		// Egress, proxy egress, and DNS are siblings: each depends only on the
-		// interface, so one failure never hides another.
+		// Egress, proxy egress, system DNS, and public DNS are siblings: each
+		// depends only on the interface, so one failure never hides another.
 		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(probeHost, nil)}
-		return []Probe{iface, internet, proxy, dns, network}
+		publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public 1.1.1.1)", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil)}
+		return []Probe{iface, internet, proxy, dns, publicDNS, network}
 	}
 
 	host, port := t.Host, t.Port
 	hp := net.JoinHostPort(host, strconv.Itoa(port)) // brackets IPv6 literals
 	dns := Probe{ID: ProbeDNS, Name: "DNS " + host, Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(host, t.IP)}
+	publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public 1.1.1.1)", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP)}
 	ttcp := Probe{ID: ProbeTargetTCP, Name: "TCP " + hp, Deps: []ProbeID{ProbeDNS}, Run: o.targetTCPProbe(port)}
-	probes := []Probe{iface, internet, proxy, dns, ttcp, network}
+	probes := []Probe{iface, internet, proxy, dns, publicDNS, ttcp, network}
 
 	switch t.Proto {
 	case ProtoTLSHTTP:
@@ -637,12 +657,14 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		}
 		if err != nil {
 			r.Status = StatusFail
+			r.DNSNotFound = dnsNotFound(err)
 			r.Detail = "cannot resolve " + host + via + ": " + err.Error()
 			r.Fix = dnsFix(runtime.GOOS)
 			return r
 		}
 		if len(ips) == 0 {
 			r.Status = StatusFail
+			r.DNSNotFound = true
 			r.Detail, r.Fix = "no A/AAAA records for "+host+via, "no address returned — check the hostname / DNS"
 			return r
 		}
@@ -650,6 +672,35 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		r.Detail = host + " → " + joinIPs(ips) + paren
 		return r
 	}
+}
+
+func (o *netops) publicDNSProbe(host string, litIP net.IP) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
+	return func(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
+		if litIP != nil {
+			return ProbeResult{Status: StatusNA, Detail: "literal IP " + litIP.String() + " — no DNS needed"}
+		}
+		ips, err := o.lookupPublicIP(ctx, host)
+		if dnsNotFound(err) || err == nil && len(ips) == 0 {
+			return ProbeResult{
+				Status:      StatusPass,
+				DNSNotFound: true,
+				Detail:      "1.1.1.1 reports no A/AAAA records for " + host,
+			}
+		}
+		if err != nil {
+			return ProbeResult{Status: StatusNA, Detail: "public DNS unavailable via 1.1.1.1: " + err.Error()}
+		}
+		return ProbeResult{
+			Status: StatusPass,
+			Addrs:  ips,
+			Detail: host + " → " + joinIPs(ips) + " (via 1.1.1.1)",
+		}
+	}
+}
+
+func dnsNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {

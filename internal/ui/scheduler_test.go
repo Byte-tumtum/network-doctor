@@ -27,11 +27,11 @@ func TestSiblingIndependence(t *testing.T) {
 	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass}
 	m.started[diagnostic.ProbeIface] = true
 	cmds := m.scheduleStep()
-	if len(cmds) != 4 {
-		t.Fatalf("want 4 dispatched (internet, proxy, dns, ssid), got %d", len(cmds))
+	if len(cmds) != 5 {
+		t.Fatalf("want 5 dispatched (internet, proxy, system/public dns, ssid), got %d", len(cmds))
 	}
-	if !m.started[diagnostic.ProbeInternet] || !m.started[diagnostic.ProbeProxy] || !m.started[diagnostic.ProbeDNS] || !m.started[diagnostic.ProbeSSID] {
-		t.Fatal("internet+proxy+dns+ssid should all be dispatched")
+	if !m.started[diagnostic.ProbeInternet] || !m.started[diagnostic.ProbeProxy] || !m.started[diagnostic.ProbeDNS] || !m.started[diagnostic.ProbeDNSPublic] || !m.started[diagnostic.ProbeSSID] {
+		t.Fatal("internet+proxy+system/public dns+ssid should all be dispatched")
 	}
 	if _, ok := m.results[diagnostic.ProbeDNS]; ok {
 		t.Error("dns must be dispatched, not skipped by an egress failure")
@@ -71,6 +71,7 @@ func TestDowngradeRunsWhenSkipsFinishRun(t *testing.T) {
 	fail(diagnostic.ProbeInternet)
 	pass(diagnostic.ProbeProxy)
 	pass(diagnostic.ProbeDNS)
+	pass(diagnostic.ProbeDNSPublic)
 	fail(diagnostic.ProbeHTTP)
 	m.started[diagnostic.ProbeTargetTCP] = true // in flight; its done-msg arrives below
 
@@ -92,6 +93,7 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 		diagnostic.ProbeInternet,
 		diagnostic.ProbeProxy,
 		diagnostic.ProbeDNS,
+		diagnostic.ProbeDNSPublic,
 		diagnostic.ProbeHTTP,
 	} {
 		m.results[id] = diagnostic.ProbeResult{ID: id, Status: diagnostic.StatusPass}
@@ -101,8 +103,8 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 
 	u, _ := m.Update(probeDoneMsg{id: diagnostic.ProbeTargetTCP, res: diagnostic.ProbeResult{Status: diagnostic.StatusFail, Detail: "connection refused"}})
 	nm := asModel(t, u)
-	if nm.selected != 4 {
-		t.Fatalf("selected = %d, want first failed probe 4", nm.selected)
+	if nm.selected != 5 {
+		t.Fatalf("selected = %d, want first failed probe 5", nm.selected)
 	}
 	if !strings.Contains(nm.bodyView(false), "connection refused") {
 		t.Error("details panel must show the selected failure")

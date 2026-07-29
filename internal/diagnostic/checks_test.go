@@ -19,14 +19,14 @@ func mustTarget(t *testing.T, s string) *Target {
 }
 
 func TestBuildProbesShape(t *testing.T) {
-	if got := len(BuildProbes(nil)); got != 5 {
-		t.Errorf("generic probes = %d, want 5", got)
+	if got := len(BuildProbes(nil)); got != 6 {
+		t.Errorf("generic probes = %d, want 6", got)
 	}
-	if got := len(BuildProbes(mustTarget(t, "github.com"))); got != 9 {
-		t.Errorf("https target probes = %d, want 9", got)
+	if got := len(BuildProbes(mustTarget(t, "github.com"))); got != 10 {
+		t.Errorf("https target probes = %d, want 10", got)
 	}
-	if got := len(BuildProbes(mustTarget(t, "host:22"))); got != 7 {
-		t.Errorf("ssh target probes = %d, want 7", got)
+	if got := len(BuildProbes(mustTarget(t, "host:22"))); got != 8 {
+		t.Errorf("ssh target probes = %d, want 8", got)
 	}
 }
 
@@ -39,7 +39,7 @@ func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
 	if got := deps[ProbeSSID]; len(got) != 1 || got[0] != ProbeIface {
 		t.Fatalf("ssid deps = %v, want [iface]", got)
 	}
-	for _, id := range []ProbeID{ProbeInternet, ProbeProxy, ProbeDNS} {
+	for _, id := range []ProbeID{ProbeInternet, ProbeProxy, ProbeDNS, ProbeDNSPublic} {
 		got := deps[id]
 		if len(got) != 1 || got[0] != ProbeIface {
 			t.Errorf("%s deps = %v, want [iface]", id, got)

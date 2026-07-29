@@ -4,6 +4,7 @@
 package diagnostic
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -212,5 +213,111 @@ func TestVerdict(t *testing.T) {
 	// An unfinished run must not claim health.
 	if _, got := Diagnose(tg, targetOrder, map[ProbeID]ProbeResult{ProbeIface: {Status: StatusPass}}); got != VerdictIncomplete {
 		t.Errorf("Verdict on partial results = %q, want %q", got, VerdictIncomplete)
+	}
+}
+
+func TestReconcileDNS(t *testing.T) {
+	ip1, ip2 := net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")
+	t.Run("public resolver works", func(t *testing.T) {
+		res := map[ProbeID]ProbeResult{
+			ProbeDNS:       {Status: StatusFail, Detail: "SERVFAIL"},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{ip1}},
+		}
+		ReconcileDNS(res)
+		if !strings.Contains(res[ProbeDNS].Detail, "public DNS resolves it") || res[ProbeDNSPublic].Status != StatusPass {
+			t.Fatalf("results = %+v, want public success to explain system failure", res)
+		}
+	})
+	t.Run("both say name is absent", func(t *testing.T) {
+		res := map[ProbeID]ProbeResult{
+			ProbeDNS:       {Status: StatusFail, DNSNotFound: true, Detail: "not found"},
+			ProbeDNSPublic: {Status: StatusPass, DNSNotFound: true},
+		}
+		ReconcileDNS(res)
+		if !strings.Contains(res[ProbeDNS].Detail, "agrees") || res[ProbeDNSPublic].Status != StatusPass {
+			t.Fatalf("results = %+v, want corroborated not-found", res)
+		}
+	})
+	t.Run("different answers warn", func(t *testing.T) {
+		res := map[ProbeID]ProbeResult{
+			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{ip1}},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{ip2}},
+		}
+		ReconcileDNS(res)
+		if res[ProbeDNSPublic].Status != StatusWarn || !strings.Contains(res[ProbeDNSPublic].Detail, "split DNS") {
+			t.Fatalf("public result = %+v, want explanatory warning", res[ProbeDNSPublic])
+		}
+	})
+	t.Run("same answers in different order pass", func(t *testing.T) {
+		res := map[ProbeID]ProbeResult{
+			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{ip1, ip2}},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{ip2, ip1}},
+		}
+		ReconcileDNS(res)
+		if res[ProbeDNSPublic].Status != StatusPass {
+			t.Fatalf("public result = %+v, want matching set to pass", res[ProbeDNSPublic])
+		}
+	})
+	t.Run("unavailable public resolver is neutral", func(t *testing.T) {
+		res := map[ProbeID]ProbeResult{
+			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{ip1}},
+			ProbeDNSPublic: {Status: StatusNA},
+		}
+		ReconcileDNS(res)
+		order := []ProbeID{ProbeDNS, ProbeDNSPublic}
+		if _, verdict := Diagnose(nil, order, res); verdict != VerdictOK {
+			t.Fatalf("verdict = %q, want public N/A to be neutral", verdict)
+		}
+	})
+}
+
+func TestDiagnoseSecondOpinionDNS(t *testing.T) {
+	tg := mustTarget(t, "example.com")
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeDNSPublic}
+	base := map[ProbeID]ProbeResult{
+		ProbeIface:    {Status: StatusPass},
+		ProbeInternet: {Status: StatusPass},
+	}
+	for _, tc := range []struct {
+		name    string
+		system  ProbeResult
+		public  ProbeResult
+		want    string
+		verdict string
+	}{
+		{
+			"system resolver broken",
+			ProbeResult{Status: StatusFail},
+			ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1")}},
+			"public DNS can",
+			VerdictDNS,
+		},
+		{
+			"name does not exist",
+			ProbeResult{Status: StatusFail, DNSNotFound: true},
+			ProbeResult{Status: StatusPass, DNSNotFound: true},
+			"no A/AAAA records according to either",
+			VerdictDNS,
+		},
+		{
+			"split DNS warning",
+			ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1")}},
+			ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.2")}},
+			"system DNS and public DNS disagree",
+			VerdictDegraded,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := make(map[ProbeID]ProbeResult, len(base)+2)
+			for id, r := range base {
+				res[id] = r
+			}
+			res[ProbeDNS], res[ProbeDNSPublic] = tc.system, tc.public
+			ReconcileDNS(res)
+			summary, verdict := Diagnose(tg, order, res)
+			if verdict != tc.verdict || !strings.Contains(summary, tc.want) {
+				t.Fatalf("Diagnose = (%q, %q), want %q and %q", summary, verdict, tc.want, tc.verdict)
+			}
+		})
 	}
 }

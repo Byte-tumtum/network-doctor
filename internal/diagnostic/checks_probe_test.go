@@ -152,6 +152,38 @@ func TestDNSProbeNamesResolver(t *testing.T) {
 	}
 }
 
+func TestPublicDNSProbe(t *testing.T) {
+	notFound := &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}
+	for _, tc := range []struct {
+		name    string
+		ips     []net.IP
+		err     error
+		litIP   net.IP
+		status  Status
+		missing bool
+	}{
+		{"answer", []net.IP{net.ParseIP("192.0.2.1")}, nil, nil, StatusPass, false},
+		{"nxdomain is evidence", nil, notFound, nil, StatusPass, true},
+		{"unreachable is unavailable", nil, errors.New("network unreachable"), nil, StatusNA, false},
+		{"literal is not applicable", nil, nil, net.ParseIP("192.0.2.2"), StatusNA, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			ops := &netops{lookupPublicIP: func(context.Context, string) ([]net.IP, error) {
+				called = true
+				return tc.ips, tc.err
+			}}
+			r := ops.publicDNSProbe("example.com", tc.litIP)(context.Background(), nil)
+			if r.Status != tc.status || r.DNSNotFound != tc.missing {
+				t.Errorf("result = %+v, want status %s, not-found %v", r, tc.status, tc.missing)
+			}
+			if tc.litIP != nil && called {
+				t.Error("literal IP must not contact public DNS")
+			}
+		})
+	}
+}
+
 // The egress probe diagnoses each family independently: IPv4 up + IPv6 down is
 // a PASS that names the missing family; both down is a FAIL naming both.
 func TestInternetProbeFamilies(t *testing.T) {

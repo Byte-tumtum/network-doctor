@@ -60,14 +60,14 @@ func TestJoinIPs(t *testing.T) {
 func TestBuildProbesProtoShapes(t *testing.T) {
 	cases := []struct {
 		target string
-		want   int // iface, internet, proxy, dns, target_tcp, ssid, + protocol rows
+		want   int // iface, internet, proxy, system/public dns, target_tcp, ssid, + protocol rows
 	}{
-		{"http://example.com", 7}, // + http
-		{"host:25", 7},            // + smtp banner
-		{"host:587", 7},           // + smtp banner
-		{"ssh://host:2222", 7},    // + ssh banner
-		{"smtp://host:2525", 7},   // + smtp banner
-		{"host:9999", 6},          // ProtoNone — stops at target_tcp
+		{"http://example.com", 8}, // + http
+		{"host:25", 8},            // + smtp banner
+		{"host:587", 8},           // + smtp banner
+		{"ssh://host:2222", 8},    // + ssh banner
+		{"smtp://host:2525", 8},   // + smtp banner
+		{"host:9999", 7},          // ProtoNone — stops at target_tcp
 	}
 	for _, c := range cases {
 		if got := len(BuildProbes(mustTarget(t, c.target))); got != c.want {

@@ -83,6 +83,7 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 		running--
 		schedule()
 	}
+	ReconcileDNS(results)
 	DowngradeEgress(results)
 	return results
 }
