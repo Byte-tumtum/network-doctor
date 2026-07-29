@@ -164,7 +164,12 @@ type reportCheck struct {
 	Source     string          `json:"source,omitempty"`
 	Iface      string          `json:"iface,omitempty"`
 	Network    string          `json:"network,omitempty"`
+	Portal     *reportPortal   `json:"portal,omitempty"`
 	Attempts   []reportAttempt `json:"attempts,omitempty"`
+}
+
+type reportPortal struct {
+	RedirectURL string `json:"redirect_url,omitempty"`
 }
 
 type reportAttempt struct {
@@ -219,6 +224,9 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			Fix:     r.Fix,
 			Iface:   r.Iface,
 			Network: r.Network,
+		}
+		if r.Portal != nil {
+			c.Portal = &reportPortal{RedirectURL: r.Portal.RedirectURL}
 		}
 		for _, ip := range r.Addrs {
 			c.Addrs = append(c.Addrs, ip.String())

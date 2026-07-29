@@ -173,6 +173,7 @@ func TestBuildReport(t *testing.T) {
 			ID:         diagnostic.ProbeTargetTCP,
 			Status:     diagnostic.StatusPass,
 			Detail:     "connected",
+			Portal:     &diagnostic.Portal{RedirectURL: "https://portal.example/signin"},
 			Addrs:      []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")},
 			SelectedIP: net.ParseIP("2001:db8::1"),
 			Source:     net.ParseIP("192.168.1.20"),
@@ -218,6 +219,9 @@ func TestBuildReport(t *testing.T) {
 	}
 	if tcp.SelectedIP != "2001:db8::1" || tcp.Source != "192.168.1.20" {
 		t.Errorf("selected_ip = %q, source = %q", tcp.SelectedIP, tcp.Source)
+	}
+	if tcp.Portal == nil || tcp.Portal.RedirectURL != "https://portal.example/signin" {
+		t.Errorf("portal = %+v", tcp.Portal)
 	}
 	// Attempts keep probe order, and only a failed attempt carries an error.
 	want := []reportAttempt{
@@ -269,6 +273,7 @@ func TestReportJSONContract(t *testing.T) {
 					Source:     "192.0.2.2",
 					Iface:      "eth0",
 					Network:    "office",
+					Portal:     &reportPortal{RedirectURL: "https://portal.example/signin"},
 					Attempts: []reportAttempt{
 						{IP: "192.0.2.1", Ms: 12},
 						{IP: "192.0.2.3", Ms: 34, Err: "timeout"},
@@ -279,12 +284,17 @@ func TestReportJSONContract(t *testing.T) {
 				FailedStage: "tls",
 				OK:          true,
 			},
-			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
+			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","portal":{"redirect_url":"https://portal.example/signin"},"attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
 		},
 		{
 			name: "empty",
 			rep:  report{Checks: []reportCheck{{}}},
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"","verdict":"","ok":false}`,
+		},
+		{
+			name: "portal without redirect",
+			rep:  report{Checks: []reportCheck{{Portal: &reportPortal{}}}},
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":"","portal":{}}],"summary":"","verdict":"","ok":false}`,
 		},
 	}
 	for _, tt := range tests {

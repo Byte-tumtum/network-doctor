@@ -203,10 +203,12 @@ document to stdout:
 `status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null`
 in generic (no-target) mode. `ms` is the check's wall time truncated to
 milliseconds but floored at `1`, so `0` means the check never ran. Optional
-per-check fields (`fix`, `addrs`, `selected_ip`,
-`source`, `iface`, `network`, `attempts`) are omitted when empty. Field names
-and the status vocabulary are stable — safe to script against. Exit codes
-follow the table below (`ok: false` ⇒ exit `1`).
+per-check fields (`fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`,
+`portal`, `attempts`) are omitted when empty. A `portal` object marks detected
+HTTP interception and includes `redirect_url` only when the response supplied
+a valid HTTP(S) sign-in URL; the app displays that URL but never opens it.
+Field names and the status vocabulary are stable — safe to script against.
+Exit codes follow the table below (`ok: false` ⇒ exit `1`).
 
 `failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`,
 …) and is omitted when none did — enough to route a bug report without reading

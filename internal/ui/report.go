@@ -108,6 +108,9 @@ func (m model) report() string {
 		if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 			b.WriteString("        fix: " + r.Fix + "\n")
 		}
+		if r.Portal != nil && r.Portal.RedirectURL != "" {
+			b.WriteString("        portal: " + r.Portal.RedirectURL + "\n")
+		}
 		if r.Source != nil {
 			b.WriteString("        src: " + r.Source.String() + " " + r.Iface + "\n")
 		}

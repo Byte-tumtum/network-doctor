@@ -66,6 +66,26 @@ func TestNetworkLine(t *testing.T) {
 	}
 }
 
+func TestPortalURLDisplayed(t *testing.T) {
+	m := newModel(nil, false)
+	for i, p := range m.probes {
+		if p.ID == diagnostic.ProbeInternet {
+			m.selected = i
+			m.results[p.ID] = diagnostic.ProbeResult{
+				Status: diagnostic.StatusFail,
+				Detail: "HTTP is intercepted",
+				Portal: &diagnostic.Portal{RedirectURL: "https://portal.example/signin"},
+			}
+			break
+		}
+	}
+	for name, got := range map[string]string{"details": m.bodyView(false), "report": m.report()} {
+		if !strings.Contains(got, "https://portal.example/signin") {
+			t.Errorf("%s missing portal URL:\n%s", name, got)
+		}
+	}
+}
+
 func TestGlyph(t *testing.T) {
 	m := newModel(nil, false)
 	if got := m.glyph(diagnostic.ProbeIface); !strings.ContainsRune(got, '·') {

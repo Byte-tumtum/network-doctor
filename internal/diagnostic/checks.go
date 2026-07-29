@@ -88,7 +88,7 @@ type ProbeResult struct {
 	ID         ProbeID
 	Status     Status
 	downgraded bool     // DowngradeEgress rewrote a direct-egress failure to Warn.
-	portal     bool     // egress failed because the path is intercepted, not dead.
+	Portal     *Portal  // non-nil when egress is intercepted, not dead.
 	Addrs      []net.IP // DNS publishes all A records here
 	SelectedIP net.IP   // winning/pinned IP used by this probe
 	Source     net.IP
@@ -98,6 +98,12 @@ type ProbeResult struct {
 	Dur        time.Duration // wall time the probe took; zero for probes that never ran
 	Detail     string
 	Fix        string
+}
+
+// Portal is structured captive-portal evidence. RedirectURL is empty when the
+// interception did not advertise a valid HTTP(S) sign-in URL.
+type Portal struct {
+	RedirectURL string
 }
 
 // Probe is one DAG node. Run receives an immutable snapshot of just its
@@ -153,9 +159,10 @@ type netops struct {
 	tlsRootCAs     *x509.CertPool
 	ssid           func(ctx context.Context, iface string) string
 	proxyFromEnv   func(*http.Request) (*url.URL, error)
-	// portalCheck returns the status code portalProbeURL answered with.
+	// portalCheck returns the status code portalProbeURL answered with and an
+	// optional validated HTTP(S) redirect URL.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
-	portalCheck func(ctx context.Context) (int, error)
+	portalCheck func(ctx context.Context) (int, string, error)
 }
 
 var defaultOps = &netops{
@@ -174,14 +181,15 @@ var defaultOps = &netops{
 	portalCheck:  portalCheck,
 }
 
-// portalCheck fetches portalProbeURL and reports the status code it got.
+// portalCheck fetches portalProbeURL and reports the status code it got plus a
+// valid HTTP(S) redirect URL, if the response advertised one.
 // Proxy and redirect following are both off: the direct-egress row must not
 // borrow the proxy's path, and an interception usually announces itself as
 // the 302 we'd otherwise chase to a sign-in page.
-func portalCheck(ctx context.Context) (int, error) {
+func portalCheck(ctx context.Context) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalProbeURL, nil)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	c := &http.Client{
 		Transport: &http.Transport{
@@ -193,10 +201,18 @@ func portalCheck(ctx context.Context) (int, error) {
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	resp.Body.Close()
-	return resp.StatusCode, nil
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		if u, err := resp.Location(); err == nil && u.Hostname() != "" {
+			switch strings.ToLower(u.Scheme) {
+			case "http", "https":
+				return resp.StatusCode, u.String(), nil
+			}
+		}
+	}
+	return resp.StatusCode, "", nil
 }
 
 // BuildProbes constructs the DAG for the given target (nil = generic mode).
@@ -228,6 +244,11 @@ func wrapRun(run func(context.Context, map[ProbeID]ProbeResult) ProbeResult) fun
 func cleanResult(r ProbeResult) ProbeResult {
 	r.Detail, r.Fix = textsafe.Clean(r.Detail), textsafe.Clean(r.Fix)
 	r.Iface, r.Network = textsafe.Clean(r.Iface), textsafe.Clean(r.Network)
+	if r.Portal != nil {
+		portal := *r.Portal
+		portal.RedirectURL = textsafe.Clean(portal.RedirectURL)
+		r.Portal = &portal
+	}
 	for i, a := range r.Attempts {
 		if a.Err != nil {
 			// Replaced, not wrapped: nothing downstream unwraps an attempt
@@ -331,6 +352,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// portalCode stays 0 when the check is stubbed out or never answered; only
 	// a real status code is evidence either way.
 	var portalCode int
+	var portalURL string
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, internetEndpoints4, 443)
@@ -342,8 +364,8 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		// Runs alongside the dials rather than after them: it costs nothing
 		// when egress is clean, and its answer is only consulted on success.
 		wg.Go(func() {
-			if code, err := o.portalCheck(ctx); err == nil {
-				portalCode = code
+			if code, redirect, err := o.portalCheck(ctx); err == nil {
+				portalCode, portalURL = code, redirect
 			}
 		})
 	}
@@ -376,7 +398,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	if portalCode != 0 && portalCode != http.StatusNoContent {
 		r.Status, r.SelectedIP, r.Source, r.Iface = StatusFail, prim.sel, src, iface
 		r.Attempts = append(prim.attempts, sec.attempts...)
-		r.portal = true
+		r.Portal = &Portal{RedirectURL: portalURL}
 		r.Detail = fmt.Sprintf("TCP reaches %s but HTTP is intercepted: %s answered %d, want 204", prim.sel, portalProbeURL, portalCode)
 		r.Fix = "captive portal or transparent filter — open a browser and sign in to the network"
 		return r

@@ -150,6 +150,9 @@ func (m model) bodyView(deferred bool) string {
 			if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 				right.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
 			}
+			if r.Portal != nil && r.Portal.RedirectURL != "" {
+				right.WriteString(faintStyle.Render("portal "+r.Portal.RedirectURL) + "\n")
+			}
 			if r.Source != nil {
 				right.WriteString(faintStyle.Render("src "+r.Source.String()+" "+r.Iface) + "\n")
 			}

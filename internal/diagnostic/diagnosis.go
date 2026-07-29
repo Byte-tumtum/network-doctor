@@ -64,7 +64,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			gv = VerdictDegraded
 		}
 		switch {
-		case res[ProbeInternet].portal:
+		case res[ProbeInternet].Portal != nil:
 			return "Behind a captive portal — traffic is intercepted until you sign in to the network.", VerdictNetwork
 		case ip && dn && prxDown:
 			return "Online directly — but the configured environment proxy check failed, so apps that honor HTTP(S)_PROXY will fail (see the proxy row).", gv
@@ -92,7 +92,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	// banner) and report the first rung that broke — everything above it
 	// failing is implied, everything below it passing is context.
 	switch {
-	case res[ProbeInternet].portal:
+	case res[ProbeInternet].Portal != nil:
 		// Ahead of the DNS rung: behind a portal every rung below is answering
 		// for the portal, so nothing further down the stack means what it says.
 		return "Behind a captive portal — sign in to the network before trusting anything about " + host + ".", VerdictNetwork
@@ -167,7 +167,7 @@ func DowngradeEgress(res map[ProbeID]ProbeResult) {
 	// An intercepted path is exempt: behind a portal DNS and the target
 	// connect both "work" because the portal answers them, so the usual
 	// evidence that the network is usable is exactly the thing being faked.
-	if !ok || r.Status != StatusFail || r.portal {
+	if !ok || r.Status != StatusFail || r.Portal != nil {
 		return
 	}
 	other, hasTarget := res[ProbeTargetTCP]

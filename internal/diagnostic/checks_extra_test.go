@@ -509,6 +509,7 @@ func TestCleanResultScrubsEveryTextField(t *testing.T) {
 		Fix:      hostile,
 		Iface:    hostile,
 		Network:  hostile,
+		Portal:   &Portal{RedirectURL: "https://portal.example/" + hostile},
 		Attempts: []Attempt{{Err: errors.New(hostile)}},
 	})
 	for name, got := range map[string]string{
@@ -516,10 +517,15 @@ func TestCleanResultScrubsEveryTextField(t *testing.T) {
 		"Fix":     r.Fix,
 		"Iface":   r.Iface,
 		"Network": r.Network,
+		"Portal":  r.Portal.RedirectURL,
 		"Attempt": r.Attempts[0].Err.Error(),
 	} {
-		if got != "boom" {
-			t.Errorf("%s = %q, want %q", name, got, "boom")
+		want := "boom"
+		if name == "Portal" {
+			want = "https://portal.example/boom"
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
 }

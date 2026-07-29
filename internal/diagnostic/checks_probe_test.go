@@ -167,10 +167,13 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 
 	portal := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, error) { return http.StatusFound, nil },
+		portalCheck: func(context.Context) (int, string, error) {
+			return http.StatusFound, "https://portal.example/signin", nil
+		},
 	}
 	r := portal.internetProbe(context.Background(), nil)
-	if r.Status != StatusFail || !r.portal || r.Fix == "" || !strings.Contains(r.Detail, "intercepted") {
+	if r.Status != StatusFail || r.Portal == nil || r.Portal.RedirectURL != "https://portal.example/signin" ||
+		r.Fix == "" || !strings.Contains(r.Detail, "intercepted") {
 		t.Errorf("portal network = %+v, want FAIL flagged as a portal with a fix", r)
 	}
 	// And the exemption holds: DNS answering must not launder it into a Warn.
@@ -182,18 +185,29 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 
 	clean := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, error) { return http.StatusNoContent, nil },
+		portalCheck: func(context.Context) (int, string, error) { return http.StatusNoContent, "", nil },
 	}
-	if r := clean.internetProbe(context.Background(), nil); r.Status != StatusPass || r.portal {
+	if r := clean.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
 		t.Errorf("204 network = %+v, want a plain PASS", r)
+	}
+
+	noRedirect := &netops{
+		dialContext: dialOK, interfaces: ifaces,
+		portalCheck: func(context.Context) (int, string, error) { return http.StatusOK, "", nil },
+	}
+	if r := noRedirect.internetProbe(context.Background(), nil); r.Status != StatusFail ||
+		r.Portal == nil || r.Portal.RedirectURL != "" {
+		t.Errorf("non-redirect interception = %+v, want portal evidence without a URL", r)
 	}
 
 	// An unreachable check is not evidence of a portal — the dial result stands.
 	broken := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, error) { return 0, errors.New("no route to host") },
+		portalCheck: func(context.Context) (int, string, error) {
+			return 0, "", errors.New("no route to host")
+		},
 	}
-	if r := broken.internetProbe(context.Background(), nil); r.Status != StatusPass || r.portal {
+	if r := broken.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
 		t.Errorf("failed check = %+v, want the TCP verdict to stand", r)
 	}
 }
@@ -340,6 +354,9 @@ func TestPortalCheck(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case "/redirect":
 			http.Redirect(w, r, "/signin", http.StatusFound)
+		case "/unsafe":
+			w.Header().Set("Location", "file:///tmp/signin")
+			w.WriteHeader(http.StatusFound)
 		case "/signin":
 			chased = true
 			w.WriteHeader(http.StatusOK)
@@ -354,21 +371,26 @@ func TestPortalCheck(t *testing.T) {
 	t.Setenv("http_proxy", "http://127.0.0.1:1")
 
 	portalProbeURL = server.URL + "/generate_204"
-	if code, err := portalCheck(context.Background()); err != nil || code != http.StatusNoContent {
-		t.Errorf("clean path = (%d, %v), want (204, nil) with the proxy env ignored", code, err)
+	if code, redirect, err := portalCheck(context.Background()); err != nil || code != http.StatusNoContent || redirect != "" {
+		t.Errorf("clean path = (%d, %q, %v), want (204, empty, nil) with the proxy env ignored", code, redirect, err)
 	}
 
 	portalProbeURL = server.URL + "/redirect"
-	if code, err := portalCheck(context.Background()); err != nil || code != http.StatusFound {
-		t.Errorf("intercepted path = (%d, %v), want the 302 itself", code, err)
+	if code, redirect, err := portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != server.URL+"/signin" {
+		t.Errorf("intercepted path = (%d, %q, %v), want the 302 and resolved HTTP URL", code, redirect, err)
 	}
 	if chased {
 		t.Error("followed the redirect to the sign-in page; the 302 is the answer")
 	}
 
+	portalProbeURL = server.URL + "/unsafe"
+	if code, redirect, err := portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != "" {
+		t.Errorf("unsafe redirect = (%d, %q, %v), want the 302 without a non-HTTP URL", code, redirect, err)
+	}
+
 	// A dead endpoint is an error, not a zero-status verdict callers can read.
 	server.Close()
-	if code, err := portalCheck(context.Background()); err == nil || code != 0 {
-		t.Errorf("dead endpoint = (%d, %v), want (0, error)", code, err)
+	if code, redirect, err := portalCheck(context.Background()); err == nil || code != 0 || redirect != "" {
+		t.Errorf("dead endpoint = (%d, %q, %v), want (0, empty, error)", code, redirect, err)
 	}
 }
