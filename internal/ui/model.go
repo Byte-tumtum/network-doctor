@@ -32,11 +32,22 @@ type probeDoneMsg struct {
 	res diagnostic.ProbeResult
 }
 
-// lanNamesMsg carries resolved or advertised names for LAN-scan IPs. They
-// override nmap's own reverse-DNS guesses in the network map (see networkHosts).
+// lanNamesMsg carries the advertised names and ssh aliases for the LAN-scan
+// IPs, which arrive as one batch. They override nmap's own reverse-DNS guesses
+// in the network map (see networkHosts). ips is the full scanned set, so Update
+// knows which addresses still need a reverse lookup.
 type lanNamesMsg struct {
 	gen   int
+	ips   []string
 	names map[string]string
+}
+
+// lanNameMsg is one address's reverse-DNS result, empty name included: it also
+// means "stop spinning for this row".
+type lanNameMsg struct {
+	gen  int
+	ip   string
+	name string
 }
 
 // pendingAction is a state change deferred until the active job's terminal event
@@ -96,7 +107,10 @@ type model struct {
 	// hostNames maps discovered IPs to resolved or advertised names; entries
 	// beat the names nmap printed.
 	hostNames map[string]string
-	spinner   spinner.Model
+	// namesPending holds the IPs whose name lookup is still in flight; those
+	// rows show a spinner instead of nmap's PTR guess.
+	namesPending map[string]bool
+	spinner      spinner.Model
 
 	generation int
 	// Generation context; cancel kills all in-flight probes and the active job on
@@ -283,7 +297,7 @@ func (m model) reportReady() bool {
 // spinnerActive reports whether the spinner tick chain should keep running:
 // while a started probe chain is pending or a drill-down job is live.
 func (m model) spinnerActive() bool {
-	return ((!m.toolbox || m.generation > 0 || m.chainRan()) && !m.allDone()) || m.jobsRunning()
+	return ((!m.toolbox || m.generation > 0 || m.chainRan()) && !m.allDone()) || m.jobsRunning() || len(m.namesPending) > 0
 }
 
 // setNotice shows one-line feedback and schedules its expiry. The expiry tick
@@ -448,11 +462,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if done.name == lanDiscoveryName && msg.Status == JobDone {
 			if ips := discoveredIPs(done.lines); len(ips) > 0 {
 				ctx, gen := m.ctx, m.generation
+				m.namesPending = make(map[string]bool, len(ips))
+				for _, ip := range ips {
+					m.namesPending[ip] = true
+				}
 				return m, func() tea.Msg {
-					names := diagnostic.ResolveNames(ctx, ips)
+					names := diagnostic.AdvertisedNames(ctx, ips)
 					// The user's own ssh aliases outrank whatever DNS thinks.
 					maps.Copy(names, diagnostic.SSHHostAliases())
-					return lanNamesMsg{gen: gen, names: names}
+					return lanNamesMsg{gen: gen, ips: ips, names: names}
 				}
 			}
 		}
@@ -466,6 +484,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hostNames = msg.names
 		} else {
 			maps.Copy(m.hostNames, msg.names)
+		}
+		// Reverse DNS runs only for what advertised nothing, one command per
+		// address: each row stops spinning as its own name lands, and no row
+		// ever shows a PTR guess that an advertised name would then replace.
+		// ponytail: unbounded fan-out — a /24 tops out at a couple dozen Up hosts.
+		var cmds []tea.Cmd
+		for _, ip := range msg.ips {
+			if m.hostNames[ip] != "" {
+				delete(m.namesPending, ip)
+				continue
+			}
+			ctx, gen := m.ctx, m.generation
+			cmds = append(cmds, func() tea.Msg {
+				return lanNameMsg{gen: gen, ip: ip, name: diagnostic.ReverseName(ctx, ip)}
+			})
+		}
+		return m, tea.Batch(cmds...)
+
+	case lanNameMsg:
+		if msg.gen != m.generation {
+			return m, nil
+		}
+		delete(m.namesPending, msg.ip)
+		if msg.name != "" {
+			if m.hostNames == nil {
+				m.hostNames = map[string]string{}
+			}
+			m.hostNames[msg.ip] = msg.name
 		}
 		return m, nil
 

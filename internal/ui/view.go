@@ -245,6 +245,12 @@ func discoveredIPs(lines []string) []string {
 	return ips
 }
 
+// namePending reports whether address is still waiting on a name we'd rather
+// show than nmap's: during the scan itself, or until its own lookup returns.
+func (m model) namePending(address string) bool {
+	return m.hostNames[address] == "" && (m.namesPending[address] || m.cur.active != nil)
+}
+
 // networkMapView renders hosts found by the LAN scan.
 func (m model) networkMapView() string {
 	source, _ := m.discoveryNetwork()
@@ -254,7 +260,7 @@ func (m model) networkMapView() string {
 	domains := map[string]int{}
 	domainedHosts := 0
 	for _, host := range hosts {
-		if _, name, ok := strings.Cut(host, " ("); ok {
+		if address, name, ok := strings.Cut(host, " ("); ok && !m.namePending(address) {
 			if _, domain, ok := strings.Cut(strings.TrimSuffix(name, ")"), "."); ok {
 				domainedHosts++
 				domains[strings.ToLower(domain)]++
@@ -288,11 +294,16 @@ func (m model) networkMapView() string {
 	b.WriteString("\n")
 
 	for i, host := range hosts {
-		if address, name, ok := strings.Cut(host, " ("); ok {
+		address, name, named := strings.Cut(host, " (")
+		if named {
 			name = strings.TrimSuffix(name, ")")
 			if short, domain, ok := strings.Cut(name, "."); ok && strings.EqualFold(domain, commonDomain) {
 				host = address + " (" + short + ")"
 			}
+		}
+		// A name we're still working on beats nmap's "unknownaabbcc" placeholder.
+		if m.namePending(address) {
+			host = address + " " + m.spinner.View()
 		}
 		branch := "├─ "
 		if i == len(hosts)-1 {

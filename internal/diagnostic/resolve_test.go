@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestResolveNames(t *testing.T) {
+func TestReverseName(t *testing.T) {
 	lookup := func(_ context.Context, ip string) ([]string, error) {
 		switch ip {
 		case "192.168.1.1":
@@ -25,10 +25,16 @@ func TestResolveNames(t *testing.T) {
 		t.Errorf("unexpected lookup %q", ip)
 		return nil, nil
 	}
-	ips := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4", "192.168.1.5"}
-	got := resolveNames(context.Background(), ips, lookup)
-	if len(got) != 1 || got["192.168.1.1"] != "pihole.lan" {
-		t.Fatalf("resolveNames = %v, want only the valid PTR (trailing dot stripped)", got)
+	for ip, want := range map[string]string{
+		"192.168.1.1": "pihole.lan", // trailing dot stripped
+		"192.168.1.2": "",           // lookup error
+		"192.168.1.3": "",           // fails the hostname allowlist
+		"192.168.1.4": "",           // over 253 bytes
+		"192.168.1.5": "",           // bare root
+	} {
+		if got := reverseName(context.Background(), ip, lookup); got != want {
+			t.Errorf("reverseName(%s) = %q, want %q", ip, got, want)
+		}
 	}
 }
 
