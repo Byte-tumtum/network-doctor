@@ -116,7 +116,7 @@ func (m model) report() string {
 			if a.Err != nil {
 				st = a.Err.Error()
 			}
-			fmt.Fprintf(&b, "        attempt: %s %dms %s\n", a.IP, a.Dur.Milliseconds(), st)
+			fmt.Fprintf(&b, "        attempt: %s %dms %s\n", a.IP, diagnostic.Ms(a.Dur), st)
 		}
 	}
 	if len(m.cur.lines) > 0 {

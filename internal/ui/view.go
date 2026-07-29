@@ -158,7 +158,7 @@ func (m model) bodyView(deferred bool) string {
 				if a.Err != nil {
 					st = a.Err.Error()
 				}
-				right.WriteString(faintStyle.Render(fmt.Sprintf("  %s %dms %s", a.IP, a.Dur.Milliseconds(), st)) + "\n")
+				right.WriteString(faintStyle.Render(fmt.Sprintf("  %s %dms %s", a.IP, diagnostic.Ms(a.Dur), st)) + "\n")
 			}
 		} else {
 			right.WriteString(m.spinner.View() + faintStyle.Render(" checking…") + "\n")

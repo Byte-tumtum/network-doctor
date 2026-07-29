@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
@@ -170,7 +169,7 @@ type reportCheck struct {
 
 type reportAttempt struct {
 	IP  string `json:"ip"`
-	Ms  int64  `json:"ms"`
+	Ms  int64  `json:"ms"` // same flooring as reportCheck.Ms
 	Err string `json:"error,omitempty"`
 }
 
@@ -195,17 +194,6 @@ func runJSON(t *diagnostic.Target, stdout, stderr io.Writer) int {
 	return 1
 }
 
-// reportMs floors a check that actually ran at 1ms. Milliseconds() truncates,
-// so a fast local check (an interface lookup, a cached resolve) would report
-// the same 0 as a check that never ran at all — and 0 is the only signal a
-// consumer has for the latter.
-func reportMs(d time.Duration) int64 {
-	if d > 0 && d < time.Millisecond {
-		return 1
-	}
-	return d.Milliseconds()
-}
-
 // buildReport flattens probe results into the stable JSON shape, preserving
 // probe order. OK means "no check failed" — Warn, Skip, and N/A don't count
 // against it, same as everywhere else in the app.
@@ -226,7 +214,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			ID:      string(p.ID),
 			Name:    p.Name,
 			Status:  r.Status.String(),
-			Ms:      reportMs(r.Dur),
+			Ms:      diagnostic.Ms(r.Dur),
 			Detail:  r.Detail,
 			Fix:     r.Fix,
 			Iface:   r.Iface,
@@ -242,7 +230,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			c.Source = r.Source.String()
 		}
 		for _, a := range r.Attempts {
-			ra := reportAttempt{IP: a.IP.String(), Ms: a.Dur.Milliseconds()}
+			ra := reportAttempt{IP: a.IP.String(), Ms: diagnostic.Ms(a.Dur)}
 			if a.Err != nil {
 				ra.Err = a.Err.Error()
 			}

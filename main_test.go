@@ -124,15 +124,23 @@ func TestRunJSON(t *testing.T) {
 }
 
 // ms is the one field with an out-of-band meaning: 0 has to keep saying "never
-// ran", which a sub-millisecond check would otherwise steal.
+// ran", which a sub-millisecond check would otherwise steal. Per-attempt ms
+// carries the same promise — a LAN connect lands under a millisecond often.
 func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 	probes := []diagnostic.Probe{
 		{ID: diagnostic.ProbeIface, Name: "Interface"},
 		{ID: diagnostic.ProbeInternet, Name: "Internet"},
+		{ID: diagnostic.ProbeTargetTCP, Name: "TCP"},
 	}
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
 		diagnostic.ProbeIface:    {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Dur: 120 * time.Microsecond},
 		diagnostic.ProbeInternet: {ID: diagnostic.ProbeInternet, Status: diagnostic.StatusSkip},
+		diagnostic.ProbeTargetTCP: {
+			ID:       diagnostic.ProbeTargetTCP,
+			Status:   diagnostic.StatusPass,
+			Dur:      2 * time.Millisecond,
+			Attempts: []diagnostic.Attempt{{IP: net.ParseIP("192.168.1.1"), Dur: 300 * time.Microsecond}},
+		},
 	}
 	rep := buildReport(nil, probes, results)
 	if rep.Checks[0].Ms != 1 {
@@ -140,6 +148,9 @@ func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 	}
 	if rep.Checks[1].Ms != 0 {
 		t.Errorf("check that never ran ms = %d, want 0", rep.Checks[1].Ms)
+	}
+	if got := rep.Checks[2].Attempts[0].Ms; got != 1 {
+		t.Errorf("sub-millisecond attempt ms = %d, want 1", got)
 	}
 }
 

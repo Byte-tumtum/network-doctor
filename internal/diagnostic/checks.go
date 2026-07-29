@@ -54,6 +54,17 @@ type Attempt struct {
 	Err error
 }
 
+// Ms renders a duration that actually elapsed as at least 1ms. Milliseconds()
+// truncates, so a fast local check (an interface lookup, a cached resolve) or a
+// LAN connect would report the same 0 as work that never happened at all — and
+// 0 is the only signal a reader has for the latter.
+func Ms(d time.Duration) int64 {
+	if d > 0 && d < time.Millisecond {
+		return 1
+	}
+	return d.Milliseconds()
+}
+
 // ProbeID is a stable DAG node id.
 type ProbeID string
 
