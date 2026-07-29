@@ -168,6 +168,7 @@ var (
 type netops struct {
 	interfaces     func() ([]net.Interface, error)
 	interfaceAddrs func(*net.Interface) ([]net.Addr, error)
+	source         net.IP
 	// lookupIP resolves host and reports the resolver that was dialed, as a
 	// host:port string. An empty server means "couldn't tell", not "none".
 	lookupIP       func(ctx context.Context, host string) ([]net.IP, string, error)
@@ -198,6 +199,108 @@ var defaultOps = &netops{
 	portalCheck:  portalCheck,
 }
 
+// SourceIP resolves an interface name (or exact local IP) to the source
+// address used by BuildProbesFrom. Interface names prefer IPv4 so the common
+// VPN/split-tunnel case does not silently disable IPv4; pass an IP to choose
+// another address explicitly.
+func SourceIP(iface string) (net.IP, error) {
+	if want := net.ParseIP(iface); want != nil {
+		ifaces, err := net.Interfaces()
+		if err != nil {
+			return nil, fmt.Errorf("list interfaces: %w", err)
+		}
+		for i := range ifaces {
+			addrs, err := ifaces[i].Addrs()
+			if err != nil {
+				continue
+			}
+			for _, addr := range addrs {
+				if ipFromAddr(addr).Equal(want) {
+					return want, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("source IP %s is not assigned to a local interface", want)
+	}
+	chosen, err := net.InterfaceByName(iface)
+	if err != nil {
+		return nil, fmt.Errorf("interface %q: %w", iface, err)
+	}
+	addrs, err := chosen.Addrs()
+	if err != nil {
+		return nil, fmt.Errorf("addresses for interface %q: %w", iface, err)
+	}
+	if ip := preferredSourceIP(addrs); ip != nil {
+		return ip, nil
+	}
+	return nil, fmt.Errorf("interface %q has no usable IP address", iface)
+}
+
+func ipFromAddr(addr net.Addr) net.IP {
+	switch a := addr.(type) {
+	case *net.IPNet:
+		return a.IP
+	case *net.IPAddr:
+		return a.IP
+	}
+	return nil
+}
+
+func preferredSourceIP(addrs []net.Addr) net.IP {
+	var v6 net.IP
+	for _, addr := range addrs {
+		ip := ipFromAddr(addr)
+		if ip == nil || ip.IsUnspecified() || ip.IsMulticast() {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			return ip4
+		}
+		if v6 == nil {
+			v6 = ip
+		}
+	}
+	return v6
+}
+
+func opsFromSource(source net.IP) *netops {
+	o := *defaultOps
+	o.source = append(net.IP(nil), source...)
+	o.dialContext = dialContextFrom(source)
+	o.dialTLS = func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+		d := tls.Dialer{NetDialer: dialerFrom(source, network), Config: cfg}
+		return d.DialContext(ctx, network, addr)
+	}
+	o.lookupIP = func(ctx context.Context, host string) ([]net.IP, string, error) {
+		return lookupIPWithDial(ctx, host, o.dialContext)
+	}
+	o.lookupPublicIP = func(ctx context.Context, host string) ([]net.IP, error) {
+		return lookupIPPublicWithDial(ctx, host, o.dialContext)
+	}
+	o.portalCheck = func(ctx context.Context) (int, string, error) {
+		return portalCheckWithDial(ctx, o.dialContext)
+	}
+	return &o
+}
+
+func dialContextFrom(source net.IP) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialerFrom(source, network).DialContext(ctx, network, addr)
+	}
+}
+
+func dialerFrom(source net.IP, network string) *net.Dialer {
+	var local net.Addr = &net.TCPAddr{IP: source}
+	if strings.HasPrefix(network, "udp") {
+		local = &net.UDPAddr{IP: source}
+	}
+	d := &net.Dialer{LocalAddr: local}
+	// Hostname resolution performed inside DialContext must use the same source
+	// path too. Resolver destinations are already numeric, so this cannot recurse.
+	d.Resolver = &net.Resolver{PreferGo: true, Dial: dialContextFrom(source)}
+	return d
+}
+
 // lookupIPWithServer resolves host and reports which resolver was on the other
 // end of the wire. The server identity comes free from the Go resolver's Dial
 // hook — it already parses resolv.conf, so we don't have to. Release builds are
@@ -208,6 +311,10 @@ var defaultOps = &netops{
 // server comes back empty and the row reads as it did before. Reading
 // GetNetworkParams would fix that, if the missing identity ever bites.
 func lookupIPWithServer(ctx context.Context, host string) ([]net.IP, string, error) {
+	return lookupIPWithDial(ctx, host, new(net.Dialer).DialContext)
+}
+
+func lookupIPWithDial(ctx context.Context, host string, dial func(context.Context, string, string) (net.Conn, error)) ([]net.IP, string, error) {
 	var (
 		mu     sync.Mutex
 		server string
@@ -221,7 +328,7 @@ func lookupIPWithServer(ctx context.Context, host string) ([]net.IP, string, err
 			// resolver exhausts one server before trying the next.
 			server = addr
 			mu.Unlock()
-			return new(net.Dialer).DialContext(ctx, network, addr)
+			return dial(ctx, network, addr)
 		},
 	}
 	ips, err := r.LookupIP(ctx, "ip", host)
@@ -233,10 +340,14 @@ func lookupIPWithServer(ctx context.Context, host string) ([]net.IP, string, err
 // lookupIPPublic bypasses the configured resolver for a second opinion.
 // Unavailability is reported as N/A by publicDNSProbe, never as a failure.
 func lookupIPPublic(ctx context.Context, host string) ([]net.IP, error) {
+	return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext)
+}
+
+func lookupIPPublicWithDial(ctx context.Context, host string, dial func(context.Context, string, string) (net.Conn, error)) ([]net.IP, error) {
 	r := net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return new(net.Dialer).DialContext(ctx, network, publicDNSServer)
+			return dial(ctx, network, publicDNSServer)
 		},
 	}
 	return r.LookupIP(ctx, "ip", host)
@@ -261,6 +372,10 @@ func dnsServerLabel(addr string) string {
 // borrow the proxy's path, and an interception usually announces itself as
 // the 302 we'd otherwise chase to a sign-in page.
 func portalCheck(ctx context.Context) (int, string, error) {
+	return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
+}
+
+func portalCheckWithDial(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalProbeURL, nil)
 	if err != nil {
 		return 0, "", err
@@ -268,6 +383,7 @@ func portalCheck(ctx context.Context) (int, string, error) {
 	c := &http.Client{
 		Transport: &http.Transport{
 			Proxy:                  nil,
+			DialContext:            dial,
 			DisableKeepAlives:      true,
 			MaxResponseHeaderBytes: 64 << 10,
 		},
@@ -296,7 +412,20 @@ func portalCheck(ctx context.Context) (int, string, error) {
 // injection by forgetting to Clean at the source. It is also the one place
 // both runners (RunAll and the ui scheduler) share, so timing lives here too.
 func BuildProbes(t *Target) []Probe {
-	probes := defaultOps.buildProbes(t)
+	return buildProbes(defaultOps, t)
+}
+
+// BuildProbesFrom constructs the same probe DAG with every network dial bound
+// to source, including resolver and HTTP transport dials.
+func BuildProbesFrom(t *Target, source net.IP) []Probe {
+	if source == nil {
+		return BuildProbes(t)
+	}
+	return buildProbes(opsFromSource(source), t)
+}
+
+func buildProbes(o *netops, t *Target) []Probe {
+	probes := o.buildProbes(t)
 	for i := range probes {
 		probes[i].Run = wrapRun(probes[i].Run)
 	}
@@ -384,6 +513,39 @@ func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeR
 	if err != nil {
 		r.Status = StatusFail
 		r.Detail, r.Fix = "cannot list interfaces: "+err.Error(), "check permissions / network stack"
+		return r
+	}
+	if o.source != nil {
+		var matches []net.Interface
+		for i := range ifaces {
+			addrs, err := o.interfaceAddrs(&ifaces[i])
+			if err != nil {
+				continue
+			}
+			for _, addr := range addrs {
+				if ipFromAddr(addr).Equal(o.source) {
+					matches = append(matches, ifaces[i])
+					break
+				}
+			}
+		}
+		if len(matches) == 0 {
+			r.Status, r.Detail = StatusFail, "source address "+o.source.String()+" is no longer assigned"
+			r.Fix = "choose an active interface with --iface"
+			return r
+		}
+		if len(matches) > 1 {
+			r.Status, r.Source, r.Iface = StatusWarn, o.source, "(ambiguous)"
+			r.Detail = "source address " + o.source.String() + " is assigned to multiple interfaces"
+			return r
+		}
+		if matches[0].Flags&net.FlagUp == 0 || matches[0].Flags&net.FlagRunning == 0 {
+			r.Status, r.Source, r.Iface = StatusFail, o.source, matches[0].Name
+			r.Detail, r.Fix = "interface "+matches[0].Name+" is down", ifaceFix(runtime.GOOS)
+			return r
+		}
+		r.Status, r.Source, r.Iface = StatusPass, o.source, matches[0].Name
+		r.Detail = "using " + matches[0].Name + " source " + o.source.String()
 		return r
 	}
 	// First up-and-running non-loopback interface wins — that's kernel

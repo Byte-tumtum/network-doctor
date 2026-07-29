@@ -46,6 +46,27 @@ func TestDialIPsLoopback(t *testing.T) {
 	}
 }
 
+// The configured source reaches the kernel socket rather than only probe
+// metadata: the live connection reports the address we pinned.
+func TestDialFromSourceLoopback(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	conn, err := opsFromSource(net.ParseIP("127.0.0.1")).dialContext(
+		context.Background(), "tcp4", ln.Addr().String(),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if got := conn.LocalAddr().(*net.TCPAddr).IP; !got.Equal(net.ParseIP("127.0.0.1")) {
+		t.Errorf("source = %v, want 127.0.0.1", got)
+	}
+}
+
 // A refused loopback port fails fast and deterministically: no conn, the failed
 // attempt is recorded with its error.
 func TestDialIPsRefusedLoopback(t *testing.T) {

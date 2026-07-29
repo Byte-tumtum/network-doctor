@@ -55,6 +55,29 @@ func TestJoinIPs(t *testing.T) {
 	}
 }
 
+func TestPreferredSourceIP(t *testing.T) {
+	addrs := []net.Addr{
+		&net.IPNet{IP: net.ParseIP("2001:db8::2")},
+		&net.IPNet{IP: net.ParseIP("192.0.2.2")},
+	}
+	if got := preferredSourceIP(addrs); !got.Equal(net.ParseIP("192.0.2.2")) {
+		t.Errorf("preferred source = %v, want IPv4 address", got)
+	}
+	if got := preferredSourceIP(addrs[:1]); !got.Equal(net.ParseIP("2001:db8::2")) {
+		t.Errorf("IPv6-only source = %v, want 2001:db8::2", got)
+	}
+}
+
+func TestDialerFromUsesNetworkAddressType(t *testing.T) {
+	source := net.ParseIP("192.0.2.2")
+	if _, ok := dialerFrom(source, "tcp").LocalAddr.(*net.TCPAddr); !ok {
+		t.Error("TCP dialer LocalAddr is not *net.TCPAddr")
+	}
+	if _, ok := dialerFrom(source, "udp").LocalAddr.(*net.UDPAddr); !ok {
+		t.Error("UDP dialer LocalAddr is not *net.UDPAddr")
+	}
+}
+
 // BuildProbes shapes for the http and smtp protocol paths (the ssh/https paths
 // are covered in checks_test.go).
 func TestBuildProbesProtoShapes(t *testing.T) {

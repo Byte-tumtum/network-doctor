@@ -50,6 +50,7 @@ func TestRun(t *testing.T) {
 		{"bad target", []string{"bad_host!"}, 2, "", "netdoc:"},
 		{"json+toolbox", []string{"-json", "-toolbox"}, 2, "", "cannot be combined"},
 		{"json+watch", []string{"-json", "-watch"}, 2, "", "cannot be combined"},
+		{"bad iface", []string{"-iface", "netdoc-no-such-interface"}, 2, "", "-iface:"},
 		{"version ignores bad timeout", []string{"-timeout", "-1s", "-version"}, 0, "netdoc dev", ""},
 		{"bad timeout", []string{"-timeout", "-1s"}, 2, "", "-timeout must be positive"},
 	}

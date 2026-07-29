@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -95,6 +96,7 @@ const (
 type model struct {
 	target  *diagnostic.Target
 	probes  []diagnostic.Probe
+	source  net.IP
 	version string
 
 	// results + started are owned exclusively by Update; probe goroutines get an
@@ -199,13 +201,20 @@ var (
 // New constructs the terminal application. histFile is where target history
 // persists across sessions; "" keeps it in-memory only.
 func New(t *diagnostic.Target, toolbox, watch bool, histFile, version string) tea.Model {
-	probes := diagnostic.BuildProbes(t)
+	return NewWithSource(t, nil, toolbox, watch, histFile, version)
+}
+
+// NewWithSource constructs the terminal application with probe dials pinned to
+// source. New remains the unpinned default for embedders and tests.
+func NewWithSource(t *diagnostic.Target, source net.IP, toolbox, watch bool, histFile, version string) tea.Model {
+	probes := diagnostic.BuildProbesFrom(t, source)
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
 		target:     t,
 		probes:     probes,
+		source:     source,
 		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
 		started:    map[diagnostic.ProbeID]bool{},
 		tools:      toolsFor(t, runtime.GOOS),

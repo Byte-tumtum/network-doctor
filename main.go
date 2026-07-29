@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -48,6 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	toolbox := fs.Bool("toolbox", false, "start in toolbox mode")
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
 	watch := fs.Bool("watch", false, "continuously re-run checks in the TUI")
+	iface := fs.String("iface", "", "bind probes to an interface name or exact local IP")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 
@@ -91,6 +93,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -json and -watch cannot be combined")
 		return 2
 	}
+	var source net.IP
+	if *iface != "" {
+		var err error
+		source, err = diagnostic.SourceIP(*iface)
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc: -iface:", err)
+			return 2
+		}
+	}
 
 	var t *diagnostic.Target
 	if len(positional) == 1 {
@@ -103,7 +114,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *jsonOut {
-		return runJSON(t, stdout, stderr)
+		return runJSON(t, source, stdout, stderr)
 	}
 
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
@@ -113,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if dir, err := os.UserConfigDir(); err == nil {
 		histFile = filepath.Join(dir, "netdoc", "history")
 	}
-	p := tea.NewProgram(ui.New(t, *toolbox, *watch, histFile, version), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewWithSource(t, source, *toolbox, *watch, histFile, version), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)
@@ -188,8 +199,8 @@ var runAll = diagnostic.RunAll
 
 // runJSON runs the probe DAG headless and prints the JSON report. Exit code
 // mirrors the TUI contract: 1 if any check failed, else 0.
-func runJSON(t *diagnostic.Target, stdout, stderr io.Writer) int {
-	probes := diagnostic.BuildProbes(t)
+func runJSON(t *diagnostic.Target, source net.IP, stdout, stderr io.Writer) int {
+	probes := diagnostic.BuildProbesFrom(t, source)
 	results := runAll(context.Background(), probes)
 	rep := buildReport(t, probes, results)
 	enc := json.NewEncoder(stdout)
