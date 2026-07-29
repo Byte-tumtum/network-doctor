@@ -317,6 +317,27 @@ func TestTLSProbeHandshakeFailure(t *testing.T) {
 	}
 }
 
+func TestTLSProbeTimeoutReportsMTU(t *testing.T) {
+	ops := &netops{
+		dialTLS: func(context.Context, string, string, *tls.Config) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{{Name: "fake0", MTU: 1420}}, nil
+		},
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {
+		SelectedIP: net.ParseIP("192.0.2.1"),
+		Iface:      "fake0",
+	}}
+
+	r := ops.tlsProbe("example.com", 443)(context.Background(), deps)
+	if !strings.Contains(r.Detail, "fake0 MTU is 1420") ||
+		!strings.Contains(r.Fix, "MTU/PMTU black hole is a prime suspect") {
+		t.Errorf("TLS timeout = %+v, want MTU detail and PMTU hint", r)
+	}
+}
+
 // A server that connects but never sends a banner is a WARN (the port
 // answered, the service didn't) with the explicit no-banner detail, once the
 // read deadline hits.

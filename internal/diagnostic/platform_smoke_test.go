@@ -53,6 +53,7 @@ func TestTLSFix(t *testing.T) {
 		{"expired", x509.CertificateInvalidError{Cert: leaf, Reason: x509.Expired}, "cert is only valid 2023-01-02 → 2024-01-02"},
 		{"unknown CA", x509.UnknownAuthorityError{Cert: leaf}, "unknown CA"},
 		{"not TLS", tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}, "not with TLS"},
+		{"timeout", context.DeadlineExceeded, "MTU/PMTU black hole is a prime suspect"},
 		{"wrapped", fmt.Errorf("tls: %w", x509.UnknownAuthorityError{Cert: leaf}), "unknown CA"},
 		{"other", errors.New("connection reset by peer"), "TLS broken"},
 	}

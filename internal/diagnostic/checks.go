@@ -745,6 +745,15 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			r.Status, r.SelectedIP = StatusFail, ip
 			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
 			r.Fix = tlsFix(err)
+			if timeoutError(err) && o.interfaces != nil {
+				ifaces, _ := o.interfaces()
+				for _, ifi := range ifaces {
+					if ifi.Name == deps[ProbeTargetTCP].Iface && ifi.MTU > 0 {
+						r.Detail += fmt.Sprintf(" (%s MTU is %d)", ifi.Name, ifi.MTU)
+						break
+					}
+				}
+			}
 			return r
 		}
 		conn.Close()

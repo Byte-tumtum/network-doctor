@@ -1,9 +1,11 @@
 package diagnostic
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"strings"
 )
 
@@ -52,8 +54,15 @@ func tlsFix(err error) string {
 		return "cert signed by an unknown CA — MITM proxy, self-signed cert, or a missing root store"
 	case errors.As(err, &record):
 		return "the port answered but not with TLS — plaintext service or wrong port?"
+	case timeoutError(err):
+		return "TLS timed out after TCP connected — an MTU/PMTU black hole is a prime suspect (VPN, PPPoE, or tunnel)"
 	}
 	return "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
+}
+
+func timeoutError(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // certNames renders who a cert actually claims to be. Long SAN lists get
