@@ -19,7 +19,9 @@ func exportReport(rep string, save bool) (notice string, ok bool) {
 	if save {
 		// cwd first (where the user is looking), $HOME as fallback — the cwd
 		// may be read-only when launched from an installed location.
-		name := fmt.Sprintf("network-doctor-%s.txt", time.Now().Format("20060102-150405"))
+		// Milliseconds in the name: two saves in the same second would otherwise
+		// collide on O_EXCL and land in $HOME, which is not where the user looked.
+		name := fmt.Sprintf("network-doctor-%s.txt", time.Now().Format("20060102-150405.000"))
 		path, err := filepath.Abs(name)
 		if err == nil {
 			err = reportWriteFile(path, []byte(rep), 0o600)
