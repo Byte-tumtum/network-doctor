@@ -2,23 +2,29 @@ package diagnostic
 
 import (
 	"context"
+	"maps"
 	"net"
 	"strings"
 	"sync"
 	"time"
 )
 
-// ResolveNames reverse-resolves ips through the OS resolver, which honors
-// /etc/hosts and the system's configured DNS server — usually the box the
-// user actually trusts to know device names. nmap's built-in lookup only
-// fires raw PTR queries at every nameserver in parallel and keeps whichever
-// answers first, so on multi-resolver setups it can report a name the user
-// has never seen. Names that fail the hostname allowlist are dropped; failed
-// lookups simply have no entry.
+// ResolveNames combines reverse DNS with device names advertised through the
+// platform's DNS-SD browser. Advertised names win because they are usually the
+// user-facing label configured on the device.
 func ResolveNames(ctx context.Context, ips []string) map[string]string {
-	return resolveNames(ctx, ips, net.DefaultResolver.LookupAddr)
+	var names, advertised map[string]string
+	var wg sync.WaitGroup
+	wg.Go(func() { names = resolveNames(ctx, ips, net.DefaultResolver.LookupAddr) })
+	wg.Go(func() { advertised = advertisedNames(ctx, ips) })
+	wg.Wait()
+	maps.Copy(names, advertised)
+	return names
 }
 
+// resolveNames uses the OS resolver, which honors /etc/hosts and the system's
+// configured DNS server. Names that fail the hostname allowlist are dropped;
+// failed lookups simply have no entry.
 func resolveNames(ctx context.Context, ips []string, lookup func(context.Context, string) ([]string, error)) map[string]string {
 	names := make(map[string]string)
 	var mu sync.Mutex

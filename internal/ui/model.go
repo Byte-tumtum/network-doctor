@@ -32,8 +32,8 @@ type probeDoneMsg struct {
 	res diagnostic.ProbeResult
 }
 
-// lanNamesMsg carries OS-resolver hostnames for LAN-scan IPs. They override
-// nmap's own reverse-DNS guesses in the network map (see networkHosts).
+// lanNamesMsg carries resolved or advertised names for LAN-scan IPs. They
+// override nmap's own reverse-DNS guesses in the network map (see networkHosts).
 type lanNamesMsg struct {
 	gen   int
 	names map[string]string
@@ -92,8 +92,8 @@ type model struct {
 	networkMap  bool
 	mapSelected int
 	networkCIDR string
-	// hostNames maps discovered IPs to OS-resolved names; entries beat the
-	// names nmap printed.
+	// hostNames maps discovered IPs to resolved or advertised names; entries
+	// beat the names nmap printed.
 	hostNames map[string]string
 	spinner   spinner.Model
 
