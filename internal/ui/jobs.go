@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -107,8 +106,8 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 	go func() {
 		defer cancel()
 		var wg sync.WaitGroup
-		wg.Go(func() { streamReader(stdout, id, gen, j.ch, &dropped) })
-		wg.Go(func() { streamReader(stderr, id, gen, j.ch, &dropped) })
+		wg.Go(func() { streamReader(stdout, name, id, gen, j.ch, &dropped) })
+		wg.Go(func() { streamReader(stderr, name, id, gen, j.ch, &dropped) })
 		wg.Wait() // drain both pipes to EOF before Wait (no drain/wait race)
 		werr := cmd.Wait()
 		// Guaranteed (blocking) terminal send, last — never dropped.
@@ -133,13 +132,13 @@ func waitForMsg(ch <-chan tea.Msg) tea.Cmd {
 // always consumes the bytes (so the child never stalls) and only drops the
 // *message* when the channel is full, so the terminal event can still be
 // delivered (no deadlock).
-func streamReader(r io.Reader, id string, gen int, ch chan<- tea.Msg, dropped *int64) {
+func streamReader(r io.Reader, tool, id string, gen int, ch chan<- tea.Msg, dropped *int64) {
 	br := bufio.NewReader(r)
 	for {
 		line, err := readCappedLine(br)
 		if line != "" {
 			select {
-			case ch <- ToolOutputMsg{JobID: id, Generation: gen, Line: textsafe.Clean(strings.ToValidUTF8(line, "?"))}:
+			case ch <- ToolOutputMsg{JobID: id, Generation: gen, Line: textsafe.Clean(decodeToolOutput(tool, line))}:
 			default:
 				atomic.AddInt64(dropped, 1)
 			}

@@ -253,10 +253,9 @@ ioctl) and the OS's built-in commands elsewhere (`route`/`networksetup` on
 macOS, `route print`/`netsh wlan` on Windows); when those fail the fields
 degrade to empty rather than failing a probe.
 
-**Windows localization caveat**: console tools emit the OEM code page, so
-non-ASCII localized text in raw tool output shows as visible `?` replacement
-characters. Everything load-bearing (route table cells, the untranslated `SSID`
-label, nslookup addresses) is parsed locale-independently.
+Windows' built-in toolbox commands are decoded from the active OEM code page
+before their output is sanitized. UTF-8 tools such as `curl.exe` and `nmap`
+remain untouched.
 
 ## Roadmap
 
