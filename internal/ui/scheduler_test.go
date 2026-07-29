@@ -111,6 +111,62 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 	}
 }
 
+func TestWatchRecordsAndRestarts(t *testing.T) {
+	m := newModel(mustTarget(t, "github.com:443"), false)
+	m.watch = true
+	for _, probe := range m.probes {
+		m.started[probe.ID] = true
+		m.results[probe.ID] = diagnostic.ProbeResult{ID: probe.ID, Status: diagnostic.StatusPass}
+	}
+	last := m.probes[len(m.probes)-1]
+	m.results[last.ID] = diagnostic.ProbeResult{ID: last.ID, Status: diagnostic.StatusFail}
+
+	u, cmd := m.Update(probeDoneMsg{id: last.ID, res: m.results[last.ID]})
+	completed := asModel(t, u)
+	if cmd == nil {
+		t.Fatal("watched completion must schedule another pass")
+	}
+	for _, probe := range completed.probes {
+		if got := len(completed.runHistory[probe.ID]); got != 1 {
+			t.Fatalf("%s history length = %d, want 1", probe.ID, got)
+		}
+	}
+	if got := completed.historyLine(last.ID); !strings.Contains(got, "failed 1 of 1 runs") {
+		t.Fatalf("history summary = %q", got)
+	}
+
+	u, cmd = completed.Update(watchMsg{gen: completed.generation})
+	restarted := asModel(t, u)
+	if restarted.generation != completed.generation+1 || len(restarted.results) != 0 {
+		t.Fatalf("watch restart generation/results = %d/%d", restarted.generation, len(restarted.results))
+	}
+	if len(restarted.runHistory[last.ID]) != 1 || cmd == nil {
+		t.Fatal("watch restart must retain history and schedule the probe root")
+	}
+}
+
+func TestWatchHistoryKeepsLastTwentyRuns(t *testing.T) {
+	m := newModel(nil, false)
+	m.watch = true
+	for run := 0; run < watchRuns+1; run++ {
+		for _, probe := range m.probes {
+			status := diagnostic.StatusPass
+			if probe.ID == diagnostic.ProbeIface && run%2 == 0 {
+				status = diagnostic.StatusFail
+			}
+			m.results[probe.ID] = diagnostic.ProbeResult{ID: probe.ID, Status: status}
+		}
+		m.recordRun()
+	}
+	history := m.runHistory[diagnostic.ProbeIface]
+	if len(history) != watchRuns {
+		t.Fatalf("history length = %d, want %d", len(history), watchRuns)
+	}
+	if history[0] != diagnostic.StatusPass {
+		t.Fatalf("oldest retained status = %v, want second run's PASS", history[0])
+	}
+}
+
 func TestNADoesNotBlock(t *testing.T) {
 	m := newModel(mustTarget(t, "1.1.1.1"), false)
 	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{Status: diagnostic.StatusPass}

@@ -132,10 +132,13 @@ netdoc github.com:22    # port selects the protocol rows (→ SSH banner)
 netdoc https://host:80  # explicit scheme selects the protocol (→ TLS + HTTPS on :80)
 netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
+netdoc --watch host     # TUI: re-run continuously and track intermittent failures
 ```
 
 `--timeout` overrides the per-check probe timeout; see `netdoc --help`
-for the default.
+for the default. `--watch` starts another pass five seconds after each run and
+shows the last 20 states plus the failure count for every check. It is TUI-only;
+`--watch --json` is rejected rather than introducing an NDJSON contract.
 
 The target parser has two independent axes: the **port** (explicit `:port` >
 scheme default > 443) and the **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp`

@@ -19,7 +19,16 @@ func ExitCode(final tea.Model) int {
 		return 0
 	}
 	if len(m.results) < len(m.probes) {
-		return 1
+		if !m.watch {
+			return 1
+		}
+		for _, probe := range m.probes {
+			history := m.runHistory[probe.ID]
+			if len(history) == 0 || history[len(history)-1] == diagnostic.StatusFail {
+				return 1
+			}
+		}
+		return 0
 	}
 	for _, probe := range m.probes {
 		if m.results[probe.ID].Status == diagnostic.StatusFail {

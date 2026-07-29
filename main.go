@@ -47,6 +47,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	toolbox := fs.Bool("toolbox", false, "start in toolbox mode")
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
+	watch := fs.Bool("watch", false, "continuously re-run checks in the TUI")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 
@@ -86,6 +87,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
 	}
+	if *jsonOut && *watch {
+		fmt.Fprintln(stderr, "netdoc: -json and -watch cannot be combined")
+		return 2
+	}
 
 	var t *diagnostic.Target
 	if len(positional) == 1 {
@@ -108,7 +113,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if dir, err := os.UserConfigDir(); err == nil {
 		histFile = filepath.Join(dir, "netdoc", "history")
 	}
-	p := tea.NewProgram(ui.New(t, *toolbox, histFile, version), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(t, *toolbox, *watch, histFile, version), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)

@@ -342,6 +342,7 @@ func (m *model) applyTarget(t *diagnostic.Target) {
 	m.target = t
 	m.probes = diagnostic.BuildProbes(t)
 	m.selected = 0
+	m.runHistory = map[diagnostic.ProbeID][]diagnostic.Status{}
 }
 
 func (m model) runPending(p *pendingAction) (tea.Model, tea.Cmd) {
@@ -371,7 +372,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.pending, m.confirmTool = nil, nil
 	m.cur, m.otherJobs = jobState{}, nil
 	m.networkMap, m.mapSelected, m.networkCIDR = false, 0, ""
-	m.hostNames = nil
+	m.hostNames, m.namesPending = nil, nil
 	m.notice = ""
 	if m.viewing {
 		m.refreshViewport()

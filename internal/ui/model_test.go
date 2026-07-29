@@ -24,7 +24,9 @@ func asModel(t *testing.T, m tea.Model) model {
 	return mm
 }
 
-func newModel(t *diagnostic.Target, toolbox bool) model { return New(t, toolbox, "", "test").(model) }
+func newModel(t *diagnostic.Target, toolbox bool) model {
+	return New(t, toolbox, false, "", "test").(model)
+}
 
 func keyMsg(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
@@ -850,6 +852,14 @@ func TestExitCode(t *testing.T) {
 	m.results[diagnostic.ProbeDNS] = diagnostic.ProbeResult{Status: diagnostic.StatusFail}
 	if ExitCode(m) != 1 {
 		t.Error("a fail must exit 1")
+	}
+	m.watch = true
+	m.results = map[diagnostic.ProbeID]diagnostic.ProbeResult{}
+	for _, probe := range m.probes {
+		m.runHistory[probe.ID] = []diagnostic.Status{diagnostic.StatusPass}
+	}
+	if ExitCode(m) != 0 {
+		t.Error("an interrupted watch pass must use the last completed run")
 	}
 }
 

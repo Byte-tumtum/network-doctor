@@ -118,6 +118,9 @@ func (m model) headerView() string {
 	if n := m.networkLine(); n != "" {
 		h += faintStyle.Render("  ·  " + n)
 	}
+	if m.watch {
+		h += faintStyle.Render("  ·  watch")
+	}
 	return h
 }
 
@@ -135,7 +138,11 @@ func (m model) bodyView(deferred bool) string {
 		if i == m.selected {
 			marker, name = selStyle.Render("› "), selStyle.Render(name)
 		}
-		left.WriteString(marker + m.glyph(probe.ID) + " " + name + "\n")
+		left.WriteString(marker + m.glyph(probe.ID) + " " + name)
+		if m.watch && len(m.runHistory[probe.ID]) > 0 {
+			left.WriteString("  " + m.statusSparkline(probe.ID, 8))
+		}
+		left.WriteString("\n")
 	}
 
 	var right strings.Builder
@@ -166,6 +173,9 @@ func (m model) bodyView(deferred bool) string {
 		} else {
 			right.WriteString(m.spinner.View() + faintStyle.Render(" checking…") + "\n")
 		}
+		if history := m.historyLine(probe.ID); history != "" {
+			right.WriteString(history + "\n")
+		}
 	}
 
 	leftStr := strings.TrimRight(left.String(), "\n")
@@ -184,6 +194,33 @@ func (m model) bodyView(deferred bool) string {
 		panelStyle.Width(leftW).Height(h).Render(leftStr),
 		" ",
 		panelStyle.Width(rightW).Height(h).Render(rightStr))
+}
+
+func (m model) historyLine(id diagnostic.ProbeID) string {
+	history := m.runHistory[id]
+	if len(history) == 0 {
+		return ""
+	}
+	failed := 0
+	for _, status := range history {
+		if status == diagnostic.StatusFail {
+			failed++
+		}
+	}
+	return faintStyle.Render("History: ") + m.statusSparkline(id, 0) +
+		faintStyle.Render(fmt.Sprintf("  ·  failed %d of %d runs", failed, len(history)))
+}
+
+func (m model) statusSparkline(id diagnostic.ProbeID, limit int) string {
+	history := m.runHistory[id]
+	if limit > 0 && len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+	var spark strings.Builder
+	for _, status := range history {
+		spark.WriteString(statusStyles[status].Render(probeGlyph(status)))
+	}
+	return spark.String()
 }
 
 func (m model) selectedPortalURL() string {

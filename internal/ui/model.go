@@ -23,6 +23,9 @@ import (
 // gen. A stale gen is ignored.
 type scheduleMsg struct{ gen int }
 
+// watchMsg starts the next pass after a completed watched run.
+type watchMsg struct{ gen int }
+
 type noticeDoneMsg struct{ deadline time.Time }
 
 // probeDoneMsg carries a finished probe's result. Accepted only when gen matches.
@@ -84,6 +87,8 @@ const (
 	jobTailLines = 14   // main-screen tail fallback when the terminal height is unknown
 	ctrlCWindow  = 2 * time.Second
 	noticeWindow = 4 * time.Second
+	watchEvery   = 5 * time.Second
+	watchRuns    = 20
 	ctrlCNotice  = "Press Ctrl+C again to quit"
 )
 
@@ -154,7 +159,9 @@ type model struct {
 
 	helping bool // ?: full-screen key cheatsheet; any key closes it
 
-	toolbox bool // --toolbox: chain deferred until 'r'
+	toolbox    bool // --toolbox: chain deferred until 'r'
+	watch      bool
+	runHistory map[diagnostic.ProbeID][]diagnostic.Status
 
 	// notice is one-line feedback from export or the Ctrl+C quit hint.
 	notice         string
@@ -191,22 +198,24 @@ var (
 
 // New constructs the terminal application. histFile is where target history
 // persists across sessions; "" keeps it in-memory only.
-func New(t *diagnostic.Target, toolbox bool, histFile, version string) tea.Model {
+func New(t *diagnostic.Target, toolbox, watch bool, histFile, version string) tea.Model {
 	probes := diagnostic.BuildProbes(t)
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
-		target:   t,
-		probes:   probes,
-		results:  map[diagnostic.ProbeID]diagnostic.ProbeResult{},
-		started:  map[diagnostic.ProbeID]bool{},
-		tools:    toolsFor(t, runtime.GOOS),
-		spinner:  sp,
-		toolbox:  toolbox,
-		histPath: histFile,
-		version:  version,
-		width:    100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+		target:     t,
+		probes:     probes,
+		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
+		started:    map[diagnostic.ProbeID]bool{},
+		tools:      toolsFor(t, runtime.GOOS),
+		spinner:    sp,
+		toolbox:    toolbox,
+		watch:      watch,
+		runHistory: map[diagnostic.ProbeID][]diagnostic.Status{},
+		histPath:   histFile,
+		version:    version,
+		width:      100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
 	m.history = loadHistory(histFile)
 	if t != nil {
@@ -388,6 +397,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.scheduleStep()...)
 
+	case watchMsg:
+		if !m.watch || msg.gen != m.generation || !m.allDone() {
+			return m, nil
+		}
+		if m.jobsRunning() {
+			return m, m.watchCmd()
+		}
+		cur, other := m.cur, m.otherJobs
+		cmd := m.doRestart()
+		m.cur, m.otherJobs = cur, other
+		if m.viewing {
+			m.refreshViewport()
+		}
+		return m, cmd
+
 	case probeDoneMsg:
 		if msg.gen != m.generation {
 			return m, nil // stale restart
@@ -408,6 +432,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
+			}
+			if m.watch {
+				m.recordRun()
+				cmds = append(cmds, m.watchCmd())
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -536,4 +564,19 @@ func (m *model) clearCancel() {
 		m.cancel()
 		m.cancel = nil
 	}
+}
+
+func (m *model) recordRun() {
+	for _, p := range m.probes {
+		history := append(m.runHistory[p.ID], m.results[p.ID].Status)
+		if len(history) > watchRuns {
+			history = history[len(history)-watchRuns:]
+		}
+		m.runHistory[p.ID] = history
+	}
+}
+
+func (m model) watchCmd() tea.Cmd {
+	gen := m.generation
+	return tea.Tick(watchEvery, func(time.Time) tea.Msg { return watchMsg{gen: gen} })
 }
