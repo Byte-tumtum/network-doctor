@@ -6,6 +6,7 @@ package ui
 import (
 	"context"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -516,6 +517,39 @@ func TestViewerCopiesFullOutput(t *testing.T) {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 	if cmd == nil || nm.notice != "output copied to clipboard" {
+		t.Fatalf("notice = %q, cmd nil = %v", nm.notice, cmd == nil)
+	}
+}
+
+func TestViewerSavesFilteredOutput(t *testing.T) {
+	oldWriteFile := reportWriteFile
+	t.Cleanup(func() { reportWriteFile = oldWriteFile })
+
+	var saved string
+	reportWriteFile = func(_ string, data []byte, perm os.FileMode) error {
+		if perm != 0o600 {
+			t.Errorf("mode = %o, want 600", perm)
+		}
+		saved = string(data)
+		return nil
+	}
+
+	m := newModel(nil, false)
+	m.cur.status = JobDone
+	m.cur.lines = []string{"keep first", "drop", "keep second"}
+	m.viewing = true
+	m.filter = "keep"
+	m.refreshViewport()
+	if !strings.Contains(m.View(), keyStyle.Render("w")) {
+		t.Fatal("viewer footer must offer w to save output")
+	}
+
+	u, cmd := m.Update(keyMsg("w"))
+	nm := asModel(t, u)
+	if saved != "keep first\nkeep second" {
+		t.Errorf("saved output = %q", saved)
+	}
+	if cmd == nil || !strings.HasPrefix(nm.notice, "output saved to ") {
 		t.Fatalf("notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 }

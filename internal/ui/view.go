@@ -467,6 +467,7 @@ func (m model) helpOverlay() string {
 	b.WriteString(row("home/end", "jump to top / bottom"))
 	b.WriteString(row("/", "filter lines"))
 	b.WriteString(row("y", "copy output (filtered if a filter is on)"))
+	b.WriteString(row("w", "save output (filtered if a filter is on)"))
 	b.WriteString(row("esc/q", "back"))
 	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
 	if m.height > 0 {
@@ -605,9 +606,9 @@ func (m model) viewerFooter() string {
 		kv = append(kv, "tab", "switch job")
 	}
 	if m.filter != "" {
-		return helpKeys(m.width, append(kv, "y", "copy output", "esc", "clear filter", "q", "back")...)
+		return helpKeys(m.width, append(kv, "y", "copy output", "w", "save output", "esc", "clear filter", "q", "back")...)
 	}
-	return helpKeys(m.width, append(kv, "y", "copy output", "esc/q", "back")...)
+	return helpKeys(m.width, append(kv, "y", "copy output", "w", "save output", "esc/q", "back")...)
 }
 
 // vpContext is the viewport position line, in wrapped display-line numbers:

@@ -228,6 +228,10 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			notice, ok = "copy failed: "+err.Error(), false
 		}
 		return m, m.setNotice(notice, ok)
+	case "w":
+		notice, ok := exportReport(strings.Join(m.visibleJobLines(), "\n"), true)
+		notice = strings.Replace(notice, "report saved", "output saved", 1)
+		return m, m.setNotice(notice, ok)
 	case "home":
 		m.vp.GotoTop()
 		m.follow = false
