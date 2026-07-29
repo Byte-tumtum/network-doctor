@@ -158,7 +158,7 @@ The same hotkeys map to each OS's built-in tools:
 | `c` (SSH target) | `ssh -v -o BatchMode=yes …` (bounded banner/handshake check) | same | same |
 | `c` (SMTP target) | `openssl s_client -starttls smtp` | same | same |
 | `t` | `traceroute -w 2 -q 1 -m 20` | same | `tracert -w 2000 -h 20` |
-| `m` | `mtr --report --report-cycles 5` | same (via brew) | `pathping -h 20 -q 5 -p 100 -w 500` (own 90 s budget) |
+| `m` | `mtr --report --report-cycles 5 --order LSNABWV` | same (via brew) | `pathping -h 20 -q 5 -p 100 -w 500` (own 90 s budget) |
 | `n` | `nmap -sT -Pn --host-timeout 110s` (the explicit target port, else nmap's default top 1000) | same | same |
 
 `n` and `v` are gated behind an explicit confirmation before their active probes
@@ -264,7 +264,9 @@ cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip
 a scrollable output viewer + `--toolbox` mode, the `Warn` state, proxy-aware
 diagnosis, `--json` output, and report copy/save.
 
-Still to come: mtr-parsed route quality.
+Completed `mtr` reports summarize destination loss and average latency beside
+the retained raw output. Suspect-hop attribution and `pathping` parsing remain
+deferred until their conclusions can be made reliable.
 
 ## Built with
 

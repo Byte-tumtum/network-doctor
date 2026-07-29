@@ -137,6 +137,9 @@ func (m model) report() string {
 		}
 		fmt.Fprintf(&b, "\ntool output ($ %s):\n", textsafe.Clean(j.display))
 		fmt.Fprintf(&b, "  status: %s\n  duration: %s\n", j.status, j.dur.Round(time.Millisecond))
+		if quality, ok := j.routeQuality(); ok {
+			b.WriteString("  route quality: " + quality.String() + "\n")
+		}
 		fmt.Fprintf(&b, "  output tail: %d of %d retained lines", len(lines), len(j.lines))
 		if j.evicted > 0 || j.dropped > 0 {
 			fmt.Fprintf(&b, " (%d evicted, %d dropped)", j.evicted, j.dropped)

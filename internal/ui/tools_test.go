@@ -77,7 +77,7 @@ func TestToolsForDefinitions(t *testing.T) {
 		{"d", "dig", "dig", []string{"+time=2", "+tries=1", "github.com"}, "dig +time=2 +tries=1 github.com", false},
 		{"c", "curl", "curl", curlArgs, "LC_ALL=C curl " + shellArgs(curlArgs), true},
 		{"t", "traceroute", "traceroute", []string{"-w", "2", "-q", "1", "-m", "20", "github.com"}, "traceroute -w 2 -q 1 -m 20 github.com", false},
-		{"m", "mtr", "mtr", []string{"--report", "--report-cycles", "5", "github.com"}, "mtr --report --report-cycles 5 github.com", false},
+		{"m", "mtr", "mtr", []string{"--report", "--report-cycles", "5", "--order", "LSNABWV", "github.com"}, "mtr --report --report-cycles 5 --order LSNABWV github.com", false},
 		{"n", "nmap", "nmap", nmapArgs, "nmap " + shellArgs(nmapArgs), false},
 	}
 

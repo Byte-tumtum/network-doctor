@@ -95,6 +95,9 @@ func (m model) vpHeight() int {
 		return 20
 	}
 	h := m.height - 3 - lipgloss.Height(m.viewerFooter()) // header + status above, context below
+	if _, ok := m.cur.routeQuality(); ok {
+		h--
+	}
 	if h < 3 {
 		h = 3
 	}
