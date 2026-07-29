@@ -589,7 +589,7 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 		// All addresses failed: deterministic fallback path = first address.
 		src, iface := o.pathIdentity(ctx, nil, addrs[0], port)
 		r.Status, r.Source, r.Iface = StatusFail, src, iface
-		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es)", port, len(attempts))
+		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(attempts), joinIPs(attemptIPs(attempts)))
 		r.Fix = fmt.Sprintf("port %d blocked/refused — firewall, wrong network, or VPN routing?", port)
 		return r
 	}
@@ -605,8 +605,10 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 		}
 		conn, err := o.dialTLS(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)), &tls.Config{ServerName: host})
 		if err != nil {
-			r.Status = StatusFail
-			r.Detail = "TLS handshake failed: " + err.Error()
+			// Name the address: the cert that failed belongs to whatever the
+			// resolver handed us, and that's often the actual culprit.
+			r.Status, r.SelectedIP = StatusFail, ip
+			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
 			r.Fix = "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
 			return r
 		}
@@ -673,7 +675,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		dialMu.Unlock()
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "no " + protocol + " response: " + err.Error()
+			r.Detail = "no " + protocol + " response from " + addrTried(dialIP, addrs) + ": " + err.Error()
 			r.Fix = protocol + " blocked — proxy or firewall?"
 			return r
 		}
@@ -694,7 +696,8 @@ func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
 		}
 		conn, err := o.dialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 		if err != nil {
-			r.Status, r.Detail = StatusFail, "connect failed: "+err.Error()
+			r.Status, r.SelectedIP = StatusFail, ip
+			r.Detail = "connect to " + ip.String() + " failed: " + err.Error()
 			return r
 		}
 		defer conn.Close()
@@ -935,6 +938,23 @@ func (o *netops) ifaceForIP(ip net.IP) string {
 	default:
 		return name
 	}
+}
+
+func attemptIPs(attempts []Attempt) []net.IP {
+	ips := make([]net.IP, len(attempts))
+	for i, a := range attempts {
+		ips[i] = a.IP
+	}
+	return ips
+}
+
+// addrTried names the address a failed HTTP attempt used: the winner if one
+// address connected and the failure came later, otherwise everything tried.
+func addrTried(sel net.IP, addrs []net.IP) string {
+	if sel != nil {
+		return sel.String()
+	}
+	return joinIPs(addrs)
 }
 
 func joinIPs(ips []net.IP) string {

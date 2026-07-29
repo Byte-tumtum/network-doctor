@@ -46,7 +46,8 @@ func TestTargetTCPProbeAttemptCap(t *testing.T) {
 	if calls != maxAttempts || len(r.Attempts) != maxAttempts {
 		t.Errorf("calls = %d, attempts = %d, want %d each", calls, len(r.Attempts), maxAttempts)
 	}
-	if want := fmt.Sprintf("port 80 unreachable on all %d address(es)", len(r.Attempts)); r.Detail != want {
+	want := fmt.Sprintf("port 80 unreachable on all %d address(es): %s", len(r.Attempts), joinIPs(ips[:maxAttempts]))
+	if r.Detail != want {
 		t.Errorf("detail = %q, want %q", r.Detail, want)
 	}
 }
@@ -221,7 +222,7 @@ func TestTLSProbeHandshakeFailure(t *testing.T) {
 	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
 
 	r := ops.tlsProbe("example.com", 443)(context.Background(), deps)
-	if r.Status != StatusFail || !strings.Contains(r.Detail, "TLS handshake failed") ||
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "TLS handshake to 192.0.2.1 failed") ||
 		!strings.Contains(r.Detail, "certificate has expired") || r.Fix == "" {
 		t.Errorf("handshake failure = %+v, want FAIL with error detail and a fix", r)
 	}
@@ -340,8 +341,24 @@ func TestHTTPProbeHeaderLimit(t *testing.T) {
 	defer cancel()
 
 	r := ops.httpProbe("example.com", 80, "http", ProbeTargetTCP)(ctx, deps)
-	if r.Status != StatusFail || !strings.Contains(r.Detail, "no HTTP response") || !strings.Contains(r.Detail, "exceeded") {
-		t.Errorf("oversized headers = %+v, want FAIL mentioning the exceeded header limit", r)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "no HTTP response from 192.0.2.1") || !strings.Contains(r.Detail, "exceeded") {
+		t.Errorf("oversized headers = %+v, want FAIL naming the address and the exceeded header limit", r)
+	}
+}
+
+// A failing stage names the address it used, so the reader doesn't have to
+// cross-reference the DNS row to find out what was actually dialed. When no
+// address connected there is no winner to name, so all of them are listed.
+func TestHTTPProbeFailureNamesAddresses(t *testing.T) {
+	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("connection refused")
+	}}
+	addrs := []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")}
+	deps := map[ProbeID]ProbeResult{ProbeDNS: {Addrs: addrs}}
+
+	r := ops.httpProbe("example.com", 80, "http", ProbeDNS)(context.Background(), deps)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "192.0.2.1, 192.0.2.2") {
+		t.Errorf("total dial failure = %+v, want FAIL listing every attempted address", r)
 	}
 }
 
