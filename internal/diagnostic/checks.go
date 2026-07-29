@@ -715,6 +715,9 @@ func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
 		if line == "" {
 			// Port answered but the service said nothing: functional, degraded.
 			r.Status, r.Detail = StatusWarn, "connected, no banner within deadline"
+		} else if valid := id == ProbeSSH && strings.HasPrefix(line, "SSH-") ||
+			id == ProbeSMTP && (strings.HasPrefix(line, "220 ") || strings.HasPrefix(line, "220-")); !valid {
+			r.Status, r.Detail = StatusFail, "unexpected service banner: "+line
 		} else {
 			r.Status, r.Detail = StatusPass, "banner: "+line
 		}

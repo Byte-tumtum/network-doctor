@@ -265,6 +265,33 @@ func TestBannerProbeReadTimeoutHonorsContext(t *testing.T) {
 	}
 }
 
+func TestBannerProbeValidatesProtocol(t *testing.T) {
+	tests := []struct {
+		name   string
+		id     ProbeID
+		banner string
+		want   Status
+	}{
+		{"SSH identification", ProbeSSH, "SSH-2.0-OpenSSH_9.7\r\n", StatusPass},
+		{"SSH impostor", ProbeSSH, "220 mail.example ESMTP\r\n", StatusFail},
+		{"SMTP greeting", ProbeSMTP, "220 mail.example ESMTP\r\n", StatusPass},
+		{"SMTP multiline greeting", ProbeSMTP, "220-mail.example ESMTP\r\n", StatusPass},
+		{"SMTP impostor", ProbeSMTP, "SSH-2.0-OpenSSH_9.7\r\n", StatusFail},
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) {
+				return &scriptConn{r: strings.NewReader(tt.banner)}, nil
+			}}
+			r := ops.bannerProbe(tt.id, "service banner", 22).Run(context.Background(), deps)
+			if r.Status != tt.want {
+				t.Errorf("status = %v, detail = %q, want %v", r.Status, r.Detail, tt.want)
+			}
+		})
+	}
+}
+
 // Dependent probes fed an empty/zero dependency map degrade to their explicit
 // fail/skip states — no nil-deref, no accidental pass.
 func TestProbesMalformedDeps(t *testing.T) {
