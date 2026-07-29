@@ -302,6 +302,20 @@ func TestProxyProbeConnectOK(t *testing.T) {
 	}
 }
 
+// A deadline-less ctx must not leave the conn with no deadline at all.
+func TestProxyProbeDeadlinelessCtxStillBoundsConn(t *testing.T) {
+	conn := &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n")}
+	ops := proxyOps("http://proxy.corp:3128", func(context.Context, string, string) (net.Conn, error) {
+		return conn, nil
+	})
+	if r := ops.proxyProbe(context.Background(), nil); r.Status != StatusPass {
+		t.Fatalf("granted CONNECT = %+v, want PASS", r)
+	}
+	if conn.writeDeadline.IsZero() {
+		t.Error("write deadline is zero, want the probe budget as a fallback leash")
+	}
+}
+
 // Basic auth on an http:// proxy rides the wire in cleartext; the tunnel
 // still works, but a diagnostic tool should say so.
 func TestProxyProbeCleartextCredsWarn(t *testing.T) {

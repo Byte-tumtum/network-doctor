@@ -458,7 +458,13 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		pw, _ := u.Password()
 		req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)) + "\r\n"
 	}
-	dl, _ := ctx.Deadline()
+	// A ctx without a deadline yields the zero time, which *clears* the conn
+	// deadlines rather than setting them — the CONNECT read would then block
+	// forever. Fall back to the probe budget.
+	dl, ok := ctx.Deadline()
+	if !ok {
+		dl = time.Now().Add(ProbeTimeout)
+	}
 	if err := conn.SetWriteDeadline(dl); err != nil {
 		r.Status = StatusFail
 		r.Detail = "cannot set proxy write deadline: " + err.Error()
