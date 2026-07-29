@@ -1,7 +1,6 @@
 package diagnostic
 
 import (
-	"bufio"
 	"io"
 	"net"
 	"os"
@@ -36,9 +35,12 @@ func SSHHostAliases() map[string]string {
 func parseSSHAliases(r io.Reader) map[string]string {
 	names := make(map[string]string)
 	var aliases []string
-	sc := bufio.NewScanner(r)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+	// Read the whole config instead of scanning it; a bufio.Scanner gives up on
+	// every later Host block once one line exceeds its buffer.
+	// ponytail: 1 MiB ceiling keeps a pathological config from eating memory.
+	b, _ := io.ReadAll(io.LimitReader(r, 1<<20))
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
 		if len(fields) < 2 || strings.HasPrefix(fields[0], "#") {
 			continue
 		}

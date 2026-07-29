@@ -34,6 +34,8 @@ func TestResolveNames(t *testing.T) {
 
 func TestParseAvahiNames(t *testing.T) {
 	out := []byte(strings.Join([]string{
+		// An overlong TXT record must not cost us the entries behind it.
+		`=;eth0;IPv4;giant;_http._tcp;local;giant.local;192.168.1.98;80;"fn=` + strings.Repeat("a", 70<<10) + `"`,
 		`=;eth0;IPv4;BRAVIA-4K-GB;_googlecast._tcp;local;uuid.local;192.168.1.79;8009;"fn=Living\032Room\032TV"`,
 		`=;eth0;IPv4;AS-BRAVIA4KGBATV3;_asrecv._tcp;local;uuid.local;192.168.1.79;59008;"fn=AS-BRAVIA4KGBATV3"`,
 		`=;eth0;IPv4;pi-nas\032-\032SSH;_ssh._tcp;local;pi-nas.local;192.168.1.2;22;`,

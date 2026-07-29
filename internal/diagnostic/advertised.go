@@ -1,8 +1,6 @@
 package diagnostic
 
 import (
-	"bufio"
-	"bytes"
 	"net"
 	"strings"
 
@@ -21,10 +19,10 @@ func parseAvahiNames(out []byte, ips []string) map[string]string {
 	}
 
 	best := make(map[string]advertisedName)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	scanner.Buffer(nil, 64<<10)
-	for scanner.Scan() {
-		fields := strings.SplitN(scanner.Text(), ";", 10)
+	// out is already fully in memory, so split it rather than scanning: a
+	// bufio.Scanner abandons the rest of the output on one overlong TXT record.
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(line, ";", 10)
 		if len(fields) < 9 || fields[0] != "=" || !wanted[fields[7]] || net.ParseIP(fields[7]) == nil {
 			continue
 		}

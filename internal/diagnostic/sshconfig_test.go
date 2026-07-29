@@ -7,7 +7,8 @@ import (
 )
 
 func TestParseSSHAliases(t *testing.T) {
-	config := `
+	// The overlong comment must not cost us the Host blocks behind it.
+	config := "#" + strings.Repeat("a", 70<<10) + `
 # comment
 Host github.com
   HostName github.com
