@@ -65,6 +65,17 @@ func Ms(d time.Duration) int64 {
 	return d.Milliseconds()
 }
 
+// since is time.Since with a nonzero floor. Windows' clock granularity is
+// coarse enough to report 0 for a fast connect, which Ms would then render as
+// the 0ms that means "never ran". A tick that coarse can't tell us anything
+// finer than "under a millisecond", and Ms already says that as 1ms.
+func since(start time.Time) time.Duration {
+	if d := time.Since(start); d > 0 {
+		return d
+	}
+	return time.Nanosecond
+}
+
 // ProbeID is a stable DAG node id.
 type ProbeID string
 
@@ -279,7 +290,7 @@ func wrapRun(run func(context.Context, map[ProbeID]ProbeResult) ProbeResult) fun
 	return func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
 		start := time.Now()
 		r := cleanResult(run(ctx, deps))
-		r.Dur = time.Since(start)
+		r.Dur = since(start)
 		return r
 	}
 }
@@ -572,7 +583,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		return r
 	}
 	resp.Body.Close()
-	rtt := time.Since(start)
+	rtt := since(start)
 	if resp.StatusCode/100 != 2 {
 		r.Status = StatusFail
 		r.Detail = "proxy " + addr + " refused CONNECT: " + resp.Status
@@ -912,7 +923,7 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 			go func(ip net.IP) {
 				start := time.Now()
 				conn, err := o.dialContext(dctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
-				att := Attempt{IP: ip, Dur: time.Since(start), Err: err}
+				att := Attempt{IP: ip, Dur: since(start), Err: err}
 				if err != nil {
 					fails <- att
 					next <- struct{}{}

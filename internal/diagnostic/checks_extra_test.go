@@ -531,3 +531,12 @@ func TestCleanResultScrubsEveryTextField(t *testing.T) {
 		}
 	}
 }
+
+// A measured attempt must never render as the 0ms that means "never ran". Only
+// fails where the clock is coarse enough to return 0 for back-to-back calls,
+// which is Windows — the platform that regressed TestTargetTCPProbe.
+func TestSinceNeverZero(t *testing.T) {
+	if d := since(time.Now()); Ms(d) < 1 {
+		t.Errorf("since(now) = %v, Ms = %d, want at least 1ms", d, Ms(d))
+	}
+}
