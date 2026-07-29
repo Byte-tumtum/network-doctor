@@ -58,6 +58,9 @@ Type "ms"
 Sleep 1s
 Enter
 Sleep 2.5s
+# Two escapes: the first drops the committed filter, the second leaves the viewer.
+Escape
+Sleep 800ms
 Escape
 Sleep 500ms
 
@@ -77,9 +80,11 @@ Type "v"
 Sleep 500ms
 
 # Restart prompt: editable arguments with target history on the up arrow.
+# The prompt opens on the current target, which is also the newest history
+# entry — so the first Up is a no-op and the second one is the visible step.
 Type "r"
 Sleep 1.5s
-Up
+Up@700ms 2
 Sleep 1.5s
 Escape
 Sleep 500ms
