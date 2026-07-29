@@ -114,18 +114,41 @@ func TestInterleaveFamilies(t *testing.T) {
 // DNS failure modes: resolver error and an empty (no A record) answer both
 // fail with an actionable detail, never panic or pass.
 func TestDNSProbeErrors(t *testing.T) {
-	ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, error) {
-		return nil, errors.New("SERVFAIL")
+	ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+		return nil, "192.168.1.1:53", errors.New("SERVFAIL")
 	}}
 	r := ops.dnsProbe("example.com", nil)(context.Background(), nil)
-	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot resolve example.com") || r.Fix == "" {
-		t.Errorf("lookup error = %+v, want FAIL with resolve detail and a fix", r)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot resolve example.com via 192.168.1.1") || r.Fix == "" {
+		t.Errorf("lookup error = %+v, want FAIL naming the resolver, plus a fix", r)
 	}
 
-	ops.lookupIP = func(context.Context, string) ([]net.IP, error) { return nil, nil }
+	ops.lookupIP = func(context.Context, string) ([]net.IP, string, error) { return nil, "", nil }
 	r = ops.dnsProbe("example.com", nil)(context.Background(), nil)
 	if r.Status != StatusFail || !strings.Contains(r.Detail, "no A/AAAA records") {
 		t.Errorf("empty answer = %+v, want FAIL with 'no A/AAAA records'", r)
+	}
+}
+
+// The DNS row names the resolver that answered when the platform reveals it, and
+// says nothing rather than "unknown" when it doesn't (Windows).
+func TestDNSProbeNamesResolver(t *testing.T) {
+	for _, tc := range []struct {
+		name, server, want string
+	}{
+		{"standard port is bare", "192.168.1.1:53", "example.com → 192.0.2.1 (via 192.168.1.1)"},
+		{"odd port is kept", "127.0.0.1:5353", "example.com → 192.0.2.1 (via 127.0.0.1:5353)"},
+		{"IPv6 resolver", "[2001:db8::1]:53", "example.com → 192.0.2.1 (via 2001:db8::1)"},
+		{"unknown resolver omitted", "", "example.com → 192.0.2.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+				return []net.IP{net.ParseIP("192.0.2.1")}, tc.server, nil
+			}}
+			r := ops.dnsProbe("example.com", nil)(context.Background(), nil)
+			if r.Status != StatusPass || r.Detail != tc.want {
+				t.Errorf("detail = %q (%v), want %q", r.Detail, r.Status, tc.want)
+			}
+		})
 	}
 }
 

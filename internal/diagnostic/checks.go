@@ -153,12 +153,14 @@ var (
 type netops struct {
 	interfaces     func() ([]net.Interface, error)
 	interfaceAddrs func(*net.Interface) ([]net.Addr, error)
-	lookupIP       func(ctx context.Context, host string) ([]net.IP, error)
-	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
-	dialTLS        func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
-	tlsRootCAs     *x509.CertPool
-	ssid           func(ctx context.Context, iface string) string
-	proxyFromEnv   func(*http.Request) (*url.URL, error)
+	// lookupIP resolves host and reports the resolver that was dialed, as a
+	// host:port string. An empty server means "couldn't tell", not "none".
+	lookupIP     func(ctx context.Context, host string) ([]net.IP, string, error)
+	dialContext  func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialTLS      func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
+	tlsRootCAs   *x509.CertPool
+	ssid         func(ctx context.Context, iface string) string
+	proxyFromEnv func(*http.Request) (*url.URL, error)
 	// portalCheck returns the status code portalProbeURL answered with and an
 	// optional validated HTTP(S) redirect URL.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
@@ -168,10 +170,8 @@ type netops struct {
 var defaultOps = &netops{
 	interfaces:     net.Interfaces,
 	interfaceAddrs: (*net.Interface).Addrs,
-	lookupIP: func(ctx context.Context, host string) ([]net.IP, error) {
-		return net.DefaultResolver.LookupIP(ctx, "ip", host)
-	},
-	dialContext: new(net.Dialer).DialContext,
+	lookupIP:       lookupIPWithServer,
+	dialContext:    new(net.Dialer).DialContext,
 	dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: new(net.Dialer), Config: cfg}
 		return d.DialContext(ctx, network, addr)
@@ -179,6 +179,51 @@ var defaultOps = &netops{
 	ssid:         ssid,
 	proxyFromEnv: http.ProxyFromEnvironment,
 	portalCheck:  portalCheck,
+}
+
+// lookupIPWithServer resolves host and reports which resolver was on the other
+// end of the wire. The server identity comes free from the Go resolver's Dial
+// hook — it already parses resolv.conf, so we don't have to. Release builds are
+// CGO_ENABLED=0 and so already resolve this way; PreferGo only pins that
+// behavior for local cgo builds.
+//
+// Windows (and anywhere the Go resolver isn't used) never calls the hook, so the
+// server comes back empty and the row reads as it did before. Reading
+// GetNetworkParams would fix that, if the missing identity ever bites.
+func lookupIPWithServer(ctx context.Context, host string) ([]net.IP, string, error) {
+	var (
+		mu     sync.Mutex
+		server string
+	)
+	r := net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			mu.Lock()
+			// ponytail: last dial wins rather than the provably-answering one —
+			// right for a single server, and right on failover, since the
+			// resolver exhausts one server before trying the next.
+			server = addr
+			mu.Unlock()
+			return new(net.Dialer).DialContext(ctx, network, addr)
+		},
+	}
+	ips, err := r.LookupIP(ctx, "ip", host)
+	mu.Lock()
+	defer mu.Unlock()
+	return ips, server, err
+}
+
+// dnsServerLabel shortens a resolver dial address for a probe row: the bare host
+// on port 53, host:port otherwise — a stub resolver on 5353 is worth seeing.
+func dnsServerLabel(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if port == "53" {
+		return host
+	}
+	return addr
 }
 
 // portalCheck fetches portalProbeURL and reports the status code it got plus a
@@ -550,20 +595,27 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 			r.Detail = "literal IP " + litIP.String() + " — no DNS needed"
 			return r
 		}
-		ips, err := o.lookupIP(ctx, host)
+		ips, server, err := o.lookupIP(ctx, host)
+		// "which server told me this" is the first question on a split-DNS or
+		// router-vs-Pi-hole setup, and often the whole answer.
+		via, paren := "", ""
+		if server != "" {
+			via = " via " + dnsServerLabel(server)
+			paren = " (via " + dnsServerLabel(server) + ")"
+		}
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "cannot resolve " + host + ": " + err.Error()
+			r.Detail = "cannot resolve " + host + via + ": " + err.Error()
 			r.Fix = dnsFix(runtime.GOOS)
 			return r
 		}
 		if len(ips) == 0 {
 			r.Status = StatusFail
-			r.Detail, r.Fix = "no A/AAAA records for "+host, "no address returned — check the hostname / DNS"
+			r.Detail, r.Fix = "no A/AAAA records for "+host+via, "no address returned — check the hostname / DNS"
 			return r
 		}
 		r.Status, r.Addrs = StatusPass, ips
-		r.Detail = host + " → " + joinIPs(ips)
+		r.Detail = host + " → " + joinIPs(ips) + paren
 		return r
 	}
 }

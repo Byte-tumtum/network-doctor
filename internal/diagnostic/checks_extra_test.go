@@ -163,8 +163,8 @@ func TestNetopsInjection(t *testing.T) {
 		interfaces: func() ([]net.Interface, error) {
 			return []net.Interface{{Name: "fake0", Flags: net.FlagUp | net.FlagRunning}}, nil
 		},
-		lookupIP: func(context.Context, string) ([]net.IP, error) {
-			return []net.IP{net.ParseIP("192.0.2.1")}, nil
+		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+			return []net.IP{net.ParseIP("192.0.2.1")}, "192.0.2.53:53", nil
 		},
 		ssid: func(context.Context, string) string { return "FakeNet" },
 	}
