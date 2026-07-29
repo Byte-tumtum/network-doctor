@@ -479,8 +479,10 @@ func TestTargetTCPProbe(t *testing.T) {
 	if r.Status != StatusPass || !r.SelectedIP.Equal(dst) || r.Iface != "fake0" {
 		t.Errorf("connect = %+v, want PASS pinned to 192.0.2.1 via fake0", r)
 	}
-	if !strings.Contains(r.Detail, "connected to 192.0.2.1:443") {
-		t.Errorf("detail = %q, want it to mention the connect", r.Detail)
+	// The fake dial returns instantly, so the detail exercises the Ms floor: a
+	// connect that happened must not read the same 0ms as one that never ran.
+	if !strings.Contains(r.Detail, "connected to 192.0.2.1:443 in 1ms") {
+		t.Errorf("detail = %q, want it to mention the connect at the 1ms floor", r.Detail)
 	}
 
 	// Refuse both the TCP attempt and the UDP path-identity fallback.

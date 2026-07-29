@@ -404,9 +404,9 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		return r
 	}
 	r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, prim.sel, src, iface
-	r.Detail = fmt.Sprintf("%s egress via %s in %dms (src %s %s)", primName, prim.sel, prim.rtt.Milliseconds(), src, iface)
+	r.Detail = fmt.Sprintf("%s egress via %s in %dms (src %s %s)", primName, prim.sel, Ms(prim.rtt), src, iface)
 	if sec.conn != nil {
-		r.Detail += fmt.Sprintf("; %s egress via %s in %dms", secName, sec.sel, sec.rtt.Milliseconds())
+		r.Detail += fmt.Sprintf("; %s egress via %s in %dms", secName, sec.sel, Ms(sec.rtt))
 	} else {
 		r.Detail += "; no " + secName + " egress"
 	}
@@ -533,7 +533,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	src, iface := o.pathIdentity(ctx, conn, nil, 0)
 	r.Status, r.Source, r.Iface = StatusPass, src, iface
-	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, probeHost, rtt.Milliseconds())
+	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, probeHost, Ms(rtt))
 	var warns []string
 	if proxyURL.User != nil && proxyURL.Scheme == "http" {
 		warns = append(warns, "credentials sent unencrypted to http:// proxy")
@@ -582,7 +582,7 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			defer conn.Close()
 			src, iface := o.pathIdentity(ctx, conn, sel, port)
 			r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, sel, src, iface
-			r.Detail = fmt.Sprintf("connected to %s:%d in %dms (src %s %s)", sel, port, rtt.Milliseconds(), src, iface)
+			r.Detail = fmt.Sprintf("connected to %s:%d in %dms (src %s %s)", sel, port, Ms(rtt), src, iface)
 			applyDialWarnings(&r, rtt)
 			return r
 		}
