@@ -1,6 +1,7 @@
 package diagnostic
 
 import (
+	"maps"
 	"net"
 	"strconv"
 )
@@ -203,22 +204,14 @@ func ReconcileDNS(res map[ProbeID]ProbeResult) {
 }
 
 func sameIPSet(a, b []net.IP) bool {
-	left, right := make(map[string]struct{}, len(a)), make(map[string]struct{}, len(b))
-	for _, ip := range a {
-		left[ip.String()] = struct{}{}
-	}
-	for _, ip := range b {
-		right[ip.String()] = struct{}{}
-	}
-	if len(left) != len(right) {
-		return false
-	}
-	for ip := range left {
-		if _, ok := right[ip]; !ok {
-			return false
+	set := func(ips []net.IP) map[string]struct{} {
+		m := make(map[string]struct{}, len(ips))
+		for _, ip := range ips {
+			m[ip.String()] = struct{}{}
 		}
+		return m
 	}
-	return true
+	return maps.Equal(set(a), set(b))
 }
 
 // DowngradeEgress rewrites a direct-egress failure to Warn once another path
