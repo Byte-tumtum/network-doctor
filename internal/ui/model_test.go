@@ -964,6 +964,9 @@ func TestPromptFormsDroppedWhenShort(t *testing.T) {
 // height where they would squeeze avail to 1-4 rows, the pane wins.
 func TestPromptFormsYieldToJobPane(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:443"), false)
+	for i := range m.tools {
+		m.tools[i].Available = false
+	}
 	m.cur.status = JobRunning
 	m.cur.display = "ping example.com"
 	for range 200 {
