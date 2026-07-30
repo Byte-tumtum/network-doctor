@@ -70,6 +70,24 @@ func TestRun(t *testing.T) {
 	}
 }
 
+// An extra argument is echoed back to the terminal, so it has to come back as
+// inert text: no OSC 52 clipboard grab, no CSI, no bidi override.
+func TestRunBadArgsAreInert(t *testing.T) {
+	const payload = "\x1b]52;c;aGk=\x07\x1b[31m‮evil\n"
+	for _, args := range [][]string{
+		{"example.com", payload},
+		{"-" + payload},
+	} {
+		var stdout, stderr bytes.Buffer
+		run(args, &stdout, &stderr)
+		for _, bad := range []string{"\x1b", "\x07", "‮"} {
+			if strings.Contains(stderr.String(), bad) {
+				t.Errorf("run(%q): stderr = %q, want no %q", args, stderr.String(), bad)
+			}
+		}
+	}
+}
+
 // Pins the seams around the shared TargetForms const: the "Target forms:"
 // header, the blank line before "Flags:", and no trailing newline in the
 // const itself — without freezing stdlib flag formatting.

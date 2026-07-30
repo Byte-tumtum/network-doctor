@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/textsafe"
 	"github.com/heymaikol/network-doctor/internal/ui"
 )
 
@@ -42,7 +45,10 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("netdoc", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	// Buffered, not stderr: the flag package quotes nothing, so an undefined
+	// flag name made of escape bytes would land on the terminal verbatim.
+	var flagErr bytes.Buffer
+	fs.SetOutput(&flagErr)
 	// Suppress the automatic usage dump: an explicit -help prints the full
 	// usage on stdout and exits 0, a parse error gets only a one-line hint.
 	fs.Usage = func() {}
@@ -63,6 +69,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 				printUsage(stdout, fs)
 				return 0
 			}
+			if msg := textsafe.Clean(strings.TrimSpace(flagErr.String())); msg != "" {
+				fmt.Fprintln(stderr, msg)
+			}
 			fmt.Fprintln(stderr, "run 'netdoc --help' for usage")
 			return 2
 		}
@@ -73,7 +82,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		args = fs.Args()[1:]
 	}
 	if len(positional) > 1 {
-		fmt.Fprintf(stderr, "netdoc: unexpected arguments: %v\n", positional[1:])
+		// %q, not %v: argv is untrusted enough to matter, and quoting escapes
+		// control bytes so an OSC 52 in an argument prints instead of running.
+		fmt.Fprintf(stderr, "netdoc: unexpected arguments: %q\n", positional[1:])
 		return 2
 	}
 	if *showVersion {
