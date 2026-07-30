@@ -22,11 +22,11 @@ func TestBuildProbesShape(t *testing.T) {
 	if got := len(BuildProbesFrom(nil, nil)); got != 6 {
 		t.Errorf("generic probes = %d, want 6", got)
 	}
-	if got := len(BuildProbesFrom(mustTarget(t, "github.com"), nil)); got != 10 {
-		t.Errorf("https target probes = %d, want 10", got)
+	if got := len(BuildProbesFrom(mustTarget(t, "github.com"), nil)); got != 11 {
+		t.Errorf("https target probes = %d, want 11", got)
 	}
-	if got := len(BuildProbesFrom(mustTarget(t, "host:22"), nil)); got != 8 {
-		t.Errorf("ssh target probes = %d, want 8", got)
+	if got := len(BuildProbesFrom(mustTarget(t, "host:22"), nil)); got != 9 {
+		t.Errorf("ssh target probes = %d, want 9", got)
 	}
 }
 

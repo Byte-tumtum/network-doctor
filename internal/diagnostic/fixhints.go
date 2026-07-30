@@ -55,9 +55,24 @@ func tlsFix(err error) string {
 	case errors.As(err, &record):
 		return "the port answered but not with TLS — plaintext service or wrong port?"
 	case timeoutError(err):
-		return "TLS timed out after TCP connected — an MTU/PMTU black hole is a prime suspect (VPN, PPPoE, or tunnel)"
+		return "TLS timed out after TCP connected — read the Path MTU row: it says whether full-size packets are reaching the far end (VPN, PPPoE, or tunnel)"
 	}
 	return "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
+}
+
+// pmtuFix answers a confirmed black hole with the only remedy that doesn't
+// depend on finding whoever is filtering ICMP: make this end stop emitting
+// packets the path won't carry.
+func pmtuFix(goos string) string {
+	const why = "packets at the interface MTU are being dropped — "
+	switch goos {
+	case "darwin":
+		return why + "lower the tunnel/interface MTU (`sudo ifconfig <iface> mtu 1400`)"
+	case "windows":
+		return why + "lower the interface MTU (`netsh interface ipv4 set subinterface \"<iface>\" mtu=1400 store=persistent`)"
+	default:
+		return why + "lower the interface MTU (`sudo ip link set <iface> mtu 1400`), or clamp MSS on the router (`iptables -t mangle -A FORWARD -p tcp --syn -j TCPMSS --clamp-mss-to-pmtu`)"
+	}
 }
 
 func timeoutError(err error) bool {

@@ -95,6 +95,8 @@ failure never hides a working one:
 - **Plain HTTP path**: `Interface → DNS → HTTP :80`.
 - **Selected target path**: `Interface → DNS → TCP → TLS → HTTPS` for secure
   web targets, or the applicable protocol row for other ports.
+- **Path-MTU branch** (hangs off the connect, not off any protocol): `TCP → Path
+  MTU`. A black hole breaks SSH and SMTP exactly as thoroughly as it breaks TLS.
 
 Each row is one of five states: **✓ Pass**, **! Warn** (reachable but degraded —
 high latency, some addresses failing, ambiguous source interface), **✗ Fail**,
@@ -109,10 +111,42 @@ IP literal). A Warn never counts as a failure.
 | **DNS** | The host resolves to an IPv4 or IPv6 address (system resolution) | IP-literal targets are N/A; all A/AAAA records are retained |
 | **DNS (public 8.8.8.8)** | A direct query to Google Public DNS provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail |
 | **TCP** | A TCP connect to the target port succeeds | races A/AAAA records Happy-Eyeballs style (RFC 8305), pins the winner |
+| **Path MTU** | 24 KiB reaches the target as full-size segments | confirms or clears an MTU/PMTU black hole — never a Fail, see below |
 | **TLS** | The TLS handshake (SNI + cert verification) succeeds | bad/expired cert, clock skew, or MITM → Fail |
 | **HTTP** | Port 80 returns any HTTP response (incl. 3xx/4xx/5xx) | Independent HEAD after DNS, redirects off, proxy off |
 | **HTTPS** | The selected TLS port returns any HTTP response | HEAD against the TLS-validated IP, redirects off, proxy off |
 | **SSH/SMTP banner** | TCP connects (banner read best-effort) | bounded read; connected but silent → Warn (not a failure) |
+
+### Path MTU without root
+
+A path MTU smaller than the local interface's, on a path that also filters the
+ICMP that would say so, is the classic tunnel/VPN/PPPoE mystery: TCP connects,
+then the connection dies the moment either side sends a real packet. `ping` and
+`curl` can't tell you that, and confirming it normally means raw sockets and a
+DF flag.
+
+The **Path MTU** row confirms it from an ordinary socket. The TCP handshake is
+the control — SYN/SYN-ACK are small enough to cross a narrowed link, so a
+completed connect already proves small packets arrive. Then the probe shrinks its
+own send buffer to 4 KiB and writes 24 KiB, which has to leave as full-size
+segments. Nothing leaves that buffer until the far end acknowledges it, so:
+
+- the write drains → full-size segments arrive, **Pass** (with the interface MTU
+  the path is confirmed to carry),
+- the write stalls with the buffer barely emptied → nothing is being
+  acknowledged at all, **Warn** naming the evidence and the MSS/MTU fix,
+- the peer hangs up first → **N/A**, inconclusive, rather than a guess.
+
+It is deliberately never a Fail: a peer that accepts a connection and then stops
+reading stalls the write the same way, so the row states its evidence — bytes
+written, buffer size, and that the handshake got through — and leaves the
+judgement to you. When the evidence lands *and* a protocol row above it failed,
+the verdict reclassifies from `service` to `network`: the service is fine, the
+path can't carry a full-size packet. The 24 KiB payload is inert, self-labelling
+filler; TLS targets get a record header in front of it so a TLS server reads (and
+acknowledges) the payload instead of resetting on the first byte. It is the only
+probe here that sends bulk data — under `--watch` that's 24 KiB per pass, once
+every 5 seconds.
 
 No verdict depends on ICMP. Plenty of healthy hosts drop ping, so a failed
 `ping` proves nothing and a successful one proves less than a TCP connect

@@ -111,3 +111,36 @@ func TestPathIdentityLoopback(t *testing.T) {
 		t.Error("iface should resolve for the loopback source")
 	}
 }
+
+// The PMTU probe over a real socket, against the case most likely to produce a
+// false alarm: a listener that accepts the connection and then never reads a
+// byte. Its receive buffer has to absorb the whole payload — if it doesn't, the
+// probe's own write stalls and every healthy peer that pauses gets accused of
+// black-holing packets. Nothing here is a black hole, so nothing may warn.
+func TestPMTUProbeLoopbackSilentPeerDoesNotWarn(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn // held open, never read from
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	defer cancel()
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("127.0.0.1")}}
+	r := defaultOps.pmtuProbe(port, ProtoNone)(ctx, deps)
+	if conn := <-accepted; conn != nil {
+		conn.Close()
+	}
+	if r.Status != StatusPass {
+		t.Errorf("silent-but-healthy peer = %+v, want PASS (%d KiB must fit in its receive buffer)", r, pmtuPayloadSize>>10)
+	}
+}

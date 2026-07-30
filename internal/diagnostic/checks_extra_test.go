@@ -83,14 +83,14 @@ func TestDialerFromUsesNetworkAddressType(t *testing.T) {
 func TestBuildProbesProtoShapes(t *testing.T) {
 	cases := []struct {
 		target string
-		want   int // iface, internet, proxy, system/public dns, target_tcp, ssid, + protocol rows
+		want   int // iface, internet, proxy, system/public dns, target_tcp, path_mtu, ssid, + protocol rows
 	}{
-		{"http://example.com", 8}, // + http
-		{"host:25", 8},            // + smtp banner
-		{"host:587", 8},           // + smtp banner
-		{"ssh://host:2222", 8},    // + ssh banner
-		{"smtp://host:2525", 8},   // + smtp banner
-		{"host:9999", 7},          // ProtoNone — stops at target_tcp
+		{"http://example.com", 9}, // + http
+		{"host:25", 9},            // + smtp banner
+		{"host:587", 9},           // + smtp banner
+		{"ssh://host:2222", 9},    // + ssh banner
+		{"smtp://host:2525", 9},   // + smtp banner
+		{"host:9999", 8},          // ProtoNone — stops at path_mtu
 	}
 	for _, c := range cases {
 		if got := len(BuildProbesFrom(mustTarget(t, c.target), nil)); got != c.want {

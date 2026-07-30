@@ -29,12 +29,15 @@ func TestSSIDSmoke(t *testing.T) {
 
 func TestFixHintsPerGOOS(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin", "windows", "plan9"} {
-		if ifaceFix(goos) == "" || dnsFix(goos) == "" {
+		if ifaceFix(goos) == "" || dnsFix(goos) == "" || pmtuFix(goos) == "" {
 			t.Errorf("empty fix hint for %s", goos)
 		}
 	}
 	if ifaceFix("darwin") == ifaceFix("windows") {
 		t.Error("darwin and windows iface hints should differ")
+	}
+	if pmtuFix("darwin") == pmtuFix("windows") {
+		t.Error("darwin and windows PMTU hints should differ")
 	}
 }
 
@@ -53,7 +56,7 @@ func TestTLSFix(t *testing.T) {
 		{"expired", x509.CertificateInvalidError{Cert: leaf, Reason: x509.Expired}, "cert is only valid 2023-01-02 → 2024-01-02"},
 		{"unknown CA", x509.UnknownAuthorityError{Cert: leaf}, "unknown CA"},
 		{"not TLS", tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}, "not with TLS"},
-		{"timeout", context.DeadlineExceeded, "MTU/PMTU black hole is a prime suspect"},
+		{"timeout", context.DeadlineExceeded, "read the Path MTU row"},
 		{"wrapped", fmt.Errorf("tls: %w", x509.UnknownAuthorityError{Cert: leaf}), "unknown CA"},
 		{"other", errors.New("connection reset by peer"), "TLS broken"},
 	}

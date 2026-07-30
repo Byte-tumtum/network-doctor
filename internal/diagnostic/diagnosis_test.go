@@ -142,7 +142,7 @@ func TestDiagnoseTargetWarnings(t *testing.T) {
 // whether anything else proved the path usable.
 func TestVerdict(t *testing.T) {
 	tg := mustTarget(t, "github.com")
-	targetOrder := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbeTLS, ProbeHTTP, ProbeHTTPS}
+	targetOrder := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbePMTU, ProbeTLS, ProbeHTTP, ProbeHTTPS}
 	genericOrder := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS}
 
 	cases := []struct {
@@ -172,6 +172,17 @@ func TestVerdict(t *testing.T) {
 		{"http broken", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbeHTTPS: {Status: StatusFail},
 		}, VerdictService},
+		// A confirmed black hole reclassifies the rung it broke: the service is
+		// fine, the path can't carry a full-size packet.
+		{"tls broken by a black hole", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbePMTU: {Status: StatusWarn},
+			ProbeTLS:  {Status: StatusFail},
+		}, VerdictNetwork},
+		// On its own it's only a warning — nothing the caller asked for broke,
+		// and a stalled write has innocent explanations.
+		{"black hole evidence alone", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbePMTU: {Status: StatusWarn},
+		}, VerdictDegraded},
 		{"target fine, egress blocked", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbeInternet: {Status: StatusFail},
 		}, VerdictDegraded},

@@ -5,11 +5,13 @@ package diagnostic
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -333,8 +335,123 @@ func TestTLSProbeTimeoutReportsMTU(t *testing.T) {
 
 	r := ops.tlsProbe("example.com", 443)(context.Background(), deps)
 	if !strings.Contains(r.Detail, "fake0 MTU is 1420") ||
-		!strings.Contains(r.Fix, "MTU/PMTU black hole is a prime suspect") {
-		t.Errorf("TLS timeout = %+v, want MTU detail and PMTU hint", r)
+		!strings.Contains(r.Fix, "Path MTU row") {
+		t.Errorf("TLS timeout = %+v, want MTU detail and a pointer at the PMTU row", r)
+	}
+}
+
+// The PMTU probe reads one asymmetry: a payload that must travel as full-size
+// segments either drains the (deliberately small) send buffer or stalls in it.
+// A stall is the black-hole evidence and never more than a WARN; a peer that
+// drains the payload clears the path; a peer that hangs up says nothing either
+// way. net.Pipe stands in for the socket — its writes block until the far end
+// reads, which is exactly the behavior being classified.
+func TestPMTUProbeClassifiesWrite(t *testing.T) {
+	tests := []struct {
+		name   string
+		serve  func(net.Conn) // runs against the far end of the pipe
+		status Status
+		detail string
+		fix    bool
+	}{
+		{
+			name:   "nothing acknowledged",
+			serve:  func(net.Conn) {}, // a black hole: our segments never land
+			status: StatusWarn,
+			detail: "stalled after 0 KiB of 24 KiB with a 4 KiB send buffer",
+			fix:    true,
+		},
+		{
+			name:   "payload delivered",
+			serve:  func(c net.Conn) { _, _ = io.Copy(io.Discard, c) },
+			status: StatusPass,
+			detail: "24 KiB went out in full-size segments",
+		},
+		{
+			name:   "peer hangs up",
+			serve:  func(c net.Conn) { c.Close() },
+			status: StatusNA,
+			detail: "inconclusive — the peer dropped the connection after 0 KiB",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			go tc.serve(server)
+			ops := &netops{
+				dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+				interfaces:  func() ([]net.Interface, error) { return []net.Interface{{Name: "wg0", MTU: 1420}}, nil },
+			}
+			deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1"), Iface: "wg0"}}
+			// Short budget so the stall case doesn't wait out pmtuWriteWait.
+			ctx, cancel := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
+			defer cancel()
+
+			r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps)
+			if r.Status != tc.status || !strings.Contains(r.Detail, tc.detail) {
+				t.Errorf("pmtu = %+v, want %v containing %q", r, tc.status, tc.detail)
+			}
+			if (r.Fix != "") != tc.fix {
+				t.Errorf("pmtu fix = %q, want present: %v", r.Fix, tc.fix)
+			}
+			if !r.SelectedIP.Equal(net.ParseIP("192.0.2.1")) {
+				t.Errorf("SelectedIP = %v, want the pinned dependency IP", r.SelectedIP)
+			}
+		})
+	}
+}
+
+// The evidence has to name the interface MTU it contradicts — that number is
+// what turns "something is dropping packets" into a value to lower.
+func TestPMTUProbeWarnNamesInterfaceMTU(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+		interfaces:  func() ([]net.Interface, error) { return []net.Interface{{Name: "wg0", MTU: 1420}}, nil },
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1"), Iface: "wg0"}}
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
+	defer cancel()
+
+	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps); !strings.Contains(r.Detail, "wg0 advertises a 1420-byte MTU") {
+		t.Errorf("pmtu detail = %q, want the interface MTU named", r.Detail)
+	}
+	// An unreadable MTU costs the note, not the verdict.
+	ops.interfaces = func() ([]net.Interface, error) { return nil, errors.New("nope") }
+	client2, server2 := net.Pipe()
+	t.Cleanup(func() { _ = server2.Close() })
+	ops.dialContext = func(context.Context, string, string) (net.Conn, error) { return client2, nil }
+	ctx2, cancel2 := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
+	defer cancel2()
+	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx2, deps); r.Status != StatusWarn || strings.Contains(r.Detail, "MTU") {
+		t.Errorf("pmtu without a readable MTU = %+v, want WARN with no MTU note", r)
+	}
+}
+
+func TestPMTUProbeSkipsWithoutPinnedIP(t *testing.T) {
+	r := new(netops).pmtuProbe(443, ProtoTLSHTTP)(context.Background(), map[ProbeID]ProbeResult{})
+	if r.Status != StatusSkip {
+		t.Errorf("pmtu without a pinned IP = %+v, want SKIP", r)
+	}
+}
+
+// The payload is sized exactly, and only a TLS target gets the record header
+// that keeps an OpenSSL server reading long enough to acknowledge it.
+func TestPMTUPayloadShape(t *testing.T) {
+	tlsPayload, plain := pmtuPayload(ProtoTLSHTTP), pmtuPayload(ProtoSSH)
+	if len(tlsPayload) != pmtuPayloadSize || len(plain) != pmtuPayloadSize {
+		t.Fatalf("payload sizes = %d, %d, want %d", len(tlsPayload), len(plain), pmtuPayloadSize)
+	}
+	if !bytes.HasPrefix(tlsPayload, tlsRecordHeader) {
+		t.Error("TLS payload does not start with a TLS record header")
+	}
+	if bytes.HasPrefix(plain, tlsRecordHeader) {
+		t.Error("non-TLS payload should not claim to be a TLS record")
+	}
+	if !bytes.Contains(plain, []byte("netdoc path-mtu probe")) {
+		t.Error("payload should identify itself in a capture")
 	}
 }
 

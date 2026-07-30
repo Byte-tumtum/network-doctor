@@ -15,3 +15,4 @@ linters:
         - (io.ReadCloser).Close
         - (net.Conn).Close
         - (net.Conn).SetReadDeadline
+        - (net.Conn).SetWriteDeadline

@@ -87,6 +87,7 @@ const (
 	ProbeDNS       ProbeID = "dns"
 	ProbeDNSPublic ProbeID = "dns_public"
 	ProbeTargetTCP ProbeID = "target_tcp"
+	ProbePMTU      ProbeID = "path_mtu"
 	ProbeTLS       ProbeID = "tls"
 	ProbeHTTP      ProbeID = "http"
 	ProbeHTTPS     ProbeID = "https"
@@ -143,6 +144,35 @@ const (
 	// as degraded rather than a clean pass.
 	warnRTT = 500 * time.Millisecond
 )
+
+// Path-MTU probe sizes. See pmtuProbe for what the asymmetry between them
+// proves.
+const (
+	// pmtuSendBuffer is the SO_SNDBUF the probe asks for. Small on purpose:
+	// with the kernel's autotuned buffer a Write returns hundreds of KiB before
+	// any acknowledgement is due, and an unacknowledged Write proves nothing.
+	pmtuSendBuffer = 4 << 10
+	// pmtuPayloadSize is pushed at the target in a single Write. Enough to force
+	// full-size segments and to outlast any ordinary peer's receive buffer,
+	// small enough to stay a polite amount of traffic.
+	pmtuPayloadSize = 24 << 10
+	// pmtuAckedBytes is the point past which the far end must have acknowledged
+	// full-size segments: more send buffer than the kernel could have handed us
+	// (Linux doubles the request), with margin.
+	pmtuAckedBytes = 12 << 10
+	// pmtuWriteWait bounds the stall the probe is willing to sit through.
+	pmtuWriteWait = 2 * time.Second
+	// pmtuHeadroom keeps the write deadline inside the probe budget, so a stall
+	// is reported as evidence instead of as a cancelled probe.
+	pmtuHeadroom = 250 * time.Millisecond
+)
+
+// tlsRecordHeader frames a handshake record declaring a full 16 KiB body, and
+// prefixes the PMTU payload on TLS targets. An OpenSSL-based server buffers —
+// and so acknowledges — the whole declared record before rejecting the garbage
+// inside it, where an unprefixed write gets reset after a few bytes and leaves
+// the path question unanswered.
+var tlsRecordHeader = []byte{0x16, 0x03, 0x01, 0x40, 0x00}
 
 // probeHost is the host used by the generic (no-target) DNS + egress probes.
 const probeHost = "connectivitycheck.gstatic.com"
@@ -479,7 +509,10 @@ func (o *netops) buildProbes(t *Target) []Probe {
 	dns := Probe{ID: ProbeDNS, Name: "DNS " + host, Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(host, t.IP)}
 	publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP)}
 	ttcp := Probe{ID: ProbeTargetTCP, Name: "TCP " + hp, Deps: []ProbeID{ProbeDNS}, Run: o.targetTCPProbe(port)}
-	probes := []Probe{iface, internet, proxy, dns, publicDNS, ttcp, network}
+	// Path MTU hangs off the TCP connect rather than off any protocol row: a
+	// black hole breaks SSH and SMTP exactly as thoroughly as it breaks TLS.
+	pmtu := Probe{ID: ProbePMTU, Name: "Path MTU " + hp, Deps: []ProbeID{ProbeTargetTCP}, Run: o.pmtuProbe(port, t.Proto)}
+	probes := []Probe{iface, internet, proxy, dns, publicDNS, ttcp, pmtu, network}
 
 	switch t.Proto {
 	case ProtoTLSHTTP:
@@ -902,13 +935,9 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			r.Status, r.SelectedIP = StatusFail, ip
 			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
 			r.Fix = tlsFix(err)
-			if timeoutError(err) && o.interfaces != nil {
-				ifaces, _ := o.interfaces()
-				for _, ifi := range ifaces {
-					if ifi.Name == deps[ProbeTargetTCP].Iface && ifi.MTU > 0 {
-						r.Detail += fmt.Sprintf(" (%s MTU is %d)", ifi.Name, ifi.MTU)
-						break
-					}
+			if iface := deps[ProbeTargetTCP].Iface; timeoutError(err) {
+				if mtu := o.mtuFor(iface); mtu > 0 {
+					r.Detail += fmt.Sprintf(" (%s MTU is %d)", iface, mtu)
 				}
 			}
 			return r
@@ -985,6 +1014,135 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		r.Detail = fmt.Sprintf("%s %d (responded)", protocol, resp.StatusCode)
 		return r
 	}
+}
+
+// pmtuProbe confirms — or clears — a path-MTU black hole with no root, no raw
+// sockets, and no DF flag, by reading the one asymmetry a normal socket exposes.
+//
+// The TCP handshake is the small-packet control: SYN/SYN-ACK are small enough to
+// cross a narrowed link, so a completed connect already proves small packets
+// arrive. The evidence is what happens to bytes that must travel as full-size
+// segments. Nothing leaves the send buffer until the far end acknowledges it, so
+// the probe shrinks that buffer to a few KiB and pushes a payload through: if
+// the write drains it several times over, full-size segments are getting there
+// and being acknowledged. If the write stalls with the buffer barely emptied,
+// nothing is being acknowledged at all — the segments are disappearing, which is
+// what a black hole looks like from an unprivileged socket.
+//
+// There is deliberately no small-write control: a small Write returns out of the
+// send buffer whether or not the bytes ever leave the machine, so it is not
+// evidence of anything.
+//
+// Never a Fail, by design. A peer that accepts the connection and then stops
+// reading stalls us the same way, so the Warn states its evidence — bytes
+// written, send buffer size, and that the handshake got through — and leaves the
+// reader room to judge.
+func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
+	return func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
+		var r ProbeResult
+		dep := deps[ProbeTargetTCP]
+		if dep.SelectedIP == nil {
+			r.Status, r.Detail = StatusSkip, "no pinned IP from Target TCP"
+			return r
+		}
+		// The stall is the measurement, so it needs a deadline of its own inside
+		// the probe budget — a ctx cancellation would report no bytes at all.
+		wait := pmtuWriteWait
+		if dl, ok := ctx.Deadline(); ok {
+			if left := time.Until(dl) - pmtuHeadroom; left < wait {
+				wait = left
+			}
+		}
+		if wait <= 0 {
+			r.Status, r.Detail = StatusNA, "not enough of the probe budget left to measure a stall"
+			return r
+		}
+		ip := dep.SelectedIP
+		conn, err := o.dialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
+		if err != nil {
+			// TCP connected moments ago, so a second refusal is flakiness on the
+			// path, not a verdict about it.
+			r.Status, r.SelectedIP = StatusNA, ip
+			r.Detail = "second connection to " + ip.String() + " failed: " + err.Error()
+			return r
+		}
+		defer conn.Close()
+		r.SelectedIP = ip
+		// Best effort: a kernel that refuses (or rounds up) the request only
+		// makes the probe less sensitive, never wrong — pmtuAckedBytes carries
+		// enough margin for the doubling Linux does.
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetWriteBuffer(pmtuSendBuffer)
+		}
+		conn.SetWriteDeadline(time.Now().Add(wait))
+		n, err := conn.Write(pmtuPayload(proto))
+
+		mtu := o.mtuFor(dep.Iface)
+		switch {
+		case err == nil:
+			r.Status = StatusPass
+			r.Detail = kib(n) + " went out in full-size segments" + mtuNote(dep.Iface, mtu, " (the path carries %s's %d-byte MTU)")
+		case n >= pmtuAckedBytes:
+			// Past the send buffer means the far end acknowledged full-size
+			// segments; whatever stopped the write after that isn't the MTU.
+			r.Status = StatusPass
+			r.Detail = fmt.Sprintf("%s acknowledged in full-size segments before the write stopped (%v) — larger packets do get through", kib(n), err)
+		case timeoutError(err):
+			r.Status = StatusWarn
+			r.Detail = fmt.Sprintf("stalled after %s of %s with a %s send buffer, so nothing was acknowledged — yet the TCP handshake's small packets got through%s",
+				kib(n), kib(pmtuPayloadSize), kib(pmtuSendBuffer), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))
+			r.Fix = pmtuFix(runtime.GOOS)
+		default:
+			r.Status = StatusNA
+			r.Detail = fmt.Sprintf("inconclusive — the peer dropped the connection after %s: %v", kib(n), err)
+		}
+		return r
+	}
+}
+
+// pmtuPayload is the byte pattern the PMTU probe pushes at the target: legible
+// to whoever finds it in a packet capture or a server log, and worthless to
+// anything that parses it.
+func pmtuPayload(proto Proto) []byte {
+	filler := []byte("netdoc path-mtu probe, discard me. ")
+	out := make([]byte, 0, pmtuPayloadSize)
+	if proto == ProtoTLSHTTP {
+		out = append(out, tlsRecordHeader...)
+	}
+	for len(out) < pmtuPayloadSize {
+		out = append(out, filler[:min(len(filler), pmtuPayloadSize-len(out))]...)
+	}
+	return out
+}
+
+// kib renders a byte count the way the numbers in this probe are chosen — in
+// whole KiB, rounded down, since a partial KiB never changes the reading.
+func kib(n int) string {
+	return strconv.Itoa(n>>10) + " KiB"
+}
+
+// mtuNote fills format with iface and mtu, or returns nothing when the MTU
+// couldn't be read — the verdict doesn't depend on knowing the number.
+func mtuNote(iface string, mtu int, format string) string {
+	if mtu <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(format, iface, mtu)
+}
+
+// mtuFor reports the MTU of the named interface, or 0 when there isn't one to
+// read.
+func (o *netops) mtuFor(name string) int {
+	if name == "" || o.interfaces == nil {
+		return 0
+	}
+	ifaces, _ := o.interfaces()
+	for _, ifi := range ifaces {
+		if ifi.Name == name && ifi.MTU > 0 {
+			return ifi.MTU
+		}
+	}
+	return 0
 }
 
 func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
