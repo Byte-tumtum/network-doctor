@@ -10,9 +10,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
@@ -54,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	toolbox := fs.Bool("toolbox", false, "start in toolbox mode")
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
-	watch := fs.Bool("watch", false, "continuously re-run checks in the TUI")
+	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	iface := fs.String("iface", "", "bind probes to an interface name or exact local IP")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
@@ -100,10 +103,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
 	}
-	if *jsonOut && *watch {
-		fmt.Fprintln(stderr, "netdoc: -json and -watch cannot be combined")
-		return 2
-	}
 	var source net.IP
 	if *iface != "" {
 		var err error
@@ -125,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *jsonOut {
-		return runJSON(t, source, stdout, stderr)
+		return runJSON(context.Background(), t, source, *watch, stdout, stderr)
 	}
 
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
@@ -162,7 +161,11 @@ Target forms:
 // The report is the stable machine-readable contract: field names and the
 // status vocabulary (PASS/WARN/FAIL/SKIP/N/A) must not change once released.
 type report struct {
-	Version string        `json:"version"`
+	Version string `json:"version"`
+	// Ts is set only under -json -watch, where the output is a stream and each
+	// pass needs to say when it ran. A single report doesn't carry one, so the
+	// one-shot output stays byte-identical to what it has always been.
+	Ts      string        `json:"ts,omitempty"`
 	Target  *reportTarget `json:"target"` // null in generic (no-target) mode
 	Checks  []reportCheck `json:"checks"`
 	Summary string        `json:"summary"`
@@ -208,22 +211,58 @@ type reportAttempt struct {
 // runAll is stubbed in tests so -json runs don't touch the network.
 var runAll = diagnostic.RunAll
 
+// watchEvery is the gap between headless passes, matching the TUI's cadence.
+// A var so tests don't have to sleep through it.
+var watchEvery = 5 * time.Second
+
 // runJSON runs the probe DAG headless and prints the JSON report. Exit code
 // mirrors the TUI contract: 1 if any check failed, else 0.
-func runJSON(t *diagnostic.Target, source net.IP, stdout, stderr io.Writer) int {
-	probes := diagnostic.BuildProbesFrom(t, source)
-	results := runAll(context.Background(), probes)
-	rep := buildReport(t, probes, results)
+//
+// With watch it never stops on its own: one compact report per line, forever,
+// until the terminal interrupts it. That's NDJSON, but not a new schema — the
+// line is the same report struct, plus the ts that makes a stream readable.
+func runJSON(ctx context.Context, t *diagnostic.Target, source net.IP, watch bool, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(rep); err != nil {
-		fmt.Fprintln(stderr, "netdoc:", err)
-		return 1
+	if !watch {
+		enc.SetIndent("", "  ")
+	} else {
+		// Ctrl-C — or the SIGTERM a supervisor sends — has to end the stream
+		// at a line boundary rather than cut one in half, and it cancels the
+		// in-flight probes on the way out.
+		var stop context.CancelFunc
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
 	}
-	if rep.OK {
-		return 0
+	code := 0
+	for {
+		probes := diagnostic.BuildProbesFrom(t, source)
+		results := runAll(ctx, probes)
+		if ctx.Err() != nil {
+			// Interrupted mid-pass: every probe failed because we cancelled it,
+			// so reporting that pass would be a lie.
+			return code
+		}
+		rep := buildReport(t, probes, results)
+		code = 0
+		if !rep.OK {
+			code = 1
+		}
+		if watch {
+			rep.Ts = time.Now().UTC().Format(time.RFC3339)
+		}
+		if err := enc.Encode(rep); err != nil {
+			fmt.Fprintln(stderr, "netdoc:", err)
+			return 1
+		}
+		if !watch {
+			return code
+		}
+		select {
+		case <-ctx.Done():
+			return code
+		case <-time.After(watchEvery):
+		}
 	}
-	return 1
 }
 
 // buildReport flattens probe results into the stable JSON shape, preserving

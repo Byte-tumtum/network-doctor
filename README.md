@@ -133,13 +133,17 @@ netdoc https://host:80  # explicit scheme selects the protocol (→ TLS + HTTPS 
 netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
 netdoc --watch host     # TUI: re-run continuously and track intermittent failures
+netdoc --json --watch host  # headless: one JSON report per line, until interrupted
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 ```
 
 `--timeout` overrides the per-check probe timeout; see `netdoc --help`
-for the default. `--watch` starts another pass five seconds after each run and
-shows the last 20 states plus the failure count for every check. It is TUI-only;
-`--watch --json` is rejected rather than introducing an NDJSON contract.
+for the default. `--watch` starts another pass five seconds after each run; in
+the TUI it shows the last 20 states plus the failure count for every check, and
+with `--json` it streams the same report on stdout, one compact JSON object per
+line, until the process is interrupted. Those lines carry an extra `ts` field
+(RFC 3339, UTC) and are otherwise the one-shot report unchanged — the one-shot
+output itself stays pretty-printed and has no `ts`.
 `--iface` binds probe connections and DNS lookups to an interface's first IPv4
 address (or its first IPv6 address when it has no IPv4). Pass an exact local IP
 instead when an interface has multiple addresses.
@@ -245,6 +249,17 @@ Exit codes follow the table below (`ok: false` ⇒ exit `1`).
 `failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`,
 …) and is omitted when none did — enough to route a bug report without reading
 the prose.
+
+`--json --watch` prints that same document once per pass, compacted onto a
+single line (NDJSON), five seconds apart, until the process is interrupted —
+for the intermittent failure you can't sit and watch:
+
+```sh
+netdoc --json --watch github.com | jq -c 'select(.ok | not) | {ts, failed_stage, summary}'
+```
+
+Those lines add a `ts` field (RFC 3339, UTC) saying when the pass ran; nothing
+else about the document changes. The exit code is the last completed pass's.
 
 `verdict` is the summary as a machine-readable class, for the question a
 script actually asks: *is my network broken, or is theirs?*

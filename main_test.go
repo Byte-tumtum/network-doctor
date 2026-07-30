@@ -49,7 +49,6 @@ func TestRun(t *testing.T) {
 		{"extra args", []string{"example.com", "extra"}, 2, "", "unexpected arguments"},
 		{"bad target", []string{"bad_host!"}, 2, "", "netdoc:"},
 		{"json+toolbox", []string{"-json", "-toolbox"}, 2, "", "cannot be combined"},
-		{"json+watch", []string{"-json", "-watch"}, 2, "", "cannot be combined"},
 		{"bad iface", []string{"-iface", "netdoc-no-such-interface"}, 2, "", "-iface:"},
 		{"version ignores bad timeout", []string{"-timeout", "-1s", "-version"}, 0, "netdoc dev", ""},
 		{"bad timeout", []string{"-timeout", "-1s"}, 2, "", "-timeout must be positive"},
@@ -140,6 +139,63 @@ func TestRunJSON(t *testing.T) {
 				t.Error("checks empty, want the probe DAG")
 			}
 		})
+	}
+}
+
+// cancelAfter stops the watch loop once it has written n reports, standing in
+// for the Ctrl-C that ends it in real use.
+type cancelAfter struct {
+	buf    *bytes.Buffer
+	n      int
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfter) Write(p []byte) (int, error) {
+	n, err := c.buf.Write(p)
+	c.n--
+	if c.n <= 0 {
+		c.cancel()
+	}
+	return n, err
+}
+
+// The watch stream's promise is one self-contained, timestamped report per
+// line — anything indented or unterminated breaks every line-oriented reader.
+func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
+	origRun, origEvery := runAll, watchEvery
+	t.Cleanup(func() { runAll, watchEvery = origRun, origEvery })
+	watchEvery = time.Millisecond
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusFail}
+		}
+		return results
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var buf, stderr bytes.Buffer
+	out := &cancelAfter{buf: &buf, n: 3, cancel: cancel}
+	if got := runJSON(ctx, nil, nil, true, out, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3:\n%s", len(lines), buf.String())
+	}
+	for i, line := range lines {
+		var rep report
+		if err := json.Unmarshal([]byte(line), &rep); err != nil {
+			t.Fatalf("line %d is not valid JSON: %v\n%s", i, err, line)
+		}
+		if rep.Ts == "" {
+			t.Errorf("line %d has no ts", i)
+		}
+		if len(rep.Checks) == 0 {
+			t.Errorf("line %d has no checks", i)
+		}
 	}
 }
 
