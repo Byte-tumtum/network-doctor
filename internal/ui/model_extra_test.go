@@ -716,7 +716,7 @@ func TestPromptTargetHistory(t *testing.T) {
 func TestHistoryPersistsAcrossSessions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "netdoc", "history")
 
-	m := New(mustTarget(t, "github.com:443"), false, false, path, "test").(model)
+	m := NewWithSource(mustTarget(t, "github.com:443"), nil, false, false, path, "test").(model)
 	u, _ := m.Update(keyMsg("r"))
 	m = asModel(t, u)
 	m.input.SetValue("one.test")
@@ -725,7 +725,7 @@ func TestHistoryPersistsAcrossSessions(t *testing.T) {
 
 	// A fresh session relaunched with the same target loads both entries,
 	// without duplicating the launch target it already knows.
-	m2 := New(mustTarget(t, "one.test"), false, false, path, "test").(model)
+	m2 := NewWithSource(mustTarget(t, "one.test"), nil, false, false, path, "test").(model)
 	if got := strings.Join(m2.history, ","); got != "github.com:443,one.test" {
 		t.Fatalf("reloaded history = %q, want github.com:443,one.test", got)
 	}

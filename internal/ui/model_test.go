@@ -25,7 +25,7 @@ func asModel(t *testing.T, m tea.Model) model {
 }
 
 func newModel(t *diagnostic.Target, toolbox bool) model {
-	return New(t, toolbox, false, "", "test").(model)
+	return NewWithSource(t, nil, toolbox, false, "", "test").(model)
 }
 
 func keyMsg(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }

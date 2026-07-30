@@ -405,25 +405,21 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 	return resp.StatusCode, "", nil
 }
 
-// BuildProbes constructs the DAG for the given target (nil = generic mode).
-// Every Run is wrapped so results leave the probe already sanitized: this is
-// the one place external bytes cross into text we print, so callers render
-// ProbeResult strings as-is and a new probe can't reintroduce terminal
-// injection by forgetting to Clean at the source. It is also the one place
-// both runners (RunAll and the ui scheduler) share, so timing lives here too.
-func BuildProbes(t *Target) []Probe {
-	return buildProbes(defaultOps, t)
-}
-
-// BuildProbesFrom constructs the same probe DAG with every network dial bound
-// to source, including resolver and HTTP transport dials.
+// BuildProbesFrom constructs the DAG for the given target (nil = generic mode)
+// with every network dial — resolver and HTTP transport included — bound to
+// source. A nil source leaves the dials unpinned.
 func BuildProbesFrom(t *Target, source net.IP) []Probe {
 	if source == nil {
-		return BuildProbes(t)
+		return buildProbes(defaultOps, t)
 	}
 	return buildProbes(opsFromSource(source), t)
 }
 
+// buildProbes wraps every Run so results leave the probe already sanitized:
+// this is the one place external bytes cross into text we print, so callers
+// render ProbeResult strings as-is and a new probe can't reintroduce terminal
+// injection by forgetting to Clean at the source. It is also the one place
+// both runners (RunAll and the ui scheduler) share, so timing lives here too.
 func buildProbes(o *netops, t *Target) []Probe {
 	probes := o.buildProbes(t)
 	for i := range probes {

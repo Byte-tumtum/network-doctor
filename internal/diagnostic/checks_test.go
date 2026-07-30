@@ -1,4 +1,4 @@
-// Shape checks for the probe DAG that BuildProbes returns per protocol.
+// Shape checks for the probe DAG that BuildProbesFrom returns per protocol.
 
 package diagnostic
 
@@ -19,19 +19,19 @@ func mustTarget(t *testing.T, s string) *Target {
 }
 
 func TestBuildProbesShape(t *testing.T) {
-	if got := len(BuildProbes(nil)); got != 6 {
+	if got := len(BuildProbesFrom(nil, nil)); got != 6 {
 		t.Errorf("generic probes = %d, want 6", got)
 	}
-	if got := len(BuildProbes(mustTarget(t, "github.com"))); got != 10 {
+	if got := len(BuildProbesFrom(mustTarget(t, "github.com"), nil)); got != 10 {
 		t.Errorf("https target probes = %d, want 10", got)
 	}
-	if got := len(BuildProbes(mustTarget(t, "host:22"))); got != 8 {
+	if got := len(BuildProbesFrom(mustTarget(t, "host:22"), nil)); got != 8 {
 		t.Errorf("ssh target probes = %d, want 8", got)
 	}
 }
 
 func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
-	probes := BuildProbes(nil)
+	probes := BuildProbesFrom(nil, nil)
 	deps := make(map[ProbeID][]ProbeID, len(probes))
 	for _, p := range probes {
 		deps[p.ID] = p.Deps
@@ -48,7 +48,7 @@ func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
 }
 
 func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
-	https := BuildProbes(mustTarget(t, "https://example.com"))
+	https := BuildProbesFrom(mustTarget(t, "https://example.com"), nil)
 	want := []struct {
 		id   ProbeID
 		name string
@@ -68,7 +68,7 @@ func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
 		}
 	}
 
-	http := BuildProbes(mustTarget(t, "http://example.com"))
+	http := BuildProbesFrom(mustTarget(t, "http://example.com"), nil)
 	got := http[len(http)-1]
 	if got.ID != ProbeHTTP || got.Name != "HTTP example.com" || len(got.Deps) != 1 || got.Deps[0] != ProbeTargetTCP {
 		t.Errorf("plain HTTP application probe = %+v, want HTTP depending on target TCP", got)

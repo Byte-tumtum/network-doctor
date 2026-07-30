@@ -94,7 +94,7 @@ func osc52Sequence(rep string) string {
 
 // report renders the finished run as plain text safe to paste into a ticket
 // or chat: no ANSI styling, and no external bytes untamed. Probe results
-// arrive sanitized from BuildProbes; tool output is cleaned here, since it
+// arrive sanitized from BuildProbesFrom; tool output is cleaned here, since it
 // comes from a subprocess this package launched.
 func (m model) report() string {
 	var b strings.Builder

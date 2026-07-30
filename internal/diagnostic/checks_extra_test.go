@@ -78,7 +78,7 @@ func TestDialerFromUsesNetworkAddressType(t *testing.T) {
 	}
 }
 
-// BuildProbes shapes for the http and smtp protocol paths (the ssh/https paths
+// BuildProbesFrom shapes for the http and smtp protocol paths (the ssh/https paths
 // are covered in checks_test.go).
 func TestBuildProbesProtoShapes(t *testing.T) {
 	cases := []struct {
@@ -93,8 +93,8 @@ func TestBuildProbesProtoShapes(t *testing.T) {
 		{"host:9999", 7},          // ProtoNone — stops at target_tcp
 	}
 	for _, c := range cases {
-		if got := len(BuildProbes(mustTarget(t, c.target))); got != c.want {
-			t.Errorf("BuildProbes(%q) = %d probes, want %d", c.target, got, c.want)
+		if got := len(BuildProbesFrom(mustTarget(t, c.target), nil)); got != c.want {
+			t.Errorf("BuildProbesFrom(%q) = %d probes, want %d", c.target, got, c.want)
 		}
 	}
 }
@@ -550,7 +550,7 @@ func TestTargetTCPProbe(t *testing.T) {
 	}
 }
 
-// Probes hand their results to BuildProbes' wrapper, which is the only place
+// Probes hand their results to buildProbes' wrapper, which is the only place
 // external text gets sanitized — so a probe that emits raw escapes must come
 // out clean anyway.
 func TestCleanResultScrubsEveryTextField(t *testing.T) {

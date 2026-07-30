@@ -198,14 +198,9 @@ var (
 	}
 )
 
-// New constructs the terminal application. histFile is where target history
-// persists across sessions; "" keeps it in-memory only.
-func New(t *diagnostic.Target, toolbox, watch bool, histFile, version string) tea.Model {
-	return NewWithSource(t, nil, toolbox, watch, histFile, version)
-}
-
 // NewWithSource constructs the terminal application with probe dials pinned to
-// source. New remains the unpinned default for embedders and tests.
+// source; a nil source leaves them unpinned. histFile is where target history
+// persists across sessions; "" keeps it in-memory only.
 func NewWithSource(t *diagnostic.Target, source net.IP, toolbox, watch bool, histFile, version string) tea.Model {
 	probes := diagnostic.BuildProbesFrom(t, source)
 	sp := spinner.New()

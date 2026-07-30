@@ -120,7 +120,7 @@ func TestReportSanitized(t *testing.T) {
 	m.results[m.probes[0].ID] = diagnostic.ProbeResult{
 		ID:     m.probes[0].ID,
 		Status: diagnostic.StatusFail,
-		// No escapes here: probe results arrive sanitized from BuildProbes
+		// No escapes here: probe results arrive sanitized from BuildProbesFrom
 		// (see TestCleanResultScrubsEveryTextField). Tool output is the one
 		// thing report() still cleans itself.
 		Detail: "boom red",
