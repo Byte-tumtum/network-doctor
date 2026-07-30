@@ -192,16 +192,22 @@ type netops struct {
 var defaultOps = &netops{
 	interfaces:     net.Interfaces,
 	interfaceAddrs: (*net.Interface).Addrs,
-	lookupIP:       lookupIPWithServer,
-	lookupPublicIP: lookupIPPublic,
-	dialContext:    new(net.Dialer).DialContext,
+	lookupIP: func(ctx context.Context, host string) ([]net.IP, string, error) {
+		return lookupIPWithDial(ctx, host, new(net.Dialer).DialContext)
+	},
+	lookupPublicIP: func(ctx context.Context, host string) ([]net.IP, error) {
+		return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext)
+	},
+	dialContext: new(net.Dialer).DialContext,
 	dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: new(net.Dialer), Config: cfg}
 		return d.DialContext(ctx, network, addr)
 	},
 	ssid:         ssid,
 	proxyFromEnv: http.ProxyFromEnvironment,
-	portalCheck:  portalCheck,
+	portalCheck: func(ctx context.Context) (int, string, error) {
+		return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
+	},
 }
 
 // SourceIP resolves an interface name (or exact local IP) to the source
@@ -306,7 +312,7 @@ func dialerFrom(source net.IP, network string) *net.Dialer {
 	return d
 }
 
-// lookupIPWithServer resolves host and reports which resolver was on the other
+// lookupIPWithDial resolves host and reports which resolver was on the other
 // end of the wire. The server identity comes free from the Go resolver's Dial
 // hook — it already parses resolv.conf, so we don't have to. Release builds are
 // CGO_ENABLED=0 and so already resolve this way; PreferGo only pins that
@@ -315,10 +321,6 @@ func dialerFrom(source net.IP, network string) *net.Dialer {
 // Windows (and anywhere the Go resolver isn't used) never calls the hook, so the
 // server comes back empty and the row reads as it did before. Reading
 // GetNetworkParams would fix that, if the missing identity ever bites.
-func lookupIPWithServer(ctx context.Context, host string) ([]net.IP, string, error) {
-	return lookupIPWithDial(ctx, host, new(net.Dialer).DialContext)
-}
-
 func lookupIPWithDial(ctx context.Context, host string, dial func(context.Context, string, string) (net.Conn, error)) ([]net.IP, string, error) {
 	var (
 		mu     sync.Mutex
@@ -342,12 +344,8 @@ func lookupIPWithDial(ctx context.Context, host string, dial func(context.Contex
 	return ips, server, err
 }
 
-// lookupIPPublic bypasses the configured resolver for a second opinion.
+// lookupIPPublicWithDial bypasses the configured resolver for a second opinion.
 // Unavailability is reported as N/A by publicDNSProbe, never as a failure.
-func lookupIPPublic(ctx context.Context, host string) ([]net.IP, error) {
-	return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext)
-}
-
 func lookupIPPublicWithDial(ctx context.Context, host string, dial func(context.Context, string, string) (net.Conn, error)) ([]net.IP, error) {
 	r := net.Resolver{
 		PreferGo: true,
@@ -371,15 +369,11 @@ func dnsServerLabel(addr string) string {
 	return addr
 }
 
-// portalCheck fetches portalProbeURL and reports the status code it got plus a
-// valid HTTP(S) redirect URL, if the response advertised one.
+// portalCheckWithDial fetches portalProbeURL and reports the status code it got
+// plus a valid HTTP(S) redirect URL, if the response advertised one.
 // Proxy and redirect following are both off: the direct-egress row must not
 // borrow the proxy's path, and an interception usually announces itself as
 // the 302 we'd otherwise chase to a sign-in page.
-func portalCheck(ctx context.Context) (int, string, error) {
-	return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
-}
-
 func portalCheckWithDial(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalProbeURL, nil)
 	if err != nil {

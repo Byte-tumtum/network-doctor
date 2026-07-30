@@ -525,12 +525,12 @@ func TestPortalCheck(t *testing.T) {
 	t.Setenv("http_proxy", "http://127.0.0.1:1")
 
 	portalProbeURL = server.URL + "/generate_204"
-	if code, redirect, err := portalCheck(context.Background()); err != nil || code != http.StatusNoContent || redirect != "" {
+	if code, redirect, err := defaultOps.portalCheck(context.Background()); err != nil || code != http.StatusNoContent || redirect != "" {
 		t.Errorf("clean path = (%d, %q, %v), want (204, empty, nil) with the proxy env ignored", code, redirect, err)
 	}
 
 	portalProbeURL = server.URL + "/redirect"
-	if code, redirect, err := portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != server.URL+"/signin" {
+	if code, redirect, err := defaultOps.portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != server.URL+"/signin" {
 		t.Errorf("intercepted path = (%d, %q, %v), want the 302 and resolved HTTP URL", code, redirect, err)
 	}
 	if chased {
@@ -538,13 +538,13 @@ func TestPortalCheck(t *testing.T) {
 	}
 
 	portalProbeURL = server.URL + "/unsafe"
-	if code, redirect, err := portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != "" {
+	if code, redirect, err := defaultOps.portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != "" {
 		t.Errorf("unsafe redirect = (%d, %q, %v), want the 302 without a non-HTTP URL", code, redirect, err)
 	}
 
 	// A dead endpoint is an error, not a zero-status verdict callers can read.
 	server.Close()
-	if code, redirect, err := portalCheck(context.Background()); err == nil || code != 0 || redirect != "" {
+	if code, redirect, err := defaultOps.portalCheck(context.Background()); err == nil || code != 0 || redirect != "" {
 		t.Errorf("dead endpoint = (%d, %q, %v), want (0, empty, error)", code, redirect, err)
 	}
 }
