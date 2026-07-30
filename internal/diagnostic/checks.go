@@ -147,7 +147,12 @@ const (
 // probeHost is the host used by the generic (no-target) DNS + egress probes.
 const probeHost = "connectivitycheck.gstatic.com"
 
-const publicDNSServer = "1.1.1.1:53"
+// publicDNSIP is the second-opinion resolver; every label and detail string
+// derives from it so switching providers stays a one-line change.
+const (
+	publicDNSIP     = "8.8.8.8"
+	publicDNSServer = publicDNSIP + ":53"
+)
 
 // portalProbeURL answers 204 with an empty body on an unintercepted path.
 // Plain HTTP on purpose — that's the request a captive portal grabs.
@@ -471,14 +476,14 @@ func (o *netops) buildProbes(t *Target) []Probe {
 		// Egress, proxy egress, system DNS, and public DNS are siblings: each
 		// depends only on the interface, so one failure never hides another.
 		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(probeHost, nil)}
-		publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public 1.1.1.1)", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil)}
+		publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil)}
 		return []Probe{iface, internet, proxy, dns, publicDNS, network}
 	}
 
 	host, port := t.Host, t.Port
 	hp := net.JoinHostPort(host, strconv.Itoa(port)) // brackets IPv6 literals
 	dns := Probe{ID: ProbeDNS, Name: "DNS " + host, Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(host, t.IP)}
-	publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public 1.1.1.1)", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP)}
+	publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP)}
 	ttcp := Probe{ID: ProbeTargetTCP, Name: "TCP " + hp, Deps: []ProbeID{ProbeDNS}, Run: o.targetTCPProbe(port)}
 	probes := []Probe{iface, internet, proxy, dns, publicDNS, ttcp, network}
 
@@ -842,16 +847,16 @@ func (o *netops) publicDNSProbe(host string, litIP net.IP) func(context.Context,
 			return ProbeResult{
 				Status:      StatusPass,
 				DNSNotFound: true,
-				Detail:      "1.1.1.1 reports no A/AAAA records for " + host,
+				Detail:      publicDNSIP + " reports no A/AAAA records for " + host,
 			}
 		}
 		if err != nil {
-			return ProbeResult{Status: StatusNA, Detail: "public DNS unavailable via 1.1.1.1: " + err.Error()}
+			return ProbeResult{Status: StatusNA, Detail: "public DNS unavailable via " + publicDNSIP + ": " + err.Error()}
 		}
 		return ProbeResult{
 			Status: StatusPass,
 			Addrs:  ips,
-			Detail: host + " → " + joinIPs(ips) + " (via 1.1.1.1)",
+			Detail: host + " → " + joinIPs(ips) + " (via " + publicDNSIP + ")",
 		}
 	}
 }
