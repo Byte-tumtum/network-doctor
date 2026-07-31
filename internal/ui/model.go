@@ -70,7 +70,8 @@ type pendingAction struct {
 }
 
 // jobState is one tool run's process and display state. The selected run is
-// model.cur; unselected runs wait in otherJobs until Tab selects them.
+// model.cur; unselected runs wait in otherJobs until Tab selects them. Reach
+// for the helpers in joblist.go rather than walking both fields.
 type jobState struct {
 	active  *job
 	status  JobStatus
@@ -485,45 +486,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Generation != m.generation {
 			return m, nil
 		}
-		if m.cur.active != nil && msg.JobID == m.cur.active.id {
+		j := m.jobByID(msg.JobID)
+		if j == nil {
+			return m, nil
+		}
+		// The selected run appends through the model: only its buffer is on
+		// screen, so only it has to keep the open viewport's offset honest.
+		if j == &m.cur {
 			m.appendJobLine(msg.Line)
 			if m.viewing {
 				m.refreshViewport()
 			}
-			return m, waitForMsg(m.cur.active.ch)
+		} else {
+			j.appendLine(msg.Line)
 		}
-		for i := range m.otherJobs {
-			j := &m.otherJobs[i]
-			if j.active != nil && msg.JobID == j.active.id {
-				j.appendLine(msg.Line)
-				return m, waitForMsg(j.active.ch)
-			}
-		}
-		return m, nil
+		return m, waitForMsg(j.active.ch)
 
 	case ToolDoneMsg:
 		if msg.Generation != m.generation {
 			return m, nil
 		}
-		var done *jobState
-		if m.cur.active != nil && msg.JobID == m.cur.active.id {
-			m.cur.status, m.cur.dropped, m.cur.active = msg.Status, msg.Dropped, nil
-			m.cur.dur = time.Since(m.cur.start)
-			done = &m.cur
-		} else {
-			for i := range m.otherJobs {
-				j := &m.otherJobs[i]
-				if j.active != nil && msg.JobID == j.active.id {
-					j.status, j.dropped, j.active = msg.Status, msg.Dropped, nil
-					j.dur = time.Since(j.start)
-					done = j
-					break
-				}
-			}
-		}
+		done := m.jobByID(msg.JobID)
 		if done == nil {
 			return m, nil
 		}
+		done.status, done.dropped, done.active = msg.Status, msg.Dropped, nil
+		done.dur = time.Since(done.start)
 		if m.pending != nil && !m.jobsRunning() {
 			p := m.pending
 			m.pending = nil

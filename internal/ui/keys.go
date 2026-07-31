@@ -66,19 +66,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.networkMap = true
 			return m, nil
 		}
-		// A scan parked in otherJobs still has a map; re-show it instead of
+		// A scan parked in the ring still has a map; re-show it instead of
 		// gating a fresh sweep.
 		for i := range m.otherJobs {
 			if m.otherJobs[i].name != lanDiscoveryName {
 				continue
 			}
-			lan := m.otherJobs[i]
-			if m.hasJob() {
-				m.otherJobs[i] = m.cur
-			} else {
-				m.otherJobs = append(m.otherJobs[:i], m.otherJobs[i+1:]...)
-			}
-			m.cur = lan
+			m.selectJob(i)
 			m.networkMap = true
 			return m, nil
 		}
@@ -435,55 +429,4 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 		return tea.Batch(cmd, m.spinner.Tick)
 	}
 	return cmd
-}
-
-func (m *model) stashJob() {
-	if m.hasJob() {
-		m.otherJobs = append(m.otherJobs, m.cur)
-		m.cur = jobState{}
-	}
-}
-
-func (m *model) switchJob() tea.Cmd {
-	if len(m.otherJobs) == 0 {
-		return nil
-	}
-	next := m.otherJobs[0]
-	m.otherJobs = append(m.otherJobs[1:], m.cur)
-	m.cur = next
-	m.networkMap = false
-	if m.viewing {
-		m.follow = true
-	}
-	// Keep the armed quit intact so the next Ctrl+C still quits.
-	if m.notice == ctrlCNotice && time.Now().Before(m.noticeDeadline) {
-		if m.viewing {
-			m.refreshViewport()
-		}
-		return nil
-	}
-	return m.setNotice("switched to "+m.cur.name, true)
-}
-
-func (m model) jobsRunning() bool {
-	if m.cur.active != nil {
-		return true
-	}
-	for _, j := range m.otherJobs {
-		if j.active != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *model) cancelJobs() {
-	if m.cur.active != nil && m.cur.active.cancel != nil {
-		m.cur.active.cancel()
-	}
-	for _, j := range m.otherJobs {
-		if j.active != nil && j.active.cancel != nil {
-			j.active.cancel()
-		}
-	}
 }

@@ -803,3 +803,19 @@ func TestNetworkMapSpinsPerRowUntilNamesArrive(t *testing.T) {
 		t.Fatalf("stale-generation name must be ignored: %v", m.hostNames)
 	}
 }
+
+// Tab with nothing in the selected slot must not park the zero jobState: a
+// blank entry in the ring is a tab stop with no name, no command, no output.
+func TestTabDoesNotParkAnEmptySlot(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	m.otherJobs = []jobState{{name: "ping", status: JobDone}}
+
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	nm := asModel(t, u)
+	if nm.cur.name != "ping" {
+		t.Fatalf("tab must select the parked run, got %q", nm.cur.name)
+	}
+	if len(nm.otherJobs) != 0 {
+		t.Fatalf("the empty slot must be dropped, not parked: %v", nm.otherJobs)
+	}
+}

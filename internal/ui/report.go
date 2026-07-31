@@ -130,11 +130,7 @@ func (m model) report() string {
 			fmt.Fprintf(&b, "        attempt: %s %dms %s\n", a.IP, diagnostic.Ms(a.Dur), st)
 		}
 	}
-	jobs := m.otherJobs
-	if m.hasJob() {
-		jobs = append([]jobState{m.cur}, jobs...)
-	}
-	for _, j := range jobs {
+	for j := range m.jobs {
 		const reportTailLines = 15
 		lines := j.lines
 		if len(lines) > reportTailLines {
