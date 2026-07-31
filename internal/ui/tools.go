@@ -251,13 +251,14 @@ func quoterFor(goos string) func([]string) string {
 	return shellArgs
 }
 
-// shellArgs renders argv for *display only* (never executed), quoting tokens with
-// shell-special characters so the shown command is copy-pasteable in a POSIX shell.
-func shellArgs(args []string) string {
+// quoteArgs single-quotes any token containing one of special (and empty tokens),
+// escaping embedded quotes as escQuote. Both shells agree on everything but those
+// two, so they differ only in the arguments they pass here.
+func quoteArgs(args []string, special, escQuote string) string {
 	out := make([]string, len(args))
 	for i, a := range args {
-		if a == "" || strings.ContainsAny(a, " \t\"'\\$*?#&|;<>(){}[]`") {
-			out[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		if a == "" || strings.ContainsAny(a, special) {
+			out[i] = "'" + strings.ReplaceAll(a, "'", escQuote) + "'"
 		} else {
 			out[i] = a
 		}
@@ -265,17 +266,15 @@ func shellArgs(args []string) string {
 	return strings.Join(out, " ")
 }
 
+// shellArgs renders argv for *display only* (never executed), quoting tokens with
+// shell-special characters so the shown command is copy-pasteable in a POSIX shell.
+func shellArgs(args []string) string {
+	return quoteArgs(args, " \t\"'\\$*?#&|;<>(){}[]`", `'\''`)
+}
+
 // psArgs renders argv for *display only* targeting PowerShell: single-quote
 // literals with embedded quotes doubled, which also keeps curl's %{…} format
 // string inert. cmd.exe paste is explicitly not supported (one shell, exact rules).
 func psArgs(args []string) string {
-	out := make([]string, len(args))
-	for i, a := range args {
-		if a == "" || strings.ContainsAny(a, " \t\"'`$*?#&|;<>(){}[],%^@") {
-			out[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
-		} else {
-			out[i] = a
-		}
-	}
-	return strings.Join(out, " ")
+	return quoteArgs(args, " \t\"'`$*?#&|;<>(){}[],%^@", "''")
 }
