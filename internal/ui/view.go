@@ -629,7 +629,7 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 	}
 	for _, t := range m.tools {
 		if t.Key == key && t.Available {
-			return "Next: press " + selStyle.Render(key) + " — " + t.Purpose + " (" + t.Name + ")"
+			return "Next: press " + selStyle.Render(key) + " — " + t.Name + " (" + t.Bin + ")"
 		}
 	}
 	return ""
@@ -730,9 +730,9 @@ func (m model) toolboxView() string {
 	parts := make([]string, len(m.tools))
 	for i, t := range m.tools {
 		if t.Available {
-			parts[i] = keyStyle.Render("["+t.Key+"]") + " " + t.Purpose
+			parts[i] = keyStyle.Render("["+t.Key+"]") + " " + t.Name
 		} else {
-			parts[i] = faintStyle.Render("[" + t.Key + "] " + t.Purpose + " — " + t.Bin + " missing")
+			parts[i] = faintStyle.Render("[" + t.Key + "] " + t.Name + " — " + t.Bin + " missing")
 		}
 	}
 	// The title rides on the first chip so line 1's width math includes it;

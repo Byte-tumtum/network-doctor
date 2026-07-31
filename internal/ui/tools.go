@@ -14,8 +14,7 @@ import (
 // Tool is a drill-down adapter: a bounded external command keyed to a hotkey.
 type Tool struct {
 	Key     string        // single-key hotkey / stable id
-	Name    string        // display label
-	Purpose string        // plain-English toolbox label
+	Name    string        // plain-English display label
 	Bin     string        // binary to resolve via LookPath
 	Timeout time.Duration // per-tool job timeout; 0 = default toolTimeout
 	Confirm bool          // show the exact command and wait for a keypress before running
@@ -49,18 +48,18 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 	switch goos {
 	case "darwin":
 		tools = []Tool{
-			staticTool(quote, "i", "route table", "netstat -rn", "netstat", "-rn"),
-			staticTool(quote, "s", "open sockets", "netstat", "netstat", "-an", "-p", "tcp"),
+			staticTool(quote, "i", "route table", "netstat", "-rn"),
+			staticTool(quote, "s", "open sockets", "netstat", "-an", "-p", "tcp"),
 		}
 	case "windows":
 		tools = []Tool{
-			staticTool(quote, "i", "route table", "route print", "route", "print", "-4"),
-			staticTool(quote, "s", "open sockets", "netstat", "netstat", "-ano"),
+			staticTool(quote, "i", "route table", "route", "print", "-4"),
+			staticTool(quote, "s", "open sockets", "netstat", "-ano"),
 		}
 	default: // linux (and any other unix)
 		tools = []Tool{
-			staticTool(quote, "i", "route table", "ip route", "ip", "route"),
-			staticTool(quote, "s", "open sockets", "ss", "ss", "-tunp"),
+			staticTool(quote, "i", "route table", "ip", "route"),
+			staticTool(quote, "s", "open sockets", "ss", "-tunp"),
 		}
 	}
 	if t == nil {
@@ -71,19 +70,19 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 	switch goos {
 	case "darwin":
 		// BSD ping's -W is milliseconds and semantics differ; omit it.
-		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "ping", "-c", "4", host))
+		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "-c", "4", host))
 	case "windows":
-		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "ping", "-n", "4", "-w", "2000", host))
+		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "-n", "4", "-w", "2000", host))
 	default:
-		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "ping", "-c", "4", "-W", "2", host))
+		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "-c", "4", "-W", "2", host))
 	}
 
 	if goos == "windows" {
-		tools = append(tools, staticTool(quote, "d", "DNS lookup", "nslookup", "nslookup", host))
+		tools = append(tools, staticTool(quote, "d", "DNS lookup", "nslookup", host))
 	} else if t.IP != nil {
-		tools = append(tools, staticTool(quote, "d", "reverse DNS lookup", "dig", "dig", "+time=2", "+tries=1", "-x", host))
+		tools = append(tools, staticTool(quote, "d", "reverse DNS lookup", "dig", "+time=2", "+tries=1", "-x", host))
 	} else {
-		tools = append(tools, staticTool(quote, "d", "DNS lookup", "dig", "dig", "+time=2", "+tries=1", host))
+		tools = append(tools, staticTool(quote, "d", "DNS lookup", "dig", "+time=2", "+tries=1", host))
 	}
 
 	// The "c" slot is the application-layer check, matched to the target's
@@ -100,16 +99,16 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 
 	if goos == "windows" {
 		tools = append(tools,
-			staticTool(quote, "t", "trace the path", "tracert", "tracert", "-w", "2000", "-h", "20", host))
+			staticTool(quote, "t", "trace the path", "tracert", "-w", "2000", "-h", "20", host))
 		// pathping's full run takes ~30–60 s; give it its own budget.
-		pp := staticTool(quote, "m", "path quality", "pathping", "pathping", "-h", "20", "-q", "5", "-p", "100", "-w", "500", host)
+		pp := staticTool(quote, "m", "path quality", "pathping", "-h", "20", "-q", "5", "-p", "100", "-w", "500", host)
 		pp.Timeout = 90 * time.Second
 		tools = append(tools, pp)
 	} else {
 		tools = append(tools,
-			staticTool(quote, "t", "trace the path", "traceroute", "traceroute", "-w", "2", "-q", "1", "-m", "20", host),
+			staticTool(quote, "t", "trace the path", "traceroute", "-w", "2", "-q", "1", "-m", "20", host),
 			// mtr report mode only — never curses inside our TUI.
-			staticTool(quote, "m", "path quality", "mtr", "mtr", "--report", "--report-cycles", "5", host))
+			staticTool(quote, "m", "path quality", "mtr", "--report", "--report-cycles", "5", host))
 	}
 
 	// Targeted nmap actively scans the host, so it is gated behind a shown-command
@@ -135,7 +134,7 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 // answer "is the port open?".
 func nmapTool(quote func([]string) string, host string) Tool {
 	return Tool{
-		Key: "n", Name: "nmap", Purpose: "port scan", Bin: "nmap", Confirm: true, Timeout: 120 * time.Second,
+		Key: "n", Name: "port scan", Bin: "nmap", Confirm: true, Timeout: 120 * time.Second,
 		Build: func(t *diagnostic.Target) ([]string, []string, string) {
 			args := []string{"-sT", "-Pn", "--host-timeout", "110s"}
 			if t.IP != nil && t.IP.To4() == nil {
@@ -152,7 +151,7 @@ func nmapTool(quote func([]string) string, host string) Tool {
 
 func lanDiscoveryTool(quote func([]string) string, cidr string) Tool {
 	return Tool{
-		Key: "v", Name: lanDiscoveryName, Purpose: "discover LAN devices", Bin: "nmap", Confirm: true, Timeout: 60 * time.Second,
+		Key: "v", Name: lanDiscoveryName, Bin: "nmap", Confirm: true, Timeout: 60 * time.Second,
 		Build: func(*diagnostic.Target) ([]string, []string, string) {
 			args := []string{"--unprivileged", "-sn", "-T3", "--host-timeout", "5s", "-oG", "-", cidr}
 			return args, nil, "nmap " + quote(args)
@@ -173,7 +172,7 @@ func curlTool(host, goos string) Tool {
 		bin, devNull = "curl.exe", "NUL"
 	}
 	return Tool{
-		Key: "c", Name: "curl", Purpose: "web check", Bin: bin,
+		Key: "c", Name: "web check", Bin: bin,
 		Build: func(t *diagnostic.Target) ([]string, []string, string) {
 			scheme := "https"
 			if t.Proto == diagnostic.ProtoHTTP {
@@ -217,7 +216,7 @@ func sshTool(quote func([]string) string, host string, port int, goos string) To
 	if goos == "windows" {
 		knownHosts = "NUL"
 	}
-	return staticTool(quote, "c", "SSH check", "ssh", "ssh",
+	return staticTool(quote, "c", "SSH check", "ssh",
 		"-v",
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=3",
@@ -232,15 +231,15 @@ func sshTool(quote func([]string) string, host string, port int, goos string) To
 // the process gets an empty stdin, so s_client exits right after the handshake
 // instead of waiting for commands; the job timeout bounds the rest.
 func smtpTool(quote func([]string) string, host string, port int) Tool {
-	return staticTool(quote, "c", "SMTP check", "openssl s_client", "openssl",
+	return staticTool(quote, "c", "SMTP check", "openssl",
 		"s_client", "-starttls", "smtp", "-connect", net.JoinHostPort(host, strconv.Itoa(port)))
 }
 
 // staticTool builds a target-independent Tool whose argv is fixed at construction
 // (a host, if any, is already baked into args). Callers never mutate the argv —
 // exec.Command copies it — so Build hands out the captured slice as-is.
-func staticTool(quote func([]string) string, key, purpose, name, bin string, args ...string) Tool {
-	return Tool{Key: key, Name: name, Purpose: purpose, Bin: bin, Build: func(*diagnostic.Target) ([]string, []string, string) {
+func staticTool(quote func([]string) string, key, name, bin string, args ...string) Tool {
+	return Tool{Key: key, Name: name, Bin: bin, Build: func(*diagnostic.Target) ([]string, []string, string) {
 		return args, nil, bin + " " + quote(args)
 	}}
 }

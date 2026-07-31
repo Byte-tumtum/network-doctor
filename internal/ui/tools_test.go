@@ -71,14 +71,14 @@ func TestToolsForDefinitions(t *testing.T) {
 	}
 	nmapArgs := []string{"-sT", "-Pn", "--host-timeout", "110s", "github.com"}
 	wantHost := []want{
-		{"i", "ip route", "ip", []string{"route"}, "ip route", false},
-		{"s", "ss", "ss", []string{"-tunp"}, "ss -tunp", false},
-		{"p", "ping", "ping", []string{"-c", "4", "-W", "2", "github.com"}, "ping -c 4 -W 2 github.com", false},
-		{"d", "dig", "dig", []string{"+time=2", "+tries=1", "github.com"}, "dig +time=2 +tries=1 github.com", false},
-		{"c", "curl", "curl", curlArgs, "LC_ALL=C curl " + shellArgs(curlArgs), true},
-		{"t", "traceroute", "traceroute", []string{"-w", "2", "-q", "1", "-m", "20", "github.com"}, "traceroute -w 2 -q 1 -m 20 github.com", false},
-		{"m", "mtr", "mtr", []string{"--report", "--report-cycles", "5", "github.com"}, "mtr --report --report-cycles 5 github.com", false},
-		{"n", "nmap", "nmap", nmapArgs, "nmap " + shellArgs(nmapArgs), false},
+		{"i", "route table", "ip", []string{"route"}, "ip route", false},
+		{"s", "open sockets", "ss", []string{"-tunp"}, "ss -tunp", false},
+		{"p", "ping the host", "ping", []string{"-c", "4", "-W", "2", "github.com"}, "ping -c 4 -W 2 github.com", false},
+		{"d", "DNS lookup", "dig", []string{"+time=2", "+tries=1", "github.com"}, "dig +time=2 +tries=1 github.com", false},
+		{"c", "web check", "curl", curlArgs, "LC_ALL=C curl " + shellArgs(curlArgs), true},
+		{"t", "trace the path", "traceroute", []string{"-w", "2", "-q", "1", "-m", "20", "github.com"}, "traceroute -w 2 -q 1 -m 20 github.com", false},
+		{"m", "path quality", "mtr", []string{"--report", "--report-cycles", "5", "github.com"}, "mtr --report --report-cycles 5 github.com", false},
+		{"n", "port scan", "nmap", nmapArgs, "nmap " + shellArgs(nmapArgs), false},
 	}
 
 	got := toolsFor(tgt, "linux")
@@ -87,9 +87,6 @@ func TestToolsForDefinitions(t *testing.T) {
 	}
 	for i, w := range wantHost {
 		tool := got[i]
-		if tool.Purpose == "" {
-			t.Errorf("tool[%d] %s has no purpose", i, tool.Key)
-		}
 		if tool.Key != w.key || tool.Name != w.name || tool.Bin != w.bin {
 			t.Errorf("tool[%d] = {Key:%q Name:%q Bin:%q}, want {%q %q %q}", i, tool.Key, tool.Name, tool.Bin, w.key, w.name, w.bin)
 		}
@@ -137,8 +134,8 @@ func TestToolsForProtocol(t *testing.T) {
 
 	ssh := mustTarget(t, "example.com:22")
 	c := findC(toolsFor(ssh, "linux"))
-	if c.Name != "ssh" || c.Purpose != "SSH check" || c.Bin != "ssh" {
-		t.Fatalf("ssh target c-slot = {Name:%q Purpose:%q Bin:%q}, want ssh/SSH check/ssh", c.Name, c.Purpose, c.Bin)
+	if c.Name != "SSH check" || c.Bin != "ssh" {
+		t.Fatalf("ssh target c-slot = {Name:%q Bin:%q}, want SSH check/ssh", c.Name, c.Bin)
 	}
 	args, env, display := c.Build(ssh)
 	wantSSH := []string{
@@ -166,8 +163,8 @@ func TestToolsForProtocol(t *testing.T) {
 
 	smtp := mustTarget(t, "mail.example.com:587")
 	c = findC(toolsFor(smtp, "linux"))
-	if c.Name != "openssl s_client" || c.Purpose != "SMTP check" || c.Bin != "openssl" {
-		t.Fatalf("smtp target c-slot = {Name:%q Purpose:%q Bin:%q}, want openssl s_client/SMTP check/openssl", c.Name, c.Purpose, c.Bin)
+	if c.Name != "SMTP check" || c.Bin != "openssl" {
+		t.Fatalf("smtp target c-slot = {Name:%q Bin:%q}, want SMTP check/openssl", c.Name, c.Bin)
 	}
 	args, _, _ = c.Build(smtp)
 	wantSMTP := []string{"s_client", "-starttls", "smtp", "-connect", "mail.example.com:587"}
@@ -213,8 +210,8 @@ func TestDigReversesLiteralTargets(t *testing.T) {
 		tool := toolByKey(t, toolsFor(target, "linux"), "d")
 		args, _, display := tool.Build(target)
 		want := []string{"+time=2", "+tries=1", "-x", raw}
-		if tool.Purpose != "reverse DNS lookup" || !slices.Equal(args, want) || display != "dig "+shellArgs(want) {
-			t.Errorf("dig for %q = {Purpose:%q args:%q display:%q}, want reverse lookup %q", raw, tool.Purpose, args, display, want)
+		if tool.Name != "reverse DNS lookup" || !slices.Equal(args, want) || display != "dig "+shellArgs(want) {
+			t.Errorf("dig for %q = {Name:%q args:%q display:%q}, want reverse lookup %q", raw, tool.Name, args, display, want)
 		}
 	}
 }
