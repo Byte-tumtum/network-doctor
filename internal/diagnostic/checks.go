@@ -100,7 +100,7 @@ const (
 type ProbeResult struct {
 	ID          ProbeID
 	Status      Status
-	downgraded  bool     // DowngradeEgress rewrote a direct-egress failure to Warn.
+	downgraded  bool     // downgradeEgress rewrote a direct-egress failure to Warn.
 	Portal      *Portal  // non-nil when egress is intercepted, not dead.
 	Addrs       []net.IP // DNS publishes all A records here
 	DNSNotFound bool     // the resolver found no A/AAAA records

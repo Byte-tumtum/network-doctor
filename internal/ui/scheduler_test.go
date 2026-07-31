@@ -54,7 +54,7 @@ func TestSkipPropagation(t *testing.T) {
 }
 
 // When the last real probe result arrives and the run only completes via the
-// skip cascade inside scheduleStep, DowngradeEgress must still run — otherwise
+// skip cascade inside scheduleStep, Finalize must still run — otherwise
 // a proxy-only network shows internet FAIL in the TUI but WARN in -json.
 func TestDowngradeRunsWhenSkipsFinishRun(t *testing.T) {
 	m := newModel(mustTarget(t, "github.com:443"), false)

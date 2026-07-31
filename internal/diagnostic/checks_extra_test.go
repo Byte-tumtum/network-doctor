@@ -404,7 +404,7 @@ func TestProxyProbeFallsBackToHTTP(t *testing.T) {
 	}
 }
 
-// DowngradeEgress turns a direct-egress FAIL into WARN only when another path
+// downgradeEgress turns a direct-egress FAIL into WARN only when another path
 // proved the network works: target TCP when a target exists, the environment
 // proxy, or else DNS.
 func TestDowngradeEgress(t *testing.T) {
@@ -445,7 +445,7 @@ func TestDowngradeEgress(t *testing.T) {
 		}, StatusFail},
 	}
 	for _, c := range cases {
-		DowngradeEgress(c.res)
+		downgradeEgress(c.res)
 		if got := c.res[ProbeInternet].Status; got != c.want {
 			t.Errorf("%s: internet status = %v, want %v", c.name, got, c.want)
 		}

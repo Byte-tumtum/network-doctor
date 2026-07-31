@@ -38,7 +38,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		return false
 	}
 	// directOK means direct egress genuinely worked: a Pass, or a Warn the
-	// probe produced itself. A Warn planted by DowngradeEgress doesn't count —
+	// probe produced itself. A Warn planted by downgradeEgress doesn't count —
 	// that's a Fail wearing a nicer hat.
 	directOK := func() bool {
 		r := res[ProbeInternet]
@@ -187,9 +187,19 @@ func functional(s Status) bool {
 	return s == StatusPass || s == StatusWarn
 }
 
-// ReconcileDNS compares the independently collected system and public answers.
+// Finalize applies the cross-probe passes that only make sense once every probe
+// has a result: results that read each other, rather than the network. Both
+// runners call it — RunAll on its way out, the ui scheduler when the last
+// result lands — so a new pass added here reaches --json and the TUI at once,
+// in the same order. Idempotent, but there's no reason to call it twice.
+func Finalize(res map[ProbeID]ProbeResult) {
+	reconcileDNS(res)
+	downgradeEgress(res)
+}
+
+// reconcileDNS compares the independently collected system and public answers.
 // Public DNS can add context or a warning, but never fails a run on its own.
-func ReconcileDNS(res map[ProbeID]ProbeResult) {
+func reconcileDNS(res map[ProbeID]ProbeResult) {
 	system, systemOK := res[ProbeDNS]
 	public, publicOK := res[ProbeDNSPublic]
 	if !systemOK || !publicOK || public.Status != StatusPass {
@@ -228,12 +238,12 @@ func sameIPSet(a, b []net.IP) bool {
 	return maps.Equal(set(a), set(b))
 }
 
-// DowngradeEgress rewrites a direct-egress failure to Warn once another path
+// downgradeEgress rewrites a direct-egress failure to Warn once another path
 // has proven the network usable: the target TCP connect succeeded, the
 // environment proxy tunnels traffic, or — in generic mode, where DNS is the
 // only other network path — DNS answered. Call it once, after every probe has
 // a result; degraded-but-functional must not read as an outage.
-func DowngradeEgress(res map[ProbeID]ProbeResult) {
+func downgradeEgress(res map[ProbeID]ProbeResult) {
 	r, ok := res[ProbeInternet]
 	// An intercepted path is exempt: behind a portal DNS and the target
 	// connect both "work" because the portal answers them, so the usual

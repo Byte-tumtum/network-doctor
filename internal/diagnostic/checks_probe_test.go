@@ -270,7 +270,7 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 	}
 	// And the exemption holds: DNS answering must not launder it into a Warn.
 	res := map[ProbeID]ProbeResult{ProbeInternet: r, ProbeDNS: {Status: StatusPass}}
-	DowngradeEgress(res)
+	downgradeEgress(res)
 	if res[ProbeInternet].Status != StatusFail {
 		t.Errorf("downgraded portal to %v, want FAIL to survive a passing DNS", res[ProbeInternet].Status)
 	}
