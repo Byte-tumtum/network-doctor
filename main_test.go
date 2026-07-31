@@ -89,6 +89,24 @@ func TestRunAsAskpass(t *testing.T) {
 			"The authenticity of host 'example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
 			1, "",
 		},
+		{
+			// The host name rides along in the first line of the host-key
+			// message, so it must not be able to answer the question.
+			"host key for a host named password",
+			"The authenticity of host 'password-reset.example.com (192.0.2.1)' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+			1, "",
+		},
+		{
+			"host key for a key stored in a passphrase directory",
+			"The authenticity of host 'passphrase.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+			1, "",
+		},
+		{
+			// Trailing blank line must not read as "no prompt at all".
+			"host key with a trailing newline",
+			"The authenticity of host 'password.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? \n",
+			1, "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
