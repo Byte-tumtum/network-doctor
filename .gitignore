@@ -2,6 +2,9 @@
 /network-doctor
 /netdoc
 
+# Saved reports — recording demo.tape presses 'w', which drops one here
+/network-doctor-*.txt
+
 # GoReleaser
 dist/
 

@@ -3,7 +3,7 @@
 A terminal UI that diagnoses your network connectivity and tells you **where the
 connection breaks** in plain English — not just a wall of tool output.
 
-![Network Doctor diagnosing github.com:443, running a traceroute and mtr concurrently](assets/demo.gif)
+![Network Doctor diagnosing github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, and watch mode](assets/demo.gif)
 
 ## Install
 
@@ -199,12 +199,16 @@ clear the history.
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
+| `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
+| `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart — opens a prompt to edit the `netdoc` arguments (`enter` runs, `esc` backs out) |
 | `S` | SSH login — a form for username, key, and password, then hands the terminal to `ssh` |
 | `tab` | switch between running tool jobs |
+| `esc` | cancel the focused job only (`tab` picks which); `q` is the stop-everything path |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
-| `q` | quit |
+| `?` | full-screen key cheatsheet; any key closes it |
+| `q` | quit (cancels running jobs first, then exits) |
 
 ## Drill-down tools
 
@@ -394,8 +398,11 @@ remain untouched.
 
 Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent
 cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) +
-a scrollable output viewer + `--toolbox` mode, the `Warn` state, proxy-aware
-diagnosis, `--json` output, and report copy/save.
+a filterable output viewer + `--toolbox` mode, the `Warn` state, proxy-aware
+diagnosis, the unprivileged path-MTU check, the public-DNS second opinion, the
+LAN network map, the `S` SSH login, source-interface pinning (`--iface`),
+`--watch` (TUI history strip and `--json` NDJSON), `--json` output, and report
+copy/save.
 
 ## Built with
 
