@@ -542,6 +542,9 @@ func (m model) helpView(deferred bool) string {
 	if m.reportReady() {
 		kv = append(kv, "w", "save report")
 	}
+	if m.sshDetected() {
+		kv = append(kv, "S", "ssh login")
+	}
 	kv = append(kv, "r", "restart", "?", "help", "q", "quit")
 	help := helpKeys(m.width, kv...)
 	if notice := m.noticeView(); notice != "" {
@@ -552,7 +555,9 @@ func (m model) helpView(deferred bool) string {
 
 // helpOverlay is the full-screen key cheatsheet (?). It lists every binding
 // unconditionally — simpler than mirroring the help bar's context rules, and
-// a key that currently does nothing is still worth knowing about.
+// a key that currently does nothing is still worth knowing about. The lone
+// exception is S: the form works against any target, but advertising a login
+// to a host with no SSH server on it is a suggestion, not information.
 func (m model) helpOverlay() string {
 	row := func(k, desc string) string {
 		// fmt widths count runes, so ↑/↓ pads the same as ASCII keys.
@@ -566,7 +571,9 @@ func (m model) helpOverlay() string {
 	b.WriteString(row("esc", "cancel the focused job"))
 	b.WriteString(row("v", "toggle network map"))
 	b.WriteString(row("r", "restart with a new target"))
-	b.WriteString(row("S", "ssh to a host — hands the terminal to ssh"))
+	if m.sshDetected() {
+		b.WriteString(row("S", "ssh to a host — hands the terminal to ssh"))
+	}
 	b.WriteString(row("y", "copy selected portal URL, otherwise report"))
 	b.WriteString(row("w", "save report"))
 	for _, tool := range m.tools {

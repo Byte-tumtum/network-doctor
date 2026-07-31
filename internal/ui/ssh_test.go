@@ -93,6 +93,37 @@ func TestSSHCommandNeedsHost(t *testing.T) {
 	}
 }
 
+// S is hinted in the help bar and the cheatsheet only once the banner probe
+// has found an SSH server, but the binding itself stays live either way.
+func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
+	oldLookPath := toolLookPath
+	toolLookPath = func(string) (string, error) { return "ssh", nil }
+	t.Cleanup(func() { toolLookPath = oldLookPath })
+
+	m := newModel(mustTarget(t, "example.com:22"), false)
+	m = asModel(t, must(m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})))
+	doneResults(&m, diagnostic.ProbeSSH) // the SSH banner probe is the one that fails
+
+	if strings.Contains(m.View(), "ssh login") {
+		t.Error("the help bar hints S with no SSH server on the target")
+	}
+	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), "hands the terminal to ssh") {
+		t.Error("the cheatsheet lists S with no SSH server on the target")
+	}
+	// Hidden, not disabled: the form still opens.
+	if !asModel(t, must(m.Update(keyMsg("S")))).sshPrompt {
+		t.Error("S must still open the form when the banner probe failed")
+	}
+
+	doneResults(&m, "")
+	if !strings.Contains(m.View(), "ssh login") {
+		t.Error("the help bar drops S even though the banner probe passed")
+	}
+	if !strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), "hands the terminal to ssh") {
+		t.Error("the cheatsheet drops S even though the banner probe passed")
+	}
+}
+
 // The form takes its host from the target, tab moves the focus, ←/→ picks a
 // key, and esc closes it.
 func TestSSHFormKeys(t *testing.T) {

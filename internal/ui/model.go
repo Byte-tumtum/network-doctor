@@ -313,6 +313,14 @@ func (m model) reportReady() bool {
 	return m.allDone() && !m.jobsRunning() && m.cur.status != JobRunning
 }
 
+// sshDetected reports whether this run found an SSH server to log in to: the
+// banner probe passed, i.e. the port answered with an SSH- identification
+// string. A warn is deliberately not enough — that one means the port answered
+// with silence, and ssh always speaks first.
+func (m model) sshDetected() bool {
+	return m.results[diagnostic.ProbeSSH].Status == diagnostic.StatusPass
+}
+
 // spinnerActive reports whether the spinner tick chain should keep running:
 // while a started probe chain is pending or a drill-down job is live.
 func (m model) spinnerActive() bool {
