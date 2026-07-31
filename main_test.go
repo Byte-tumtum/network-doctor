@@ -71,9 +71,10 @@ func TestRun(t *testing.T) {
 }
 
 // Run as ssh's askpass helper, netdoc prints the secret it was handed and
-// nothing else — no flag parsing, no TUI, whatever the arguments say. A prompt
-// that isn't asking for a password gets nothing: forced askpass sees the
-// host-key question too, and that one must not be answered with a secret.
+// nothing else — no flag parsing, no TUI. Only a password or passphrase
+// question earns the secret; everything else, a missing prompt included, gets
+// nothing: forced askpass sees the host-key question too, and that one must not
+// be answered with a secret.
 func TestRunAsAskpass(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -83,7 +84,9 @@ func TestRunAsAskpass(t *testing.T) {
 	}{
 		{"password", "alice@example.com's password:", 0, "hunter2\n"},
 		{"passphrase", "Enter passphrase for key '/home/a/.ssh/id_ed25519':", 0, "hunter2\n"},
-		{"no prompt", "", 0, "hunter2\n"},
+		// A helper whose job is to refuse what it doesn't recognize has no
+		// business guessing at a prompt that isn't there.
+		{"no prompt", "", 1, ""},
 		{
 			"host key",
 			"The authenticity of host 'example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
@@ -105,6 +108,14 @@ func TestRunAsAskpass(t *testing.T) {
 			// Trailing blank line must not read as "no prompt at all".
 			"host key with a trailing newline",
 			"The authenticity of host 'password.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? \n",
+			1, "",
+		},
+		{
+			// The price of refusing anything that mentions a fingerprint: a key
+			// filed under that name has its passphrase prompt turned away too,
+			// and the user types it on the terminal instead. Cheap at the price.
+			"passphrase for a key named fingerprint",
+			"Enter passphrase for key '/home/a/.ssh/fingerprint_id':",
 			1, "",
 		},
 	}

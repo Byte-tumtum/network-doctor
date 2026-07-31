@@ -53,18 +53,15 @@ func main() {
 // prompt is answered; anything else is refused and ssh says so on the
 // terminal, leaving the user to answer it themselves on a run with the
 // password field left blank.
-//
-// Only the last line decides. The host-key message arrives as one multi-line
-// argument whose first line quotes the host name, so matching the whole thing
-// would let a host called password.example.com talk its way past the gate; the
-// question ssh is actually asking is always the last line, and that line is
-// OpenSSH's own words.
 func askpass(args []string, secret string, stdout, stderr io.Writer) int {
-	prompt := strings.ToLower(strings.TrimSpace(strings.Join(args, " ")))
-	if i := strings.LastIndexByte(prompt, '\n'); i >= 0 {
-		prompt = prompt[i+1:]
-	}
-	if prompt != "" && !strings.Contains(prompt, "password") && !strings.Contains(prompt, "passphrase") {
+	prompt := strings.ToLower(strings.Join(args, " "))
+	// The host-key question embeds the host name, so a target like
+	// "passwordless.example.com" would otherwise satisfy the check below and
+	// spend the secret on a host nobody has vouched for. Refuse the
+	// confirmation question on its own terms, and refuse a promptless call
+	// rather than guessing what it wanted.
+	confirm := strings.Contains(prompt, "(yes/no") || strings.Contains(prompt, "fingerprint")
+	if prompt == "" || confirm || (!strings.Contains(prompt, "password") && !strings.Contains(prompt, "passphrase")) {
 		fmt.Fprintln(stderr, "netdoc: not answering this prompt with the stored password")
 		return 1
 	}
