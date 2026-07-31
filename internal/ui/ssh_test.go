@@ -139,6 +139,28 @@ func TestSSHFormKeys(t *testing.T) {
 	}
 }
 
+// Once the password has been handed to the askpass environment, the form drops
+// its copy rather than holding it until the next S.
+func TestSSHFormClearsPasswordOnConnect(t *testing.T) {
+	oldLookPath := toolLookPath
+	toolLookPath = func(string) (string, error) { return "ssh", nil }
+	t.Cleanup(func() { toolLookPath = oldLookPath })
+
+	target, err := diagnostic.ParseTarget("example.com:2222")
+	if err != nil {
+		t.Fatalf("ParseTarget: %v", err)
+	}
+	m := asModel(t, must(newModel(target, true).Update(keyMsg("S"))))
+	m.ssh.pass.SetValue("hunter2")
+	m = asModel(t, must(m.Update(tea.KeyMsg{Type: tea.KeyEnter})))
+	if m.sshPrompt {
+		t.Fatal("enter left the form open")
+	}
+	if got := m.ssh.pass.Value(); got != "" {
+		t.Errorf("password = %q, want it cleared after connecting", got)
+	}
+}
+
 // Without a target there is no host to log in to, so S declines rather than
 // opening a form that cannot be completed.
 func TestSSHFormNeedsTarget(t *testing.T) {

@@ -187,6 +187,9 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.sshPrompt = false
+		// The password is in env now, so the form has no reason to keep it.
+		// ponytail: Go strings can't be wiped, this only shortens the window.
+		m.ssh.pass.SetValue("")
 		return m, runSSH(args, env)
 	}
 	var cmd tea.Cmd
