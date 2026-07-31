@@ -2,7 +2,7 @@
 
 ## Build, Test, and Development Commands
 
-Full validation gate: see "Development" in `README.md`.
+Full validation gate: see "Tests" in `README.md`.
 
 ## Coding Style & Naming Conventions
 
