@@ -32,7 +32,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "r":
 		// Open the restart prompt; an active job keeps streaming until Enter commits.
-		m.entering, m.inputErr = true, ""
+		m.entering, m.sshPrompt, m.inputErr = true, false, ""
 		ti := textinput.New()
 		ti.Prompt = "netdoc "
 		ti.Placeholder = "example.com:443 — empty for a general check"
@@ -44,6 +44,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ti.Focus()
 		ti.CursorEnd()
 		m.input = ti
+		return m, textinput.Blink
+	case "S":
+		// The SSH login form is offered for every target, unlike the 'c'
+		// handshake check, which only fits an SSH one. It logs in to the
+		// machine under test, so it needs a target and takes the host from it.
+		if m.target == nil {
+			return m, m.setNotice("SSH needs a target — press r to set one", false)
+		}
+		if _, err := toolLookPath("ssh"); err != nil {
+			return m, m.setNotice("ssh not found — install an OpenSSH client", false)
+		}
+		m.sshPrompt, m.ssh = true, newSSHForm(m.target)
 		return m, textinput.Blink
 	case "v":
 		if m.networkMap {
@@ -369,7 +381,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.selMoved = false
 	m.results = map[diagnostic.ProbeID]diagnostic.ProbeResult{}
 	m.started = map[diagnostic.ProbeID]bool{}
-	m.pending, m.confirmTool = nil, nil
+	m.pending, m.confirmTool, m.sshPrompt = nil, nil, false
 	m.cur, m.otherJobs = jobState{}, nil
 	m.networkMap, m.mapSelected, m.networkCIDR = false, 0, ""
 	m.hostNames, m.namesPending = nil, nil

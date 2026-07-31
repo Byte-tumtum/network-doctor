@@ -201,6 +201,7 @@ clear the history.
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart — opens a prompt to edit the `netdoc` arguments (`enter` runs, `esc` backs out) |
+| `S` | SSH login — a form for username, key, and password, then hands the terminal to `ssh` |
 | `tab` | switch between running tool jobs |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
 | `q` | quit |
@@ -251,6 +252,57 @@ displayed command is copy-pasteable in a POSIX shell (Linux/macOS) or PowerShell
 `--toolbox [<host>]` opens straight into the toolbox without auto-running the
 chain (press `r` to run it). With no host, only the target-independent tools are
 offered.
+
+### SSH login
+
+`S` logs in to the current target — the machine the checks are about — so it
+needs one (`r` sets it). The form asks for the three things that are yours, not
+the target's: `tab` moves between fields, `←`/`→` picks a key, `enter`
+connects, `esc` backs out.
+
+```
+╭────────────────────────────────────────────────────╮
+│ SSH login to 192.168.1.50:2222                     │
+│   Username  mplaczek                               │
+│ ▸ Key       id_rsa  (3 of 4)  ←/→                  │
+│   Password  *******                                │
+╰────────────────────────────────────────────────────╯
+```
+
+Unlike the drill-down tools this is not a bounded job: `netdoc` suspends itself
+and gives `ssh` the real terminal, so the session is fully interactive and
+anything the form left blank — a key passphrase, a host-key check, a 2FA code —
+is asked by `ssh` on screen. When the session ends the TUI comes back with
+`ssh`'s stderr in a job pane, so a `Permission denied` is still readable
+afterwards instead of being painted over.
+
+The form fills in `ssh` options, nothing more:
+
+| Field | Effect |
+|-------|--------|
+| (host) | the target, plus `-p` when it named a non-default port |
+| Username | the `user@` part of the destination |
+| Key | `-i <path> -o IdentitiesOnly=yes`, so a loaded agent can't spend the server's auth attempts before this key is tried |
+| Password | see below |
+
+The key list is the private keys in `~/.ssh`, each recognized by its `.pub`
+half sitting next to it — no key file is ever opened or parsed. `none` (the
+first entry) leaves key selection to `ssh`, i.e. the agent and `ssh_config`,
+which is also where a key kept outside `~/.ssh` belongs.
+
+A typed password is echoed as dots and never reaches the command line, a
+notice, or a report. It is passed to `ssh` through the environment
+(`SSH_ASKPASS`), where `ssh` re-executes `netdoc` as its askpass helper and
+reads the secret from the helper's stdout — an argv would be readable by every
+process on the machine, an environment variable only by you. The form is
+rebuilt on each `S`, so the password lives no longer than the open form, and
+`-o NumberOfPasswordPrompts=1` stops `ssh` from re-offering a rejected one.
+
+Because forced askpass routes *every* prompt to the helper, the helper answers
+only password and passphrase prompts; it refuses the rest. So the first
+connection to an unknown host — where `ssh` asks you to verify the host key —
+needs one run with the password field blank, which puts that question back on
+your terminal where it belongs.
 
 ### JSON output
 

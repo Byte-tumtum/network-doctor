@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/ui"
 )
 
 func TestVersionString(t *testing.T) {
@@ -64,6 +65,47 @@ func TestRun(t *testing.T) {
 			}
 			if !strings.Contains(stderr.String(), tt.wantStderr) {
 				t.Errorf("stderr = %q, want contains %q", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
+
+// Run as ssh's askpass helper, netdoc prints the secret it was handed and
+// nothing else — no flag parsing, no TUI, whatever the arguments say. A prompt
+// that isn't asking for a password gets nothing: forced askpass sees the
+// host-key question too, and that one must not be answered with a secret.
+func TestRunAsAskpass(t *testing.T) {
+	tests := []struct {
+		name       string
+		prompt     string
+		want       int
+		wantStdout string
+	}{
+		{"password", "alice@example.com's password:", 0, "hunter2\n"},
+		{"passphrase", "Enter passphrase for key '/home/a/.ssh/id_ed25519':", 0, "hunter2\n"},
+		{"no prompt", "", 0, "hunter2\n"},
+		{
+			"host key",
+			"The authenticity of host 'example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+			1, "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(ui.AskpassEnv, "hunter2")
+			var stdout, stderr bytes.Buffer
+			args := []string{tt.prompt}
+			if tt.prompt == "" {
+				args = nil
+			}
+			if got := run(args, &stdout, &stderr); got != tt.want {
+				t.Errorf("run = %d, want %d", got, tt.want)
+			}
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+			if tt.want == 0 && stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want empty", stderr.String())
 			}
 		})
 	}

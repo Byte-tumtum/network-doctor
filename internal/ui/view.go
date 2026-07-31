@@ -71,6 +71,9 @@ func (m model) View() string {
 	if m.entering {
 		help = m.promptView(true)
 	}
+	if m.sshPrompt {
+		help = m.sshFormView()
+	}
 	if m.confirmTool != nil {
 		help = m.confirmView()
 	}
@@ -449,6 +452,43 @@ func (m model) promptView(withForms bool) string {
 	return focusPanelStyle.Width(w).Render(body) + "\n" + footer
 }
 
+// sshFormView is the SSH login panel (S), shown in place of the help bar. The
+// value receiver is doing real work here: the inputs are resized to the
+// terminal on the copy, never on the model.
+func (m model) sshFormView() string {
+	w := max(min(m.width-2, 76), 24)
+	// 6 = panel border + padding + the gutter the key row's ▸ marker sits in.
+	inputW := func(prompt string) int { return max(w-6-lipgloss.Width(prompt), 8) }
+	m.ssh.user.Width = inputW(m.ssh.user.Prompt)
+	m.ssh.pass.Width = inputW(m.ssh.pass.Prompt)
+
+	// The key row is a chooser, so it renders itself: the selected key, and
+	// the ←/→ hint only while the row has the focus.
+	key := keyStyle.Render("Key       ") + m.ssh.keyLabel()
+	if len(m.ssh.keys) > 1 {
+		key += faintStyle.Render(fmt.Sprintf("  (%d of %d)", m.ssh.keyIdx+1, len(m.ssh.keys)))
+		if m.ssh.focus == sshKey {
+			key += faintStyle.Render("  ←/→")
+		}
+	}
+	if m.ssh.focus == sshKey {
+		key = selStyle.Render("▸ ") + key
+	} else {
+		key = "  " + key
+	}
+
+	body := panelTitleStyle.Render("SSH login to "+m.ssh.host) + "\n" +
+		"  " + m.ssh.user.View() + "\n" +
+		key + "\n" +
+		"  " + m.ssh.pass.View() +
+		"\n\n" + faintStyle.Render("Leave a field blank and ssh asks you itself — as it does for a\nkey passphrase, a host-key check, or a 2FA code.")
+	if m.ssh.err != "" {
+		body += "\n" + failStyle.Render("✗ "+m.ssh.err)
+	}
+	return focusPanelStyle.Width(w).Render(body) + "\n" +
+		helpKeys(m.width, "tab", "next field", "enter", "connect", "esc", "back")
+}
+
 func (m model) helpView(deferred bool) string {
 	// Enter opens the output viewer whenever a job pane exists (same condition
 	// as jobView), so the hint tracks exactly when the key does something.
@@ -526,6 +566,7 @@ func (m model) helpOverlay() string {
 	b.WriteString(row("esc", "cancel the focused job"))
 	b.WriteString(row("v", "toggle network map"))
 	b.WriteString(row("r", "restart with a new target"))
+	b.WriteString(row("S", "ssh to a host — hands the terminal to ssh"))
 	b.WriteString(row("y", "copy selected portal URL, otherwise report"))
 	b.WriteString(row("w", "save report"))
 	for _, tool := range m.tools {
@@ -734,6 +775,14 @@ func (m model) toolboxView() string {
 		} else {
 			parts[i] = faintStyle.Render("[" + t.Key + "] " + t.Name + " — " + t.Bin + " missing")
 		}
+	}
+	// SSH login isn't a Tool: it takes over the terminal instead of streaming
+	// output into a job pane, so it rides along as a plain chip. It logs in to
+	// the target, which the target-independent tools don't need.
+	if m.target == nil {
+		parts = append(parts, faintStyle.Render("[S] SSH login — needs a target"))
+	} else {
+		parts = append(parts, keyStyle.Render("[S]")+" SSH login")
 	}
 	// The title rides on the first chip so line 1's width math includes it;
 	// wrapping happens only between chips, never inside one.

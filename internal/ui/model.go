@@ -155,6 +155,12 @@ type model struct {
 	histDraft string
 	histPath  string // ""; disables persistence (tests, or no config dir)
 
+	// SSH login form (S): host, username, key file, password. Enter hands the
+	// terminal to ssh; esc closes it. Every S starts a fresh form, so a typed
+	// password lives only as long as the form is open.
+	sshPrompt bool
+	ssh       sshForm
+
 	// Confirm gate: a tool marked Confirm (nmap) is held here after its hotkey,
 	// showing the exact command until 'y' runs it or esc cancels.
 	confirmTool *Tool
@@ -374,6 +380,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.confirmTool != nil {
 			return m.handleConfirmKey(msg)
 		}
+		if m.sshPrompt {
+			return m.handleSSHKey(msg)
+		}
 		if m.entering {
 			return m.handlePromptKey(msg)
 		}
@@ -391,6 +400,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case sshDoneMsg:
+		// The session's own screen is gone the moment the TUI repaints, so
+		// whatever ssh said lands in a job pane like any other tool's output.
+		m.stashJob()
+		m.cur = jobState{name: "SSH login", display: msg.display, status: JobDone}
+		for line := range strings.SplitSeq(strings.TrimRight(msg.output, "\n"), "\n") {
+			if line != "" {
+				m.appendJobLine(textsafe.Clean(line))
+			}
+		}
+		notice := "ssh session ended"
+		if msg.err != nil {
+			m.cur.status = JobFailed
+			m.appendJobLine(textsafe.Clean(msg.err.Error()))
+			notice = "ssh failed — press enter for the output"
+		}
+		if m.viewing {
+			m.refreshViewport()
+		}
+		return m, m.setNotice(notice, msg.err == nil)
 
 	case scheduleMsg:
 		if msg.gen != m.generation {

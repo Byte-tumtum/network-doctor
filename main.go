@@ -46,7 +46,31 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// askpass answers one ssh prompt, whose text arrives as the argument. ssh is
+// told to force askpass, which routes *every* prompt here — including the
+// unknown-host-key question, where handing over the password would silently
+// spend it on a host nobody vouched for. So only a password or passphrase
+// prompt is answered; anything else is refused and ssh says so on the
+// terminal, leaving the user to answer it themselves on a run with the
+// password field left blank.
+func askpass(args []string, secret string, stdout, stderr io.Writer) int {
+	prompt := strings.ToLower(strings.Join(args, " "))
+	if prompt != "" && !strings.Contains(prompt, "password") && !strings.Contains(prompt, "passphrase") {
+		fmt.Fprintln(stderr, "netdoc: not answering this prompt with the stored password")
+		return 1
+	}
+	fmt.Fprintln(stdout, secret)
+	return 0
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
+	// The SSH login form (S) runs this binary as ssh's askpass helper so the
+	// password reaches ssh through the environment instead of an argv every
+	// process on the machine could read. First thing in run: ssh wants a
+	// secret on stdout and nothing else.
+	if secret, ok := os.LookupEnv(ui.AskpassEnv); ok {
+		return askpass(args, secret, stdout, stderr)
+	}
 	fs := flag.NewFlagSet("netdoc", flag.ContinueOnError)
 	// Buffered, not stderr: the flag package quotes nothing, so an undefined
 	// flag name made of escape bytes would land on the terminal verbatim.
