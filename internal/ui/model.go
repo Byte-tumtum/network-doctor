@@ -458,7 +458,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range m.otherJobs {
 			j := &m.otherJobs[i]
 			if j.active != nil && msg.JobID == j.active.id {
-				appendJobLine(&j.lines, &j.evicted, msg.Line)
+				j.appendLine(msg.Line)
 				return m, waitForMsg(j.active.ch)
 			}
 		}

@@ -18,7 +18,7 @@ func (m *model) appendJobLine(text string) {
 	if oldLen == maxJobLines {
 		evictedLine = m.cur.lines[0]
 	}
-	appendJobLine(&m.cur.lines, &m.cur.evicted, text)
+	m.cur.appendLine(text)
 	// Only correct the offset when the evicted line was actually visible: under
 	// a filter that hides it, the filtered view lost nothing at the top.
 	if len(m.cur.lines) == oldLen && m.viewing && !m.follow && matchesFilter(evictedLine, m.filter) {
@@ -27,11 +27,11 @@ func (m *model) appendJobLine(text string) {
 	}
 }
 
-func appendJobLine(lines *[]string, evicted *int, text string) {
-	*lines = append(*lines, text)
-	if n := len(*lines) - maxJobLines; n > 0 {
-		*evicted += n
-		*lines = (*lines)[n:]
+func (j *jobState) appendLine(text string) {
+	j.lines = append(j.lines, text)
+	if n := len(j.lines) - maxJobLines; n > 0 {
+		j.evicted += n
+		j.lines = j.lines[n:]
 	}
 }
 
