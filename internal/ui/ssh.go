@@ -7,6 +7,7 @@ package ui
 import (
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -81,13 +82,15 @@ func newSSHForm(t *diagnostic.Target) sshForm {
 }
 
 // sshHostValue renders the target for ssh: bare host, plus the port when the
-// target named a non-default one.
+// target named a non-default one. JoinHostPort, because concatenating a port
+// onto a bare IPv6 literal yields another valid address — sshCommand would
+// parse it back as a host nobody asked for and connect there on port 22.
 func sshHostValue(t *diagnostic.Target) string {
 	if t == nil {
 		return ""
 	}
 	if t.PortExplicit && t.Port != 22 {
-		return t.Host + ":" + strconv.Itoa(t.Port)
+		return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
 	}
 	return t.Host
 }

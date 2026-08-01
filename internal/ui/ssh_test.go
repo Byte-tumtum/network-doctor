@@ -93,6 +93,39 @@ func TestSSHCommandNeedsHost(t *testing.T) {
 	}
 }
 
+// The form's host string is written by sshHostValue and read back by
+// sshCommand, so the round trip has to land on the target the run was about.
+// An IPv6 literal is the case that punishes a plain host+":"+port: the result
+// parses as a different, perfectly valid address, and ssh would connect there
+// without anyone noticing.
+func TestSSHHostValueRoundTrip(t *testing.T) {
+	tests := []struct {
+		target string
+		want   []string
+	}{
+		{"example.com:2222", []string{"-p", "2222", "example.com"}},
+		{"192.0.2.1:2222", []string{"-p", "2222", "192.0.2.1"}},
+		{"[2001:db8::1]:2222", []string{"-p", "2222", "2001:db8::1"}},
+		{"[2001:db8::1]:22", []string{"2001:db8::1"}},
+		{"2001:db8::1", []string{"2001:db8::1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			target, err := diagnostic.ParseTarget(tt.target)
+			if err != nil {
+				t.Fatalf("ParseTarget: %v", err)
+			}
+			args, _, err := sshCommand(sshHostValue(target), "", "", "", "")
+			if err != nil {
+				t.Fatalf("sshCommand: %v", err)
+			}
+			if !slices.Equal(args, tt.want) {
+				t.Errorf("args = %v, want %v", args, tt.want)
+			}
+		})
+	}
+}
+
 // S is hinted in the help bar and the cheatsheet only once the banner probe
 // has found an SSH server, but the binding itself stays live either way.
 func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
