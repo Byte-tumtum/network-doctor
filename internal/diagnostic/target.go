@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
 // Proto selects which protocol-specific probe rows append to the target path.
@@ -66,7 +68,21 @@ var hostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])
 // [<ipv6>][:<port>] | <scheme>://<host>[:port][/path], where scheme is HTTP,
 // HTTPS, SSH, or SMTP. Returns a typed Target
 // or an error (caller exits 2 on error).
+//
+// The error is sanitized here rather than at each caller: every one of them
+// prints it straight at a terminal (stderr, the restart prompt, the SSH form),
+// and not every error we wrap quotes what it echoes — net.AddrError embeds the
+// host verbatim, so a target carrying U+202E would reorder the line it lands
+// in. Replaced, not wrapped: nothing unwraps a parse error, it only gets shown.
 func ParseTarget(raw string) (*Target, error) {
+	t, err := parseTarget(raw)
+	if err != nil {
+		return nil, errors.New(textsafe.Clean(err.Error()))
+	}
+	return t, nil
+}
+
+func parseTarget(raw string) (*Target, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return nil, errors.New("empty target")

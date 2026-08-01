@@ -2,7 +2,11 @@
 
 package diagnostic
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/heymaikol/network-doctor/internal/textsafe"
+)
 
 func TestParseTarget(t *testing.T) {
 	cases := []struct {
@@ -63,6 +67,30 @@ func TestParseTargetErrors(t *testing.T) {
 	for _, in := range bad {
 		if tg, err := ParseTarget(in); err == nil {
 			t.Errorf("ParseTarget(%q) = %+v, want error", in, tg)
+		}
+	}
+}
+
+// A rejected target's error text goes straight to a terminal — stderr, the
+// restart prompt, the SSH form — so it must survive Clean unchanged. The
+// wrapped errors are the risk: net.AddrError echoes the host without quoting
+// it, which is how a bidi override used to reach the screen.
+func TestParseTargetErrorsAreTerminalSafe(t *testing.T) {
+	rlo := string(rune(0x202e))
+	for _, in := range []string{
+		rlo + ":1:2",            // net.AddrError, "too many colons"
+		"ssh://" + rlo + ":1:2", // same, behind a scheme
+		rlo + "host",            // hostname allowlist reject
+		"[" + rlo + "]:80",      // bracket reject
+		string(rune(0x1b)) + ":1:2",
+		string(rune(0x200b)) + ".example.com",
+	} {
+		_, err := ParseTarget(in)
+		if err == nil {
+			t.Fatalf("ParseTarget(%q) = nil error, want reject", in)
+		}
+		if got := err.Error(); got != textsafe.Clean(got) {
+			t.Errorf("ParseTarget(%q) error %q carries unsanitized bytes", in, got)
 		}
 	}
 }
