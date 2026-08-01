@@ -157,6 +157,30 @@ func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 	}
 }
 
+// A target with no SSH rung never gets a ProbeSSH result at all, and a missing
+// map key yields the zero ProbeResult — whose Status is StatusPass, the first
+// iota. Presence has to be checked alongside the status, or every HTTPS target
+// advertises a login nothing has vouched for.
+func TestSSHHintStaysHiddenWithoutAnSSHRung(t *testing.T) {
+	oldLookPath := toolLookPath
+	toolLookPath = func(string) (string, error) { return "ssh", nil }
+	t.Cleanup(func() { toolLookPath = oldLookPath })
+
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	m = asModel(t, must(m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})))
+	doneResults(&m, "") // every rung this target has passes; none of them is SSH
+
+	if _, ok := m.results[diagnostic.ProbeSSH]; ok {
+		t.Fatal("an https target grew an SSH rung — pick another target for this test")
+	}
+	if strings.Contains(m.View(), "ssh login") {
+		t.Error("the help bar hints S on a target with no SSH rung")
+	}
+	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), "hands the terminal to ssh") {
+		t.Error("the cheatsheet lists S on a target with no SSH rung")
+	}
+}
+
 // The form takes its host from the target, tab moves the focus, ←/→ picks a
 // key, and esc closes it.
 func TestSSHFormKeys(t *testing.T) {

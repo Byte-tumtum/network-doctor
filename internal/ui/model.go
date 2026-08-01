@@ -318,8 +318,12 @@ func (m model) reportReady() bool {
 // banner probe passed, i.e. the port answered with an SSH- identification
 // string. A warn is deliberately not enough — that one means the port answered
 // with silence, and ssh always speaks first.
+//
+// Presence first: a target with no SSH rung has no entry here at all, and the
+// zero ProbeResult a missing key returns carries StatusPass (the first iota).
 func (m model) sshDetected() bool {
-	return m.results[diagnostic.ProbeSSH].Status == diagnostic.StatusPass
+	r, ok := m.results[diagnostic.ProbeSSH]
+	return ok && r.Status == diagnostic.StatusPass
 }
 
 // spinnerActive reports whether the spinner tick chain should keep running:
