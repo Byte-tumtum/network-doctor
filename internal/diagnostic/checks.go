@@ -906,7 +906,17 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			src, iface := o.pathIdentity(ctx, conn, sel, port)
 			r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, sel, src, iface
 			r.Detail = fmt.Sprintf("connected to %s:%d in %dms (src %s %s)", sel, port, Ms(rtt), src, iface)
+			// Warnings judge only the winning family, exactly as the egress row
+			// does: dialIPs races both at once, so a family this network simply
+			// doesn't carry arrives as a pile of failed siblings, and a dual-stack
+			// name on an IPv4-only link would otherwise read as degraded forever.
+			// A family that is configured and still unreachable is the egress
+			// row's story to tell. The losers are appended back afterwards so the
+			// details panel still lists every address that was tried.
+			same, other := splitAttemptFamilies(attempts, sel)
+			r.Attempts = same
 			applyDialWarnings(&r, rtt)
+			r.Attempts = append(same, other...)
 			return r
 		}
 		// All addresses failed: deterministic fallback path = first address.
@@ -1196,9 +1206,10 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 		notes = append(notes, fmt.Sprintf("high latency (%dms)", rtt.Milliseconds()))
 	}
 	// dialIPs records completed attempts plus the winner (last), so every
-	// earlier attempt genuinely failed before the win.
+	// earlier attempt genuinely failed before the win. Callers hand over only
+	// the winning family's attempts — see targetTCPProbe.
 	if n := len(r.Attempts) - 1; n > 0 {
-		notes = append(notes, fmt.Sprintf("%d of %d address(es) failed%s", n, len(r.Attempts), familyNote(r.Attempts, r.SelectedIP)))
+		notes = append(notes, fmt.Sprintf("%d of %d address(es) failed", n, len(r.Attempts)))
 	}
 	if r.Iface == "(ambiguous)" {
 		notes = append(notes, "ambiguous source interface")
@@ -1209,31 +1220,23 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 	}
 }
 
-// familyNote names the broken-family signature: every failed attempt was in
-// the other address family than the winner. Mixed or same-family failures
-// return no note.
-func familyNote(attempts []Attempt, sel net.IP) string {
+// splitAttemptFamilies partitions attempts into the winner's address family
+// and everything else, so a dial result can be judged on the family that
+// actually carried it. A nil winner leaves everything in same — there is no
+// family to judge against, and the caller is on its failure path anyway.
+func splitAttemptFamilies(attempts []Attempt, sel net.IP) (same, other []Attempt) {
 	if sel == nil {
-		return ""
+		return attempts, nil
 	}
 	selV4 := sel.To4() != nil
-	other := 0
 	for _, a := range attempts {
-		if a.Err == nil {
-			continue
-		}
 		if (a.IP.To4() != nil) == selV4 {
-			return ""
+			same = append(same, a)
+		} else {
+			other = append(other, a)
 		}
-		other++
 	}
-	if other == 0 {
-		return ""
-	}
-	if selV4 {
-		return " (IPv6 unreachable, connected via IPv4)"
-	}
-	return " (IPv4 unreachable, connected via IPv6)"
+	return same, other
 }
 
 // interleaveFamilies orders addresses IPv6-first, alternating families

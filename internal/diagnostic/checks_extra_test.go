@@ -452,28 +452,54 @@ func TestDowngradeEgress(t *testing.T) {
 	}
 }
 
-// familyNote only speaks up for the clean broken-family signature: every
-// failure in the opposite family from the winner.
-func TestFamilyNote(t *testing.T) {
-	v4, v6 := net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")
-	fail := errors.New("refused")
+// A dual-stack name on a single-stack network is the common case, not a
+// degraded one: the resolver hands out AAAA records an IPv4-only link can
+// never reach, and every one of them fails. The connect stays a clean PASS and
+// the dead addresses stay visible in Attempts. Sibling failures in the family
+// that actually carried the connection still warn.
+func TestTargetTCPProbeIgnoresTheAbsentFamily(t *testing.T) {
+	v4, v4b, v6 := net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2"), net.ParseIP("2001:db8::1")
 	cases := []struct {
 		name     string
-		attempts []Attempt
-		sel      net.IP
-		want     string
+		addrs    []net.IP
+		reach    net.IP // the only address the stub dialer accepts
+		want     Status
+		attempts int
 	}{
-		{"no winner", []Attempt{{IP: v6, Err: fail}}, nil, ""},
-		{"no failures", []Attempt{{IP: v4}}, v4, ""},
-		{"v6 broken, v4 won", []Attempt{{IP: v6, Err: fail}, {IP: v4}}, v4, " (IPv6 unreachable, connected via IPv4)"},
-		{"v4 broken, v6 won", []Attempt{{IP: v4, Err: fail}, {IP: v6}}, v6, " (IPv4 unreachable, connected via IPv6)"},
-		{"same-family failure", []Attempt{{IP: net.ParseIP("192.0.2.2"), Err: fail}, {IP: v4}}, v4, ""},
-		{"mixed failures", []Attempt{{IP: v6, Err: fail}, {IP: net.ParseIP("192.0.2.2"), Err: fail}, {IP: v4}}, v4, ""},
+		{"v6 unreachable, v4 won", []net.IP{v4, v6}, v4, StatusPass, 2},
+		// dialIPs leads with IPv6 (RFC 8305), so a v6 win returns before the
+		// staggered v4 attempt ever starts — one attempt, and nothing to warn about.
+		{"v4 unreachable, v6 won", []net.IP{v4, v6}, v6, StatusPass, 1},
+		{"same-family sibling failed", []net.IP{v4b, v4}, v4, StatusWarn, 2},
 	}
 	for _, c := range cases {
-		if got := familyNote(c.attempts, c.sel); got != c.want {
-			t.Errorf("%s: familyNote = %q, want %q", c.name, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			ops := &netops{
+				dialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+					if host, _, _ := net.SplitHostPort(addr); net.ParseIP(host).Equal(c.reach) {
+						return fakeConn{local: &net.TCPAddr{IP: net.ParseIP("192.0.2.7")}}, nil
+					}
+					return nil, errors.New("network is unreachable")
+				},
+				interfaces: func() ([]net.Interface, error) {
+					return []net.Interface{{Name: "fake0"}}, nil
+				},
+				interfaceAddrs: func(*net.Interface) ([]net.Addr, error) {
+					return []net.Addr{&net.IPNet{IP: net.ParseIP("192.0.2.7"), Mask: net.CIDRMask(24, 32)}}, nil
+				},
+			}
+			r := ops.targetTCPProbe(443)(context.Background(), map[ProbeID]ProbeResult{ProbeDNS: {Addrs: c.addrs}})
+			if r.Status != c.want {
+				t.Errorf("status = %v, want %v (detail %q)", r.Status, c.want, r.Detail)
+			}
+			if !r.SelectedIP.Equal(c.reach) {
+				t.Errorf("selected = %v, want %v", r.SelectedIP, c.reach)
+			}
+			// Every address tried stays in the report either way.
+			if len(r.Attempts) != c.attempts {
+				t.Errorf("attempts = %d, want %d", len(r.Attempts), c.attempts)
+			}
+		})
 	}
 }
 
