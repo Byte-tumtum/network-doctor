@@ -8,9 +8,35 @@ Terminal UI. Diagnose network connectivity, tell you **where connection breaks**
 
 Runs on **Linux, macOS, and Windows**. Project = `network-doctor`; installed binary = `netdoc`.
 
-### Arch Linux (AUR)
+### Windows
 
-[`network-doctor`](https://aur.archlinux.org/packages/network-doctor) package builds from source:
+Scoop, from own bucket:
+
+```powershell
+scoop bucket add heymaikol https://github.com/heymaikol/scoop-bucket
+scoop install network-doctor
+```
+
+Or winget:
+
+```powershell
+winget install heymaikol.NetworkDoctor
+```
+
+Release reaches Scoop bucket right away; winget lands whenever Microsoft merges the manifest PR, so it can trail a version behind.
+
+### macOS (Homebrew)
+
+Binary unsigned, so cask strips quarantine attribute and Gatekeeper no prompt. That removes warning, not adds check; verify separate step you run yourself ([Verify your download](#verify-your-download)):
+
+```sh
+brew tap heymaikol/tap
+brew install --cask network-doctor
+```
+
+### Linux
+
+Arch — [`network-doctor`](https://aur.archlinux.org/packages/network-doctor) AUR package builds from source:
 
 ```sh
 yay -S network-doctor    # or: paru -S network-doctor
@@ -24,18 +50,19 @@ cd network-doctor
 makepkg -si
 ```
 
-### macOS (Homebrew)
-
-Binary unsigned, so cask strips quarantine attribute and Gatekeeper no prompt. That removes warning, not adds check; verify separate step you run yourself ([Verify your download](#verify-your-download)):
+Everything else — `.deb`, `.rpm`, `.apk` on [latest release](https://github.com/heymaikol/network-doctor/releases/latest), `amd64` and `arm64`. Download one, install locally:
 
 ```sh
-brew tap heymaikol/tap
-brew install --cask network-doctor
+sudo apt install ./network-doctor_X.Y.Z_linux_amd64.deb    # Debian, Ubuntu, Mint
+sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # Fedora, RHEL, Rocky, Alma
+sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpine
 ```
+
+No repo hosted, so these no auto-update — `dnf`/`apt` won't pull next version for you. AUR does.
 
 ### Everywhere else
 
-Grab prebuilt binary from [latest release](https://github.com/heymaikol/network-doctor/releases/latest), or install with Go 1.25+:
+Grab prebuilt binary from [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as `.zip`, rest as bare binary), or install with Go 1.25+:
 
 ```sh
 go install github.com/heymaikol/network-doctor@latest
@@ -62,7 +89,7 @@ gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
   --signer-workflow heymaikol/network-doctor/.github/workflows/release.yml
 ```
 
-Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball AUR builds from attested too.
+Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball AUR builds from attested too, as are `.deb`/`.rpm`/`.apk` and Windows `.zip` — pass whichever filename you downloaded.
 
 ## How it diagnoses
 
