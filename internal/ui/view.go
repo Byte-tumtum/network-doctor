@@ -398,7 +398,7 @@ func (m model) discoveryNetwork() (net.IP, string) {
 		ip := m.results[id].Source
 		if v4 := ip.To4(); v4 != nil && ip.IsPrivate() {
 			// ponytail: cap discovery at the source /24; widen only if larger LANs matter.
-			return ip, net.IP(v4.Mask(net.CIDRMask(24, 32))).String() + "/24"
+			return ip, v4.Mask(net.CIDRMask(24, 32)).String() + "/24"
 		}
 	}
 	return nil, ""
