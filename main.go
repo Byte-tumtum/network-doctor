@@ -263,7 +263,9 @@ func runJSON(ctx context.Context, t *diagnostic.Target, source net.IP, watch boo
 		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
 	}
-	code := 0
+	// code starts at 1: until a pass completes, there's no report to call a
+	// success, so an interrupt before the first line lands has to fail closed.
+	code := 1
 	for {
 		probes := diagnostic.BuildProbesFrom(t, source)
 		results := runAll(ctx, probes)

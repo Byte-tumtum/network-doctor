@@ -270,6 +270,30 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	}
 }
 
+// If the context is already cancelled before the first pass completes, there
+// is no report to trust — runJSON must fail closed rather than default to 0.
+func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runAll = func(ctx context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		if ctx.Err() == nil {
+			t.Error("runAll called with a live context, want it already cancelled")
+		}
+		return nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if got := runJSON(ctx, nil, nil, true, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (no report for a cancelled pass)", stdout.String())
+	}
+}
+
 // ms is the one field with an out-of-band meaning: 0 has to keep saying "never
 // ran", which a sub-millisecond check would otherwise steal. Per-attempt ms
 // carries the same promise — a LAN connect lands under a millisecond often.
