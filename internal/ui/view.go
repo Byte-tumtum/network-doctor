@@ -62,7 +62,6 @@ func (m model) View() string {
 	}
 	deferred := m.toolbox && !m.chainRan()
 
-	header := m.headerView()
 	body := m.bodyView(deferred)
 	if m.networkMap {
 		body = m.networkMapView()
@@ -78,7 +77,11 @@ func (m model) View() string {
 		help = m.confirmView()
 	}
 	toolbox := m.toolboxView()
-	top := header + "\n" + m.banner() + "\n\n"
+	top := m.banner() + "\n"
+	if header := m.headerView(); header != "" {
+		top += header + "\n"
+	}
+	top += "\n"
 	// Adaptive tail: the job pane gets whatever rows the rest doesn't use.
 	// avail is a budget in newlines: jobView's output must add at most avail
 	// of them, or the view exceeds the terminal and the renderer cuts the top.
@@ -116,19 +119,24 @@ func (m model) targetHP() string {
 	return net.JoinHostPort(m.target.Host, strconv.Itoa(m.target.Port))
 }
 
-// headerView is the one-line masthead: app name, target, connected network.
+// headerView is the one-line context strip under the banner: target, connected
+// network, watch mode. Empty when there is nothing to say, and the caller drops
+// the line rather than rendering a blank one.
 func (m model) headerView() string {
-	h := selStyle.Render("◆ ") + titleStyle.Render("Network Doctor")
+	var parts []string
 	if m.target != nil {
-		h += faintStyle.Render("  " + m.targetHP())
+		parts = append(parts, m.targetHP())
 	}
 	if n := m.networkLine(); n != "" {
-		h += faintStyle.Render("  ·  " + n)
+		parts = append(parts, n)
 	}
 	if m.watch {
-		h += faintStyle.Render("  ·  watch")
+		parts = append(parts, "watch")
 	}
-	return h
+	if len(parts) == 0 {
+		return ""
+	}
+	return faintStyle.Render(strings.Join(parts, "  ·  "))
 }
 
 // bodyView renders the Checks and Details panels side by side, stacking them

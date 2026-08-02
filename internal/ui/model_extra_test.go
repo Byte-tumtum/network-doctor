@@ -523,7 +523,7 @@ func TestLaunchToolStartErrorClearsPreviousJobState(t *testing.T) {
 func TestViewRenders(t *testing.T) {
 	m := newModel(nil, false)
 	out := m.View()
-	for _, want := range []string{"Network Doctor", "Checks", "Details"} {
+	for _, want := range []string{"Checking your connection", "Checks", "Details"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("View missing %q", want)
 		}

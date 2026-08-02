@@ -939,8 +939,8 @@ func TestViewClampsLongDetailsToTerminal(t *testing.T) {
 	if rows := strings.Count(view, "\n") + 1; rows > nm.height {
 		t.Errorf("view is %d rows, terminal is %d", rows, nm.height)
 	}
-	if !strings.Contains(view, "Network Doctor") {
-		t.Error("height clamp must preserve the masthead")
+	if !strings.Contains(view, "Checking your connection") {
+		t.Error("height clamp must preserve the banner")
 	}
 }
 
