@@ -278,7 +278,7 @@ Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent canc
 
 ## Tests
 
-Before submitting change, run complete CI gate:
+Before submitting change, run complete CI gate. The final check requires GoReleaser v2.17.1, matching the CI and release workflows:
 
 ```sh
 go vet ./...
