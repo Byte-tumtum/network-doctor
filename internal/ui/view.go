@@ -11,8 +11,19 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
+
+// wrap reflows a full-width block that no panel is wrapping for us. Without
+// it the terminal hard-wraps mid-word, and the extra display rows aren't in
+// View's newline budget — so the renderer eats the top of the screen.
+func (m model) wrap(s string) string {
+	if m.width <= 0 {
+		return s
+	}
+	return ansi.Wrap(s, m.width, "")
+}
 
 func (m model) glyph(id diagnostic.ProbeID) string {
 	r, ok := m.results[id]
@@ -77,8 +88,8 @@ func (m model) View() string {
 		help = m.confirmView()
 	}
 	toolbox := m.toolboxView()
-	top := m.banner() + "\n"
-	if header := m.headerView(); header != "" {
+	top := m.wrap(m.banner()) + "\n"
+	if header := m.wrap(m.headerView()); header != "" {
 		top += header + "\n"
 	}
 	top += "\n"
@@ -814,17 +825,21 @@ func (m model) jobView(avail int) string {
 	if m.height > 0 && avail < 5 {
 		return "" // not even rule+title+status+note fit — drop the pane
 	}
+	title := m.wrap(titleStyle.Render("$ " + m.cur.display))
+	status := m.wrap(m.jobStatusLine())
 	tailN := jobTailLines
 	if m.height > 0 {
-		tailN = avail - 5 // rule, title, status, context note, trailing blank
+		// rule, context note, trailing blank — plus however many rows the
+		// title and status took after wrapping.
+		tailN = avail - 3 - lipgloss.Height(title) - lipgloss.Height(status)
 		if tailN < 0 {
 			tailN = 0
 		}
 	}
 	var b strings.Builder
 	b.WriteString(faintStyle.Render(strings.Repeat("─", m.width)) + "\n")
-	b.WriteString(titleStyle.Render("$ "+m.cur.display) + "\n")
-	b.WriteString(m.jobStatusLine() + "\n")
+	b.WriteString(title + "\n")
+	b.WriteString(status + "\n")
 
 	shown := m.cur.lines
 	if len(shown) > tailN {

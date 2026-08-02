@@ -985,9 +985,25 @@ func TestPromptFormsYieldToJobPane(t *testing.T) {
 	}
 }
 
+// Nothing the TUI writes itself may run past a narrow terminal: the banner
+// and header are full-width prose, and the terminal's own hard wrap would
+// break words and blow View's row budget. Command output is exempt — it is
+// whatever the tool printed, and the viewer wraps it.
+func TestViewWrapsToNarrowTerminal(t *testing.T) {
+	for _, w := range []int{40, 60, 79} {
+		m := newModel(mustTarget(t, "example.com:443"), false)
+		u, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: 24})
+		nm := asModel(t, u)
+		for _, line := range strings.Split(nm.View(), "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Errorf("%d cols: line is %d wide: %q", w, got, line)
+			}
+		}
+	}
+}
+
 // At 40 cols the prompt panel wraps its content instead of overflowing
-// horizontally. Tested on promptView in isolation: the whole view has a
-// pre-existing wide banner out of scope here.
+// horizontally.
 func TestPromptViewNarrowNoOverflow(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:443"), false)
 	u, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
