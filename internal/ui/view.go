@@ -721,13 +721,24 @@ func (m model) jobStatusLine() string {
 	return s
 }
 
+// viewerHeader is the command line and status above the viewport, wrapped:
+// nothing else reflows them, and vpHeight has to know how many rows they cost.
+func (m model) viewerHeader() string {
+	return m.wrap(titleStyle.Render("$ "+m.cur.display)) + "\n" + m.wrap(m.jobStatusLine())
+}
+
 // outputView is the full-screen scrollable output viewer (Enter).
 func (m model) outputView() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("$ "+m.cur.display) + "\n")
-	b.WriteString(m.jobStatusLine() + "\n")
+	b.WriteString(m.viewerHeader() + "\n")
 	b.WriteString(m.vp.View() + "\n")
-	b.WriteString(faintStyle.Render(m.vpContext()) + "\n")
+	// The context line is budgeted at exactly one row, so trim it rather than
+	// wrap it — a long filter is the usual way it outgrows the terminal.
+	ctx := m.vpContext()
+	if m.width > 0 {
+		ctx = ansi.Truncate(ctx, m.width, "")
+	}
+	b.WriteString(faintStyle.Render(ctx) + "\n")
 	b.WriteString(m.viewerFooter())
 	return b.String()
 }

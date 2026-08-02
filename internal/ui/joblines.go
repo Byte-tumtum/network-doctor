@@ -94,7 +94,8 @@ func (m model) vpHeight() int {
 	if m.height <= 0 {
 		return 20
 	}
-	h := m.height - 3 - lipgloss.Height(m.viewerFooter()) // header + status above, context below
+	// header above, one context line below, then the footer
+	h := m.height - lipgloss.Height(m.viewerHeader()) - 1 - lipgloss.Height(m.viewerFooter())
 	if h < 3 {
 		h = 3
 	}

@@ -1026,6 +1026,36 @@ func TestJobPaneFitsHeight(t *testing.T) {
 	}
 }
 
+// The viewer's own header has the same problem the job pane had: a command
+// line wider than the terminal costs display rows the viewport height never
+// budgeted for, so the frame runs off the bottom of the screen.
+func TestOutputViewerFitsHeight(t *testing.T) {
+	for _, h := range []int{24, 40} {
+		m := newModel(mustTarget(t, "example.com:443"), false)
+		m.cur.status = JobRunning
+		m.cur.display = "mtr --report --report-cycles 5 example.com --show-ips --no-dns"
+		m.cur.name = "traceroute (mtr)"
+		m.cur.lines = []string{"line one", "line two"}
+		m.filter = strings.Repeat("z", 80) // pushes the context line past 60 cols too
+		u, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: h})
+		nm := asModel(t, u)
+		u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		nm = asModel(t, u)
+		if !nm.viewing {
+			t.Fatal("enter must open the viewer")
+		}
+		v := nm.View()
+		if rows := lipgloss.Height(v); rows > h {
+			t.Errorf("60x%d: viewer is %d display rows tall", h, rows)
+		}
+		for _, line := range strings.Split(v, "\n") {
+			if got := lipgloss.Width(line); got > 60 {
+				t.Errorf("60x%d: line is %d wide: %q", h, got, line)
+			}
+		}
+	}
+}
+
 // At 40 cols the prompt panel wraps its content instead of overflowing
 // horizontally.
 func TestPromptViewNarrowNoOverflow(t *testing.T) {
