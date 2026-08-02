@@ -589,6 +589,29 @@ func TestHTTPProbeFailureNamesAddresses(t *testing.T) {
 	}
 }
 
+// The transport dials on a goroutine that outlives client.Do when the context
+// expires mid-dial, so the failure detail has to name the address from the
+// guarded snapshot rather than re-read what that goroutine is still writing.
+// Only -race fails on the difference.
+func TestHTTPProbeDialOutlivesRequest(t *testing.T) {
+	// The dial outlasts the request deadline on its own clock — nothing hands it
+	// the baton, or the handoff would order the very access under test.
+	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) {
+		time.Sleep(60 * time.Millisecond)
+		return nil, errors.New("connection refused")
+	}}
+	deps := map[ProbeID]ProbeResult{ProbeDNS: {Addrs: []net.IP{net.ParseIP("192.0.2.1")}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	r := ops.httpProbe("example.com", 80, "http", ProbeDNS)(ctx, deps)
+	time.Sleep(100 * time.Millisecond) // stay alive for the dial's write, the racing access
+
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "192.0.2.1") {
+		t.Errorf("dial outliving the request = %+v, want FAIL naming the address", r)
+	}
+}
+
 func TestHTTPSProbeSupportsHTTP2OnlyServer(t *testing.T) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor != 2 {

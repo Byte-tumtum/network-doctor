@@ -1013,7 +1013,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		dialMu.Unlock()
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "no " + protocol + " response from " + addrTried(dialIP, addrs) + ": " + err.Error()
+			r.Detail = "no " + protocol + " response from " + addrTried(r.SelectedIP, addrs) + ": " + err.Error()
 			r.Fix = protocol + " blocked — proxy or firewall?"
 			return r
 		}
