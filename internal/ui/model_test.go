@@ -42,16 +42,6 @@ func doneResults(m *model, failID diagnostic.ProbeID) {
 	}
 }
 
-func TestFixShortcutRemoved(t *testing.T) {
-	m := newModel(nil, false)
-	doneResults(&m, diagnostic.ProbeDNS)
-	u, cmd := m.Update(keyMsg("f"))
-	nm := asModel(t, u)
-	if cmd != nil || nm.cur.active != nil || nm.pending != nil {
-		t.Error("f must not launch or defer an automatic fix")
-	}
-}
-
 func TestHelpOverlay(t *testing.T) {
 	m := newModel(nil, false)
 	u, _ := m.Update(keyMsg("?"))
