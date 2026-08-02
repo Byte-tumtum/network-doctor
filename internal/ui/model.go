@@ -46,6 +46,18 @@ type lanNamesMsg struct {
 	names map[string]string
 }
 
+// mergeLANNames combines platform-advertised names with the user's ssh
+// aliases into one freshly allocated map. AdvertisedNames legitimately
+// returns nil on non-Linux systems and several Linux error paths, so the
+// result must never depend on either input being non-nil. Aliases are
+// copied last: the user's own ssh config outranks whatever DNS thinks.
+func mergeLANNames(advertised, aliases map[string]string) map[string]string {
+	names := make(map[string]string, len(advertised)+len(aliases))
+	maps.Copy(names, advertised)
+	maps.Copy(names, aliases)
+	return names
+}
+
 // lanNameMsg is one address's reverse-DNS result, empty name included: it also
 // means "stop spinning for this row".
 type lanNameMsg struct {
@@ -529,9 +541,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.namesPending[ip] = true
 				}
 				return m, func() tea.Msg {
-					names := diagnostic.AdvertisedNames(ctx, ips)
-					// The user's own ssh aliases outrank whatever DNS thinks.
-					maps.Copy(names, diagnostic.SSHHostAliases())
+					names := mergeLANNames(diagnostic.AdvertisedNames(ctx, ips), diagnostic.SSHHostAliases())
 					return lanNamesMsg{gen: gen, ips: ips, names: names}
 				}
 			}

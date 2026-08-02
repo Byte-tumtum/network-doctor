@@ -804,6 +804,23 @@ func TestNetworkMapSpinsPerRowUntilNamesArrive(t *testing.T) {
 	}
 }
 
+// AdvertisedNames legitimately returns nil (non-Linux, or several Linux
+// error paths); mergeLANNames must still hand back a usable map, and ssh
+// aliases must keep winning collisions once one is allocated.
+func TestMergeLANNames(t *testing.T) {
+	if got := mergeLANNames(nil, map[string]string{"192.168.1.7": "printer"}); got["192.168.1.7"] != "printer" {
+		t.Fatalf("nil advertised names must not drop aliases: %v", got)
+	}
+
+	got := mergeLANNames(
+		map[string]string{"192.168.1.7": "attlocal-guess"},
+		map[string]string{"192.168.1.7": "printer"},
+	)
+	if got["192.168.1.7"] != "printer" {
+		t.Fatalf("ssh alias must win over an advertised name for the same IP: %v", got)
+	}
+}
+
 // Tab with nothing in the selected slot must not park the zero jobState: a
 // blank entry in the ring is a tab stop with no name, no command, no output.
 func TestTabDoesNotParkAnEmptySlot(t *testing.T) {
