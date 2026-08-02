@@ -313,6 +313,33 @@ func TestProxyProbeMalformedURLFailsWithoutDial(t *testing.T) {
 	}
 }
 
+// TestProxyProbeParseErrorIsRedacted guards against a regression where the
+// raw net/url parser error — which can repeat the malformed HTTPS_PROXY/
+// HTTP_PROXY value verbatim, including any embedded credentials — leaks into
+// the report. The probe must fail with a fixed, generic detail instead.
+func TestProxyProbeParseErrorIsRedacted(t *testing.T) {
+	const sentinel = "SENSITIVE_PROXY_VALUE"
+	ops := &netops{
+		proxyFromEnv: func(*http.Request) (*url.URL, error) {
+			return nil, errors.New("parse " + sentinel + ": invalid control character in URL")
+		},
+		dialContext: func(context.Context, string, string) (net.Conn, error) {
+			t.Fatal("a proxy parse error must not be dialed")
+			return nil, nil
+		},
+	}
+	r := ops.proxyProbe(context.Background(), nil)
+	if r.Status != StatusFail {
+		t.Errorf("status = %v, want FAIL", r.Status)
+	}
+	if !strings.Contains(r.Detail, "bad proxy configuration") || !strings.Contains(r.Detail, "HTTPS_PROXY") || !strings.Contains(r.Detail, "HTTP_PROXY") {
+		t.Errorf("detail = %q, want an actionable bad proxy configuration message", r.Detail)
+	}
+	if strings.Contains(r.Detail, sentinel) || strings.Contains(r.Fix, sentinel) {
+		t.Errorf("parser error text leaked into report: detail=%q fix=%q", r.Detail, r.Fix)
+	}
+}
+
 func TestProxyProbeConnectOK(t *testing.T) {
 	conn := &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n")}
 	ops := proxyOps("http://proxy.corp:3128", func(context.Context, string, string) (net.Conn, error) {

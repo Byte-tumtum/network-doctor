@@ -708,7 +708,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	if err != nil {
 		r.Status = StatusFail
-		r.Detail = "bad proxy configuration: " + err.Error()
+		r.Detail = "bad proxy configuration: HTTPS_PROXY/HTTP_PROXY is not a valid proxy URL"
 		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
 		return r
 	}
