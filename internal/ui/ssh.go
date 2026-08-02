@@ -243,11 +243,13 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 			AskpassEnv+"="+password,
 			AskpassHostEnv+"="+t.Host)
 	}
-	dest := t.Host
 	if login != "" {
-		dest = login + "@" + dest
+		// -l rather than login@host: the login is the one free-text field on
+		// this form, and getopt takes an option's value verbatim, so a name
+		// starting with "-" stays a name instead of becoming an ssh option.
+		args = append(args, "-l", login)
 	}
-	return append(args, dest), env, nil
+	return append(args, t.Host), env, nil
 }
 
 // runSSH hands the terminal to ssh and takes it back when the session ends.

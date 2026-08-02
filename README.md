@@ -222,7 +222,7 @@ Form fills in `ssh` options, nothing more:
 | Field | Effect |
 |-------|--------|
 | (host) | the target, plus `-p` when it named a non-default port |
-| Username | the `user@` part of the destination |
+| Username | `-l <login>`, not `login@host`, so a name starting with `-` stays a name |
 | Key | `-i <path> -o IdentitiesOnly=yes`, so a loaded agent can't spend the server's auth attempts before this key is tried |
 | Password | see below |
 

@@ -26,14 +26,20 @@ func TestSSHCommand(t *testing.T) {
 		want                          []string
 	}{
 		{name: "host only", host: "example.com", want: []string{"example.com"}},
-		{name: "login", host: "example.com", login: "alice", want: []string{"alice@example.com"}},
+		{name: "login", host: "example.com", login: "alice", want: []string{"-l", "alice", "example.com"}},
 		{
 			name: "port", host: "example.com:2222", login: "alice",
-			want: []string{"-p", "2222", "alice@example.com"},
+			want: []string{"-p", "2222", "-l", "alice", "example.com"},
 		},
 		{
 			name: "port 22 is the default", host: "example.com:22", login: "alice",
-			want: []string{"alice@example.com"},
+			want: []string{"-l", "alice", "example.com"},
+		},
+		{
+			// A login is free text: as an operand it would be read as an option,
+			// as -l's value it cannot be.
+			name: "login starting with a dash stays a login", host: "example.com", login: "-oProxyCommand=touch /tmp/pwned",
+			want: []string{"-l", "-oProxyCommand=touch /tmp/pwned", "example.com"},
 		},
 		{
 			name: "chosen key wins over the agent", host: "example.com", keyArg: key,
@@ -80,8 +86,8 @@ func TestSSHCommandWithoutHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
-	if !slices.Equal(args, []string{"alice@example.com"}) {
-		t.Errorf("args = %v, want [alice@example.com]", args)
+	if !slices.Equal(args, []string{"-l", "alice", "example.com"}) {
+		t.Errorf("args = %v, want [-l alice example.com]", args)
 	}
 	if env != nil {
 		t.Errorf("env = %v, want nil", env)
