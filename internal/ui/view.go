@@ -846,6 +846,12 @@ func (m model) jobView(avail int) string {
 		shown = shown[len(shown)-tailN:]
 	}
 	for _, ln := range shown {
+		// Truncate rather than wrap: tool output routinely runs past the
+		// terminal, and every extra display row is a row tailN never budgeted
+		// for. The pane already offers enter to scroll for the whole line.
+		if m.width > 0 {
+			ln = ansi.Truncate(ln, m.width, "")
+		}
 		b.WriteString(ln + "\n")
 	}
 	older := len(m.cur.lines) - len(shown) + m.cur.evicted

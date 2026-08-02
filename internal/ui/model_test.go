@@ -985,10 +985,9 @@ func TestPromptFormsYieldToJobPane(t *testing.T) {
 	}
 }
 
-// Nothing the TUI writes itself may run past a narrow terminal: the banner
-// and header are full-width prose, and the terminal's own hard wrap would
-// break words and blow View's row budget. Command output is exempt — it is
-// whatever the tool printed, and the viewer wraps it.
+// Nothing View writes may run past a narrow terminal: the terminal's own hard
+// wrap would break words and blow View's row budget. Prose the TUI writes
+// itself gets wrapped; tool output gets truncated (see TestJobPaneFitsHeight).
 func TestViewWrapsToNarrowTerminal(t *testing.T) {
 	for _, w := range []int{40, 60, 79} {
 		m := newModel(mustTarget(t, "example.com:443"), false)
@@ -997,6 +996,31 @@ func TestViewWrapsToNarrowTerminal(t *testing.T) {
 		for _, line := range strings.Split(nm.View(), "\n") {
 			if got := lipgloss.Width(line); got > w {
 				t.Errorf("%d cols: line is %d wide: %q", w, got, line)
+			}
+		}
+	}
+}
+
+// The job pane budgets its tail in logical lines, so an output line wider than
+// the terminal would cost display rows nobody counted — ss and traceroute
+// produce those routinely. Truncating keeps the frame inside the terminal.
+func TestJobPaneFitsHeight(t *testing.T) {
+	for _, h := range []int{24, 40, 50} {
+		m := newModel(mustTarget(t, "example.com:443"), false)
+		m.cur.status = JobRunning
+		m.cur.display = "ss -tunp"
+		for range 200 {
+			m.cur.lines = append(m.cur.lines, strings.Repeat("x", 200))
+		}
+		u, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: h})
+		nm := asModel(t, u)
+		v := nm.View()
+		if rows := lipgloss.Height(v); rows > h {
+			t.Errorf("60x%d: view is %d display rows tall", h, rows)
+		}
+		for _, line := range strings.Split(v, "\n") {
+			if got := lipgloss.Width(line); got > 60 {
+				t.Errorf("60x%d: line is %d wide: %q", h, got, line)
 			}
 		}
 	}
