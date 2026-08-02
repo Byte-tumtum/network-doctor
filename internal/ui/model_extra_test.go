@@ -296,6 +296,30 @@ func TestDeferredRestartDefersTargetSwap(t *testing.T) {
 	}
 }
 
+// A restart forgets its jobs, but each producer still owes one blocking
+// terminal send. With a full buffer and nothing left re-issuing waitForMsg,
+// that send parks the goroutine forever.
+func TestRestartDrainsAbandonedJob(t *testing.T) {
+	m := newModel(mustTarget(t, "github.com"), false)
+	ch := make(chan tea.Msg, 2)
+	ch <- ToolOutputMsg{JobID: "j"}
+	ch <- ToolOutputMsg{JobID: "j"} // buffer full: the terminal send will block
+	m.cur.active, m.cur.status = &job{id: "j", ch: ch, cancel: func() {}}, JobRunning
+
+	m.doRestart()
+
+	sent := make(chan struct{})
+	go func() {
+		ch <- ToolDoneMsg{JobID: "j", Status: JobCanceled}
+		close(sent)
+	}()
+	select {
+	case <-sent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal send parked: an abandoned job's channel is never drained")
+	}
+}
+
 // Starting another tool keeps the first one running, routes its output in the
 // background, and lets Tab select it again.
 func TestConcurrentToolsCanSwitch(t *testing.T) {

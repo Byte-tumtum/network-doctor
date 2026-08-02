@@ -376,7 +376,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.results = map[diagnostic.ProbeID]diagnostic.ProbeResult{}
 	m.started = map[diagnostic.ProbeID]bool{}
 	m.pending, m.confirmTool, m.sshPrompt = nil, nil, false
-	m.cur, m.otherJobs = jobState{}, nil
+	m.dropJobs()
 	m.networkMap, m.mapSelected, m.networkCIDR = false, 0, ""
 	m.hostNames, m.namesPending = nil, nil
 	m.notice = ""

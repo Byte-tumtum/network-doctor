@@ -44,6 +44,15 @@ func (m model) jobsRunning() bool {
 	return false
 }
 
+// dropJobs forgets every run. Anything still streaming gets a background
+// drainer, since after this there's no jobState left to route its messages to.
+func (m *model) dropJobs() {
+	for j := range m.jobs {
+		j.active.drain()
+	}
+	m.cur, m.otherJobs = jobState{}, nil
+}
+
 func (m *model) cancelJobs() {
 	for j := range m.jobs {
 		if j.active != nil && j.active.cancel != nil {

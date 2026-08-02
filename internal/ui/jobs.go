@@ -128,6 +128,24 @@ func waitForMsg(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg { return <-ch }
 }
 
+// drain keeps reading an abandoned job's channel in the background. Once a run
+// is dropped nothing re-issues waitForMsg for it, and the producer still owes
+// one blocking terminal send — on a full buffer that parks the goroutine for
+// good. Exactly one ToolDoneMsg arrives, last, so this loop always ends.
+func (j *job) drain() {
+	if j == nil || j.ch == nil {
+		return
+	}
+	ch := j.ch
+	go func() {
+		for {
+			if _, done := (<-ch).(ToolDoneMsg); done {
+				return
+			}
+		}
+	}()
+}
+
 // streamReader reads capped, sanitized lines and pushes them non-blocking: it
 // always consumes the bytes (so the child never stalls) and only drops the
 // *message* when the channel is full, so the terminal event can still be
