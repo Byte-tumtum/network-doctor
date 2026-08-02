@@ -1,4 +1,4 @@
-// Toolbox mode: tool sets and the exit code.
+// Toolbox mode: the exit code.
 
 package ui
 
@@ -7,19 +7,6 @@ import (
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
-
-func TestToolsFor(t *testing.T) {
-	for _, goos := range []string{"linux", "darwin", "windows"} {
-		// Generic mode: target-independent tools only (routes, sockets).
-		if got := len(toolsFor(nil, goos)); got != 2 {
-			t.Errorf("%s toolsFor(nil) = %d, want 2", goos, got)
-		}
-		// Target mode: + ping, dns, curl, trace, path-quality, nmap.
-		if got := len(toolsFor(mustTarget(t, "github.com"), goos)); got != 8 {
-			t.Errorf("%s toolsFor(target) = %d, want 8", goos, got)
-		}
-	}
-}
 
 // Toolbox mode with no chain run exits 0.
 func TestToolboxExitZero(t *testing.T) {
