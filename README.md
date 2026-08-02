@@ -232,6 +232,8 @@ Typed password echoed as dots and never reaches command line, notice, or report.
 
 Because forced askpass routes *every* prompt to helper, helper answers only password and passphrase prompts; refuses rest. So first connection to unknown host — where `ssh` asks you to verify host key — needs one run with password field blank, which puts that question back on your terminal where it belongs.
 
+Whole `ssh` subtree inherits askpass setting, so with `ProxyJump` in your `ssh_config` jump host's `ssh` asks helper too. Prompt names machine it asks for (`user@host's password:`), and helper answers only when that host matches target — jump host's prompt goes back to your terminal. Prompts naming no host (key passphrase, PAM keyboard-interactive `Password:`) still answered; refusing those would break ordinary logins.
+
 ### JSON output
 
 `--json` runs same probe DAG headless — no TUI — and prints one JSON document to stdout:

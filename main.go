@@ -53,7 +53,9 @@ func main() {
 // prompt is answered; anything else is refused and ssh says so on the
 // terminal, leaving the user to answer it themselves on a run with the
 // password field left blank.
-func askpass(args []string, secret string, stdout, stderr io.Writer) int {
+// host is the machine the password was collected for; a prompt naming any
+// other one is refused, since ssh's whole subtree inherits the helper.
+func askpass(args []string, secret, host string, stdout, stderr io.Writer) int {
 	prompt := strings.ToLower(strings.Join(args, " "))
 	// The host-key question embeds the host name, so a target like
 	// "passwordless.example.com" would otherwise satisfy the check below and
@@ -65,8 +67,29 @@ func askpass(args []string, secret string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: not answering this prompt with the stored password")
 		return 1
 	}
+	if h := promptHost(prompt); h != "" && h != strings.ToLower(host) {
+		fmt.Fprintln(stderr, "netdoc: not answering a password prompt for", h)
+		return 1
+	}
 	fmt.Fprintln(stdout, secret)
 	return 0
+}
+
+// promptHost names the machine an ssh password prompt is for, or "" when the
+// prompt names none. ssh asks as "user@host's password:", and a ProxyJump or
+// ProxyCommand child asks the same way for the jump host — a prompt that
+// matches on "password" but wants a secret this form never collected. A key
+// passphrase and a PAM keyboard-interactive "Password:" carry no host, and
+// those stay answerable: refusing them would break ordinary logins.
+func promptHost(prompt string) string {
+	head, _, ok := strings.Cut(prompt, "'s password")
+	if !ok {
+		return ""
+	}
+	if i := strings.LastIndex(head, "@"); i >= 0 {
+		return head[i+1:]
+	}
+	return ""
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -75,7 +98,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// process on the machine could read. First thing in run: ssh wants a
 	// secret on stdout and nothing else.
 	if secret, ok := os.LookupEnv(ui.AskpassEnv); ok {
-		return askpass(args, secret, stdout, stderr)
+		return askpass(args, secret, os.Getenv(ui.AskpassHostEnv), stdout, stderr)
 	}
 	fs := flag.NewFlagSet("netdoc", flag.ContinueOnError)
 	// Buffered, not stderr: the flag package quotes nothing, so an undefined

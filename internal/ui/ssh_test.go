@@ -60,6 +60,7 @@ func TestSSHCommand(t *testing.T) {
 				return
 			}
 			if !slices.Contains(env, AskpassEnv+"="+tt.password) ||
+				!slices.Contains(env, AskpassHostEnv+"=example.com") ||
 				!slices.Contains(env, "SSH_ASKPASS=/usr/bin/netdoc") ||
 				!slices.Contains(env, "SSH_ASKPASS_REQUIRE=force") {
 				t.Errorf("askpass environment incomplete: %v", env)

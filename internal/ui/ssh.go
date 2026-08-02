@@ -43,6 +43,12 @@ const (
 // which is where ssh expects an askpass helper's answer.
 const AskpassEnv = "NETDOC_ASKPASS"
 
+// AskpassHostEnv names the host the password was collected for. ssh's whole
+// subtree inherits the askpass setting, so a ProxyJump child asking for the
+// jump host's password reaches the same helper; the helper compares the host
+// in the prompt against this one and refuses anything else.
+const AskpassHostEnv = "NETDOC_ASKPASS_HOST"
+
 // sshForm is the SSH login prompt. The host is the run target, not a field:
 // the form logs in to the machine the checks are about.
 type sshForm struct {
@@ -234,7 +240,8 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 		env = append(os.Environ(),
 			"SSH_ASKPASS="+self,
 			"SSH_ASKPASS_REQUIRE=force", // ask the helper even though ssh has a tty
-			AskpassEnv+"="+password)
+			AskpassEnv+"="+password,
+			AskpassHostEnv+"="+t.Host)
 	}
 	dest := t.Host
 	if login != "" {

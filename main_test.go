@@ -84,6 +84,18 @@ func TestRunAsAskpass(t *testing.T) {
 	}{
 		{"password", "alice@example.com's password:", 0, "hunter2\n"},
 		{"passphrase", "Enter passphrase for key '/home/a/.ssh/id_ed25519':", 0, "hunter2\n"},
+		{
+			// ProxyJump: the jump host's ssh inherits the helper and asks for its
+			// own password. Same "password" prompt, different machine.
+			"password for a host on the way", "alice@jump.example.com's password:", 1, "",
+		},
+		{
+			// The user@ half is not the target's, so it can't stand in for it.
+			"password for a look-alike login", "example.com@evil.example's password:", 1, "",
+		},
+		// Keyboard-interactive PAM prompts name no host, and refusing those
+		// would break the logins netdoc is there to make.
+		{"hostless PAM prompt", "Password: ", 0, "hunter2\n"},
 		// A helper whose job is to refuse what it doesn't recognize has no
 		// business guessing at a prompt that isn't there.
 		{"no prompt", "", 1, ""},
@@ -122,6 +134,7 @@ func TestRunAsAskpass(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(ui.AskpassEnv, "hunter2")
+			t.Setenv(ui.AskpassHostEnv, "example.com")
 			var stdout, stderr bytes.Buffer
 			args := []string{tt.prompt}
 			if tt.prompt == "" {
