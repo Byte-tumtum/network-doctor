@@ -29,6 +29,20 @@ source:
 checksum:
   name_template: "checksums.txt"
 
+# Distro-agnostic packages for everything that isn't Arch: apt, dnf, apk all
+# install these straight off the release page.
+nfpms:
+  - package_name: network-doctor
+    homepage: https://github.com/heymaikol/network-doctor
+    description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
+    maintainer: Michael Placzek <heymaikol@proton.me>
+    license: Apache-2.0
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/network-doctor/LICENSE
+
 aur_sources:
   - homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
