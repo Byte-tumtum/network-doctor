@@ -78,27 +78,6 @@ func TestDialerFromUsesNetworkAddressType(t *testing.T) {
 	}
 }
 
-// BuildProbesFrom shapes for the http and smtp protocol paths (the ssh/https paths
-// are covered in checks_test.go).
-func TestBuildProbesProtoShapes(t *testing.T) {
-	cases := []struct {
-		target string
-		want   int // iface, internet, proxy, system/public dns, target_tcp, path_mtu, ssid, + protocol rows
-	}{
-		{"http://example.com", 9}, // + http
-		{"host:25", 9},            // + smtp banner
-		{"host:587", 9},           // + smtp banner
-		{"ssh://host:2222", 9},    // + ssh banner
-		{"smtp://host:2525", 9},   // + smtp banner
-		{"host:9999", 8},          // ProtoNone — stops at path_mtu
-	}
-	for _, c := range cases {
-		if got := len(BuildProbesFrom(mustTarget(t, c.target), nil)); got != c.want {
-			t.Errorf("BuildProbesFrom(%q) = %d probes, want %d", c.target, got, c.want)
-		}
-	}
-}
-
 // dialIPs with a stubbed dialer returns a connection pinned to the address
 // that won, with the attempt recorded. No real sockets.
 func TestDialIPsSuccess(t *testing.T) {

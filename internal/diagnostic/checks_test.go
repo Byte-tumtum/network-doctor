@@ -18,15 +18,31 @@ func mustTarget(t *testing.T, s string) *Target {
 	return tg
 }
 
+// A target adds iface, internet, proxy, system/public dns, target_tcp, path_mtu,
+// ssid, plus whatever rows its protocol contributes.
 func TestBuildProbesShape(t *testing.T) {
-	if got := len(BuildProbesFrom(nil, nil)); got != 6 {
-		t.Errorf("generic probes = %d, want 6", got)
+	cases := []struct {
+		target string // empty means no target
+		want   int
+	}{
+		{"", 6},                   // no target — no target_tcp/path_mtu/protocol rows
+		{"github.com", 11},        // + tls, http, https
+		{"http://example.com", 9}, // + http
+		{"host:22", 9},            // + ssh banner
+		{"ssh://host:2222", 9},    // + ssh banner
+		{"host:25", 9},            // + smtp banner
+		{"host:587", 9},           // + smtp banner
+		{"smtp://host:2525", 9},   // + smtp banner
+		{"host:9999", 8},          // ProtoNone — stops at path_mtu
 	}
-	if got := len(BuildProbesFrom(mustTarget(t, "github.com"), nil)); got != 11 {
-		t.Errorf("https target probes = %d, want 11", got)
-	}
-	if got := len(BuildProbesFrom(mustTarget(t, "host:22"), nil)); got != 9 {
-		t.Errorf("ssh target probes = %d, want 9", got)
+	for _, c := range cases {
+		var tg *Target
+		if c.target != "" {
+			tg = mustTarget(t, c.target)
+		}
+		if got := len(BuildProbesFrom(tg, nil)); got != c.want {
+			t.Errorf("BuildProbesFrom(%q) = %d probes, want %d", c.target, got, c.want)
+		}
 	}
 }
 
