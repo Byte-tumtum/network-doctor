@@ -84,7 +84,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		case warn(ProbeDNSPublic) && functional(res[ProbeDNS].Status):
 			return "Online, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", gv
 		case ip && dn && prxDown:
-			return "Online directly — but the configured environment proxy check failed, so apps that honor HTTP(S)_PROXY will fail (see the proxy row).", gv
+			return "Online directly — but the configured environment proxy check failed, so apps that honor HTTP(S)_PROXY will fail (see the proxy row).", VerdictDegraded
 		case ip && dn:
 			return "Online — direct TCP egress and DNS both work.", gv
 		case warn(ProbeInternet) && res[ProbeInternet].downgraded && dn && prx:
@@ -158,7 +158,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	case fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded):
 		return "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded
 	case prxDown && directOK():
-		return "The target and direct egress work, but the configured environment proxy check failed — apps that honor HTTP(S)_PROXY will fail (see the proxy row).", healthy
+		return "The target and direct egress work, but the configured environment proxy check failed — apps that honor HTTP(S)_PROXY will fail (see the proxy row).", VerdictDegraded
 	case warn(ProbeInternet):
 		return "The target works but direct internet egress is degraded (see the ! row for details).", VerdictDegraded
 	case warn(ProbeDNSPublic):

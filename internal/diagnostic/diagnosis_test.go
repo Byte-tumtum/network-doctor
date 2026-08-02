@@ -189,6 +189,12 @@ func TestVerdict(t *testing.T) {
 		{"slow but working", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbeTargetTCP: {Status: StatusWarn},
 		}, VerdictDegraded},
+		// The target and direct egress both work; only the configured proxy
+		// check failed. Apps that honor HTTP(S)_PROXY will still fail, so
+		// this can't be a clean pass.
+		{"target fine, configured proxy broken", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbeProxy: {Status: StatusFail},
+		}, VerdictDegraded},
 		{"generic online", nil, genericOrder, nil, VerdictOK},
 		{"generic dns down", nil, genericOrder, map[ProbeID]ProbeResult{
 			ProbeDNS: {Status: StatusFail},
@@ -204,6 +210,12 @@ func TestVerdict(t *testing.T) {
 		{"generic proxy-only", nil, genericOrder, map[ProbeID]ProbeResult{
 			ProbeInternet: {Status: StatusWarn, downgraded: true},
 			ProbeProxy:    {Status: StatusPass},
+		}, VerdictDegraded},
+		// Direct internet and DNS both work; only the configured proxy check
+		// failed. The summary already warns proxy-aware apps will fail, so
+		// the verdict can't say ok.
+		{"generic direct fine, configured proxy broken", nil, genericOrder, map[ProbeID]ProbeResult{
+			ProbeProxy: {Status: StatusFail},
 		}, VerdictDegraded},
 	}
 	for _, c := range cases {
