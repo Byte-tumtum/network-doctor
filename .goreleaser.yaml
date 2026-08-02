@@ -17,6 +17,10 @@ builds:
 
 archives:
   - formats: [binary]
+    # winget and Scoop both refuse a bare binary; Windows gets a zip instead.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
 
 source:
   enabled: true
@@ -57,6 +61,41 @@ homebrew_casks:
           if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}"]
           end
+
+# Scoop publishes to our own bucket immediately; winget opens a PR upstream that
+# Microsoft reviews, so releases land there some time later.
+scoops:
+  - repository:
+      owner: heymaikol
+      name: scoop-bucket
+      token: "{{ .Env.WINDOWS_PACKAGES_TOKEN }}"
+    homepage: https://github.com/heymaikol/network-doctor
+    description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
+    license: Apache-2.0
+
+winget:
+  - package_name: Network Doctor
+    package_identifier: heymaikol.NetworkDoctor
+    publisher: Michael Placzek
+    publisher_url: https://github.com/heymaikol
+    publisher_support_url: https://github.com/heymaikol/network-doctor/issues
+    short_description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
+    homepage: https://github.com/heymaikol/network-doctor
+    license: Apache-2.0
+    tags:
+      - cli
+      - network
+      - diagnostics
+    repository:
+      owner: heymaikol
+      name: winget-pkgs
+      token: "{{ .Env.WINDOWS_PACKAGES_TOKEN }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
 
 changelog:
   use: github-native
