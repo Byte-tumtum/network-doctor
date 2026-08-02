@@ -36,7 +36,7 @@ nfpms:
     homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
     maintainer: Michael Placzek <heymaikol@proton.me>
-    license: GPL-3.0-only
+    license: GPL-3.0-or-later
     formats: [deb, rpm, apk]
     bindir: /usr/bin
     contents:
@@ -46,7 +46,7 @@ nfpms:
 aur_sources:
   - homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
-    license: GPL-3.0-only
+    license: GPL-3.0-or-later
     maintainers:
       - Michael Placzek <heymaikol@proton.me>
     private_key: "{{ .Env.AUR_KEY }}"
@@ -85,7 +85,7 @@ scoops:
       token: "{{ .Env.WINDOWS_PACKAGES_TOKEN }}"
     homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
-    license: GPL-3.0-only
+    license: GPL-3.0-or-later
 
 winget:
   - package_name: Network Doctor
@@ -95,7 +95,7 @@ winget:
     publisher_support_url: https://github.com/heymaikol/network-doctor/issues
     short_description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
     homepage: https://github.com/heymaikol/network-doctor
-    license: GPL-3.0-only
+    license: GPL-3.0-or-later
     tags:
       - cli
       - network

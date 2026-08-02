@@ -331,3 +331,7 @@ Code split by responsibility:
 - `internal/textsafe` sanitizes untrusted remote and subprocess text shared by both layers.
 
 UI depends on diagnostics; diagnostics do not depend on UI. Add network semantics under `internal/diagnostic`, interaction or rendering behavior under `internal/ui`.
+
+## License
+
+Network Doctor is free software under the [GNU General Public License](LICENSE), either version 3 of the License, or (at your option) any later version. Package metadata declares this as `GPL-3.0-or-later`.
