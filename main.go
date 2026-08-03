@@ -218,6 +218,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	p := tea.NewProgram(ui.NewWithSource(t, source, *toolbox, *watch, histFile, version), tea.WithAltScreen())
 	final, err := p.Run()
+	// Every way out of Run lands here, including the ones that never reached
+	// the model's own quit path.
+	ui.Cleanup(final)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)
 		return 1

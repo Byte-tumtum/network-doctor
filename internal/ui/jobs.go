@@ -60,6 +60,9 @@ const (
 	// the UI never blocks to spare a chatty subprocess's feelings.
 	chanBuf      = 256
 	maxLineBytes = 4096
+	// exitGrace bounds the wait for killed jobs on the way out. It has to
+	// outlast cmd.WaitDelay, which is what caps a child holding the pipe.
+	exitGrace = 3 * time.Second
 )
 
 // job is a running external command. The channel carries ToolOutputMsg lines and
@@ -144,6 +147,27 @@ func (j *job) drain() {
 			}
 		}
 	}()
+}
+
+// waitDone blocks until the job's terminal event lands or deadline fires. Only
+// shutdown uses it — while the app is up, Update owns this channel. Cancelling
+// a job is not the same as having killed it: exec runs cmd.Cancel on its own
+// goroutine, so without this wait the process could exit before the SIGKILL
+// goes out.
+func (j *job) waitDone(deadline <-chan time.Time) {
+	if j == nil || j.ch == nil {
+		return
+	}
+	for {
+		select {
+		case msg := <-j.ch:
+			if _, done := msg.(ToolDoneMsg); done {
+				return
+			}
+		case <-deadline:
+			return
+		}
+	}
 }
 
 // streamReader reads capped, sanitized lines and pushes them non-blocking: it

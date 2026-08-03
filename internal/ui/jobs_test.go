@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +37,17 @@ func TestHelperProcess(t *testing.T) {
 		for i := 0; i < 20000; i++ {
 			fmt.Printf("flood %d\n", i)
 		}
+	case "grandchild":
+		// A child of the child, reachable only through the process group. Its
+		// output is discarded rather than inherited, so it can't hold our
+		// stdout pipe open and stall the drain after we die.
+		child := exec.Command("sleep", "300")
+		if err := child.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "grandchild:", err)
+			os.Exit(1)
+		}
+		fmt.Println(child.Process.Pid)
+		time.Sleep(30 * time.Second)
 	}
 	os.Exit(0)
 }
