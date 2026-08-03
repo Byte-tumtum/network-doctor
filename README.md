@@ -307,7 +307,7 @@ Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent canc
 
 ## Tests
 
-Before submitting change, run complete CI gate. The final check requires GoReleaser v2.17.1, matching the CI and release workflows:
+Before submitting change, run complete CI gate. Every tool runs through `go run` at the version CI uses, so a Go toolchain is the only prerequisite:
 
 ```sh
 go vet ./...
@@ -316,9 +316,9 @@ go test ./...
 go test -tags integration ./internal/diagnostic
 go test -race ./...
 go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
-golangci-lint run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-goreleaser check
+go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
 ```
 
 Race and fuzz checks run only on Linux in CI.
