@@ -35,14 +35,19 @@ func (m *model) jobByID(id string) *jobState {
 	return nil
 }
 
-func (m model) jobsRunning() bool {
+// runningJobs counts live subprocesses, the selected slot included. A job with
+// no active handle has already delivered its ToolDoneMsg.
+func (m model) runningJobs() int {
+	n := 0
 	for j := range m.jobs {
 		if j.active != nil {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
+
+func (m model) jobsRunning() bool { return m.runningJobs() > 0 }
 
 // dropJobs forgets every run. Anything still streaming gets a background
 // drainer, since after this there's no jobState left to route its messages to.
@@ -68,6 +73,21 @@ func (m *model) stashJob() {
 	if m.hasJob() {
 		m.otherJobs = append(m.otherJobs, m.cur)
 		m.cur = jobState{}
+		m.trimJobs()
+	}
+}
+
+// trimJobs drops the oldest finished runs until the ring is back under
+// maxParkedJobs. A live run is never dropped: its output still needs a jobState
+// to route to, and the user didn't ask for it to be killed. That means the ring
+// can sit over the cap while jobs are in flight — maxActiveJobs bounds how far.
+func (m *model) trimJobs() {
+	for i := 0; i < len(m.otherJobs) && len(m.otherJobs) > maxParkedJobs; {
+		if m.otherJobs[i].active != nil {
+			i++
+			continue
+		}
+		m.otherJobs = append(m.otherJobs[:i], m.otherJobs[i+1:]...)
 	}
 }
 

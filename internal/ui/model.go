@@ -99,11 +99,17 @@ type jobState struct {
 const (
 	maxJobLines  = 5000 // ring-buffer cap: older lines become a "discarded" count, not a memory bill
 	jobTailLines = 14   // main-screen tail fallback when the terminal height is unknown
-	ctrlCWindow  = 2 * time.Second
-	noticeWindow = 4 * time.Second
-	watchEvery   = 5 * time.Second
-	watchRuns    = 20
-	ctrlCNotice  = "Press Ctrl+C again to quit"
+	// maxActiveJobs caps live subprocesses. A held-down hotkey is one keypress
+	// per repeat, and every one of them used to fork.
+	maxActiveJobs = 4
+	// maxParkedJobs caps the tab ring. Each parked run still owns its output
+	// buffer, so an unbounded ring is a memory bill nobody asked for.
+	maxParkedJobs = 12
+	ctrlCWindow   = 2 * time.Second
+	noticeWindow  = 4 * time.Second
+	watchEvery    = 5 * time.Second
+	watchRuns     = 20
+	ctrlCNotice   = "Press Ctrl+C again to quit"
 )
 
 type model struct {

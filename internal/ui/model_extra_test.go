@@ -366,6 +366,54 @@ func TestConcurrentToolsCanSwitch(t *testing.T) {
 	_, _ = drain(t, second.ch)
 }
 
+// TestJobLimits covers both caps: the ring evicts finished runs oldest-first
+// and keeps live ones, and a launch at maxActiveJobs is refused instead of
+// forking yet another subprocess.
+func TestJobLimits(t *testing.T) {
+	m := newModel(mustTarget(t, "github.com"), false)
+	m.generation = 1
+
+	// One live run plus a full ring of finished ones.
+	m.cur.active = &job{id: "live", ch: make(chan tea.Msg, 1)}
+	m.cur.status, m.cur.name = JobRunning, "live tool"
+	for i := range maxParkedJobs {
+		m.otherJobs = append(m.otherJobs, jobState{status: JobDone, name: fmt.Sprintf("old-%d", i)})
+	}
+	m.stashJob()
+	if len(m.otherJobs) != maxParkedJobs {
+		t.Fatalf("ring holds %d runs, want %d", len(m.otherJobs), maxParkedJobs)
+	}
+	if m.otherJobs[0].name != "old-1" {
+		t.Fatalf("evicted %q, want the oldest finished run old-0", m.otherJobs[0].name)
+	}
+	if m.otherJobs[len(m.otherJobs)-1].active == nil {
+		t.Fatal("the live run must survive eviction")
+	}
+
+	// At the active cap, the hotkey reports back instead of launching.
+	m.cur = jobState{}
+	m.otherJobs = nil
+	for i := range maxActiveJobs {
+		m.otherJobs = append(m.otherJobs, jobState{
+			active: &job{id: fmt.Sprintf("run-%d", i)}, status: JobRunning,
+		})
+	}
+	tool := Tool{Key: "z", Name: "second tool", Bin: os.Args[0], Available: true,
+		Build: func(*diagnostic.Target) ([]string, []string, string) {
+			t.Fatal("launch must be refused at the active cap")
+			return nil, nil, ""
+		}}
+	m.tools = []Tool{tool}
+	u, _ := m.Update(keyMsg("z"))
+	nm := asModel(t, u)
+	if nm.cur.active != nil || len(nm.otherJobs) != maxActiveJobs {
+		t.Fatalf("refused launch still touched job state (cur=%+v other=%d)", nm.cur, len(nm.otherJobs))
+	}
+	if !strings.Contains(nm.notice, "already running") {
+		t.Fatalf("notice = %q, want the at-capacity message", nm.notice)
+	}
+}
+
 func TestTabPreservesArmedQuit(t *testing.T) {
 	m := newModel(nil, false)
 	m.cur.name, m.cur.status = "current tool", JobDone

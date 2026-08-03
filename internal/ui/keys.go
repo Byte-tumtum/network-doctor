@@ -392,6 +392,12 @@ func (m *model) doRestart() tea.Cmd {
 }
 
 func (m *model) launchTool(tool Tool) tea.Cmd {
+	// Refuse before stashing — stashJob clears the slot, so a late bail would
+	// blank the pane the user is looking at. A missing binary spawns nothing,
+	// so "not found" still gets through at the limit.
+	if tool.Available && m.runningJobs() >= maxActiveJobs {
+		return m.setNotice(fmt.Sprintf("%d tools already running — wait for one to finish", maxActiveJobs), false)
+	}
 	m.stashJob()
 	m.networkMap = tool.Key == "v"
 	if m.networkMap {
