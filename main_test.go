@@ -258,6 +258,31 @@ func TestRunJSON(t *testing.T) {
 	}
 }
 
+// -timeout is the only knob on the bounded-time contract, and rejecting a bad
+// value proves nothing about a good one: a positive duration has to reach the
+// probes before the run starts.
+func TestRunAppliesTimeout(t *testing.T) {
+	origRun, origTimeout := runAll, diagnostic.ProbeTimeout
+	t.Cleanup(func() { runAll, diagnostic.ProbeTimeout = origRun, origTimeout })
+
+	var applied time.Duration
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		applied = diagnostic.ProbeTimeout
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+		}
+		return results
+	}
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"-timeout", "250ms", "-json", "example.com:443"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if applied != 250*time.Millisecond {
+		t.Errorf("ProbeTimeout during the run = %v, want 250ms", applied)
+	}
+}
+
 // cancelAfter stops the watch loop once it has written n reports, standing in
 // for the Ctrl-C that ends it in real use.
 type cancelAfter struct {

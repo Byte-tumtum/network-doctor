@@ -4,9 +4,11 @@
 package ui
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
@@ -164,6 +166,55 @@ func TestWatchHistoryKeepsLastTwentyRuns(t *testing.T) {
 	}
 	if history[0] != diagnostic.StatusPass {
 		t.Fatalf("oldest retained status = %v, want second run's PASS", history[0])
+	}
+}
+
+// blockUntilDone is the diagnostic-side helper's twin: a probe that only ends
+// when its context does, so a runProbe that dropped the timeout wrapper hangs
+// instead of passing.
+func blockUntilDone(id diagnostic.ProbeID) diagnostic.Probe {
+	return diagnostic.Probe{ID: id, Name: string(id), Run: func(ctx context.Context, _ map[diagnostic.ProbeID]diagnostic.ProbeResult) diagnostic.ProbeResult {
+		if _, ok := ctx.Deadline(); !ok {
+			return diagnostic.ProbeResult{Status: diagnostic.StatusFail, Detail: "no deadline"}
+		}
+		<-ctx.Done()
+		return diagnostic.ProbeResult{Status: diagnostic.StatusFail, Detail: ctx.Err().Error()}
+	}}
+}
+
+// The bounded-time guarantee, TUI half: runProbe wraps each probe in its own
+// ProbeTimeout child of the model context, so a stuck probe still lands as a
+// probeDoneMsg instead of freezing the run.
+func TestRunProbeBoundsProbe(t *testing.T) {
+	orig := diagnostic.ProbeTimeout
+	diagnostic.ProbeTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { diagnostic.ProbeTimeout = orig })
+
+	m := newModel(nil, false)
+	m.ctx = context.Background()
+	msg := m.runProbe(blockUntilDone("slow"))()
+	done, ok := msg.(probeDoneMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want probeDoneMsg", msg)
+	}
+	if done.id != "slow" || done.gen != m.generation {
+		t.Errorf("msg id/gen = %q/%d, want slow/%d", done.id, done.gen, m.generation)
+	}
+	if done.res.Detail != context.DeadlineExceeded.Error() {
+		t.Errorf("detail = %q, want %q", done.res.Detail, context.DeadlineExceeded)
+	}
+}
+
+// Quitting cancels the model context; the per-probe timeout is a child of it,
+// so in-flight probes must unwind rather than outlive the TUI.
+func TestRunProbePropagatesCancellation(t *testing.T) {
+	m := newModel(nil, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.ctx = ctx
+	msg := m.runProbe(blockUntilDone("slow"))()
+	if got := msg.(probeDoneMsg).res.Detail; got != context.Canceled.Error() {
+		t.Errorf("detail = %q, want %q", got, context.Canceled)
 	}
 }
 
