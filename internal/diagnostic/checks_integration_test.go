@@ -12,8 +12,10 @@ package diagnostic
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -143,4 +145,214 @@ func TestPMTUProbeLoopbackSilentPeerDoesNotWarn(t *testing.T) {
 	if r.Status != StatusPass {
 		t.Errorf("silent-but-healthy peer = %+v, want PASS (%d KiB must fit in its receive buffer)", r, pmtuPayloadSize>>10)
 	}
+}
+
+// SourceIP resolves both of the forms -iface accepts, without this test
+// knowing what the loopback interface is called (lo, lo0, "Loopback
+// Pseudo-Interface 1", ...).
+func TestSourceIPResolvesLoopbackInterface(t *testing.T) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatalf("interfaces: %v", err)
+	}
+	name := ""
+	for i := range ifaces {
+		if ifaces[i].Flags&net.FlagLoopback == 0 {
+			continue
+		}
+		if addrs, err := ifaces[i].Addrs(); err == nil && preferredSourceIP(addrs) != nil {
+			name = ifaces[i].Name
+			break
+		}
+	}
+	if name == "" {
+		t.Skip("no loopback interface with a usable address")
+	}
+
+	ip, err := SourceIP(name)
+	if err != nil {
+		t.Fatalf("SourceIP(%q): %v", name, err)
+	}
+	if !ip.IsLoopback() {
+		t.Errorf("SourceIP(%q) = %v, want a loopback address", name, ip)
+	}
+	// The exact-IP form has to accept what the name form just handed back.
+	again, err := SourceIP(ip.String())
+	if err != nil {
+		t.Fatalf("SourceIP(%q): %v", ip, err)
+	}
+	if !again.Equal(ip) {
+		t.Errorf("SourceIP(%q) = %v, want %v", ip, again, ip)
+	}
+
+	// TEST-NET-1 is reserved for documentation, so it is never a local address.
+	if _, err := SourceIP("192.0.2.1"); err == nil {
+		t.Error("an unassigned IP should be rejected")
+	}
+	if _, err := SourceIP("netdoc-no-such-interface"); err == nil {
+		t.Error("an unknown interface name should be rejected")
+	}
+}
+
+// The configured source has to reach the DNS socket too, not only the TCP one:
+// a probe that binds correctly while its resolver leaks onto the default route
+// is the failure this test exists to catch.
+func TestResolverDialsFromSourceLoopback(t *testing.T) {
+	stub := newDNSStub(t, net.ParseIP("192.0.2.7"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// The address the hook is handed comes from resolv.conf and varies per
+	// machine; send every query to the stub instead. What is under test is the
+	// dialer the source produced, not which server the host would have picked.
+	dial := dialContextFrom(net.ParseIP("127.0.0.1"))
+	ips, server, err := lookupIPWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dial(ctx, network, stub.addr())
+	})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if !containsIP(ips, net.ParseIP("192.0.2.7")) {
+		t.Errorf("ips = %v, want 192.0.2.7", ips)
+	}
+	if server == "" {
+		t.Error("server should report the resolver that was dialed")
+	}
+	stub.wantSources(t, net.ParseIP("127.0.0.1"))
+}
+
+// Same for the second-opinion resolver, which additionally must ignore the
+// address it is given and always ask the public server.
+func TestPublicResolverDialsFromSourceLoopback(t *testing.T) {
+	stub := newDNSStub(t, net.ParseIP("192.0.2.8"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var (
+		mu      sync.Mutex
+		targets []string
+	)
+	dial := dialContextFrom(net.ParseIP("127.0.0.1"))
+	ips, err := lookupIPPublicWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		targets = append(targets, addr)
+		mu.Unlock()
+		return dial(ctx, network, stub.addr())
+	})
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if !containsIP(ips, net.ParseIP("192.0.2.8")) {
+		t.Errorf("ips = %v, want 192.0.2.8", ips)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(targets) == 0 {
+		t.Fatal("the dial hook was never called")
+	}
+	for _, addr := range targets {
+		if addr != publicDNSServer {
+			t.Errorf("dialed %q, want %q", addr, publicDNSServer)
+		}
+	}
+	stub.wantSources(t, net.ParseIP("127.0.0.1"))
+}
+
+func containsIP(ips []net.IP, want net.IP) bool {
+	for _, ip := range ips {
+		if ip.Equal(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// dnsStub is a loopback UDP resolver that answers A queries with one fixed
+// address and everything else with an empty NOERROR — enough to satisfy the Go
+// resolver's parallel A/AAAA pair without a DNS library. It records the source
+// address every query arrived from, which is the whole point of it.
+type dnsStub struct {
+	conn *net.UDPConn
+	mu   sync.Mutex
+	srcs []net.IP
+}
+
+func newDNSStub(t *testing.T, answer net.IP) *dnsStub {
+	t.Helper()
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	s := &dnsStub{conn: conn}
+	go s.serve(answer)
+	return s
+}
+
+func (s *dnsStub) addr() string { return s.conn.LocalAddr().String() }
+
+func (s *dnsStub) serve(answer net.IP) {
+	buf := make([]byte, 512)
+	for {
+		n, from, err := s.conn.ReadFromUDP(buf)
+		if err != nil {
+			return // closed by cleanup
+		}
+		s.mu.Lock()
+		s.srcs = append(s.srcs, from.IP)
+		s.mu.Unlock()
+		if reply := dnsReply(buf[:n], answer); reply != nil {
+			s.conn.WriteToUDP(reply, from)
+		}
+	}
+}
+
+// wantSources asserts every query reached the stub from want. Reading after the
+// lookup returned is safe: the resolver has no queries left in flight.
+func (s *dnsStub) wantSources(t *testing.T, want net.IP) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.srcs) == 0 {
+		t.Fatal("no query reached the stub resolver")
+	}
+	for _, src := range s.srcs {
+		if !src.Equal(want) {
+			t.Errorf("query source = %v, want %v", src, want)
+		}
+	}
+}
+
+// dnsReply turns a query into a response: the same header and question back,
+// plus a single A record when A is what was asked for. Anything else — AAAA, a
+// packet too short to parse — gets an answerless NOERROR, which the resolver
+// accepts without retrying.
+func dnsReply(q []byte, answer net.IP) []byte {
+	if len(q) < 12 {
+		return nil
+	}
+	// Walk the question's length-prefixed labels to the qtype behind them.
+	i := 12
+	for i < len(q) && q[i] != 0 {
+		i += int(q[i]) + 1
+	}
+	if i+5 > len(q) {
+		return nil
+	}
+	qtype := binary.BigEndian.Uint16(q[i+1:])
+
+	r := append([]byte(nil), q[:i+5]...)
+	r[2], r[3] = 0x81, 0x80 // QR + RD, RA + NOERROR
+	binary.BigEndian.PutUint16(r[6:], 0)
+	// Any EDNS OPT record the resolver appended is dropped along with the
+	// counts that described it.
+	binary.BigEndian.PutUint16(r[8:], 0)
+	binary.BigEndian.PutUint16(r[10:], 0)
+	if qtype != 1 {
+		return r
+	}
+	binary.BigEndian.PutUint16(r[6:], 1)
+	// 0xc00c points back at the question's name; then A, IN, TTL 60, 4 bytes.
+	r = append(r, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4)
+	return append(r, answer.To4()...)
 }
