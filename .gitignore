@@ -8,9 +8,6 @@
 # GoReleaser
 dist/
 
-# Graphify
-graphify-out/
-
 # Node (nothing here is Go's business)
 node_modules/
 package.json
