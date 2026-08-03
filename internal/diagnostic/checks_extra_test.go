@@ -129,6 +129,38 @@ func TestDialIPsRefused(t *testing.T) {
 	}
 }
 
+// Siblings that fail before the win stay in the attempt list. Every stub dial
+// returns instantly, so failures pile up faster than the race loop drains them
+// and the winning hand-off becomes ready with several still queued — the exact
+// shape that used to lose them. Repeated because the interleaving is a race.
+func TestDialIPsKeepsFailuresThatLostToTheWinner(t *testing.T) {
+	ops := &netops{dialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+		if strings.HasPrefix(addr, "192.0.2.255:") {
+			return fakeConn{}, nil
+		}
+		return nil, errors.New("connection refused")
+	}}
+	var ips []net.IP
+	for i := range maxAttempts - 1 {
+		ips = append(ips, net.IPv4(192, 0, 2, byte(i+1)))
+	}
+	ips = append(ips, net.IPv4(192, 0, 2, 255)) // only address the stub connects to
+
+	for round := range 200 {
+		conn, sel, attempts, _ := ops.dialIPs(context.Background(), ips, 80)
+		if conn == nil {
+			t.Fatalf("round %d: expected the last address to win", round)
+		}
+		conn.Close()
+		if len(attempts) != len(ips) {
+			t.Fatalf("round %d: recorded %d of %d attempts: %+v", round, len(attempts), len(ips), attempts)
+		}
+		if !attempts[len(attempts)-1].IP.Equal(sel) {
+			t.Fatalf("round %d: winner is not the last attempt: %+v", round, attempts)
+		}
+	}
+}
+
 // pathIdentity reads the winning conn's LocalAddr as ground truth and maps it
 // back to an interface via the stubbed interface list.
 func TestPathIdentityFromConn(t *testing.T) {

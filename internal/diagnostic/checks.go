@@ -1335,7 +1335,15 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 	for pending := len(ips); pending > 0; pending-- {
 		select {
 		case w := <-winner:
-			attempts = append(attempts, w.att)
+			// Both channels can be ready at once and select picks blind, so
+			// siblings that already failed may still be queued. Collect them
+			// before leaving — dropping one turns a documented WARN into a PASS
+			// and loses the evidence. Nothing else reads fails, so no receive
+			// here can block.
+			for len(fails) > 0 {
+				attempts = append(attempts, <-fails)
+			}
+			attempts = append(attempts, w.att) // winner last; applyDialWarnings counts on it
 			return w.conn, w.att.IP, attempts, w.att.Dur
 		case att := <-fails:
 			attempts = append(attempts, att)
