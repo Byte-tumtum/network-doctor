@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-03T01:08:03.335333+00:00",
+  "generated_at": "2026-08-03T01:09:59.138016+00:00",
   "nodes": {
     "config": {
       "code_fingerprint": "",
@@ -12,7 +12,7 @@
           "q": "$ponytail:ponytail-audit"
         }
       ],
-      "score": 0.998114192,
+      "score": 0.998083283,
       "source_file": "",
       "status": "tentative",
       "uses": 1
@@ -33,7 +33,7 @@
           "q": "Audit this entire repository. Do not modify code."
         }
       ],
-      "score": 1.6114974,
+      "score": 1.611447496,
       "source_file": "internal/diagnostic/checks.go",
       "status": "preferred",
       "uses": 2
@@ -49,7 +49,7 @@
           "q": "Does it work in complex network setups like Openstack, SDN (OvS, OpenDaylight), etc?"
         }
       ],
-      "score": 0.793664446,
+      "score": 0.793639869,
       "source_file": "internal/diagnostic/checks.go",
       "status": "tentative",
       "uses": 1
@@ -65,7 +65,7 @@
           "q": "Today: I want you to help me making a post to Terminal Trove."
         }
       ],
-      "score": 0.95556823,
+      "score": 0.955538638,
       "source_file": "internal/diagnostic/checks.go",
       "status": "tentative",
       "uses": 1
@@ -91,7 +91,7 @@
           "q": "Promote OSC 52 and remove clipboard direct dependency; inline fallback verdict and one-caller helpers remaining, jobTailN, envProxyURL, and skipResult"
         }
       ],
-      "score": 2.292002606,
+      "score": 2.291931629,
       "source_file": "internal/diagnostic/checks.go",
       "status": "preferred",
       "uses": 3
@@ -127,7 +127,7 @@
           "q": "Make a list of things to work on in my project."
         }
       ],
-      "score": 3.798600529,
+      "score": 3.798482897,
       "source_file": "internal/diagnostic/checks.go",
       "status": "preferred",
       "uses": 5
@@ -148,26 +148,33 @@
           "q": "Can you solve this GitHub Issue, Diagnose claims the general internet is unreachable when the egress probe is Warn (connected but degraded) #2"
         }
       ],
-      "score": 1.405705976,
+      "score": 1.405662445,
       "source_file": "internal/diagnostic/checks.go",
       "status": "preferred",
       "uses": 2
     },
-    "graphify_out_memory_query_20260712_221737_promote_osc_52_and_remove_clipboard_direct_depende_osc_52_simplification": {
-      "code_fingerprint": "abaaa7b6a189110fdb9bd9ba689b43241c535e029f8d0489a7b4cc6cd84fba84",
-      "label": "OSC 52 Clipboard Simplification",
-      "last": "2026-07-18T21:02:39.697648+00:00",
+    "diagnostic_target": {
+      "code_fingerprint": "c664a34f709c93d27195ad4b1601bdc93d8882d165c0450266b54475e97509a1",
+      "label": "Target",
+      "last": "2026-07-28T02:32:12.153034+00:00",
+      "neg": 1,
       "provenance": [
         {
-          "date": "2026-07-18T21:02:39.697648+00:00",
+          "date": "2026-07-28T02:32:12.153034+00:00",
           "outcome": "useful",
-          "q": "6. shrink: osc52Mode — switch with one case. if os.Getenv(\"TMUX\") != \"\" { … }. -4 lines (moot if #2 lands). [internal/ui/report.go:78]"
+          "q": "Canonicalize targets before history or rendering"
+        },
+        {
+          "date": "2026-07-17T23:49:50.766119+00:00",
+          "outcome": "useful",
+          "q": "hostnameRe rejects trailing-dot FQDNs such as example.com.; should target parsing accept them?"
         }
       ],
-      "score": 0.704328118,
-      "source_file": "graphify-out/memory/query_20260712_221737_promote_osc_52_and_remove_clipboard_direct_depende.md",
-      "status": "tentative",
-      "uses": 1
+      "score": 1.086805048,
+      "source_file": "internal/diagnostic/target.go",
+      "status": "contested",
+      "uses": 2,
+      "verdict": "useful"
     },
     "internal_diagnostic_advertised_parseavahinames": {
       "code_fingerprint": "860f01d727bddb05f54fcda0fa1bf40b6732332cbee14d4d257fa43e0a75b9fc",
@@ -180,7 +187,7 @@
           "q": "Hold on, please fix my program so that it would to display the advertised name of 192.168.1.79 and other devices too"
         }
       ],
-      "score": 0.891475208,
+      "score": 0.891447602,
       "source_file": "internal/diagnostic/advertised.go",
       "status": "tentative",
       "uses": 1
@@ -196,7 +203,7 @@
           "q": "$ponytail:ponytail-audit"
         }
       ],
-      "score": 0.998114192,
+      "score": 0.998083283,
       "source_file": "internal/diagnostic/checks.go",
       "status": "tentative",
       "uses": 1
@@ -232,7 +239,7 @@
           "q": "Can you solve this GitHub Issue, Diagnose claims the general internet is unreachable when the egress probe is Warn (connected but degraded) #2"
         }
       ],
-      "score": 5.117315267,
+      "score": 5.117156798,
       "source_file": "internal/diagnostic/diagnosis.go",
       "status": "preferred",
       "uses": 7
@@ -253,7 +260,7 @@
           "q": "I would like for you to help me make an ideal prompt I can send to Fable to help me make my program cross platform."
         }
       ],
-      "score": 1.346601963,
+      "score": 1.346560263,
       "source_file": "internal/diagnostic/target.go",
       "status": "preferred",
       "uses": 2
@@ -274,7 +281,7 @@
           "q": "How are these ideas? Roadmap and known debt list; item 9 is complete."
         }
       ],
-      "score": 1.458658498,
+      "score": 1.458613327,
       "source_file": "internal/textsafe/sanitize.go",
       "status": "preferred",
       "uses": 2
@@ -290,7 +297,7 @@
           "q": "shrink: winSafe() GOOS branch — unconditional strings.ToValidUTF8(line, \"?\") is one line, consistent across platforms"
         }
       ],
-      "score": 0.688110631,
+      "score": 0.688089322,
       "source_file": "internal/ui/jobs.go",
       "status": "tentative",
       "uses": 1
@@ -306,7 +313,7 @@
           "q": "Give me a list of things to do in my project."
         }
       ],
-      "score": 0.585616683,
+      "score": 0.585598549,
       "source_file": "internal/ui/jobs_test.go",
       "status": "tentative",
       "uses": 1
@@ -322,7 +329,7 @@
           "q": "Audit this entire repository. Do not modify code."
         }
       ],
-      "score": 0.722543237,
+      "score": 0.722520862,
       "source_file": "internal/ui/keys.go",
       "status": "tentative",
       "uses": 1
@@ -343,7 +350,7 @@
           "q": "Ctrl+C swallowed silently — first press should flash “Press q to quit”, second within ~2s quits, and Ctrl+C should cancel the confirm gate."
         }
       ],
-      "score": 1.306634022,
+      "score": 1.306593559,
       "source_file": "internal/ui/model_test.go",
       "status": "preferred",
       "uses": 2
@@ -359,7 +366,7 @@
           "q": "Commit the existing fix for network map Enter panic after the host list shrinks; do not edit Go files."
         }
       ],
-      "score": 0.846188913,
+      "score": 0.846162709,
       "source_file": "internal/ui/model_test.go",
       "status": "tentative",
       "uses": 1
@@ -375,7 +382,7 @@
           "q": "Restart clears tool output but not the job pane status/header — stale UI"
         }
       ],
-      "score": 0.691100324,
+      "score": 0.691078923,
       "source_file": "internal/ui/model_test.go",
       "status": "tentative",
       "uses": 1
@@ -391,7 +398,7 @@
           "q": "15. Details attempts unbounded — long attempt list can push top region past terminal height on short screens; body has no height clamp, masthead gets cut. Edge case, clamp when it bites. Commit when done."
         }
       ],
-      "score": 0.676615229,
+      "score": 0.676594276,
       "source_file": "internal/ui/model_test.go",
       "status": "tentative",
       "uses": 1
@@ -407,7 +414,7 @@
           "q": "9. q dead in viewer — only esc exits (deliberate per commit), but q falls through to viewport, does nothing. Muscle memory from less/pagers expects q = back. Cheap add. Commit when done."
         }
       ],
-      "score": 0.676268128,
+      "score": 0.676247186,
       "source_file": "internal/ui/model_test.go",
       "status": "tentative",
       "uses": 1
@@ -423,7 +430,7 @@
           "q": "Viewer lacks search + copy — 5000 lines, no / filter, no y copy-full-output. Copy is cheap (clipboard path exists in report.go); search is bigger, add when needed."
         }
       ],
-      "score": 0.676511842,
+      "score": 0.676490892,
       "source_file": "internal/ui/report.go",
       "status": "tentative",
       "uses": 1
@@ -439,7 +446,7 @@
           "q": "Audit this entire repository. Do not modify code."
         }
       ],
-      "score": 0.722543237,
+      "score": 0.722520862,
       "source_file": "internal/ui/report.go",
       "status": "tentative",
       "uses": 1
@@ -455,7 +462,7 @@
           "q": "Give me a list of things to do in my project."
         }
       ],
-      "score": 0.585616683,
+      "score": 0.585598549,
       "source_file": "internal/ui/report_test.go",
       "status": "tentative",
       "uses": 1
@@ -471,7 +478,7 @@
           "q": "shrink: Available() uncached fallback branch — production tools all pass through cacheAvailability, so the live-LookPath path only serves hand-built zero-value Tools in tests. Return t.available when checked, else one LookPath line; or accept as-is, it's 3 lines. [internal/ui/tools.go:32-38]"
         }
       ],
-      "score": 0.687877198,
+      "score": 0.687855897,
       "source_file": "internal/ui/tools.go",
       "status": "tentative",
       "uses": 1
@@ -487,7 +494,7 @@
           "q": "Pressing v will run a LAN Scan, not prompt to user to run a LAN Scan. Also update the text to say that pressing v runs a network map and then it says lan scan."
         }
       ],
-      "score": 0.736452083,
+      "score": 0.736429277,
       "source_file": "internal/ui/tools.go",
       "status": "tentative",
       "uses": 1
@@ -509,7 +516,7 @@
           "q": "I know for a fact that my home network contains numerous devices, but the network map only shows one"
         }
       ],
-      "score": 0.197247201,
+      "score": 0.197241092,
       "source_file": "internal/ui/tools.go",
       "status": "contested",
       "uses": 1,
@@ -526,7 +533,7 @@
           "q": "Give me a list of things to do in my project."
         }
       ],
-      "score": 0.585616683,
+      "score": 0.585598549,
       "source_file": "internal/ui/tools_test.go",
       "status": "tentative",
       "uses": 1
@@ -547,7 +554,7 @@
           "q": "Does it work in complex network setups like Openstack, SDN (OvS, OpenDaylight), etc?"
         }
       ],
-      "score": 1.727065894,
+      "score": 1.727012412,
       "source_file": "internal/ui/tools.go",
       "status": "preferred",
       "uses": 2
@@ -568,7 +575,7 @@
           "q": "3. Viewer overflows on narrow terminals — vpHeight() reserves fixed 4 rows (model.go:741), but viewer footer helpKeys wraps to 2-3 lines under ~70 cols. Total exceeds terminal, renderer cuts title. Subtract lipgloss.Height(footer) instead of constant."
         }
       ],
-      "score": 1.568849827,
+      "score": 1.568801244,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -584,7 +591,7 @@
           "q": "Should cross-platform release distribution via GoReleaser and prebuilt GitHub binaries be out of scope for the portability plan?"
         }
       ],
-      "score": 0.475075958,
+      "score": 0.475061246,
       "source_file": "main.go",
       "status": "tentative",
       "uses": 1
@@ -600,7 +607,7 @@
           "q": "Give me a list of things to do in my project."
         }
       ],
-      "score": 0.585616683,
+      "score": 0.585598549,
       "source_file": "main.go",
       "status": "tentative",
       "uses": 1
@@ -616,7 +623,7 @@
           "q": "I would like for you to help me make an ideal prompt I can send to Fable to help me make my program cross platform."
         }
       ],
-      "score": 0.474875237,
+      "score": 0.474860532,
       "source_file": "main.go",
       "status": "tentative",
       "uses": 1
@@ -638,7 +645,7 @@
           "q": "Give me a list of things to do in my project."
         }
       ],
-      "score": -2.555e-06,
+      "score": -2.554e-06,
       "source_file": "main.go",
       "status": "contested",
       "uses": 1,
@@ -655,48 +662,10 @@
           "q": "I believe the project is ripe enough to push a 1.8.3 release"
         }
       ],
-      "score": 0.892743728,
+      "score": 0.892716083,
       "source_file": "main.go",
       "status": "tentative",
       "uses": 1
-    },
-    "model": {
-      "code_fingerprint": "",
-      "label": "Model",
-      "last": "2026-08-02T23:10:24.763481+00:00",
-      "neg": 1,
-      "provenance": [
-        {
-          "date": "2026-08-02T23:10:24.763481+00:00",
-          "outcome": "useful",
-          "q": "$ponytail:ponytail-audit"
-        },
-        {
-          "date": "2026-07-28T02:29:58.790703+00:00",
-          "outcome": "useful",
-          "q": "Restore the green verification baseline by resolving one unchecked cleanup and four intentional Unicode test literals so lint runs through vulnerability and release checks."
-        },
-        {
-          "date": "2026-07-26T19:39:05.311601+00:00",
-          "outcome": "useful",
-          "q": "Commit the existing fix for network map Enter panic after the host list shrinks; do not edit Go files."
-        },
-        {
-          "date": "2026-07-25T18:18:33.896697+00:00",
-          "outcome": "useful",
-          "q": "Commit the existing fix for canceling a running job with Esc; do not edit Go files."
-        },
-        {
-          "date": "2026-07-20T18:57:06.675300+00:00",
-          "outcome": "corrected",
-          "q": "I know for a fact that my home network contains numerous devices, but the network map only shows one"
-        }
-      ],
-      "score": 9.530565288,
-      "source_file": "",
-      "status": "contested",
-      "uses": 14,
-      "verdict": "useful"
     },
     "network_doctor_report": {
       "code_fingerprint": "f362080e4d36e6bc0413257ab109ef593fd8007d7618c2712f9a265ed41a83f6",
@@ -719,7 +688,7 @@
           "q": "Promote OSC 52 and remove clipboard direct dependency; inline fallback verdict and one-caller helpers remaining, jobTailN, envProxyURL, and skipResult"
         }
       ],
-      "score": 2.02836522,
+      "score": 2.028302407,
       "source_file": "main.go",
       "status": "preferred",
       "uses": 3
@@ -755,7 +724,7 @@
           "q": "Which LICENSE should I use?"
         }
       ],
-      "score": 3.952809672,
+      "score": 3.952687265,
       "source_file": "README.md",
       "status": "preferred",
       "uses": 6
@@ -771,7 +740,7 @@
           "q": "Which reading is yours — and does no external packages include OS builtins like dig and traceroute, or only true add-ons like nmap/mtr?"
         }
       ],
-      "score": 0.933401448,
+      "score": 0.933372543,
       "source_file": "README.md",
       "status": "tentative",
       "uses": 1
@@ -802,7 +771,7 @@
           "q": "Should cross-platform release distribution via GoReleaser and prebuilt GitHub binaries be out of scope for the portability plan?"
         }
       ],
-      "score": 2.600534631,
+      "score": 2.6004541,
       "source_file": "README.md",
       "status": "preferred",
       "uses": 4
@@ -833,7 +802,7 @@
           "q": "Tell me how to get more people to this project."
         }
       ],
-      "score": 3.244063274,
+      "score": 3.243962814,
       "source_file": "README.md",
       "status": "preferred",
       "uses": 4
@@ -849,7 +818,7 @@
           "q": "Tell me how to get more people to this project."
         }
       ],
-      "score": 0.692285176,
+      "score": 0.692263738,
       "source_file": "README.md",
       "status": "tentative",
       "uses": 1
@@ -886,7 +855,7 @@
           "q": "Tell me how to get more people to this project."
         }
       ],
-      "score": 3.855989378,
+      "score": 3.855869968,
       "source_file": "README.md",
       "status": "contested",
       "uses": 6,
@@ -903,7 +872,7 @@
           "q": "Tell me how to get more people to this project."
         }
       ],
-      "score": 0.692285176,
+      "score": 0.692263738,
       "source_file": "README.md",
       "status": "tentative",
       "uses": 1
@@ -924,7 +893,7 @@
           "q": "How are these ideas? Roadmap and known debt list; item 9 is complete."
         }
       ],
-      "score": 1.279519165,
+      "score": 1.279479542,
       "source_file": "README.md",
       "status": "preferred",
       "uses": 2
@@ -940,7 +909,7 @@
           "q": "Make a list of things to work on in my project."
         }
       ],
-      "score": 0.692556305,
+      "score": 0.692534858,
       "source_file": "README.md",
       "status": "tentative",
       "uses": 1
@@ -961,7 +930,7 @@
           "q": "shrink: jobOutput() builder loop = strings.Join(m.jobLines, \"\\n\"). One line replaces ten. [internal/ui/model.go:676]"
         }
       ],
-      "score": 1.513634196,
+      "score": 1.513587323,
       "source_file": "internal/ui/jobs.go",
       "status": "preferred",
       "uses": 2
@@ -977,7 +946,7 @@
           "q": "No auto-jump to failure — run finishes with fail #5, selection still on probe 0. Select first fail when allDone(); details panel then shows the thing that matters. Commit when done."
         }
       ],
-      "score": 0.676217775,
+      "score": 0.676196834,
       "source_file": "internal/ui/model.go",
       "status": "tentative",
       "uses": 1
@@ -998,7 +967,7 @@
           "q": "No auto-jump to failure — run finishes with fail #5, selection still on probe 0. Select first fail when allDone(); details panel then shows the thing that matters. Commit when done."
         }
       ],
-      "score": 1.352833004,
+      "score": 1.35279111,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -1014,7 +983,7 @@
           "q": "10. Queued vs running indistinguishable — glyph() shows spinner for every unfinished probe, including deps-blocked ones not started. You have started map: faint · for queued, spinner only for in-flight. Makes the dependency chain visible. Commit when done."
         }
       ],
-      "score": 0.676344432,
+      "score": 0.676323487,
       "source_file": "internal/ui/view.go",
       "status": "tentative",
       "uses": 1
@@ -1030,7 +999,7 @@
           "q": "Ctrl+C swallowed silently — first press should flash “Press q to quit”, second within ~2s quits, and Ctrl+C should cancel the confirm gate."
         }
       ],
-      "score": 0.630184624,
+      "score": 0.630165109,
       "source_file": "internal/ui/keys.go",
       "status": "tentative",
       "uses": 1
@@ -1067,7 +1036,7 @@
           "q": "I want the user to be able to press v to visualize the network"
         }
       ],
-      "score": 5.113521015,
+      "score": 5.113362664,
       "source_file": "internal/ui/keys.go",
       "status": "contested",
       "uses": 8,
@@ -1084,7 +1053,7 @@
           "q": "Expose existing target-history navigation in the restart footer."
         }
       ],
-      "score": 0.892855189,
+      "score": 0.89282754,
       "source_file": "internal/ui/keys.go",
       "status": "tentative",
       "uses": 1
@@ -1120,7 +1089,7 @@
           "q": "q inside output viewer quits whole app (model.go:409). less/pager convention: q closes pager. Surprise app-exit is worse than redundant key. Make q = back in viewer, quit only from main screen."
         }
       ],
-      "score": 3.439427899,
+      "score": 3.43932139,
       "source_file": "internal/ui/keys.go",
       "status": "preferred",
       "uses": 5
@@ -1136,7 +1105,7 @@
           "q": "Pressing v will run a LAN Scan, not prompt to user to run a LAN Scan. Also update the text to say that pressing v runs a network map and then it says lan scan."
         }
       ],
-      "score": 0.736452083,
+      "score": 0.736429277,
       "source_file": "internal/ui/view.go",
       "status": "tentative",
       "uses": 1
@@ -1157,7 +1126,7 @@
           "q": "Promote OSC 52 and remove clipboard direct dependency; inline fallback verdict and one-caller helpers remaining, jobTailN, envProxyURL, and skipResult"
         }
       ],
-      "score": 1.304991464,
+      "score": 1.304951052,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -1178,7 +1147,7 @@
           "q": "Commit the existing fix for network map Enter panic after the host list shrinks; do not edit Go files."
         }
       ],
-      "score": 1.737664121,
+      "score": 1.73761031,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -1194,7 +1163,7 @@
           "q": "Pressing v will run a LAN Scan, not prompt to user to run a LAN Scan. Also update the text to say that pressing v runs a network map and then it says lan scan."
         }
       ],
-      "score": 0.736452083,
+      "score": 0.736429277,
       "source_file": "internal/ui/view.go",
       "status": "tentative",
       "uses": 1
@@ -1215,7 +1184,7 @@
           "q": "11. w saves to cwd — installed binary run from read-only dir fails; also notice shows bare filename, user hunts for it. Fall back os.UserHomeDir(), print absolute path. Commit when done."
         }
       ],
-      "score": 1.35286518,
+      "score": 1.352823285,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -1251,7 +1220,7 @@
           "q": "q inside output viewer quits whole app (model.go:409). less/pager convention: q closes pager. Surprise app-exit is worse than redundant key. Make q = back in viewer, quit only from main screen."
         }
       ],
-      "score": 3.300928988,
+      "score": 3.300826767,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 5
@@ -1272,7 +1241,7 @@
           "q": "Set ti.Placeholder = \"example.com:443 — empty for a general check\" in the restart prompt (model.go:312)."
         }
       ],
-      "score": 1.5231158,
+      "score": 1.523068633,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -1293,7 +1262,7 @@
           "q": "How are these ideas? Roadmap and known debt list; item 9 is complete."
         }
       ],
-      "score": 1.413028167,
+      "score": 1.41298441,
       "source_file": "internal/ui/joblines.go",
       "status": "preferred",
       "uses": 2
@@ -1309,7 +1278,7 @@
           "q": "11. w saves to cwd — installed binary run from read-only dir fails; also notice shows bare filename, user hunts for it. Fall back os.UserHomeDir(), print absolute path. Commit when done."
         }
       ],
-      "score": 0.676415782,
+      "score": 0.676394835,
       "source_file": "internal/ui/report.go",
       "status": "tentative",
       "uses": 1
@@ -1325,7 +1294,7 @@
           "q": "Promote OSC 52 and remove clipboard direct dependency; inline fallback verdict and one-caller helpers remaining, jobTailN, envProxyURL, and skipResult"
         }
       ],
-      "score": 0.61389114,
+      "score": 0.613872129,
       "source_file": "internal/ui/scheduler.go",
       "status": "tentative",
       "uses": 1
@@ -1341,7 +1310,7 @@
           "q": "10. Queued vs running indistinguishable — glyph() shows spinner for every unfinished probe, including deps-blocked ones not started. You have started map: faint · for queued, spinner only for in-flight. Makes the dependency chain visible. Commit when done."
         }
       ],
-      "score": 0.676344432,
+      "score": 0.676323487,
       "source_file": "internal/ui/model.go",
       "status": "tentative",
       "uses": 1
@@ -1372,7 +1341,7 @@
           "q": "Ctrl+C swallowed silently — first press should flash “Press q to quit”, second within ~2s quits, and Ctrl+C should cancel the confirm gate."
         }
       ],
-      "score": 2.658850363,
+      "score": 2.658768026,
       "source_file": "internal/ui/model.go",
       "status": "preferred",
       "uses": 4
@@ -1393,7 +1362,7 @@
           "q": "15. Details attempts unbounded — long attempt list can push top region past terminal height on short screens; body has no height clamp, masthead gets cut. Edge case, clamp when it bites. Commit when done."
         }
       ],
-      "score": 1.412617144,
+      "score": 1.412573399,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 2
@@ -1419,7 +1388,7 @@
           "q": "9. q dead in viewer — only esc exits (deliberate per commit), but q falls through to viewport, does nothing. Muscle memory from less/pagers expects q = back. Cheap add. Commit when done."
         }
       ],
-      "score": 2.178845277,
+      "score": 2.178777805,
       "source_file": "internal/ui/view.go",
       "status": "preferred",
       "uses": 3
@@ -1435,7 +1404,7 @@
           "q": "3. Viewer overflows on narrow terminals — vpHeight() reserves fixed 4 rows (model.go:741), but viewer footer helpKeys wraps to 2-3 lines under ~70 cols. Total exceeds terminal, renderer cuts title. Subtract lipgloss.Height(footer) instead of constant."
         }
       ],
-      "score": 0.675994638,
+      "score": 0.675973704,
       "source_file": "internal/ui/joblines.go",
       "status": "tentative",
       "uses": 1
@@ -1472,7 +1441,7 @@
           "q": "Tell me how to make Reddit posts so this project gets more attention."
         }
       ],
-      "score": 3.77271598,
+      "score": 3.772599149,
       "source_file": "internal/ui/tools.go",
       "status": "contested",
       "uses": 6,
@@ -1489,7 +1458,7 @@
           "q": "- delete: stderr tagging plumbed through whole job pipeline, never used — ToolOutputMsg.Stderr, streamReader stderr param, outLine.stderr, and identity wrapper renderJobLine (returns ln.text, 3 call sites). Replacement: jobLines []string, inline .text. ~-25 lines + test churn. [internal/ui/jobs.go:43, internal/ui/model.go:65,737]"
         }
       ],
-      "score": 0.676703178,
+      "score": 0.676682222,
       "source_file": "internal/ui/jobs.go",
       "status": "tentative",
       "uses": 1

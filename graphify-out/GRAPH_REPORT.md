@@ -5,12 +5,12 @@
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1053 nodes · 2084 edges · 115 communities (76 shown, 39 thin omitted)
+- 1017 nodes · 2084 edges · 79 communities (76 shown, 3 thin omitted)
 - Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 357 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `0472bd6e`
+- Built from commit: `cbbb3184`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -27,21 +27,15 @@
 - Gateway Route Parsing
 - TestFixHintsPerGOOS
 - model
-- Viewer Feedback Improvements
 - Platform Fix Hints
 - ExitCode
 - Integration Network Checks
-- Failure Details Navigation
-- Job Output Simplification
 - toolsFor
 - Other Process Groups
 - Unix Process Groups
 - Windows Process Groups
 - IP
-- Viewer Navigation Layout
 - parseSSHAliases
-- Probe Progress Glyphs
-- Tool Availability Lookup
 - Network Address Type
 - Cancellation Function Type
 - Command Process Type
@@ -50,9 +44,6 @@
 - Time Duration Type
 - Diagnostic Fact Type
 - Fake Connection Type
-- Clipboard OSC 52
-- Ctrl C Interaction
-- Restart Prompt UX
 - Target Type
 - Target Type
 - Probe Identifier Type
@@ -71,34 +62,7 @@
 - Target Type
 - Diagnostic Tool Type
 - Conn
-- Target Type
-- Target Type
-- Target Type
-- Network IP Type
-- Job State Type
-- Job Status Type
-- Keyboard Message Type
-- Diagnostic Probe Type
-- Probe Identifier Type
-- Probe Result Type
-- Target Type
-- UI Model Type
-- Tea Message Type
 - Network Doctor Module
-- Diagnostic Probe Type
-- Probe Identifier Type
-- Probe Result Type
-- Stream Reader Type
-- Probe Status Type
-- Output Stream Type
-- Test Handle Type
-- Target Type
-- Time Value Type
-- Diagnostic Tool Type
-- Remove Unused Stderr Tagging
-- Replace Job Output Builder with Join
-- strings.Join Job Output
-- Keep Available Fallback Readable
 - advertisedNames
 - Target
 - CancelFunc
@@ -156,7 +120,7 @@
 ## Import Cycles
 - None detected.
 
-## Communities (115 total, 39 thin omitted)
+## Communities (79 total, 3 thin omitted)
 
 ### Community 0 - "Model Extra Tests"
 Cohesion: 0.07
@@ -455,9 +419,9 @@ Cohesion: 0.22
 Nodes (3): Cmd, model, jobState
 
 ## Knowledge Gaps
-- **213 isolated node(s):** `github.com/heymaikol/network-doctor`, `advertisedName`, `iwreq`, `jobState`, `ToolOutputMsg` (+208 more)
+- **186 isolated node(s):** `Answer`, `Outcome`, `Source Nodes`, `Answer`, `Outcome` (+181 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **3 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Work-memory lessons
 
@@ -479,12 +443,12 @@ Nodes (3): Cmd, model, jobState
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `newModel()` connect `Model Extra Tests` to `UI Model State`, `IP`, `model`, `toolsFor`, `model.go`?**
-  _High betweenness centrality (0.090) - this node is a cross-community bridge._
 - **Why does `Clean()` connect `model` to `checks_extra_test.go`, `Probe Configuration Build`, `parseSSHAliases`, `Job Execution Lifecycle`, `IP`, `Integration Network Checks`, `model.go`?**
-  _High betweenness centrality (0.086) - this node is a cross-community bridge._
-- **Why does `Target` connect `UI Model State` to `Model Extra Tests`, `Probe Configuration Build`, `IP`, `model`, `toolsFor`, `Target`, `model.go`?**
-  _High betweenness centrality (0.076) - this node is a cross-community bridge._
+  _High betweenness centrality (0.105) - this node is a cross-community bridge._
+- **Why does `newModel()` connect `Model Extra Tests` to `UI Model State`, `IP`, `model`, `toolsFor`, `model.go`?**
+  _High betweenness centrality (0.075) - this node is a cross-community bridge._
+- **Why does `ParseTarget()` connect `model.go` to `Model Extra Tests`, `UI Model State`, `IP`, `model`, `Target`?**
+  _High betweenness centrality (0.061) - this node is a cross-community bridge._
 - **Are the 52 inferred relationships involving `newModel()` (e.g. with `TestInit()` and `TestConcurrentToolsCanSwitch()`) actually correct?**
   _`newModel()` has 52 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 29 inferred relationships involving `asModel()` (e.g. with `TestConcurrentToolsCanSwitch()` and `TestDeferredQuit()`) actually correct?**

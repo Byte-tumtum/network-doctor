@@ -5,8 +5,8 @@
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1058 nodes · 2074 edges · 119 communities (74 shown, 45 thin omitted)
-- Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 347 edges (avg confidence: 0.8)
+- 1053 nodes · 2084 edges · 115 communities (76 shown, 39 thin omitted)
+- Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 357 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
@@ -22,10 +22,8 @@
 - fixhints.go
 - ExitCode
 - Job Execution Lifecycle
-- TestInit
 - CLI Reporting Entry Point
 - Architecture Decision Memory
-- ssid
 - Gateway Route Parsing
 - TestFixHintsPerGOOS
 - model
@@ -119,8 +117,6 @@
 - Q: Commit the existing fix for canceling a running job with Esc; do not edit Go files.
 - TestFixHintsPerGOOS
 - CancelFunc
-- T
-- Model
 - Cmd
 - IP
 - IP
@@ -143,7 +139,7 @@
 7. `model` - 30 edges
 8. `netops` - 29 edges
 9. `model` - 27 edges
-10. `Diagnose()` - 21 edges
+10. `Target` - 22 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `buildReport()` --calls--> `Ms()`  [INFERRED]
@@ -160,23 +156,27 @@
 ## Import Cycles
 - None detected.
 
-## Communities (119 total, 45 thin omitted)
+## Communities (115 total, 39 thin omitted)
 
 ### Community 0 - "Model Extra Tests"
-Cohesion: 0.08
-Nodes (97): T, TestAppendJobLine(), TestClassifyJob(), TestConcurrentToolsCanSwitch(), TestDeferredQuit(), TestDeferredRestart(), TestDeferredRestartDefersTargetSwap(), TestEscClearsCommittedFilterBeforeClosing() (+89 more)
+Cohesion: 0.07
+Nodes (104): T, TestInit(), T, TestAppendJobLine(), TestClassifyJob(), TestConcurrentToolsCanSwitch(), TestDeferredQuit(), TestDeferredRestart() (+96 more)
 
 ### Community 1 - "UI Model State"
-Cohesion: 0.10
-Nodes (33): Cmd, listSSHKeys(), newSSHForm(), parseSSHConfig(), runSSH(), sshCommand(), sshHostValue(), Cmd (+25 more)
+Cohesion: 0.11
+Nodes (29): Target, IP, Cmd, KeyMsg, Model, model, listSSHKeys(), newSSHForm() (+21 more)
 
 ### Community 2 - "Probe Configuration Build"
-Cohesion: 0.06
-Nodes (75): Certificate, CertPool, Config, Attempt, netops, Portal, Probe, ProbeID (+67 more)
+Cohesion: 0.07
+Nodes (60): CertPool, Config, Attempt, netops, Portal, Probe, ProbeID, ProbeResult (+52 more)
 
 ### Community 3 - "Q: 6. shrink: osc52Mode — switch with one case. if os.Getenv("TMUX") != "" { … }. -4 lines (moot if #2 lands). [internal/ui/report.go:78]"
 Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: 6. shrink: osc52Mode — switch with one case. if os.Getenv("TMUX") != "" { … }. -4 lines (moot if #2 lands). [internal/ui/report.go:78], Source Nodes
+
+### Community 4 - "fixhints.go"
+Cohesion: 0.24
+Nodes (13): Certificate, certNames(), certWindow(), dnsFix(), ifaceFix(), pmtuFix(), timeoutError(), tlsFix() (+5 more)
 
 ### Community 5 - "ExitCode"
 Cohesion: 0.40
@@ -199,7 +199,7 @@ Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: Confirm that the problem is fixed, and that there is no new issue because of the fix., Source Nodes
 
 ### Community 12 - "TestFixHintsPerGOOS"
-Cohesion: 0.12
+Cohesion: 0.13
 Nodes (8): discoveredIPs(), IP, model, helpKeys(), joinChips(), probeGlyph(), progressBar(), upHostLine()
 
 ### Community 13 - "model"
@@ -215,12 +215,12 @@ Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: Tell me how to get more people to this project., Source Nodes
 
 ### Community 17 - "Integration Network Checks"
-Cohesion: 0.09
-Nodes (36): advertisedName, bestNames, dnsStub, zoneEntry, cutField(), AdvertisedNames(), browseZone(), Context (+28 more)
+Cohesion: 0.13
+Nodes (21): advertisedName, bestNames, zoneEntry, cutField(), AdvertisedNames(), browseZone(), Context, resolveTargets() (+13 more)
 
 ### Community 20 - "toolsFor"
-Cohesion: 0.17
-Nodes (30): Target, IP, cacheAvailability(), curlTool(), Duration, lanDiscoveryTool(), nmapTool(), psArgs() (+22 more)
+Cohesion: 0.19
+Nodes (28): cacheAvailability(), curlTool(), Duration, lanDiscoveryTool(), nmapTool(), psArgs(), quoteArgs(), quoterFor() (+20 more)
 
 ### Community 21 - "Other Process Groups"
 Cohesion: 0.67
@@ -229,6 +229,10 @@ Nodes (3): Cmd, killGroup(), setProcGroup()
 ### Community 22 - "Unix Process Groups"
 Cohesion: 0.67
 Nodes (3): Cmd, killGroup(), setProcGroup()
+
+### Community 24 - "IP"
+Cohesion: 0.25
+Nodes (15): dnsStub, containsIP(), dnsReply(), IP, T, newDNSStub(), TestDialFromSourceLoopback(), TestDialIPsLoopback() (+7 more)
 
 ### Community 26 - "parseSSHAliases"
 Cohesion: 0.40
@@ -339,8 +343,8 @@ Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: I know for a fact that my home network contains numerous devices, but the network map only shows one, Source Nodes
 
 ### Community 87 - "Target"
-Cohesion: 0.13
-Nodes (27): T, mustTarget(), TestBuildProbesNamesProtocolApplicationRow(), TestBuildProbesShape(), TestSSIDDoesNotGateNetworkProbes(), TestWrapRunTimesAndCleans(), Diagnose(), downgradeEgress() (+19 more)
+Cohesion: 0.15
+Nodes (29): BuildProbesFrom(), T, mustTarget(), TestBuildProbesNamesProtocolApplicationRow(), TestBuildProbesShape(), TestSSIDDoesNotGateNetworkProbes(), TestWrapRunTimesAndCleans(), Diagnose() (+21 more)
 
 ### Community 88 - "CancelFunc"
 Cohesion: 0.40
@@ -423,8 +427,8 @@ Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: $ponytail:ponytail-audit, Source Nodes
 
 ### Community 113 - "model"
-Cohesion: 0.05
-Nodes (39): iwreq, F, Context, ReverseName(), Reader, parseSSHAliases(), SSHHostAliases(), T (+31 more)
+Cohesion: 0.06
+Nodes (34): F, Context, ReverseName(), Reader, parseSSHAliases(), SSHHostAliases(), T, TestParseSSHAliases() (+26 more)
 
 ### Community 114 - "model"
 Cohesion: 0.27
@@ -443,31 +447,31 @@ Cohesion: 0.12
 Nodes (28): silentConn, T, Time, TestBannerProbeReadTimeout(), TestBannerProbeReadTimeoutHonorsContext(), TestBannerProbeValidatesProtocol(), TestDialIPsCancelledStopsEarly(), TestDialIPsRacesStaggered() (+20 more)
 
 ### Community 129 - "checks_extra_test.go"
-Cohesion: 0.09
-Nodes (39): Builder, fakeConn, scriptConn, Addr, Conn, Context, Reader, T (+31 more)
+Cohesion: 0.07
+Nodes (45): Builder, fakeConn, iwreq, scriptConn, Addr, Conn, Context, Reader (+37 more)
 
 ### Community 135 - "jobState"
 Cohesion: 0.22
 Nodes (3): Cmd, model, jobState
 
 ## Knowledge Gaps
-- **213 isolated node(s):** `advertisedName`, `Windows`, `macOS (Homebrew)`, `Linux`, `Everywhere else` (+208 more)
+- **213 isolated node(s):** `github.com/heymaikol/network-doctor`, `advertisedName`, `iwreq`, `jobState`, `ToolOutputMsg` (+208 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **45 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Work-memory lessons
 
 **Preferred sources** — corroborated by past sessions; start here.
-- `Diagnose()` (7× useful, score=5.118295574)
-- `README.md` (6× useful, score=3.953566899)
-- `Probe` (5× useful, score=3.799328215)
-- `.handleViewKey()` (5× useful, score=3.44008678)
-- `.outputView()` (5× useful, score=3.301561336)
-- `JSON output` (4× useful, score=3.244684728)
-- `.Update()` (4× useful, score=2.65935971)
-- `Install` (4× useful, score=2.601032808)
-- `.proxyProbe()` (3× useful, score=2.292441678)
-- `.viewerFooter()` (3× useful, score=2.179262672)
+- `Diagnose()` (7× useful, score=5.117315267)
+- `README.md` (6× useful, score=3.952809672)
+- `Probe` (5× useful, score=3.798600529)
+- `.handleViewKey()` (5× useful, score=3.439427899)
+- `.outputView()` (5× useful, score=3.300928988)
+- `JSON output` (4× useful, score=3.244063274)
+- `.Update()` (4× useful, score=2.658850363)
+- `Install` (4× useful, score=2.600534631)
+- `.proxyProbe()` (3× useful, score=2.292002606)
+- `.viewerFooter()` (3× useful, score=2.178845277)
 
 **Known dead ends** — questions that led nowhere; don't re-derive.
 - "What do you think? Accept the proposed Linux/macOS/Windows toolbox table plus Windows pathping for m and nslookup for d?" -> `Target`, `BuildProbes`
@@ -475,12 +479,12 @@ Nodes (3): Cmd, model, jobState
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Clean()` connect `model` to `Probe Configuration Build`, `parseSSHAliases`, `Job Execution Lifecycle`, `IP`, `Target`, `model.go`?**
-  _High betweenness centrality (0.083) - this node is a cross-community bridge._
-- **Why does `model` connect `model` to `UI Model State`, `Probe Configuration Build`, `toolsFor`?**
-  _High betweenness centrality (0.073) - this node is a cross-community bridge._
-- **Why does `newModel()` connect `Model Extra Tests` to `UI Model State`, `ssid`, `IP`, `model`, `toolsFor`, `model.go`?**
-  _High betweenness centrality (0.073) - this node is a cross-community bridge._
+- **Why does `newModel()` connect `Model Extra Tests` to `UI Model State`, `IP`, `model`, `toolsFor`, `model.go`?**
+  _High betweenness centrality (0.090) - this node is a cross-community bridge._
+- **Why does `Clean()` connect `model` to `checks_extra_test.go`, `Probe Configuration Build`, `parseSSHAliases`, `Job Execution Lifecycle`, `IP`, `Integration Network Checks`, `model.go`?**
+  _High betweenness centrality (0.086) - this node is a cross-community bridge._
+- **Why does `Target` connect `UI Model State` to `Model Extra Tests`, `Probe Configuration Build`, `IP`, `model`, `toolsFor`, `Target`, `model.go`?**
+  _High betweenness centrality (0.076) - this node is a cross-community bridge._
 - **Are the 52 inferred relationships involving `newModel()` (e.g. with `TestInit()` and `TestConcurrentToolsCanSwitch()`) actually correct?**
   _`newModel()` has 52 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 29 inferred relationships involving `asModel()` (e.g. with `TestConcurrentToolsCanSwitch()` and `TestDeferredQuit()`) actually correct?**
