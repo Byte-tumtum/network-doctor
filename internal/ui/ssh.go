@@ -257,8 +257,10 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 		if effective == "" {
 			effective = t.Host // no ssh to ask, or it had nothing to say
 		}
-		// The secret goes through the environment (readable only by this user)
-		// to the helper, never through argv, which every process can read.
+		// The secret goes through the environment to the helper, never through
+		// argv, which every process can read. It lives in ssh's environment for
+		// the whole session and is inherited by whatever ssh_config starts —
+		// ProxyCommand, LocalCommand, a ProxyJump's own ssh.
 		// One prompt only: the helper would just repeat a rejected password.
 		args = append(args, "-o", "NumberOfPasswordPrompts=1")
 		env = append(os.Environ(),
