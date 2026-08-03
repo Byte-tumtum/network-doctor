@@ -50,6 +50,7 @@ func TestSSHCommand(t *testing.T) {
 			want: []string{"-o", "NumberOfPasswordPrompts=1", "example.com"},
 		},
 	}
+	stubSSHEffective(t, "example.com", false)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			args, env, err := sshCommand(tt.host, tt.login, tt.keyArg, tt.password, "/usr/bin/netdoc")
@@ -91,6 +92,83 @@ func TestSSHCommandWithoutHelper(t *testing.T) {
 	}
 	if env != nil {
 		t.Errorf("env = %v, want nil", env)
+	}
+}
+
+// stubSSHEffective stands in for the `ssh -G` lookup, keeping the suite off
+// the real ssh binary and off whatever the developer's own ~/.ssh/config says
+// about example.com.
+func stubSSHEffective(t *testing.T, host string, proxied bool) {
+	t.Helper()
+	old := sshEffective
+	sshEffective = func([]string) (string, bool) { return host, proxied }
+	t.Cleanup(func() { sshEffective = old })
+}
+
+// ssh substitutes a Host alias's HostName before it asks for a password, so
+// the helper has to be told the name it will actually see — an alias would
+// never match its own prompt, and the legitimate password would be refused.
+func TestSSHCommandResolvesTheAlias(t *testing.T) {
+	stubSSHEffective(t, "real.example.com", false)
+	_, env, err := sshCommand("alias", "alice", "", "hunter2", "/usr/bin/netdoc")
+	if err != nil {
+		t.Fatalf("sshCommand: %v", err)
+	}
+	if !slices.Contains(env, AskpassHostEnv+"=real.example.com") {
+		t.Errorf("env = %v, want the resolved HostName", env)
+	}
+	if slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, AskpassProxyEnv+"=") }) {
+		t.Error("a direct connection was marked as proxied")
+	}
+}
+
+// A jump host runs an ssh of its own that inherits the helper, so the helper
+// has to know it cannot attribute a host-less prompt to the target.
+func TestSSHCommandMarksProxiedConnections(t *testing.T) {
+	stubSSHEffective(t, "example.com", true)
+	_, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc")
+	if err != nil {
+		t.Fatalf("sshCommand: %v", err)
+	}
+	if !slices.Contains(env, AskpassProxyEnv+"=1") {
+		t.Errorf("env = %v, want the proxy marker", env)
+	}
+}
+
+// The lookup is asked with the argv the session will use, since a Match block
+// can key off the port or the login and answer with a different HostName.
+func TestSSHCommandQueriesWithTheRealArgv(t *testing.T) {
+	var got []string
+	old := sshEffective
+	sshEffective = func(args []string) (string, bool) { got = args; return "example.com", false }
+	t.Cleanup(func() { sshEffective = old })
+
+	if _, _, err := sshCommand("example.com:2222", "alice", "", "hunter2", "/usr/bin/netdoc"); err != nil {
+		t.Fatalf("sshCommand: %v", err)
+	}
+	want := []string{"-p", "2222", "-l", "alice", "example.com"}
+	if !slices.Equal(got, want) {
+		t.Errorf("query args = %v, want %v", got, want)
+	}
+	if slices.Contains(got, "NumberOfPasswordPrompts=1") {
+		t.Error("the prompt limit leaked into the config query")
+	}
+}
+
+func TestParseSSHConfig(t *testing.T) {
+	const direct = "user alice\nhostname real.example.com\nport 22\nproxycommand none\nproxyjump none\n"
+	host, proxied := parseSSHConfig(direct)
+	if host != "real.example.com" || proxied {
+		t.Errorf("parseSSHConfig(direct) = %q, %v; want real.example.com, false", host, proxied)
+	}
+	// ssh prints the keywords in no fixed order, and an unset one still prints
+	// as "none" — which must not talk a set one back out of it.
+	const jumped = "hostname real.example.com\nproxyjump jump.example.com\nproxycommand none\n"
+	if host, proxied = parseSSHConfig(jumped); host != "real.example.com" || !proxied {
+		t.Errorf("parseSSHConfig(jumped) = %q, %v; want real.example.com, true", host, proxied)
+	}
+	if host, proxied = parseSSHConfig(""); host != "" || proxied {
+		t.Errorf("parseSSHConfig(empty) = %q, %v; want \"\", false", host, proxied)
 	}
 }
 
@@ -237,6 +315,7 @@ func TestSSHFormKeys(t *testing.T) {
 // Once the password has been handed to the askpass environment, the form drops
 // its copy rather than holding it until the next S.
 func TestSSHFormClearsPasswordOnConnect(t *testing.T) {
+	stubSSHEffective(t, "example.com", false)
 	oldLookPath := toolLookPath
 	toolLookPath = func(string) (string, error) { return "ssh", nil }
 	t.Cleanup(func() { toolLookPath = oldLookPath })

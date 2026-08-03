@@ -79,62 +79,94 @@ func TestRunAsAskpass(t *testing.T) {
 	tests := []struct {
 		name       string
 		prompt     string
+		proxied    bool
 		want       int
 		wantStdout string
 	}{
-		{"password", "alice@example.com's password:", 0, "hunter2\n"},
-		{"passphrase", "Enter passphrase for key '/home/a/.ssh/id_ed25519':", 0, "hunter2\n"},
+		{name: "password", prompt: "alice@example.com's password:", want: 0, wantStdout: "hunter2\n"},
+		{name: "passphrase", prompt: "Enter passphrase for key '/home/a/.ssh/id_ed25519':", want: 0, wantStdout: "hunter2\n"},
 		{
 			// ProxyJump: the jump host's ssh inherits the helper and asks for its
 			// own password. Same "password" prompt, different machine.
-			"password for a host on the way", "alice@jump.example.com's password:", 1, "",
+			name: "password for a host on the way", prompt: "alice@jump.example.com's password:", want: 1,
 		},
 		{
 			// The user@ half is not the target's, so it can't stand in for it.
-			"password for a look-alike login", "example.com@evil.example's password:", 1, "",
+			name: "password for a look-alike login", prompt: "example.com@evil.example's password:", want: 1,
 		},
-		// Keyboard-interactive PAM prompts name no host, and refusing those
-		// would break the logins netdoc is there to make.
-		{"hostless PAM prompt", "Password: ", 0, "hunter2\n"},
+		// Keyboard-interactive: ssh puts the machine in front of the server's
+		// own wording, so a PAM question is attributable after all.
+		{
+			name: "keyboard-interactive for the target", prompt: "(alice@example.com) Password: ",
+			want: 0, wantStdout: "hunter2\n",
+		},
+		{
+			name: "keyboard-interactive for a host on the way", prompt: "(alice@jump.example.com) Password: ",
+			want: 1,
+		},
+		{
+			// The text after ssh's prefix is the server's, and a jump host is
+			// free to write the target's name into it. The prefix decides.
+			name:   "keyboard-interactive impersonating the target",
+			prompt: "(alice@jump.example.com) root@example.com's password: ", want: 1,
+		},
+		// A PAM prompt from a client too old to prefix them names no host, and
+		// refusing those outright would break the logins netdoc is there to
+		// make — as long as only one machine could be asking.
+		{name: "hostless PAM prompt", prompt: "Password: ", want: 0, wantStdout: "hunter2\n"},
+		{
+			// With a jump host in the way, either end could have sent it.
+			name: "hostless PAM prompt on a proxied connection", prompt: "Password: ",
+			proxied: true, want: 1,
+		},
+		{
+			// The passphrase unlocks a local file, so no host is on the
+			// receiving end of it and a proxy changes nothing.
+			name: "passphrase on a proxied connection", prompt: "Enter passphrase for key '/home/a/.ssh/id_ed25519':",
+			proxied: true, want: 0, wantStdout: "hunter2\n",
+		},
 		// A helper whose job is to refuse what it doesn't recognize has no
 		// business guessing at a prompt that isn't there.
-		{"no prompt", "", 1, ""},
+		{name: "no prompt", prompt: "", want: 1},
 		{
-			"host key",
-			"The authenticity of host 'example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
-			1, "",
+			name:   "host key",
+			prompt: "The authenticity of host 'example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+			want:   1,
 		},
 		{
 			// The host name rides along in the first line of the host-key
 			// message, so it must not be able to answer the question.
-			"host key for a host named password",
-			"The authenticity of host 'password-reset.example.com (192.0.2.1)' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
-			1, "",
+			name:   "host key for a host named password",
+			prompt: "The authenticity of host 'password-reset.example.com (192.0.2.1)' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+			want:   1,
 		},
 		{
-			"host key for a key stored in a passphrase directory",
-			"The authenticity of host 'passphrase.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
-			1, "",
+			name:   "host key for a key stored in a passphrase directory",
+			prompt: "The authenticity of host 'passphrase.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+			want:   1,
 		},
 		{
 			// Trailing blank line must not read as "no prompt at all".
-			"host key with a trailing newline",
-			"The authenticity of host 'password.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? \n",
-			1, "",
+			name:   "host key with a trailing newline",
+			prompt: "The authenticity of host 'password.example.com' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? \n",
+			want:   1,
 		},
 		{
 			// The price of refusing anything that mentions a fingerprint: a key
 			// filed under that name has its passphrase prompt turned away too,
 			// and the user types it on the terminal instead. Cheap at the price.
-			"passphrase for a key named fingerprint",
-			"Enter passphrase for key '/home/a/.ssh/fingerprint_id':",
-			1, "",
+			name:   "passphrase for a key named fingerprint",
+			prompt: "Enter passphrase for key '/home/a/.ssh/fingerprint_id':",
+			want:   1,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(ui.AskpassEnv, "hunter2")
 			t.Setenv(ui.AskpassHostEnv, "example.com")
+			if tt.proxied {
+				t.Setenv(ui.AskpassProxyEnv, "1")
+			}
 			var stdout, stderr bytes.Buffer
 			args := []string{tt.prompt}
 			if tt.prompt == "" {

@@ -47,7 +47,18 @@ const AskpassEnv = "NETDOC_ASKPASS"
 // subtree inherits the askpass setting, so a ProxyJump child asking for the
 // jump host's password reaches the same helper; the helper compares the host
 // in the prompt against this one and refuses anything else.
+//
+// It holds the HostName ssh_config resolves the target to, not what was typed:
+// ssh substitutes the real name before it asks, so an alias would never match
+// its own prompt.
 const AskpassHostEnv = "NETDOC_ASKPASS_HOST"
+
+// AskpassProxyEnv marks a connection that goes through a jump host or a proxy
+// command. Those run an ssh of their own that inherits the helper, so a prompt
+// naming no host — an old client's keyboard-interactive PAM question — could
+// be either end's. With a proxy in play the helper refuses those instead of
+// guessing; without one there is only one machine it could be.
+const AskpassProxyEnv = "NETDOC_ASKPASS_PROXY"
 
 // sshForm is the SSH login prompt. The host is the run target, not a field:
 // the form logs in to the machine the checks are about.
@@ -232,7 +243,20 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 		// server's auth attempts before this key is ever tried.
 		args = append(args, "-i", key, "-o", "IdentitiesOnly=yes")
 	}
+	if login != "" {
+		// -l rather than login@host: the login is the one free-text field on
+		// this form, and getopt takes an option's value verbatim, so a name
+		// starting with "-" stays a name instead of becoming an ssh option.
+		args = append(args, "-l", login)
+	}
 	if password != "" && self != "" {
+		// Asked with the same argv the session will use, because a Match block
+		// can key off the port, the login, or the host and hand back a
+		// different HostName than a bare query would.
+		effective, proxied := sshEffective(append(slices.Clone(args), t.Host))
+		if effective == "" {
+			effective = t.Host // no ssh to ask, or it had nothing to say
+		}
 		// The secret goes through the environment (readable only by this user)
 		// to the helper, never through argv, which every process can read.
 		// One prompt only: the helper would just repeat a rejected password.
@@ -241,15 +265,40 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 			"SSH_ASKPASS="+self,
 			"SSH_ASKPASS_REQUIRE=force", // ask the helper even though ssh has a tty
 			AskpassEnv+"="+password,
-			AskpassHostEnv+"="+t.Host)
-	}
-	if login != "" {
-		// -l rather than login@host: the login is the one free-text field on
-		// this form, and getopt takes an option's value verbatim, so a name
-		// starting with "-" stays a name instead of becoming an ssh option.
-		args = append(args, "-l", login)
+			AskpassHostEnv+"="+effective)
+		if proxied {
+			env = append(env, AskpassProxyEnv+"=1")
+		}
 	}
 	return append(args, t.Host), env, nil
+}
+
+// sshEffective asks ssh what the target really resolves to once ssh_config has
+// had its say: the HostName a password prompt will name, and whether anything
+// stands between here and there. A var so tests don't shell out.
+var sshEffective = func(args []string) (host string, proxied bool) {
+	// -G prints the resolved config and connects to nothing.
+	out, err := exec.Command("ssh", append([]string{"-G"}, args...)...).Output()
+	if err != nil {
+		return "", false
+	}
+	return parseSSHConfig(string(out))
+}
+
+// parseSSHConfig reads `ssh -G` output, which is one lowercased keyword per
+// line followed by its value.
+func parseSSHConfig(out string) (host string, proxied bool) {
+	for line := range strings.Lines(out) {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), " ")
+		switch k {
+		case "hostname":
+			host = v
+		case "proxyjump", "proxycommand":
+			// Both are printed even when unset, as the literal "none".
+			proxied = proxied || (v != "" && v != "none")
+		}
+	}
+	return host, proxied
 }
 
 // runSSH hands the terminal to ssh and takes it back when the session ends.
