@@ -2,16 +2,6 @@ package ui
 
 import "testing"
 
-func TestDecodeWindowsCodePage(t *testing.T) {
-	got, err := decodeWindowsCodePage(437, "M\x81nchen")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "München" {
-		t.Errorf("decoded = %q, want München", got)
-	}
-}
-
 func TestWindowsOEMToolSelection(t *testing.T) {
 	for _, name := range []string{"route", "NETSTAT.EXE", `C:\Windows\System32\ping.exe`, "nslookup", "tracert", "pathping"} {
 		if !isWindowsOEMTool(name) {

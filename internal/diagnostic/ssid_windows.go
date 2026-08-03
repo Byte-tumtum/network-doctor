@@ -5,7 +5,6 @@ package diagnostic
 import (
 	"context"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/textsafe"
@@ -20,6 +19,7 @@ func ssid(ctx context.Context, iface string) string {
 	if err != nil {
 		return ""
 	}
-	// Console output is OEM code page; make invalid bytes visible, not silent.
-	return textsafe.Clean(parseNetshSSID(strings.ToValidUTF8(string(out), "?"), iface))
+	// netsh writes OEM code page bytes; decode before parsing so non-ASCII
+	// interface names still match their block.
+	return textsafe.Clean(parseNetshSSID(textsafe.DecodeOEM(string(out)), iface))
 }
