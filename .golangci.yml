@@ -1,5 +1,11 @@
 version: "2"
 
+# `golangci-lint run` reports formatter diffs as findings, so the existing lint
+# step gates formatting too — no separate gofmt job to keep in sync.
+formatters:
+  enable:
+    - gofmt
+
 linters:
   settings:
     errcheck:
