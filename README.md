@@ -62,11 +62,11 @@ Or winget:
 winget install heymaikol.NetworkDoctor
 ```
 
-Release reaches Scoop bucket right away; winget lands whenever Microsoft merges the manifest PR, so it can trail a version behind.
+A release reaches the Scoop bucket right away; winget lands whenever Microsoft merges the manifest PR, so it can trail a version behind.
 
 ### macOS (Homebrew)
 
-Binary unsigned, so cask strips quarantine attribute and Gatekeeper no prompt. That removes warning, not adds check; verify separate step you run yourself ([Verify your download](#verify-your-download)):
+The binary is unsigned, so the cask strips the quarantine attribute and Gatekeeper does not prompt. That removes a warning rather than adding a check — verification is a separate step you run yourself ([Verify your download](#verify-your-download)):
 
 ```sh
 brew tap heymaikol/tap
@@ -82,9 +82,9 @@ sudo dnf copr enable heymaikol/network-doctor
 sudo dnf install network-doctor
 ```
 
-Covers Fedora 43, 44, rawhide on `x86_64` and `aarch64`. COPR signs with own per-project key, which `dnf copr enable` installs — separate trust root from GitHub attestation below, not same one.
+Covers Fedora 43, 44, and rawhide on `x86_64` and `aarch64`. COPR signs with its own per-project key, which `dnf copr enable` installs — a separate trust root from the GitHub attestation below, not the same one.
 
-Everything else — `.deb`, `.rpm`, `.apk` on [latest release](https://github.com/heymaikol/network-doctor/releases/latest), `amd64` and `arm64`. Download one, install locally:
+Everything else — `.deb`, `.rpm`, and `.apk` packages are on the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), for `amd64` and `arm64`. Download one and install it locally:
 
 ```sh
 sudo apt install ./network-doctor_X.Y.Z_linux_amd64.deb    # Debian, Ubuntu, Mint
@@ -92,17 +92,17 @@ sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # Fedora, RHEL, Rocky
 sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpine
 ```
 
-Downloaded by hand, so these no auto-update — `dnf`/`apt` won't pull next version for you. COPR does.
+Because these are downloaded by hand, they do not auto-update — `dnf`/`apt` won't pull the next version for you. COPR does.
 
 ### Everywhere else
 
-Grab prebuilt binary from [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as `.zip`, rest as bare binary), or install with Go 1.25+:
+Grab a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as a `.zip`, the rest as bare binaries), or install with Go 1.25+:
 
 ```sh
 go install github.com/heymaikol/network-doctor@latest
 ```
 
-(`go install` names binary `network-doctor` after module; rename to `netdoc` if you like.) Check what you run with `netdoc --version`.
+(`go install` names the binary `network-doctor` after the module; rename it to `netdoc` if you like.) Check what you are running with `netdoc --version`.
 
 Or build from clone:
 
@@ -114,7 +114,7 @@ go build -o netdoc .
 
 ### Verify your download
 
-Releases carry signed attestation binding each artifact to workflow run that built it. v1.8.4 and earlier published before release workflow attested anything — none. With GitHub CLI installed and `gh auth login` done:
+Releases carry a signed attestation binding each artifact to the workflow run that built it. v1.8.4 and earlier were published before the release workflow attested anything, so they have none. With the GitHub CLI installed and `gh auth login` done:
 
 ```sh
 VERSION=X.Y.Z
@@ -123,27 +123,27 @@ gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
   --signer-workflow heymaikol/network-doctor/.github/workflows/release.yml
 ```
 
-Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball attested too, as are `.deb`/`.rpm`/`.apk` and Windows `.zip` — pass whichever filename you downloaded.
+This proves the bytes were built from the tagged commit by the release workflow, which gates the release on CI and an ancestor-of-`main` check. The source tarball is attested too, as are the `.deb`/`.rpm`/`.apk` packages and the Windows `.zip` — pass whichever filename you downloaded.
 
-`*-vendor.tar.gz` (Go deps, exists so COPR can build offline) is attested as well — it is what COPR compiles, and `-mod=vendor` never checks `go.sum`, so the COPR job verifies it against this attestation before it builds anything. One exception: COPR packages get rebuilt on Fedora's builders, so COPR's signature covers them, not this attestation.
+`*-vendor.tar.gz` (the vendored Go dependencies, which exist so COPR can build offline) is attested as well — it is what COPR compiles, and `-mod=vendor` never checks `go.sum`, so the COPR job verifies it against this attestation before it builds anything. One exception: COPR packages get rebuilt on Fedora's builders, so COPR's signature covers them, not this attestation.
 
 ## How it diagnoses
 
-Probes form **dependency graph with independent branches**, so unrelated failure never hides working one:
+Probes form a **dependency graph with independent branches**, so an unrelated failure never hides a working one:
 
 - **Direct-egress path** (independent of DNS): `Interface → Internet (TCP
-  egress)`. Always runs, so "DNS down but internet up" diagnosable.
+  egress)`. Always runs, so "DNS down but internet up" stays diagnosable.
 - **Proxy-egress path** (independent of both): `Interface → Internet (env
-  proxy)`. Native probes deliberately bypass proxies, so this row reports environment-configured proxy separately — proxy-only corporate network reads "online via proxy" not offline.
+  proxy)`. Native probes deliberately bypass proxies, so this row reports the environment-configured proxy separately — a proxy-only corporate network reads "online via proxy" rather than offline.
 - **Public-DNS path** (independent of system DNS): `Interface → DNS (public
-  8.8.8.8)`. Failure to reach third-party resolver = N/A; differing answers warn about split DNS or filtering but never fail run alone.
+  8.8.8.8)`. Failing to reach the third-party resolver is N/A; differing answers warn about split DNS or filtering but never fail the run on their own.
 - **Wi-Fi metadata path**: `Interface → Wi-Fi network`. SSID discovery runs beside network checks, so slow OS lookup never delays them.
 - **Plain HTTP path**: `Interface → DNS → HTTP :80`.
 - **Selected target path**: `Interface → DNS → TCP → TLS → HTTPS` for secure web targets, or applicable protocol row for other ports.
 - **Path-MTU branch** (hangs off connect, not off any protocol): `TCP → Path
   MTU`. Black hole breaks SSH and SMTP exactly as thoroughly as TLS.
 
-Each row = one of five states: **✓ Pass**, **! Warn** (reachable but degraded — high latency, some addresses failing, ambiguous source interface), **✗ Fail**, **⊘ Skip** (prerequisite failed), or **– N/A** (doesn't apply — e.g. DNS on IP literal). Warn never counts as failure.
+Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but degraded — high latency, some addresses failing, an ambiguous source interface), **✗ Fail**, **⊘ Skip** (a prerequisite failed), or **– N/A** (doesn't apply — e.g. DNS on an IP literal). Warn never counts as a failure.
 
 | Probe | Passes when | Notes |
 |-------|-------------|-------|
@@ -161,17 +161,17 @@ Each row = one of five states: **✓ Pass**, **! Warn** (reachable but degraded 
 
 ### Path MTU without root
 
-Path MTU smaller than local interface's, on path that also filters ICMP that would say so = classic tunnel/VPN/PPPoE mystery: TCP connects, then connection dies moment either side sends real packet. `ping` and `curl` can't tell you that, and confirming normally means raw sockets and DF flag.
+A path MTU smaller than the local interface's, on a path that also filters the ICMP that would say so, is the classic tunnel/VPN/PPPoE mystery: TCP connects, then the connection dies the moment either side sends a real packet. `ping` and `curl` can't tell you that, and confirming it normally means raw sockets and the DF flag.
 
-**Path MTU** row confirms from ordinary socket. TCP handshake = control — SYN/SYN-ACK small enough to cross narrowed link, so completed connect already proves small packets arrive. Then probe shrinks own send buffer to 4 KiB and writes 24 KiB, which must leave as full-size segments. Nothing leaves that buffer until far end acknowledges it, so:
+The **Path MTU** row confirms it from an ordinary socket. The TCP handshake is the control: SYN/SYN-ACK are small enough to cross a narrowed link, so a completed connect already proves that small packets arrive. The probe then shrinks its own send buffer to 4 KiB and writes 24 KiB, which must leave as full-size segments. Nothing leaves that buffer until the far end acknowledges it, so:
 
-- write drains → full-size segments arrive, **Pass** (with interface MTU path confirmed to carry),
-- write stalls with buffer barely emptied → nothing acknowledged at all, **Warn** naming evidence and MSS/MTU fix,
-- peer hangs up first → **N/A**, inconclusive, not guess.
+- the write drains → full-size segments arrive, **Pass**, along with the interface MTU the path is confirmed to carry,
+- the write stalls with the buffer barely emptied → nothing was acknowledged at all, **Warn**, naming the evidence and an MSS/MTU fix,
+- the peer hangs up first → **N/A**: inconclusive, and it will not guess.
 
-Deliberately never Fail: peer that accepts connection then stops reading stalls write same way, so row states its evidence — bytes written, buffer size, and that handshake got through — and leaves judgement to you. When evidence lands *and* protocol row above it failed, verdict reclassifies from `service` to `network`: service fine, path can't carry full-size packet. 24 KiB payload = inert, self-labelling filler; TLS targets get record header in front so TLS server reads (and acknowledges) payload instead of resetting on first byte. Only probe here that sends bulk data — under `--watch` that 24 KiB per pass, once every 5 seconds.
+It deliberately never Fails: a peer that accepts the connection and then stops reading stalls the write the same way, so the row states its evidence — bytes written, buffer size, and the fact that the handshake got through — and leaves the judgement to you. When that evidence lands *and* the protocol row above it failed, the verdict is reclassified from `service` to `network`: the service is fine, the path can't carry a full-size packet. The 24 KiB payload is inert, self-labelling filler; TLS targets get a record header in front so the TLS server reads (and acknowledges) the payload instead of resetting on the first byte. This is the only probe that sends bulk data — under `--watch` that is 24 KiB per pass, once every 5 seconds.
 
-No verdict depends on ICMP. Plenty healthy hosts drop ping, so failed `ping` proves nothing and successful one proves less than TCP connect — RTT measured from TCP-connect handshake instead (no ICMP, no root). `ping` available as drill-down tool, where it evidence for human not input to diagnosis. Source IP and interface read from winning connection's `LocalAddr`, with UDP-connect fallback (sends no packets) for path identity on failure. Every probe bounded by 4-second timeout.
+No verdict depends on ICMP. Plenty of healthy hosts drop ping, so a failed `ping` proves nothing and a successful one proves less than a TCP connect — RTT is measured from the TCP-connect handshake instead (no ICMP, no root). `ping` is available as a drill-down tool, where it is evidence for a human rather than input to the diagnosis. The source IP and interface are read from the winning connection's `LocalAddr`, with a UDP-connect fallback (which sends no packets) for path identity on failure. Every probe is bounded by a 4-second timeout.
 
 ## Usage
 
@@ -187,12 +187,12 @@ netdoc --json --watch host  # headless: one JSON report per line, until interrup
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 ```
 
-`--timeout` overrides per-check probe timeout; see `netdoc --help` for default. `--watch` starts another pass five seconds after each run; in TUI shows last 20 states plus failure count for every check, and with `--json` streams same report on stdout, one compact JSON object per line, until process interrupted. Those lines carry extra `ts` field (RFC 3339, UTC) and otherwise = one-shot report unchanged — one-shot output stays pretty-printed, no `ts`.
-`--iface` binds probe connections and DNS lookups to interface's first IPv4 address (or first IPv6 when no IPv4). Pass exact local IP instead when interface has multiple addresses.
+`--timeout` overrides the per-check probe timeout; see `netdoc --help` for the default. `--watch` starts another pass five seconds after each run; in the TUI it shows the last 20 states plus a failure count for every check, and with `--json` it streams the same report on stdout, one compact JSON object per line, until the process is interrupted. Those lines carry an extra `ts` field (RFC 3339, UTC) and are otherwise the one-shot report unchanged — one-shot output stays pretty-printed, with no `ts`.
+`--iface` binds probe connections and DNS lookups to the interface's first IPv4 address (or its first IPv6 when there is no IPv4). Pass an exact local IP instead when the interface has multiple addresses.
 
-Target parser has two independent axes: **port** (explicit `:port` > scheme default > 443) and **protocol rows** (explicit `http`/`https`/`ssh`/`smtp` scheme wins; else inferred from port — `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP, `22`→SSH, `25/587`→SMTP). Hosts validated against strict allowlist; IPv6 literals accepted bare (`::1`) or bracketed with port (`[::1]:443`).
+The target parser has two independent axes: **port** (explicit `:port` > scheme default > 443) and **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp` scheme wins; otherwise it is inferred from the port — `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP, `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 
-TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. Exit `netdoc` and delete that file to clear history.
+The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. Exit `netdoc` and delete that file to clear history.
 
 | Key | Action |
 |-----|--------|
@@ -212,10 +212,10 @@ TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/h
 
 ## Drill-down tools
 
-Each diagnosis row = *evidence*; want proof, run real tools as cancellable streaming jobs — several run at once, `tab` switches between live ones. Contextual toolbox shows tools available for current target with hotkeys — missing binaries greyed out with install hint. Output bounded and sanitized (no terminal-escape injection from hostile server); reports include version/OS metadata plus each job's command, status, duration, last 15 output lines.
-Review local copy before sharing — tool evidence may contain sensitive data.
+Each diagnosis row is *evidence*; when you want proof, run the real tools as cancellable streaming jobs — several run at once, and `tab` switches between the live ones. A contextual toolbox shows the tools available for the current target with their hotkeys, greying out missing binaries with an install hint. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.
+Review your local copy before sharing — tool evidence may contain sensitive data.
 
-Same hotkeys map to each OS's built-in tools:
+The same hotkeys map to each OS's built-in tools:
 
 | Key | Linux | macOS | Windows |
 |-----|-------|-------|---------|
@@ -230,17 +230,17 @@ Same hotkeys map to each OS's built-in tools:
 | `m` | `mtr --report --report-cycles 5` | same (via brew) | `pathping -h 20 -q 5 -p 100 -w 500` (own 90 s budget) |
 | `n` | `nmap -sT -Pn --host-timeout 110s` (the explicit target port, else nmap's default top 1000) | same | same |
 
-`n` and `v` gated behind explicit confirmation before their active probes run. `n` uses plain connect scan with nmap default timing, no version/OS detection. `v` runs host discovery without raw sockets or root and caps scope at source address's `/24`.
+`n` and `v` are gated behind an explicit confirmation before their active probes run. `n` uses a plain connect scan with nmap's default timing and no version/OS detection. `v` runs host discovery without raw sockets or root, and caps its scope at the source address's `/24`.
 
-`c` slot protocol-aware: HTTP(S) and unknown-port targets get `curl`, while SSH (port 22) and SMTP (ports 25/587) targets get protocol-appropriate handshake probe — never HTTPS-oriented `curl` line. SSH check uses throwaway known-hosts file (no prompts, no writes) and disables authentication with `PreferredAuthentications=none`, stopping after banner and key exchange.
+The `c` slot is protocol-aware: HTTP(S) and unknown-port targets get `curl`, while SSH (port 22) and SMTP (ports 25/587) targets get a protocol-appropriate handshake probe rather than an HTTPS-oriented `curl` line. The SSH check uses a throwaway known-hosts file (no prompts, no writes) and disables authentication with `PreferredAuthentications=none`, stopping after the banner and key exchange.
 
-Routes/sockets tools target-independent; rest need host. Tools run with argument slice (never shell string), in own process group on Unix (cancel kills descendants too), and without privilege escalation. Displayed command copy-pasteable in POSIX shell (Linux/macOS) or PowerShell (Windows; cmd.exe paste not supported).
+The routes and sockets tools are target-independent; the rest need a host. Tools run with an argument slice (never a shell string), in their own process group on Unix (so cancelling kills descendants too), and without privilege escalation. The displayed command is copy-pasteable in a POSIX shell (Linux/macOS) or PowerShell (Windows; cmd.exe paste is not supported).
 
-`--toolbox [<host>]` opens straight into toolbox without auto-running chain (press `r` to run it). No host = only target-independent tools offered.
+`--toolbox [<host>]` opens straight into the toolbox without auto-running the chain (press `r` to run it). With no host, only the target-independent tools are offered.
 
 ### SSH login
 
-`S` logs in to current target — machine the checks about — so needs one (`r` sets it). Form asks for three things that yours, not target's: `tab` moves between fields, `←`/`→` picks key, `enter` connects, `esc` backs out.
+`S` logs in to the current target — the machine the checks are about — so it needs one (`r` sets it). The form asks for the three things that are yours rather than the target's: `tab` moves between fields, `←`/`→` picks the key, `enter` connects, and `esc` backs out.
 
 ```
 ╭────────────────────────────────────────────────────╮
@@ -251,9 +251,9 @@ Routes/sockets tools target-independent; rest need host. Tools run with argument
 ╰────────────────────────────────────────────────────╯
 ```
 
-Unlike drill-down tools this not bounded job: `netdoc` suspends itself and gives `ssh` real terminal, so session fully interactive and anything form left blank — key passphrase, host-key check, 2FA code — asked by `ssh` on screen. Session ends, TUI comes back with `ssh` stderr in job pane, so `Permission denied` still readable after instead of painted over.
+Unlike the drill-down tools, this is not a bounded job: `netdoc` suspends itself and gives `ssh` the real terminal, so the session is fully interactive and anything the form left blank — a key passphrase, a host-key check, a 2FA code — is asked by `ssh` on screen. When the session ends the TUI comes back with `ssh`'s stderr in the job pane, so a `Permission denied` is still readable afterwards instead of being painted over.
 
-Form fills in `ssh` options, nothing more:
+The form fills in `ssh` options, nothing more:
 
 | Field | Effect |
 |-------|--------|
@@ -262,17 +262,17 @@ Form fills in `ssh` options, nothing more:
 | Key | `-i <path> -o IdentitiesOnly=yes`, so a loaded agent can't spend the server's auth attempts before this key is tried |
 | Password | see below |
 
-Key list = private keys in `~/.ssh`, each recognized by its `.pub` half sitting next to it — no key file ever opened or parsed. `none` (first entry) leaves key selection to `ssh`, i.e. agent and `ssh_config`, which also where key kept outside `~/.ssh` belongs.
+The key list is the private keys in `~/.ssh`, each recognized by its `.pub` half sitting next to it — no key file is ever opened or parsed. `none` (the first entry) leaves key selection to `ssh`, i.e. to the agent and `ssh_config`, which is also where a key kept outside `~/.ssh` belongs.
 
-Typed password echoed as dots and never reaches command line, notice, or report. Passed to `ssh` through environment (`SSH_ASKPASS`), where `ssh` re-executes `netdoc` as its askpass helper and reads secret from helper's stdout. What that buys: secret stays out of argv, which every process on machine can read, and out of your shell history — not out of memory. Password field cleared once connecting, but by then value copied into `ssh`'s environment, where it stays until `ssh` exits and is inherited by whole subtree `ssh` starts — `ProxyCommand`, `LocalCommand`, `ProxyJump`'s own `ssh`. On Linux that environment readable through `/proc` by your own processes and by root; anything your `ssh_config` runs sees it too. `-o NumberOfPasswordPrompts=1` stops `ssh` re-offering rejected one.
+The typed password is echoed as dots and never reaches a command line, notice, or report. It is passed to `ssh` through the environment (`SSH_ASKPASS`), where `ssh` re-executes `netdoc` as its askpass helper and reads the secret from the helper's stdout. What that buys: the secret stays out of argv, which every process on the machine can read, and out of your shell history — but not out of memory. The password field is cleared once connecting starts, but by then the value has been copied into `ssh`'s environment, where it stays until `ssh` exits and is inherited by the whole subtree `ssh` starts — `ProxyCommand`, `LocalCommand`, and `ProxyJump`'s own `ssh`. On Linux that environment is readable through `/proc` by your own processes and by root; anything your `ssh_config` runs sees it too. `-o NumberOfPasswordPrompts=1` stops `ssh` re-offering a rejected one.
 
-Because forced askpass routes *every* prompt to helper, helper answers only password and passphrase prompts; refuses rest. So first connection to unknown host — where `ssh` asks you to verify host key — needs one run with password field blank, which puts that question back on your terminal where it belongs.
+Because forced askpass routes *every* prompt to the helper, the helper answers only password and passphrase prompts and refuses the rest. So the first connection to an unknown host — where `ssh` asks you to verify the host key — needs one run with the password field blank, which puts that question back on your terminal where it belongs.
 
-Whole `ssh` subtree inherits askpass setting, so with `ProxyJump` in your `ssh_config` jump host's `ssh` asks helper too. Prompt names machine it asks for (`user@host's password:`), and helper answers only when that host matches target — jump host's prompt goes back to your terminal. Prompts naming no host (key passphrase, PAM keyboard-interactive `Password:`) still answered on a direct connection, where only one machine can be asking; refusing those would break ordinary logins. Add proxy and they name no host *and* could be either end, so helper refuses all of them. Wording is no help there — keyboard-interactive text is written by far end, so jump host can call its question a passphrase — and that run wants the password field blank anyway, which puts the prompt back on your terminal. All of this depends on netdoc being able to read your resolved config (`ssh -G`); when that lookup fails there is no way to tell whose prompt is whose, so password-assisted login is refused outright and the form says so.
+The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in your `ssh_config` the jump host's `ssh` asks the helper too. The prompt names the machine it is asking for (`user@host's password:`), and the helper answers only when that host matches the target — the jump host's prompt goes back to your terminal. Prompts naming no host (a key passphrase, a PAM keyboard-interactive `Password:`) are still answered on a direct connection, where only one machine can be asking; refusing those would break ordinary logins. Add a proxy and they name no host *and* could be either end, so the helper refuses all of them. Wording is no help there — keyboard-interactive text is written by the far end, so a jump host can call its question a passphrase — and that run wants the password field blank anyway, which puts the prompt back on your terminal. All of this depends on netdoc being able to read your resolved config (`ssh -G`); when that lookup fails there is no way to tell whose prompt is whose, so password-assisted login is refused outright and the form says so.
 
 ### JSON output
 
-`--json` runs same probe DAG headless — no TUI — and prints one JSON document to stdout:
+`--json` runs the same probe DAG headless — no TUI — and prints one JSON document to stdout:
 
 ```json
 {
@@ -287,19 +287,19 @@ Whole `ssh` subtree inherits askpass setting, so with `ProxyJump` in your `ssh_c
 }
 ```
 
-`status` = one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` = `null` in generic (no-target) mode. `ms` = check's wall time truncated to milliseconds but floored at `1`, so `0` means check never ran. Optional per-check fields (`fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) omitted when empty. `portal` object marks detected HTTP interception, includes `redirect_url` only when response supplied valid HTTP(S) sign-in URL; app displays that URL but never opens it. Field names and status vocabulary stable — safe to script against. Exit codes follow table below (`ok: false` ⇒ exit `1`).
+`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable — safe to script against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
 
-`failed_stage` names first check that failed (`dns`, `target_tcp`, `tls`, …), omitted when none did — enough to route bug report without reading prose.
+`failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`, …) and is omitted when none did — enough to route a bug report without reading any prose.
 
-`--json --watch` prints same document once per pass, compacted onto single line (NDJSON), five seconds apart, until process interrupted — for intermittent failure you can't sit and watch:
+`--json --watch` prints the same document once per pass, compacted onto a single line (NDJSON), five seconds apart, until the process is interrupted — for the intermittent failure you can't sit and watch:
 
 ```sh
 netdoc --json --watch github.com | jq -c 'select(.ok | not) | {ts, failed_stage, summary}'
 ```
 
-Those lines add `ts` field (RFC 3339, UTC) saying when pass ran; nothing else changes. Exit code = last completed pass's.
+Those lines add a `ts` field (RFC 3339, UTC) saying when the pass ran; nothing else changes. The exit code is the last completed pass's.
 
-`verdict` = summary as machine-readable class, for question script actually asks: *is my network broken, or is theirs?*
+`verdict` is the summary as a machine-readable class, for the question a script actually asks: *is my network broken, or is theirs?*
 
 | `verdict` | Meaning |
 |---|---|
@@ -310,7 +310,7 @@ Those lines add `ts` field (RFC 3339, UTC) saying when pass ran; nothing else ch
 | `service` | **The path works, the far end does not** — TCP refused while the general internet is reachable, or TLS/HTTP/banner failing on top of a good connection |
 | `incomplete` | A check has no result (the chain did not finish) |
 
-`network`/`service` split decided by evidence, not guesswork: unreachable target only blamed on service when direct egress independently succeeded. No working egress to compare against, netdoc says `network` rather than accuse host it never reached.
+The `network`/`service` split is decided by evidence, not guesswork: an unreachable target is only blamed on the service when direct egress independently succeeded. With no working egress to compare against, netdoc says `network` rather than accusing a host it never reached.
 
 ### Exit codes
 
@@ -327,9 +327,9 @@ netdoc github.com || echo "path to github is broken"
 
 ## Platform support
 
-All probes, diagnosis engine, and TUI pure Go and identical on Linux, macOS, Windows. Platform-specific garnish (default gateway, Wi-Fi SSID) uses kernel directly on Linux (`/proc/net/route`, wireless ioctl) and OS built-in commands elsewhere (`route`/`networksetup` on macOS, `route print`/`netsh wlan` on Windows); when those fail fields degrade to empty rather than failing probe.
+All probes, the diagnosis engine, and the TUI are pure Go and identical on Linux, macOS, and Windows. Platform-specific garnish (the default gateway, the Wi-Fi SSID) uses the kernel directly on Linux (`/proc/net/route`, a wireless ioctl) and OS built-in commands elsewhere (`route`/`networksetup` on macOS, `route print`/`netsh wlan` on Windows); when those fail the fields degrade to empty rather than failing the probe.
 
-Windows built-in toolbox commands decoded from active OEM code page before output sanitized. UTF-8 tools like `curl.exe` and `nmap` untouched.
+Windows built-in toolbox commands are decoded from the active OEM code page before their output is sanitized. UTF-8 tools like `curl.exe` and `nmap` are left untouched.
 
 ## Roadmap
 
@@ -358,7 +358,7 @@ the software or how issues are prioritized.
 
 ## Tests
 
-Before submitting change, run complete CI gate. Every tool runs through `go run` at the version CI uses, so a Go toolchain is the only prerequisite:
+Before submitting a change, run the complete CI gate. Every tool runs through `go run` at the version CI uses, so a Go toolchain is the only prerequisite:
 
 ```sh
 go vet ./...
@@ -376,14 +376,14 @@ Race and fuzz checks run only on Linux in CI.
 
 ## Development
 
-Code split by responsibility:
+The code is split by responsibility:
 
 - `main.go` owns CLI arguments, process I/O, application startup.
 - `internal/diagnostic` owns target parsing, native probes, per-OS route/SSID lookups, verdict logic without depending on terminal presentation.
 - `internal/ui` owns Bubble Tea state, rendering, tool jobs.
 - `internal/textsafe` sanitizes untrusted remote and subprocess text shared by both layers.
 
-UI depends on diagnostics; diagnostics do not depend on UI. Add network semantics under `internal/diagnostic`, interaction or rendering behavior under `internal/ui`.
+The UI depends on diagnostics; diagnostics do not depend on the UI. Add network semantics under `internal/diagnostic`, and interaction or rendering behavior under `internal/ui`.
 
 ## License
 
