@@ -533,7 +533,12 @@ func (m model) sshFormView() string {
 }
 
 func (m model) helpView(deferred bool) string {
-	hosts := len(m.networkHosts())
+	// Only the map branch cares how many devices there are, and networkHosts
+	// walks the whole job line buffer — don't pay for it on every checks frame.
+	hosts := 0
+	if m.networkMap {
+		hosts = len(m.networkHosts())
+	}
 	var kv []string
 	switch {
 	case m.networkMap:
