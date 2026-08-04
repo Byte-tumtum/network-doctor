@@ -249,6 +249,14 @@ func TestInternetProbeBlackHoledIPv6(t *testing.T) {
 	if r := linkLocalOnly.internetProbe(context.Background(), nil); r.Status != StatusPass {
 		t.Errorf("v4-only network = %+v, want PASS — no global IPv6 means nothing is broken", r)
 	}
+
+	ulaOnly := *blackholed
+	ulaOnly.interfaceAddrs = func(*net.Interface) ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("fd00::1")}}, nil
+	}
+	if r := ulaOnly.internetProbe(context.Background(), nil); r.Status != StatusPass {
+		t.Errorf("ULA-only network = %+v, want PASS — fc00::/7 was never meant to reach the internet", r)
+	}
 }
 
 // A network whose TCP handshakes all succeed is still not online if the 204

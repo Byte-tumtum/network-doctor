@@ -1402,8 +1402,10 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 // unicast IPv6 address — the machine accepted a router advertisement (or was
 // configured statically), so the network claimed to carry IPv6.
 //
-// ponytail: a ULA-only network counts as configured and will be called
-// black-holed; narrow this to non-fc00::/7 if that ever produces a false alarm.
+// fc00::/7 doesn't count: unique-local addresses are routable inside the LAN
+// and never to the internet, so no IPv6 egress is their design rather than a
+// black hole. Docker hands them out, which would otherwise warn on every
+// v4-only machine running a v6-enabled bridge.
 func (o *netops) hasGlobalV6() bool {
 	ifaces, err := o.interfaces()
 	if err != nil {
@@ -1418,7 +1420,7 @@ func (o *netops) hasGlobalV6() bool {
 			continue
 		}
 		for _, a := range addrs {
-			if n, ok := a.(*net.IPNet); ok && n.IP.To4() == nil && n.IP.IsGlobalUnicast() {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() == nil && n.IP.IsGlobalUnicast() && n.IP[0]&0xfe != 0xfc {
 				return true
 			}
 		}
