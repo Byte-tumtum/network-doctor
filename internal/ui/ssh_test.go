@@ -163,11 +163,6 @@ func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
 	if args != nil || env != nil {
 		t.Errorf("args = %v, env = %v, want both nil", args, env)
 	}
-	for _, e := range env {
-		if strings.Contains(e, "hunter2") {
-			t.Fatal("the password survived a refused login")
-		}
-	}
 }
 
 // Without a password there is no secret to misroute, so the lookup is not
