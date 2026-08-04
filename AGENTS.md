@@ -10,7 +10,7 @@ Keep OS behavior in build-tagged or platform-suffixed files; pass `GOOS` into te
 
 ## Testing Guidelines
 
-Real-socket tests must keep `integration` build tag, stay loopback-only. Ordinary tests deterministic + rootless. Before submit, run full gate from `README.md`: vet, build, unit + integration tests, race detection, sanitizer fuzzing, lint, vuln scanning, `goreleaser check`.
+Real-socket tests must keep `integration` build tag, stay loopback-only. Ordinary tests deterministic + rootless.
 
 After changing `internal/textsafe`, fuzz sanitizer: `go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe`. `internal/ui/jobs_test.go` uses `GO_HELPER` subprocesses to verify process-group cancellation.
 
