@@ -932,7 +932,11 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 		// All addresses failed: deterministic fallback path = first address.
 		src, iface := o.pathIdentity(ctx, nil, addrs[0], port)
 		r.Status, r.Source, r.Iface = StatusFail, src, iface
-		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(attempts), joinIPs(attemptIPs(attempts)))
+		tried := make([]net.IP, len(attempts))
+		for i, a := range attempts {
+			tried[i] = a.IP
+		}
+		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(attempts), joinIPs(tried))
 		r.Fix = fmt.Sprintf("port %d blocked/refused — firewall, wrong network, or VPN routing?", port)
 		return r
 	}
@@ -1023,7 +1027,13 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		dialMu.Unlock()
 		if err != nil {
 			r.Status = StatusFail
-			r.Detail = "no " + protocol + " response from " + addrTried(r.SelectedIP, addrs) + ": " + err.Error()
+			// Name the winner if one address connected and the failure came
+			// later, otherwise everything tried.
+			tried := joinIPs(addrs)
+			if r.SelectedIP != nil {
+				tried = r.SelectedIP.String()
+			}
+			r.Detail = "no " + protocol + " response from " + tried + ": " + err.Error()
 			r.Fix = protocol + " blocked — proxy or firewall?"
 			return r
 		}
@@ -1444,23 +1454,6 @@ func (o *netops) ifaceForIP(ip net.IP) string {
 	default:
 		return name
 	}
-}
-
-func attemptIPs(attempts []Attempt) []net.IP {
-	ips := make([]net.IP, len(attempts))
-	for i, a := range attempts {
-		ips[i] = a.IP
-	}
-	return ips
-}
-
-// addrTried names the address a failed HTTP attempt used: the winner if one
-// address connected and the failure came later, otherwise everything tried.
-func addrTried(sel net.IP, addrs []net.IP) string {
-	if sel != nil {
-		return sel.String()
-	}
-	return joinIPs(addrs)
 }
 
 func joinIPs(ips []net.IP) string {
