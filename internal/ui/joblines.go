@@ -79,8 +79,11 @@ func (m model) jobContent() string {
 
 // refreshViewport resizes and re-renders the open viewport, sticking to the
 // tail in follow mode.
-// ponytail: full content rebuild per line while open; fine at the 5000-line
-// cap, switch to incremental append if it ever lags.
+// Every appended line rebuilds the whole content instead of appending to it.
+// The ring buffer caps at maxJobLines, so the join and wrap stay bounded, and
+// the rebuild is cheap next to the terminal redraw it feeds — an incremental
+// path would have to re-derive the same wrapping anyway to keep the context
+// line's display-line numbers honest.
 func (m *model) refreshViewport() {
 	m.vp.Width, m.vp.Height = m.width, m.vpHeight()
 	m.vp.SetContent(m.jobContent())
