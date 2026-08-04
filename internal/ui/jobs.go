@@ -154,7 +154,7 @@ func (j *job) drain() {
 // a job is not the same as having killed it: exec runs cmd.Cancel on its own
 // goroutine, so without this wait the process could exit before the SIGKILL
 // goes out.
-func (j *job) waitDone(deadline <-chan time.Time) {
+func (j *job) waitDone(deadline <-chan struct{}) {
 	if j == nil || j.ch == nil {
 		return
 	}

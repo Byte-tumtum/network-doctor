@@ -3,7 +3,7 @@
 package ui
 
 import (
-	"time"
+	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
@@ -24,10 +24,13 @@ func Cleanup(final tea.Model) {
 	m.cancelJobs()
 	m.clearCancel()
 	// One deadline for all of them: a job that somehow won't die must not be
-	// able to hold the exit open job by job.
-	deadline := time.After(exitGrace)
+	// able to hold the exit open job by job. It has to be a closed channel, not
+	// a timer channel — the latter fires exactly once, so the first stuck job
+	// would eat it and the rest would wait forever.
+	ctx, cancel := context.WithTimeout(context.Background(), exitGrace)
+	defer cancel()
 	for j := range m.jobs {
-		j.active.waitDone(deadline)
+		j.active.waitDone(ctx.Done())
 	}
 }
 

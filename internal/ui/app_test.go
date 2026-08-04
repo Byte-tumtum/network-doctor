@@ -4,6 +4,9 @@ package ui
 
 import (
 	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Toolbox Init emits one tick, then sleeps until the deferred chain is started.
@@ -23,5 +26,23 @@ func TestInit(t *testing.T) {
 	tb.doRestart()
 	if !tb.spinnerActive() {
 		t.Error("toolbox spinner must activate when the deferred chain starts")
+	}
+}
+
+// Two jobs that never send their terminal event must share one exit grace, not
+// serialize it. Regression: a time.After channel fires once, so the first stuck
+// job consumed it and the second blocked forever.
+func TestCleanupStuckJobsShareOneGrace(t *testing.T) {
+	m := newModel(nil, false)
+	stuck := func(id string) *job { return &job{id: id, ch: make(chan tea.Msg)} }
+	m.cur.active = stuck("a")
+	m.otherJobs = []jobState{{active: stuck("b")}, {active: stuck("c")}}
+
+	done := make(chan struct{})
+	go func() { defer close(done); Cleanup(m) }()
+	select {
+	case <-done:
+	case <-time.After(2 * exitGrace):
+		t.Fatal("Cleanup outlived one exit grace with multiple stuck jobs")
 	}
 }
