@@ -302,6 +302,14 @@ Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent canc
 [Bubbles](https://github.com/charmbracelet/bubbles), and
 [Lip Gloss](https://github.com/charmbracelet/lipgloss).
 
+## Support
+
+Network Doctor is free software maintained independently. If it saves you time,
+you can [sponsor its development](https://github.com/sponsors/heymaikol). Your
+support helps fund the time spent on cross-platform testing, packaging, releases,
+and ongoing maintenance. Sponsorship is optional and does not affect access to
+the software or how issues are prioritized.
+
 ## Tests
 
 Before submitting change, run complete CI gate. Every tool runs through `go run` at the version CI uses, so a Go toolchain is the only prerequisite:
