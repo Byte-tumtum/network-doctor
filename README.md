@@ -1,8 +1,47 @@
 # Network Doctor
 
-Terminal UI. Diagnose network connectivity, tell you **where connection breaks** in plain English — not wall of tool output.
+[![CI](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/heymaikol/network-doctor)](https://github.com/heymaikol/network-doctor/releases/latest)
+[![License: GPL-3.0-or-later](https://img.shields.io/github/license/heymaikol/network-doctor)](LICENSE)
+
+**Find exactly where your connection breaks.** Network Doctor is a
+cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
+TLS, HTTP, proxy, and path-MTU checks into one plain-English diagnosis.
 
 ![Network Doctor diagnosing github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, and watch mode](assets/demo.gif)
+
+Instead of handing you a wall of `ping`, `dig`, and `curl` output, Network
+Doctor answers the useful question: **is the problem on my network, along the
+path, or at the service?**
+
+## Why Network Doctor
+
+- **Pinpoints the failed layer.** Independent probes distinguish local-link,
+  DNS, egress, target, TLS, HTTP, proxy, and path-MTU failures.
+- **Explains what to do next.** Results include evidence and targeted fix hints,
+  with familiar drill-down tools one keypress away.
+- **Needs no root access.** Even the path-MTU check and LAN map use unprivileged
+  sockets and bounded probes.
+- **Works interactively or in automation.** Use the TUI for live investigation,
+  `--watch` for intermittent faults, or stable JSON and exit codes in scripts.
+- **Runs everywhere.** The same diagnosis engine supports Linux, macOS, and
+  Windows, with native packages and prebuilt binaries.
+
+## Quick start
+
+Install `netdoc` using the package for your platform below, then diagnose any
+host or service:
+
+```sh
+netdoc github.com       # DNS → TCP → TLS → HTTP diagnosis
+netdoc github.com:22    # SSH path and banner diagnosis
+netdoc --watch host     # catch intermittent failures
+netdoc --json host      # structured report for scripts or bug reports
+```
+
+Run `netdoc` with no target to check the local interface, internet egress,
+configured proxy, public DNS, and Wi-Fi metadata. In the TUI, select a failed
+row to see its evidence and suggested fix; press `?` for every shortcut.
 
 ## Install
 
@@ -301,6 +340,13 @@ Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent canc
 [Bubble Tea](https://github.com/charmbracelet/bubbletea),
 [Bubbles](https://github.com/charmbracelet/bubbles), and
 [Lip Gloss](https://github.com/charmbracelet/lipgloss).
+
+## Contributing
+
+Bug reports, focused pull requests, and platform testing are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, validation, and reporting guidance.
+Please report suspected vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md).
 
 ## Support
 

@@ -1,0 +1,65 @@
+name: Bug report
+description: Report reproducible behavior that looks wrong
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Review pasted reports and command output for private hostnames, addresses, usernames, and other sensitive data.
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues for this problem.
+          required: true
+        - label: This is not a security vulnerability (those should be reported using SECURITY.md).
+          required: true
+  - type: input
+    attributes:
+      label: Network Doctor version
+      description: Output of `netdoc --version`.
+      placeholder: Paste the full output here
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Platform
+      description: OS, version, and architecture.
+      placeholder: Fedora 43, x86_64
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Installation method
+      options:
+        - Homebrew
+        - Scoop
+        - winget
+        - COPR
+        - deb/rpm/apk package
+        - Release binary
+        - go install
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the target form and the smallest steps that reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Sanitized output or screenshots
+      description: Paste `--json` output, terminal text, or screenshots after removing sensitive network details.
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Note whether the problem is consistent, intermittent, or specific to one network.

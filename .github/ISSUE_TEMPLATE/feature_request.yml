@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a focused improvement or new diagnostic capability
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true
+  - type: textarea
+    attributes:
+      label: Troubleshooting problem
+      description: What real network troubleshooting task is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed behavior
+      description: Describe the result or workflow you would find useful.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives considered
+      description: How do you solve this today, inside or outside Network Doctor?
+  - type: dropdown
+    attributes:
+      label: Platforms affected
+      multiple: true
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - All platforms
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Mockups, sample output, and links are welcome. Remove sensitive network details.
