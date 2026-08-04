@@ -24,17 +24,10 @@ const (
 )
 
 func (p Proto) String() string {
-	switch p {
-	case ProtoTLSHTTP:
-		return "tls+http"
-	case ProtoHTTP:
-		return "http"
-	case ProtoSSH:
-		return "ssh"
-	case ProtoSMTP:
-		return "smtp"
+	if p < ProtoNone || p > ProtoSMTP {
+		return "none"
 	}
-	return "none"
+	return [...]string{"none", "tls+http", "http", "ssh", "smtp"}[p]
 }
 
 // Target is the parsed, validated destination. Two independent axes: the
