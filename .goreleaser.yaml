@@ -46,8 +46,8 @@ release:
   extra_files:
     - glob: ./network-doctor-*-vendor.tar.gz
 
-# Distro-agnostic packages for everything that isn't Arch: apt, dnf, apk all
-# install these straight off the release page.
+# Distro-agnostic packages installed straight off the release page: apt, dnf,
+# apk. Repo-based installs go through COPR instead, which builds its own.
 nfpms:
   - package_name: network-doctor
     homepage: https://github.com/heymaikol/network-doctor
@@ -59,24 +59,6 @@ nfpms:
     contents:
       - src: LICENSE
         dst: /usr/share/doc/network-doctor/LICENSE
-
-aur_sources:
-  - homepage: https://github.com/heymaikol/network-doctor
-    description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
-    license: GPL-3.0-or-later
-    maintainers:
-      - Michael Placzek <heymaikol@proton.me>
-    private_key: "{{ .Env.AUR_KEY }}"
-    git_url: ssh://aur@aur.archlinux.org/network-doctor.git
-    build: |-
-      cd "${pkgname}-${pkgver}"
-      export CGO_ENABLED=0
-      export GOFLAGS="-trimpath -mod=readonly -modcacherw"
-      go build -ldflags "-s -w -X main.version=${pkgver}" -o netdoc .
-    package: |-
-      cd "${pkgname}-${pkgver}"
-      install -Dm755 netdoc "${pkgdir}/usr/bin/netdoc"
-      install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
 homebrew_casks:
   - repository:

@@ -36,20 +36,6 @@ brew install --cask network-doctor
 
 ### Linux
 
-Arch — [`network-doctor`](https://aur.archlinux.org/packages/network-doctor) AUR package builds from source:
-
-```sh
-yay -S network-doctor    # or: paru -S network-doctor
-```
-
-By hand, no AUR helper:
-
-```sh
-git clone https://aur.archlinux.org/network-doctor.git
-cd network-doctor
-makepkg -si
-```
-
 Fedora — [COPR repo](https://copr.fedorainfracloud.org/coprs/heymaikol/network-doctor/) builds from source, upgrades through `dnf` like any other repo:
 
 ```sh
@@ -67,7 +53,7 @@ sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # Fedora, RHEL, Rocky
 sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpine
 ```
 
-Downloaded by hand, so these no auto-update — `dnf`/`apt` won't pull next version for you. AUR and COPR do.
+Downloaded by hand, so these no auto-update — `dnf`/`apt` won't pull next version for you. COPR does.
 
 ### Everywhere else
 
@@ -98,7 +84,7 @@ gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
   --signer-workflow heymaikol/network-doctor/.github/workflows/release.yml
 ```
 
-Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball AUR builds from attested too, as are `.deb`/`.rpm`/`.apk` and Windows `.zip` — pass whichever filename you downloaded.
+Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball attested too, as are `.deb`/`.rpm`/`.apk` and Windows `.zip` — pass whichever filename you downloaded.
 
 Two exceptions. `*-vendor.tar.gz` (Go deps, exists so COPR can build offline) sits outside `checksums.txt`, so nothing attests it — reproduce with `go mod vendor` at the tag if you care. COPR packages get rebuilt on Fedora's builders, so COPR's signature covers them, not this attestation.
 
