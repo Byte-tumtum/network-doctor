@@ -43,7 +43,6 @@ func (m model) visibleJobLines() []string {
 
 // filterLines keeps the lines containing f, case-insensitively; an empty f
 // keeps everything.
-// ponytail: substring only — regex when someone actually asks for it.
 func filterLines(lines []string, f string) []string {
 	if f == "" {
 		return lines
