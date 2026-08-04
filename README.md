@@ -50,6 +50,15 @@ cd network-doctor
 makepkg -si
 ```
 
+Fedora — [COPR repo](https://copr.fedorainfracloud.org/coprs/heymaikol/network-doctor/) builds from source, upgrades through `dnf` like any other repo:
+
+```sh
+sudo dnf copr enable heymaikol/network-doctor
+sudo dnf install network-doctor
+```
+
+Covers Fedora 43, 44, rawhide on `x86_64` and `aarch64`. COPR signs with own per-project key, which `dnf copr enable` installs — separate trust root from GitHub attestation below, not same one.
+
 Everything else — `.deb`, `.rpm`, `.apk` on [latest release](https://github.com/heymaikol/network-doctor/releases/latest), `amd64` and `arm64`. Download one, install locally:
 
 ```sh
@@ -58,7 +67,7 @@ sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # Fedora, RHEL, Rocky
 sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpine
 ```
 
-No repo hosted, so these no auto-update — `dnf`/`apt` won't pull next version for you. AUR does.
+Downloaded by hand, so these no auto-update — `dnf`/`apt` won't pull next version for you. AUR and COPR do.
 
 ### Everywhere else
 
@@ -90,6 +99,8 @@ gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
 ```
 
 Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball AUR builds from attested too, as are `.deb`/`.rpm`/`.apk` and Windows `.zip` — pass whichever filename you downloaded.
+
+Two exceptions. `*-vendor.tar.gz` (Go deps, exists so COPR can build offline) sits outside `checksums.txt`, so nothing attests it — reproduce with `go mod vendor` at the tag if you care. COPR packages get rebuilt on Fedora's builders, so COPR's signature covers them, not this attestation.
 
 ## How it diagnoses
 
