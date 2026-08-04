@@ -1,5 +1,16 @@
 version: 2
 
+# COPR builds in mock, which has no network, and the source tarball below is a
+# git archive that can't carry untracked vendor/. Ship deps as a side tarball
+# instead of committing vendor/, which would break every dependency-bump PR.
+# Written to the repo root, not dist/: before-hooks run ahead of the step that
+# asserts dist/ is empty, so writing there aborts the build. Untracked, so
+# `git archive` keeps it out of the source tarball.
+before:
+  hooks:
+    - go mod vendor
+    - tar -czf {{ .ProjectName }}-{{ .Version }}-vendor.tar.gz vendor
+
 builds:
   - binary: netdoc
     env:
@@ -28,6 +39,12 @@ source:
 
 checksum:
   name_template: "checksums.txt"
+
+release:
+  # Uploaded alongside the build artifacts but outside checksums.txt, so no
+  # attestation covers it. Reproduce it with `go mod vendor` if that matters.
+  extra_files:
+    - glob: ./network-doctor-*-vendor.tar.gz
 
 # Distro-agnostic packages for everything that isn't Arch: apt, dnf, apk all
 # install these straight off the release page.

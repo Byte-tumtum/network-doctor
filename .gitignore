@@ -7,6 +7,10 @@
 
 # GoReleaser
 dist/
+# Vendored Go deps + the tarball of them COPR builds against, both produced by
+# release-time hooks. Neither belongs in the source tarball.
+/vendor/
+/network-doctor-*-vendor.tar.gz
 
 # Graphify
 graphify-out/
