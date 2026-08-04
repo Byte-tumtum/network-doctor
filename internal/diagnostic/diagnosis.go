@@ -259,9 +259,9 @@ func answersAgree(a, b []net.IP) bool {
 // those as different networks is exactly the false positive worth avoiding.
 // Erring coarse costs us a warning when two operators share a block; erring
 // fine costs a wrong headline verdict on every healthy run.
-// ponytail: prefix length stands in for an ASN lookup. Only an RIR/BGP source
-// gets this exactly right, and it would need a network call or a bundled
-// dataset — add one if same-block operators turn out to matter.
+// Prefix length stands in for an ASN lookup: only an RIR/BGP source gets this
+// exactly right, and it would cost either a network call or a bundled dataset
+// in a probe that must stay time-bounded and offline.
 func routePrefix(ip net.IP) (netip.Prefix, bool) {
 	addr, ok := netip.AddrFromSlice(ip)
 	if !ok {
