@@ -101,7 +101,16 @@ func TestSSHCommandWithoutHelper(t *testing.T) {
 func stubSSHEffective(t *testing.T, host string, proxied bool) {
 	t.Helper()
 	old := sshEffective
-	sshEffective = func([]string) (string, bool) { return host, proxied }
+	sshEffective = func([]string) (string, bool, error) { return host, proxied, nil }
+	t.Cleanup(func() { sshEffective = old })
+}
+
+// stubSSHEffectiveErr stands in for an `ssh -G` that couldn't answer: no ssh on
+// PATH, a config it refused to parse, a Match exec that exited nonzero.
+func stubSSHEffectiveErr(t *testing.T, err error) {
+	t.Helper()
+	old := sshEffective
+	sshEffective = func([]string) (string, bool, error) { return "", false, err }
 	t.Cleanup(func() { sshEffective = old })
 }
 
@@ -135,12 +144,64 @@ func TestSSHCommandMarksProxiedConnections(t *testing.T) {
 	}
 }
 
+// An unreadable config leaves the helper unable to tell the target's prompt
+// from a jump host's, and both defaults are wrong: direct spends the password
+// on whoever asks, proxied silently refuses the login it was opened for. Refuse
+// the login and say why, so the retry with a blank field is the user's choice.
+func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
+	stubSSHEffectiveErr(t, errors.New("exit status 255"))
+	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc")
+	if err == nil {
+		t.Fatal("sshCommand succeeded, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "password field blank") {
+		t.Errorf("err = %q, want it to name the way out", err)
+	}
+	// Nothing may be handed back on the refusal path — an argv that reached ssh
+	// without the askpass env would prompt on a terminal the TUI still owns,
+	// and an env would carry the secret past the check that just failed.
+	if args != nil || env != nil {
+		t.Errorf("args = %v, env = %v, want both nil", args, env)
+	}
+	for _, e := range env {
+		if strings.Contains(e, "hunter2") {
+			t.Fatal("the password survived a refused login")
+		}
+	}
+}
+
+// Without a password there is no secret to misroute, so the lookup is not
+// consulted at all and a broken config costs the user nothing.
+func TestSSHCommandWithoutPasswordIgnoresConfigFailure(t *testing.T) {
+	called := false
+	old := sshEffective
+	sshEffective = func([]string) (string, bool, error) {
+		called = true
+		return "", false, errors.New("exit status 255")
+	}
+	t.Cleanup(func() { sshEffective = old })
+
+	args, env, err := sshCommand("example.com", "alice", "", "", "/usr/bin/netdoc")
+	if err != nil {
+		t.Fatalf("sshCommand: %v", err)
+	}
+	if called {
+		t.Error("the config lookup ran for a password-less login")
+	}
+	if !slices.Equal(args, []string{"-l", "alice", "example.com"}) {
+		t.Errorf("args = %v, want [-l alice example.com]", args)
+	}
+	if env != nil {
+		t.Errorf("env = %v, want nil", env)
+	}
+}
+
 // The lookup is asked with the argv the session will use, since a Match block
 // can key off the port or the login and answer with a different HostName.
 func TestSSHCommandQueriesWithTheRealArgv(t *testing.T) {
 	var got []string
 	old := sshEffective
-	sshEffective = func(args []string) (string, bool) { got = args; return "example.com", false }
+	sshEffective = func(args []string) (string, bool, error) { got = args; return "example.com", false, nil }
 	t.Cleanup(func() { sshEffective = old })
 
 	if _, _, err := sshCommand("example.com:2222", "alice", "", "hunter2", "/usr/bin/netdoc"); err != nil {

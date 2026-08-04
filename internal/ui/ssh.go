@@ -6,6 +6,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
 // sshDoneMsg reports an interactive ssh session's exit once the TUI has the
@@ -203,7 +205,9 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		args, env, err := sshCommand(m.ssh.host, strings.TrimSpace(m.ssh.user.Value()),
 			m.ssh.keyPath(), m.ssh.pass.Value(), self)
 		if err != nil {
-			m.ssh.err = err.Error()
+			// The panel renders this raw, and one of these errors now quotes an
+			// exec failure. Clean at the assignment, which is the only one.
+			m.ssh.err = textsafe.Clean(err.Error())
 			return m, nil
 		}
 		m.sshPrompt = false
@@ -253,9 +257,17 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 		// Asked with the same argv the session will use, because a Match block
 		// can key off the port, the login, or the host and hand back a
 		// different HostName than a bare query would.
-		effective, proxied := sshEffective(append(slices.Clone(args), t.Host))
+		effective, proxied, err := sshEffective(append(slices.Clone(args), t.Host))
+		if err != nil {
+			// Neither default is safe. Assume direct and a jump host's prompt
+			// gets answered with this password; assume proxied and every
+			// ordinary login quietly loses the answer it asked for. Say which
+			// step failed instead — with the field blank ssh asks on the
+			// terminal, where the user can see who is asking.
+			return nil, nil, fmt.Errorf("cannot read ssh config for %s (%v) — retry with the password field blank and let ssh ask", t.Host, err)
+		}
 		if effective == "" {
-			effective = t.Host // no ssh to ask, or it had nothing to say
+			effective = t.Host // ssh had nothing to say
 		}
 		// The secret goes through the environment to the helper, never through
 		// argv, which every process can read. It lives in ssh's environment for
@@ -277,14 +289,18 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 
 // sshEffective asks ssh what the target really resolves to once ssh_config has
 // had its say: the HostName a password prompt will name, and whether anything
-// stands between here and there. A var so tests don't shell out.
-var sshEffective = func(args []string) (host string, proxied bool) {
+// stands between here and there. The error is not cosmetic — without an answer
+// the helper cannot tell whose prompt it is answering, so callers carrying a
+// password must refuse rather than pick a default. A var so tests don't shell
+// out.
+var sshEffective = func(args []string) (host string, proxied bool, err error) {
 	// -G prints the resolved config and connects to nothing.
 	out, err := exec.Command("ssh", append([]string{"-G"}, args...)...).Output()
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
-	return parseSSHConfig(string(out))
+	host, proxied = parseSSHConfig(string(out))
+	return host, proxied, nil
 }
 
 // parseSSHConfig reads `ssh -G` output, which is one lowercased keyword per
