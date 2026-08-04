@@ -21,36 +21,20 @@ func (m *model) scheduleStep() []tea.Cmd {
 			if m.started[p.ID] {
 				continue
 			}
-			ready, blocked := depsState(p.Deps, m.results)
+			ready, blocked := diagnostic.DepsState(p.Deps, m.results)
 			if !ready {
 				continue
 			}
 			m.started[p.ID] = true
 			progress = true
 			if blocked {
-				m.results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusSkip, Detail: "skipped — a prerequisite failed"}
+				m.results[p.ID] = diagnostic.SkipPrereq(p.ID)
 				continue
 			}
 			cmds = append(cmds, m.runProbe(p))
 		}
 	}
 	return cmds
-}
-
-// depsState reports whether all deps completed (ready) and whether any completed
-// dep blocks this probe. A dep blocks on Fail or Skip (no output); a Pass, a
-// Warn (degraded but produced output), or an applicable NotApplicable satisfies.
-func depsState(deps []diagnostic.ProbeID, res map[diagnostic.ProbeID]diagnostic.ProbeResult) (ready, blocked bool) {
-	for _, d := range deps {
-		r, ok := res[d]
-		if !ok {
-			return false, false
-		}
-		if r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusSkip {
-			blocked = true
-		}
-	}
-	return true, blocked
 }
 
 // runProbe builds the tea.Cmd for a probe, capturing the generation, the parent

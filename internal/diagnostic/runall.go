@@ -2,6 +2,27 @@ package diagnostic
 
 import "context"
 
+// DepsState reports whether all deps completed (ready) and whether any completed
+// dep blocks this probe. A dep blocks on Fail or Skip (no output); a Pass, a
+// Warn (degraded but produced output), or an applicable NotApplicable satisfies.
+func DepsState(deps []ProbeID, res map[ProbeID]ProbeResult) (ready, blocked bool) {
+	for _, d := range deps {
+		r, ok := res[d]
+		if !ok {
+			return false, false
+		}
+		if r.Status == StatusFail || r.Status == StatusSkip {
+			blocked = true
+		}
+	}
+	return true, blocked
+}
+
+// SkipPrereq is the result recorded for a probe DepsState reports as blocked.
+func SkipPrereq(id ProbeID) ProbeResult {
+	return ProbeResult{ID: id, Status: StatusSkip, Detail: "skipped — a prerequisite failed"}
+}
+
 // RunAll executes the probe DAG headlessly with the same semantics as the TUI
 // scheduler: every ready probe runs in parallel under its own ProbeTimeout, a
 // failed or skipped prerequisite skips its dependents, and the egress
@@ -12,12 +33,6 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 	done := make(chan ProbeResult)
 	running := 0
 
-	// Yes, this re-implements the ui scheduler's ready/blocked walk. Sharing it
-	// is cheap enough — ui already imports diagnostic, so exporting the deps
-	// predicate would do — but only the predicate is common. The halves that
-	// drive it differ (goroutines and a channel here, tea.Cmds there), so the
-	// trade is ten fewer lines for one more exported symbol. Not worth moving.
-	//
 	// schedule launches every probe whose deps all have results. Runs to a
 	// fixpoint because starting one probe can make another ready — skips
 	// cascade synchronously (a skip is a result too), so a chain of doomed
@@ -29,26 +44,14 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 				if started[p.ID] {
 					continue
 				}
-				// ready: all deps have results. blocked: at least one of
-				// those results means this probe shouldn't bother trying.
-				ready, blocked := true, false
-				for _, d := range p.Deps {
-					r, ok := results[d]
-					if !ok {
-						ready = false
-						break
-					}
-					if r.Status == StatusFail || r.Status == StatusSkip {
-						blocked = true
-					}
-				}
+				ready, blocked := DepsState(p.Deps, results)
 				if !ready {
 					continue
 				}
 				started[p.ID] = true
 				progress = true
 				if blocked {
-					results[p.ID] = ProbeResult{ID: p.ID, Status: StatusSkip, Detail: "skipped — a prerequisite failed"}
+					results[p.ID] = SkipPrereq(p.ID)
 					continue
 				}
 				// Snapshot the dep results before spawning: the goroutine
