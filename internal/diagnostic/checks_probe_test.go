@@ -360,7 +360,7 @@ func TestTLSProbeTimeoutReportsMTU(t *testing.T) {
 
 	r := ops.tlsProbe("example.com", 443)(context.Background(), deps)
 	if !strings.Contains(r.Detail, "fake0 MTU is 1420") ||
-		!strings.Contains(r.Fix, "Path MTU row") {
+		!strings.Contains(r.Fix, "Path MTU row") || !r.timedOut {
 		t.Errorf("TLS timeout = %+v, want MTU detail and a pointer at the PMTU row", r)
 	}
 }
@@ -383,14 +383,14 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			name:   "nothing acknowledged",
 			serve:  func(net.Conn) {}, // a black hole: our segments never land
 			status: StatusWarn,
-			detail: "stalled after 0 KiB of 24 KiB with a 4 KiB send buffer",
+			detail: "stalled after 0 KiB of 24 KiB without draining the measured 4 KiB TCP send buffer",
 			fix:    true,
 		},
 		{
 			name:   "payload delivered",
 			serve:  func(c net.Conn) { _, _ = io.Copy(io.Discard, c) },
 			status: StatusPass,
-			detail: "24 KiB went out in full-size segments",
+			detail: "24 KiB drained past the measured 4 KiB TCP send buffer",
 		},
 		{
 			name:   "peer hangs up",
@@ -407,6 +407,8 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			ops := &netops{
 				dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
 				interfaces:  func() ([]net.Interface, error) { return []net.Interface{{Name: "wg0", MTU: 1420}}, nil },
+				sendBuffer:  func(net.Conn) (int, error) { return pmtuSendBuffer, nil },
+				tcpMSS:      func(net.Conn) (int, error) { return 1380, nil },
 			}
 			deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1"), Iface: "wg0"}}
 			// Short budget so the stall case doesn't wait out pmtuWriteWait.
@@ -435,6 +437,8 @@ func TestPMTUProbeWarnNamesInterfaceMTU(t *testing.T) {
 	ops := &netops{
 		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
 		interfaces:  func() ([]net.Interface, error) { return []net.Interface{{Name: "wg0", MTU: 1420}}, nil },
+		sendBuffer:  func(net.Conn) (int, error) { return pmtuSendBuffer, nil },
+		tcpMSS:      func(net.Conn) (int, error) { return 1380, nil },
 	}
 	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1"), Iface: "wg0"}}
 	ctx, cancel := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
@@ -450,7 +454,7 @@ func TestPMTUProbeWarnNamesInterfaceMTU(t *testing.T) {
 	ops.dialContext = func(context.Context, string, string) (net.Conn, error) { return client2, nil }
 	ctx2, cancel2 := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
 	defer cancel2()
-	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx2, deps); r.Status != StatusWarn || strings.Contains(r.Detail, "MTU") {
+	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx2, deps); r.Status != StatusWarn || strings.Contains(r.Detail, "advertises") {
 		t.Errorf("pmtu without a readable MTU = %+v, want WARN with no MTU note", r)
 	}
 }
@@ -459,6 +463,44 @@ func TestPMTUProbeSkipsWithoutPinnedIP(t *testing.T) {
 	r := new(netops).pmtuProbe(443, ProtoTLSHTTP)(context.Background(), map[ProbeID]ProbeResult{})
 	if r.Status != StatusSkip {
 		t.Errorf("pmtu without a pinned IP = %+v, want SKIP", r)
+	}
+}
+
+func TestPMTUProbeDeclinesUnmeasurableSendBuffer(t *testing.T) {
+	tests := []struct {
+		name   string
+		buffer func(net.Conn) (int, error)
+		detail string
+	}{
+		{
+			name: "socket option unavailable",
+			buffer: func(net.Conn) (int, error) {
+				return 0, errors.New("unsupported")
+			},
+			detail: "cannot read the effective TCP send buffer",
+		},
+		{
+			name: "kernel buffer holds payload",
+			buffer: func(net.Conn) (int, error) {
+				return pmtuPayloadSize, nil
+			},
+			detail: "large enough to hold the whole probe locally",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			ops := &netops{
+				dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+				sendBuffer:  tc.buffer,
+			}
+			deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+			r := ops.pmtuProbe(443, ProtoTLSHTTP)(context.Background(), deps)
+			if r.Status != StatusNA || !strings.Contains(r.Detail, tc.detail) {
+				t.Errorf("pmtu = %+v, want N/A containing %q", r, tc.detail)
+			}
+		})
 	}
 }
 

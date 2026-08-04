@@ -172,12 +172,16 @@ func TestVerdict(t *testing.T) {
 		{"http broken", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbeHTTPS: {Status: StatusFail},
 		}, VerdictService},
-		// A confirmed black hole reclassifies the rung it broke: the service is
-		// fine, the path can't carry a full-size packet.
+		// A bulk stall correlated with a protocol timeout reclassifies the rung
+		// it broke; an immediate protocol error does not.
 		{"tls broken by a black hole", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbePMTU: {Status: StatusWarn},
-			ProbeTLS:  {Status: StatusFail},
+			ProbeTLS:  {Status: StatusFail, timedOut: true},
 		}, VerdictNetwork},
+		{"certificate failure alongside a bulk stall", tg, targetOrder, map[ProbeID]ProbeResult{
+			ProbePMTU: {Status: StatusWarn},
+			ProbeTLS:  {Status: StatusFail},
+		}, VerdictService},
 		// On its own it's only a warning — nothing the caller asked for broke,
 		// and a stalled write has innocent explanations.
 		{"black hole evidence alone", tg, targetOrder, map[ProbeID]ProbeResult{

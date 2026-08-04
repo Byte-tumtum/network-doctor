@@ -153,7 +153,7 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 | **DNS** | The host resolves to an IPv4 or IPv6 address (system resolution) | IP-literal targets are N/A; all A/AAAA records are retained |
 | **DNS (public 8.8.8.8)** | A direct query to Google Public DNS provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail |
 | **TCP** | A TCP connect to the target port succeeds | races A/AAAA records Happy-Eyeballs style (RFC 8305), pins the winner |
-| **Path MTU** | 24 KiB reaches the target as full-size segments | confirms or clears an MTU/PMTU black hole — never a Fail, see below |
+| **Path MTU** | a 24 KiB write drains beyond the measured kernel send buffer | finds evidence consistent with an MTU/PMTU black hole — never a Fail, see below |
 | **TLS** | The TLS handshake (SNI + cert verification) succeeds | bad/expired cert, clock skew, or MITM → Fail |
 | **HTTP** | Port 80 returns any HTTP response (incl. 3xx/4xx/5xx) | Independent HEAD after DNS, redirects off, proxy off |
 | **HTTPS** | The selected TLS port returns any HTTP response | HEAD against the TLS-validated IP, redirects off, proxy off |
@@ -163,13 +163,15 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 
 A path MTU smaller than the local interface's, on a path that also filters the ICMP that would say so, is the classic tunnel/VPN/PPPoE mystery: TCP connects, then the connection dies the moment either side sends a real packet. `ping` and `curl` can't tell you that, and confirming it normally means raw sockets and the DF flag.
 
-The **Path MTU** row confirms it from an ordinary socket. The TCP handshake is the control: SYN/SYN-ACK are small enough to cross a narrowed link, so a completed connect already proves that small packets arrive. The probe then shrinks its own send buffer to 4 KiB and writes 24 KiB, which must leave as full-size segments. Nothing leaves that buffer until the far end acknowledges it, so:
+The **Path MTU** row looks for it from an ordinary socket. The TCP handshake is the control: SYN/SYN-ACK are small enough to cross a narrowed link, so a completed connect already proves that small packets arrive. The probe asks the kernel for a 4 KiB send buffer, reads back the effective size the OS actually installed, and writes 24 KiB. A write that advances beyond that measured buffer could not have remained entirely queued locally, so:
 
-- the write drains → full-size segments arrive, **Pass**, along with the interface MTU the path is confirmed to carry,
-- the write stalls with the buffer barely emptied → nothing was acknowledged at all, **Warn**, naming the evidence and an MSS/MTU fix,
+- the write drains beyond the effective send buffer → bulk TCP data moved, **Pass**, with the connection's TCP MSS when the OS exposes it,
+- the write stalls without draining that buffer → **Warn**, naming the evidence and an MSS/MTU experiment,
 - the peer hangs up first → **N/A**: inconclusive, and it will not guess.
 
-It deliberately never Fails: a peer that accepts the connection and then stops reading stalls the write the same way, so the row states its evidence — bytes written, buffer size, and the fact that the handshake got through — and leaves the judgement to you. When that evidence lands *and* the protocol row above it failed, the verdict is reclassified from `service` to `network`: the service is fine, the path can't carry a full-size packet. The 24 KiB payload is inert, self-labelling filler; TLS targets get a record header in front so the TLS server reads (and acknowledges) the payload instead of resetting on the first byte. This is the only probe that sends bulk data — under `--watch` that is 24 KiB per pass, once every 5 seconds.
+It deliberately never Fails: a peer that accepts the connection and then stops accepting data can stall the write the same way. A normal TCP socket also cannot discover the exact path MTU when ICMP feedback is filtered. The row therefore reports the bytes written, the effective send-buffer size, the TCP MSS when available, and the local interface MTU as context—never as a measured path MTU. Only when both this write and a protocol exchange time out does the overall verdict identify a probable network-path problem; certificate and other immediate protocol failures remain service failures.
+
+The 24 KiB payload is inert, self-labelling filler; TLS targets get a record header in front so the TLS server reads the payload instead of resetting on the first byte. This is the only probe that sends bulk data — under `--watch` that is 24 KiB per pass, once every 5 seconds.
 
 No verdict depends on ICMP. Plenty of healthy hosts drop ping, so a failed `ping` proves nothing and a successful one proves less than a TCP connect — RTT is measured from the TCP-connect handshake instead (no ICMP, no root). `ping` is available as a drill-down tool, where it is evidence for a human rather than input to the diagnosis. The source IP and interface are read from the winning connection's `LocalAddr`, with a UDP-connect fallback (which sends no packets) for path identity on failure. Every probe is bounded by a 4-second timeout.
 

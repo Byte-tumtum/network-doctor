@@ -60,11 +60,11 @@ func tlsFix(err error) string {
 	return "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
 }
 
-// pmtuFix answers a confirmed black hole with the only remedy that doesn't
-// depend on finding whoever is filtering ICMP: make this end stop emitting
-// packets the path won't carry.
+// pmtuFix suggests the usual confirmation/remedy for a bulk stall that is
+// consistent with a PMTU black hole. The probe cannot determine an exact path
+// MTU from an ordinary TCP socket, so the hint must not claim that it did.
 func pmtuFix(goos string) string {
-	const why = "packets at the interface MTU are being dropped — "
+	const why = "bulk TCP stalled after the handshake; if lowering MTU makes it drain, "
 	switch goos {
 	case "darwin":
 		return why + "lower the tunnel/interface MTU (`sudo ifconfig <iface> mtu 1400`)"

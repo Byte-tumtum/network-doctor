@@ -112,6 +112,7 @@ type ProbeResult struct {
 	Dur         time.Duration // wall time the probe took; zero for probes that never ran
 	Detail      string
 	Fix         string
+	timedOut    bool // protocol failure was a timeout; used to correlate PMTU evidence.
 }
 
 // Portal is structured captive-portal evidence. RedirectURL is empty when the
@@ -152,14 +153,10 @@ const (
 	// with the kernel's autotuned buffer a Write returns hundreds of KiB before
 	// any acknowledgement is due, and an unacknowledged Write proves nothing.
 	pmtuSendBuffer = 4 << 10
-	// pmtuPayloadSize is pushed at the target in a single Write. Enough to force
-	// full-size segments and to outlast any ordinary peer's receive buffer,
-	// small enough to stay a polite amount of traffic.
+	// pmtuPayloadSize is pushed at the target in a single Write. Enough to
+	// require multiple ordinary TCP segments, small enough to stay a polite
+	// amount of traffic.
 	pmtuPayloadSize = 24 << 10
-	// pmtuAckedBytes is the point past which the far end must have acknowledged
-	// full-size segments: more send buffer than the kernel could have handed us
-	// (Linux doubles the request), with margin.
-	pmtuAckedBytes = 12 << 10
 	// pmtuWriteWait bounds the stall the probe is willing to sit through.
 	pmtuWriteWait = 2 * time.Second
 	// pmtuHeadroom keeps the write deadline inside the probe budget, so a stall
@@ -209,6 +206,8 @@ type netops struct {
 	lookupIP       func(ctx context.Context, host string) ([]net.IP, string, error)
 	lookupPublicIP func(ctx context.Context, host string) ([]net.IP, error)
 	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
+	sendBuffer     func(net.Conn) (int, error)
+	tcpMSS         func(net.Conn) (int, error)
 	dialTLS        func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
 	tlsRootCAs     *x509.CertPool
 	ssid           func(ctx context.Context, iface string) string
@@ -229,6 +228,8 @@ var defaultOps = &netops{
 		return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext)
 	},
 	dialContext: new(net.Dialer).DialContext,
+	sendBuffer:  socketSendBuffer,
+	tcpMSS:      socketMSS,
 	dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: new(net.Dialer), Config: cfg}
 		return d.DialContext(ctx, network, addr)
@@ -955,6 +956,7 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			// Name the address: the cert that failed belongs to whatever the
 			// resolver handed us, and that's often the actual culprit.
 			r.Status, r.SelectedIP = StatusFail, ip
+			r.timedOut = timeoutError(err)
 			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
 			r.Fix = tlsFix(err)
 			if iface := deps[ProbeTargetTCP].Iface; timeoutError(err) {
@@ -1027,6 +1029,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		dialMu.Unlock()
 		if err != nil {
 			r.Status = StatusFail
+			r.timedOut = timeoutError(err)
 			// Name the winner if one address connected and the failure came
 			// later, otherwise everything tried.
 			tried := joinIPs(addrs)
@@ -1044,18 +1047,18 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 	}
 }
 
-// pmtuProbe confirms — or clears — a path-MTU black hole with no root, no raw
-// sockets, and no DF flag, by reading the one asymmetry a normal socket exposes.
+// pmtuProbe looks for evidence of a path-MTU black hole with no root, raw
+// sockets, or DF flag, by reading the one asymmetry a normal socket exposes.
 //
 // The TCP handshake is the small-packet control: SYN/SYN-ACK are small enough to
 // cross a narrowed link, so a completed connect already proves small packets
-// arrive. The evidence is what happens to bytes that must travel as full-size
-// segments. Nothing leaves the send buffer until the far end acknowledges it, so
-// the probe shrinks that buffer to a few KiB and pushes a payload through: if
-// the write drains it several times over, full-size segments are getting there
-// and being acknowledged. If the write stalls with the buffer barely emptied,
-// nothing is being acknowledged at all — the segments are disappearing, which is
-// what a black hole looks like from an unprivileged socket.
+// arrive. The evidence is what happens to a write that requires multiple
+// ordinary TCP segments. Unacknowledged data consumes send-buffer space, so
+// the probe shrinks that buffer to a few KiB, reads back the size the kernel
+// actually installed, and pushes a payload through. If the write advances past
+// that measured buffer, data had to leave the queue. If it stalls before doing
+// so, the result is consistent with a black hole but is not proof on its own: a
+// peer can also stop accepting data.
 //
 // There is deliberately no small-write control: a small Write returns out of the
 // send buffer whether or not the bytes ever leave the machine, so it is not
@@ -1064,7 +1067,8 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 // Never a Fail, by design. A peer that accepts the connection and then stops
 // reading stalls us the same way, so the Warn states its evidence — bytes
 // written, send buffer size, and that the handshake got through — and leaves the
-// reader room to judge.
+// reader room to judge. Only an independent protocol timeout promotes this
+// evidence into a network-path verdict.
 func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
 		var r ProbeResult
@@ -1096,29 +1100,60 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 		}
 		defer conn.Close()
 		r.SelectedIP = ip
-		// Best effort: a kernel that refuses (or rounds up) the request only
-		// makes the probe less sensitive, never wrong — pmtuAckedBytes carries
-		// enough margin for the doubling Linux does.
+		// A requested SO_SNDBUF is only a hint. Linux doubles it, and other
+		// kernels may impose a much larger minimum. Read the effective value
+		// back rather than treating a locally queued Write as remote delivery.
 		if tc, ok := conn.(*net.TCPConn); ok {
-			_ = tc.SetWriteBuffer(pmtuSendBuffer)
+			if err := tc.SetWriteBuffer(pmtuSendBuffer); err != nil {
+				r.Status = StatusNA
+				r.Detail = "cannot bound the TCP send buffer: " + err.Error()
+				return r
+			}
 		}
-		conn.SetWriteDeadline(time.Now().Add(wait))
+		measureBuffer := o.sendBuffer
+		if measureBuffer == nil {
+			measureBuffer = socketSendBuffer
+		}
+		sendBuffer, err := measureBuffer(conn)
+		if err != nil || sendBuffer <= 0 {
+			r.Status = StatusNA
+			r.Detail = "cannot read the effective TCP send buffer; a completed write would only prove local buffering"
+			return r
+		}
+		if sendBuffer >= pmtuPayloadSize {
+			r.Status = StatusNA
+			r.Detail = fmt.Sprintf("effective TCP send buffer is %s, large enough to hold the whole probe locally", kib(sendBuffer))
+			return r
+		}
+		mss := 0
+		measureMSS := o.tcpMSS
+		if measureMSS == nil {
+			measureMSS = socketMSS
+		}
+		if measured, measureErr := measureMSS(conn); measureErr == nil && measured > 0 {
+			mss = measured
+		}
+		if err := conn.SetWriteDeadline(time.Now().Add(wait)); err != nil {
+			r.Status = StatusNA
+			r.Detail = "cannot bound the bulk write: " + err.Error()
+			return r
+		}
 		n, err := conn.Write(pmtuPayload(proto))
 
 		mtu := o.mtuFor(dep.Iface)
 		switch {
 		case err == nil:
 			r.Status = StatusPass
-			r.Detail = kib(n) + " went out in full-size segments" + mtuNote(dep.Iface, mtu, " (the path carries %s's %d-byte MTU)")
-		case n >= pmtuAckedBytes:
-			// Past the send buffer means the far end acknowledged full-size
-			// segments; whatever stopped the write after that isn't the MTU.
+			r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s", kib(n), kib(sendBuffer), mssNote(mss))
+		case n > sendBuffer:
+			// Past the measured send buffer means data left the local queue;
+			// whatever stopped the write after that is not a total bulk stall.
 			r.Status = StatusPass
-			r.Detail = fmt.Sprintf("%s acknowledged in full-size segments before the write stopped (%v) — larger packets do get through", kib(n), err)
+			r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s before the write stopped (%v)", kib(n), kib(sendBuffer), mssNote(mss), err)
 		case timeoutError(err):
 			r.Status = StatusWarn
-			r.Detail = fmt.Sprintf("stalled after %s of %s with a %s send buffer, so nothing was acknowledged — yet the TCP handshake's small packets got through%s",
-				kib(n), kib(pmtuPayloadSize), kib(pmtuSendBuffer), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))
+			r.Detail = fmt.Sprintf("stalled after %s of %s without draining the measured %s TCP send buffer%s; the TCP handshake succeeded%s — consistent with a path-MTU black hole",
+				kib(n), kib(pmtuPayloadSize), kib(sendBuffer), mssNote(mss), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))
 			r.Fix = pmtuFix(runtime.GOOS)
 		default:
 			r.Status = StatusNA
@@ -1126,6 +1161,13 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 		}
 		return r
 	}
+}
+
+func mssNote(mss int) string {
+	if mss <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" at a %d-byte TCP MSS", mss)
 }
 
 // pmtuPayload is the byte pattern the PMTU probe pushes at the target: legible

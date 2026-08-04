@@ -28,15 +28,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	pass := func(id ProbeID) bool { return res[id].Status == StatusPass }
 	fail := func(id ProbeID) bool { return res[id].Status == StatusFail }
 	warn := func(id ProbeID) bool { return res[id].Status == StatusWarn }
+	timedOut := func(id ProbeID) bool { return res[id].timedOut }
 	has := func(id ProbeID) bool { _, ok := res[id]; return ok }
-	anyFail := func(ids ...ProbeID) bool {
-		for _, id := range ids {
-			if has(id) && fail(id) {
-				return true
-			}
-		}
-		return false
-	}
 	// directOK means direct egress genuinely worked: a Pass, or a Warn the
 	// probe produced itself. A Warn planted by downgradeEgress doesn't count —
 	// that's a Fail wearing a nicer hat.
@@ -136,12 +129,12 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return hp + " is unreachable directly, but the environment proxy has egress — proxy-only network; route traffic through the proxy.", VerdictNetwork
 		}
 		return host + " resolves but neither it nor the general internet is reachable — local egress problem.", VerdictNetwork
-	case warn(ProbePMTU) && anyFail(ProbeTLS, ProbeHTTP, ProbeHTTPS, ProbeSSH, ProbeSMTP):
-		// Ahead of every protocol rung: a black hole lets the handshake through
-		// and then eats the first full-size segment of whatever follows, so each
-		// of those rows is reporting the same one problem — and it's a path
-		// problem, not the broken service they'd otherwise be blamed on.
-		return "TCP reaches " + hp + " but anything larger than the handshake is being dropped — a path MTU black hole, not a broken service (see the Path MTU row).", VerdictNetwork
+	case warn(ProbePMTU) && ((fail(ProbeTLS) && timedOut(ProbeTLS)) ||
+		(fail(ProbeHTTP) && timedOut(ProbeHTTP)) || (fail(ProbeHTTPS) && timedOut(ProbeHTTPS))):
+		// A protocol timeout and a separate bulk-write stall are correlated
+		// evidence for a path problem. Immediate failures such as a bad
+		// certificate must continue down to their service-specific verdict.
+		return "TCP reaches " + hp + " but the protocol and bulk-transfer checks both stall — evidence of a path MTU black hole rather than a broken service (see the Path MTU row).", VerdictNetwork
 	case has(ProbeTLS) && fail(ProbeTLS):
 		return "TCP reaches " + hp + " but the TLS handshake fails — bad/expired cert, clock skew, or MITM proxy.", VerdictService
 	case has(ProbeHTTPS) && fail(ProbeHTTPS):
