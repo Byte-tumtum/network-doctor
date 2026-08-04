@@ -241,6 +241,7 @@ func TestVerdict(t *testing.T) {
 
 func TestReconcileDNS(t *testing.T) {
 	ip1, ip2 := net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")
+	elsewhere := net.ParseIP("198.51.100.7")
 	t.Run("public resolver works", func(t *testing.T) {
 		res := map[ProbeID]ProbeResult{
 			ProbeDNS:       {Status: StatusFail, Detail: "SERVFAIL"},
@@ -261,10 +262,10 @@ func TestReconcileDNS(t *testing.T) {
 			t.Fatalf("results = %+v, want corroborated not-found", res)
 		}
 	})
-	t.Run("different answers warn", func(t *testing.T) {
+	t.Run("unrelated answers warn", func(t *testing.T) {
 		res := map[ProbeID]ProbeResult{
 			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{ip1}},
-			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{ip2}},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{elsewhere}},
 		}
 		reconcileDNS(res)
 		if res[ProbeDNSPublic].Status != StatusWarn || !strings.Contains(res[ProbeDNSPublic].Detail, "split DNS") {
@@ -279,6 +280,59 @@ func TestReconcileDNS(t *testing.T) {
 		reconcileDNS(res)
 		if res[ProbeDNSPublic].Status != StatusPass {
 			t.Fatalf("public result = %+v, want matching set to pass", res[ProbeDNSPublic])
+		}
+	})
+	// Round-robin and GeoDNS: the everyday case a healthy run must not warn on.
+	t.Run("rotating answers in one block pass", func(t *testing.T) {
+		for _, tc := range []struct {
+			name           string
+			system, public []net.IP
+		}{
+			{"same block, different hosts", []net.IP{ip1}, []net.IP{ip2}},
+			{
+				// The default probe host: Google anycast, observed answering
+				// from a different /24 and /48 per resolver on every run.
+				"gstatic anycast answers per resolver",
+				[]net.IP{net.ParseIP("142.250.9.94"), net.ParseIP("2607:f8b0:4002:c00::5e")},
+				[]net.IP{net.ParseIP("142.250.189.99"), net.ParseIP("2607:f8b0:4009:80c::2003")},
+			},
+			{
+				"github round-robin within one /24",
+				[]net.IP{net.ParseIP("140.82.114.3")},
+				[]net.IP{net.ParseIP("140.82.114.4")},
+			},
+			{
+				"v4 differs, v6 allocation shared",
+				[]net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8:1::5e")},
+				[]net.IP{net.ParseIP("198.51.100.9"), net.ParseIP("2001:db8:9::2003")},
+			},
+			{
+				"one of several addresses overlaps",
+				[]net.IP{net.ParseIP("198.51.100.1"), ip1},
+				[]net.IP{ip2},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				res := map[ProbeID]ProbeResult{
+					ProbeDNS:       {Status: StatusPass, Addrs: tc.system},
+					ProbeDNSPublic: {Status: StatusPass, Addrs: tc.public},
+				}
+				reconcileDNS(res)
+				if res[ProbeDNSPublic].Status != StatusPass {
+					t.Fatalf("public result = %+v, want shared routing prefix to pass", res[ProbeDNSPublic])
+				}
+			})
+		}
+	})
+	// Split DNS proper: an internal answer against a public one.
+	t.Run("private against public warns", func(t *testing.T) {
+		res := map[ProbeID]ProbeResult{
+			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{net.ParseIP("10.1.2.3")}},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{ip1}},
+		}
+		reconcileDNS(res)
+		if res[ProbeDNSPublic].Status != StatusWarn {
+			t.Fatalf("public result = %+v, want internal-vs-public warning", res[ProbeDNSPublic])
 		}
 	})
 	t.Run("unavailable public resolver is neutral", func(t *testing.T) {
@@ -325,7 +379,7 @@ func TestDiagnoseSecondOpinionDNS(t *testing.T) {
 		{
 			"split DNS warning",
 			ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1")}},
-			ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.2")}},
+			ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("198.51.100.2")}},
 			"system DNS and public DNS disagree",
 			VerdictDegraded,
 		},

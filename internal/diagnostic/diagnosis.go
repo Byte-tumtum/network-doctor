@@ -1,8 +1,8 @@
 package diagnostic
 
 import (
-	"maps"
 	"net"
+	"net/netip"
 	"strconv"
 )
 
@@ -217,9 +217,9 @@ func reconcileDNS(res map[ProbeID]ProbeResult) {
 		public.Detail += " — system DNS reports no records; split DNS or filtering may be intentional"
 		system.Detail += " — but public DNS resolves it"
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
-	case system.Status == StatusPass && len(public.Addrs) > 0 && !sameIPSet(system.Addrs, public.Addrs):
+	case system.Status == StatusPass && len(public.Addrs) > 0 && !answersAgree(system.Addrs, public.Addrs):
 		public.Status = StatusWarn
-		public.Detail = "answers differ — system: " + joinIPs(system.Addrs) + "; public " + publicDNSIP + ": " + joinIPs(public.Addrs) + " (split DNS may be intentional)"
+		public.Detail = "answers point elsewhere — system: " + joinIPs(system.Addrs) + "; public " + publicDNSIP + ": " + joinIPs(public.Addrs) + " (split DNS may be intentional)"
 	case system.Status == StatusFail && len(public.Addrs) > 0:
 		system.Detail += " — but public DNS resolves it"
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
@@ -227,15 +227,53 @@ func reconcileDNS(res map[ProbeID]ProbeResult) {
 	res[ProbeDNS], res[ProbeDNSPublic] = system, public
 }
 
-func sameIPSet(a, b []net.IP) bool {
-	set := func(ips []net.IP) map[string]struct{} {
-		m := make(map[string]struct{}, len(ips))
-		for _, ip := range ips {
-			m[ip.String()] = struct{}{}
+// answersAgree reports whether two answer sets point at the same place.
+// Round-robin and GeoDNS make byte-identical sets the exception rather than
+// the rule — anycast hosts answer differently per resolver by design — so
+// agreement means one shared routing prefix, not set equality. Disjoint
+// prefixes are the case worth a warning: a different operator, or one side
+// private and the other public.
+func answersAgree(a, b []net.IP) bool {
+	seen := make(map[netip.Prefix]struct{}, len(a))
+	for _, ip := range a {
+		if p, ok := routePrefix(ip); ok {
+			seen[p] = struct{}{}
 		}
-		return m
 	}
-	return maps.Equal(set(a), set(b))
+	for _, ip := range b {
+		p, ok := routePrefix(ip)
+		if !ok {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			return true
+		}
+	}
+	return false
+}
+
+// routePrefix reduces an address to the block its operator was allocated:
+// /16 for v4, /32 for v6 — the RIR allocation size, deliberately coarser than
+// the announced route. One anycast host answers from many /24s within a single
+// allocation (142.250.9.94 and 142.250.189.99 are both Google), and treating
+// those as different networks is exactly the false positive worth avoiding.
+// Erring coarse costs us a warning when two operators share a block; erring
+// fine costs a wrong headline verdict on every healthy run.
+// ponytail: prefix length stands in for an ASN lookup. Only an RIR/BGP source
+// gets this exactly right, and it would need a network call or a bundled
+// dataset — add one if same-block operators turn out to matter.
+func routePrefix(ip net.IP) (netip.Prefix, bool) {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	addr = addr.Unmap()
+	bits := 32
+	if addr.Is4() {
+		bits = 16
+	}
+	p, err := addr.Prefix(bits)
+	return p, err == nil
 }
 
 // downgradeEgress rewrites a direct-egress failure to Warn once another path
