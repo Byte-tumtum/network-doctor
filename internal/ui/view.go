@@ -533,49 +533,39 @@ func (m model) sshFormView() string {
 }
 
 func (m model) helpView(deferred bool) string {
-	// Enter opens the output viewer whenever a job pane exists (same condition
-	// as jobView), so the hint tracks exactly when the key does something.
-	hasJob := m.hasJob()
-	if deferred {
-		if m.networkMap {
-			kv := []string{"v", "checks"}
-			if len(m.networkHosts()) > 0 {
-				kv = append([]string{"↑/↓", "select device", "enter", "set target"}, kv...)
-			} else if hasJob {
-				kv = append(kv, "enter", "full output")
-			}
-			if len(m.otherJobs) > 0 {
-				kv = append(kv, "tab", "switch job")
-			}
-			return helpKeys(m.width, append(kv, "r", "run the checks", "?", "help", "q", "quit")...)
+	hosts := len(m.networkHosts())
+	var kv []string
+	switch {
+	case m.networkMap:
+		if hosts > 0 {
+			kv = []string{"↑/↓", "select device", "enter", "set target"}
 		}
-		kv := []string{"r", "run the checks", "v", "network map"}
+		kv = append(kv, "v", "checks")
+	case deferred:
+		kv = []string{"r", "run the checks", "v", "network map"}
 		if len(m.tools) > 0 {
 			kv = append(kv, "letter", "runs that tool")
 		}
-		if hasJob {
-			kv = append(kv, "enter", "full output")
-		}
-		if len(m.otherJobs) > 0 {
-			kv = append(kv, "tab", "switch job")
-		}
-		return helpKeys(m.width, append(kv, "?", "help", "q", "quit")...)
+	default:
+		kv = []string{"↑/↓", "scroll", "v", "network map"}
 	}
-	kv := []string{"↑/↓", "scroll", "v", "network map"}
-	if m.networkMap {
-		kv = []string{"v", "checks"}
-		if len(m.networkHosts()) > 0 {
-			kv = append([]string{"↑/↓", "select device", "enter", "set target"}, kv...)
-		}
-	}
-	if hasJob && (!m.networkMap || len(m.networkHosts()) == 0) {
+	// Enter opens the output viewer whenever a job pane exists (same condition
+	// as jobView), so the hint tracks exactly when the key does something — on
+	// the map with devices listed, enter sets the target instead.
+	if m.hasJob() && (!m.networkMap || hosts == 0) {
 		kv = append(kv, "enter", "full output")
 	}
-	if m.cur.active != nil {
+	if !deferred && m.cur.active != nil {
 		kv = append(kv, "esc", "cancel job")
 	}
 	if len(m.otherJobs) > 0 {
 		kv = append(kv, "tab", "switch job")
+	}
+	if deferred {
+		if m.networkMap {
+			kv = append(kv, "r", "run the checks")
+		}
+		return helpKeys(m.width, append(kv, "?", "help", "q", "quit")...)
 	}
 	if m.selectedPortalURL() != "" {
 		kv = append(kv, "y", "copy portal URL")
