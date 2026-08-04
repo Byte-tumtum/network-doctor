@@ -27,13 +27,3 @@ Commit direct to `main`, no `Co-Authored-By` trailer. Keep `--help` on standard 
 ## Security & Configuration Tips
 
 Keep probes unprivileged, time-bounded, safe for arbitrary host input. Sanitize external command output. Never interpolate targets into shell. No automatic privilege escalation or config rewrites.
-
-## graphify
-
-Project has knowledge graph at graphify-out/ with god nodes, community structure, cross-file relationships.
-
-When user types `/graphify`, use installed graphify skill or instructions first.
-
-Rules:
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review, or when query/path/explain not enough context.
-- After code changes, run `graphify update .` to keep graph current (AST-only, no API cost).
