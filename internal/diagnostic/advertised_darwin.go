@@ -89,24 +89,28 @@ func AdvertisedNames(ctx context.Context, ips []string) map[string]string {
 	return best.plain()
 }
 
-// resolveTargets maps each distinct SRV target to its addresses.
-// ponytail: unbounded fan-out — one lookup per advertising device, and a home
-// LAN runs out of devices long before the resolver runs out of patience.
+// resolveTargets maps each distinct SRV target to its addresses. The target
+// count comes from the LAN, not from us — an office or a hotel advertises
+// hundreds of instances — so lookups queue behind a fixed number of in-flight
+// queries rather than arriving at mDNSResponder all at once. The outer context
+// still bounds the queue: targets that never get a turn resolve to nothing,
+// which is what an unresolvable target would have yielded anyway.
 func resolveTargets(ctx context.Context, entries []zoneEntry) map[string][]string {
 	addrs := make(map[string][]string, len(entries))
+	seen := make(map[string]bool, len(entries))
+	sem := make(chan struct{}, 16)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, entry := range entries {
-		mu.Lock()
-		_, seen := addrs[entry.host]
-		if !seen {
-			addrs[entry.host] = nil
-		}
-		mu.Unlock()
-		if seen {
+		if seen[entry.host] {
 			continue
 		}
+		seen[entry.host] = true
 		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// Timed from the turn, not from the queue, so a deep queue doesn't
+			// hand the last targets a timeout that has already run out.
 			lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
 			found, err := net.DefaultResolver.LookupHost(lctx, entry.host)
