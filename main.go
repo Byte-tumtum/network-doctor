@@ -301,10 +301,6 @@ type reportAttempt struct {
 // runAll is stubbed in tests so -json runs don't touch the network.
 var runAll = diagnostic.RunAll
 
-// watchEvery is the gap between headless passes, matching the TUI's cadence.
-// A var so tests don't have to sleep through it.
-var watchEvery = 5 * time.Second
-
 // runJSON runs the probe DAG headless and prints the JSON report. Exit code
 // mirrors the TUI contract: 1 if any check failed, else 0.
 //
@@ -352,7 +348,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, source net.IP, watch boo
 		select {
 		case <-ctx.Done():
 			return code
-		case <-time.After(watchEvery):
+		case <-time.After(diagnostic.WatchEvery):
 		}
 	}
 }

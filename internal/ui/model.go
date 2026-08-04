@@ -107,7 +107,6 @@ const (
 	maxParkedJobs = 12
 	ctrlCWindow   = 2 * time.Second
 	noticeWindow  = 4 * time.Second
-	watchEvery    = 5 * time.Second
 	watchRuns     = 20
 	ctrlCNotice   = "Press Ctrl+C again to quit"
 )
@@ -634,5 +633,5 @@ func (m *model) recordRun() {
 
 func (m model) watchCmd() tea.Cmd {
 	gen := m.generation
-	return tea.Tick(watchEvery, func(time.Time) tea.Msg { return watchMsg{gen: gen} })
+	return tea.Tick(diagnostic.WatchEvery, func(time.Time) tea.Msg { return watchMsg{gen: gen} })
 }

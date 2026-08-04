@@ -133,6 +133,11 @@ type Probe struct {
 // A var so the -timeout flag can override the default before probes run.
 var ProbeTimeout = 4 * time.Second
 
+// WatchEvery is the gap between repeat passes in watch mode, shared so the TUI
+// and the headless -json -watch loop can't drift apart. A var so tests don't
+// have to sleep through it.
+var WatchEvery = 5 * time.Second
+
 const (
 	// attemptDelay is the Happy Eyeballs (RFC 8305) connection-attempt stagger:
 	// the next address starts this long after the previous one, or immediately
