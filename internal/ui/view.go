@@ -87,41 +87,65 @@ func (m model) View() string {
 	if m.confirmTool != nil {
 		help = m.confirmView()
 	}
-	toolbox := m.toolboxView()
-	top := m.wrap(m.banner()) + "\n"
-	if header := m.wrap(m.headerView()); header != "" {
-		top += header + "\n"
+	toolbox := m.toolboxView(false)
+	banner := m.wrap(m.banner()) + "\n"
+	header := ""
+	if h := m.wrap(m.headerView()); h != "" {
+		header = h + "\n"
 	}
-	top += "\n"
+	tail := help + "\n"
 	// Adaptive tail: the job pane gets whatever rows the rest doesn't use.
 	// avail is a budget in newlines: jobView's output must add at most avail
 	// of them, or the view exceeds the terminal and the renderer cuts the top.
-	fixed := top + body + "\n" + toolbox + "\n"
-	tail := help + "\n"
-	avail := m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
+	var fixed string
+	var avail int
+	budget := func() {
+		fixed = banner + header + "\n" + body + "\n" + toolbox + "\n"
+		avail = m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
+	}
+	budget()
 	if m.entering && m.confirmTool == nil && m.height > 0 {
 		// The forms cheatsheet yields first: drop it when the view would
 		// overflow, or when it would starve a live job pane below jobView's
 		// 5-row minimum. m.height == 0 means size unknown — keep the forms.
 		if avail < 0 || (m.hasJob() && avail < 5) {
 			tail = m.promptView(false) + "\n"
-			avail = m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
+			budget()
 		}
 	}
 	minAvail := 0
 	if m.entering && m.hasJob() {
 		minAvail = 5
 	}
+	// Still overflowing: shed chrome before content. The toolbox chips go
+	// first — they wrap to a row per couple of tools on a narrow terminal —
+	// then the header line, then the panels are clipped to what is left. The
+	// banner is the plain-English verdict, so it never yields.
+	if m.height > 0 && avail < minAvail {
+		toolbox = m.toolboxView(true)
+		budget()
+	}
+	if m.height > 0 && avail < minAvail && header != "" {
+		header = ""
+		budget()
+	}
 	if m.height > 0 && avail < minAvail {
 		body = lipgloss.NewStyle().MaxHeight(max(lipgloss.Height(body)+avail-minAvail, 1)).Render(body)
-		fixed = top + body + "\n" + toolbox + "\n"
-		avail = m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
+		budget()
 	}
 	job := m.jobView(avail)
 	if m.networkMap && m.cur.name == lanDiscoveryName {
 		job = ""
 	}
-	return fixed + job + tail
+	out := fixed + job + tail
+	if m.height > 0 {
+		// Last resort: the panels bottom out at one row and the help bar has no
+		// floor at all, so on a very short terminal the view can still overflow.
+		// Clip from the bottom — losing the help bar beats the renderer eating
+		// the top of the screen, which is where the banner lives.
+		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
+	}
+	return out
 }
 
 // targetHP is the target endpoint as host:port; JoinHostPort brackets IPv6
@@ -801,30 +825,46 @@ func progressBar(done, total, w int) string {
 	return selStyle.Render(strings.Repeat("█", filled)) + faintStyle.Render(strings.Repeat("░", w-filled))
 }
 
-func (m model) toolboxView() string {
+// toolboxView renders the "Dig deeper" chip row. compact keeps only the keys:
+// on a short terminal the names are the first thing View sheds, and the letters
+// alone still say which keys are bound — ? lists what they do.
+func (m model) toolboxView(compact bool) string {
 	if len(m.tools) == 0 {
 		return faintStyle.Render("Tools need a host — press ") + keyStyle.Render("r") + faintStyle.Render(" to set one") + "\n"
 	}
+	chip := func(available bool, key, rest string) string {
+		if compact {
+			rest = ""
+		}
+		if !available {
+			return faintStyle.Render("[" + key + "]" + rest)
+		}
+		return keyStyle.Render("["+key+"]") + rest
+	}
 	parts := make([]string, len(m.tools))
 	for i, t := range m.tools {
-		if t.Available {
-			parts[i] = keyStyle.Render("["+t.Key+"]") + " " + t.Name
-		} else {
-			parts[i] = faintStyle.Render("[" + t.Key + "] " + t.Name + " — " + t.Bin + " missing")
+		rest := " " + t.Name
+		if !t.Available {
+			rest = " " + t.Name + " — " + t.Bin + " missing"
 		}
+		parts[i] = chip(t.Available, t.Key, rest)
 	}
 	// SSH login isn't a Tool: it takes over the terminal instead of streaming
 	// output into a job pane, so it rides along as a plain chip. It logs in to
 	// the target, which the target-independent tools don't need.
 	if m.target == nil {
-		parts = append(parts, faintStyle.Render("[S] SSH login — needs a target"))
+		parts = append(parts, chip(false, "S", " SSH login — needs a target"))
 	} else {
-		parts = append(parts, keyStyle.Render("[S]")+" SSH login")
+		parts = append(parts, chip(true, "S", " SSH login"))
+	}
+	sep := faintStyle.Render("  ·  ")
+	if compact {
+		sep = " "
 	}
 	// The title rides on the first chip so line 1's width math includes it;
 	// wrapping happens only between chips, never inside one.
 	parts[0] = titleStyle.Render("Dig deeper") + "  " + parts[0]
-	return joinChips(m.width, faintStyle.Render("  ·  "), parts) + "\n"
+	return joinChips(m.width, sep, parts) + "\n"
 }
 
 // jobView renders the job pane with an adaptive tail: avail is the screen

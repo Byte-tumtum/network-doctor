@@ -916,6 +916,33 @@ func TestViewFitsTerminal(t *testing.T) {
 	}
 }
 
+// A short or narrow terminal sheds the toolbox names, then the header, then the
+// panels — and clips the help bar last. The banner never yields: it carries the
+// plain-English verdict, and it is the first thing the renderer would eat.
+func TestShortTerminalKeepsBanner(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	m.cur.status = JobRunning
+	m.cur.display = "ping example.com"
+	for range 50 {
+		m.cur.lines = append(m.cur.lines, "reply from 1.2.3.4")
+	}
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 40, Height: 17}, {Width: 40, Height: 10}, {Width: 40, Height: 6},
+		{Width: 60, Height: 8}, {Width: 80, Height: 8}, {Width: 120, Height: 7},
+		{Width: 30, Height: 4},
+	} {
+		u, _ := m.Update(size)
+		nm := asModel(t, u)
+		v := nm.View()
+		if rows := strings.Count(v, "\n") + 1; rows > nm.height {
+			t.Errorf("%dx%d: view is %d rows, terminal is %d", size.Width, size.Height, rows, nm.height)
+		}
+		if !strings.Contains(v, "Checking your connection") {
+			t.Errorf("%dx%d: banner must survive:\n%s", size.Width, size.Height, v)
+		}
+	}
+}
+
 func TestViewClampsLongDetailsToTerminal(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:443"), false)
 	m.results[m.probes[0].ID] = diagnostic.ProbeResult{

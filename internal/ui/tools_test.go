@@ -30,7 +30,7 @@ func TestToolAvailabilityCachedUntilRestart(t *testing.T) {
 	initialCalls := calls
 	installed = false
 	for range 10 {
-		m.toolboxView()
+		m.toolboxView(false)
 		m.nextStep(diagnostic.ProbeDNS)
 	}
 	if calls != initialCalls {
