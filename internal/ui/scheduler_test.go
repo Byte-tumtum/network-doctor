@@ -147,6 +147,64 @@ func TestWatchRecordsAndRestarts(t *testing.T) {
 	}
 }
 
+// A watch tick refreshes results underneath the user: it must not close a
+// modal they are typing into, dismiss a confirmation gate mid-decision, wipe
+// the last notice, or yank a cursor they moved themselves.
+func TestWatchPreservesOpenUIState(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		open  func(m *model)
+		check func(t *testing.T, m model)
+	}{
+		{"ssh form", func(m *model) {
+			m.sshPrompt, m.ssh = true, newSSHForm(m.target)
+			m.ssh.user.SetValue("operator")
+		}, func(t *testing.T, m model) {
+			if !m.sshPrompt {
+				t.Error("watch tick closed the open SSH form")
+			}
+			if got := m.ssh.user.Value(); got != "operator" {
+				t.Errorf("typed username = %q, want %q", got, "operator")
+			}
+		}},
+		{"tool confirmation", func(m *model) {
+			tool := m.tools[0]
+			m.confirmTool = &tool
+		}, func(t *testing.T, m model) {
+			if m.confirmTool == nil {
+				t.Error("watch tick dismissed the tool confirmation gate")
+			}
+		}},
+		{"notice", func(m *model) { m.notice, m.noticeOK = "report saved to /tmp/report.txt", true },
+			func(t *testing.T, m model) {
+				if m.notice != "report saved to /tmp/report.txt" {
+					t.Errorf("notice = %q, want it preserved", m.notice)
+				}
+			}},
+		{"moved cursor", func(m *model) { m.selMoved = true }, func(t *testing.T, m model) {
+			if !m.selMoved {
+				t.Error("watch tick reset selMoved, re-yanking the cursor to the first failure")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel(mustTarget(t, "github.com:443"), false)
+			m.watch = true
+			for _, probe := range m.probes {
+				m.started[probe.ID] = true
+				m.results[probe.ID] = diagnostic.ProbeResult{ID: probe.ID, Status: diagnostic.StatusPass}
+			}
+			tc.open(&m)
+
+			restarted := asModel(t, must(m.Update(watchMsg{gen: m.generation})))
+			if restarted.generation != m.generation+1 {
+				t.Fatalf("watch tick did not restart: generation = %d", restarted.generation)
+			}
+			tc.check(t, restarted)
+		})
+	}
+}
+
 func TestWatchHistoryKeepsLastTwentyRuns(t *testing.T) {
 	m := newModel(nil, false)
 	m.watch = true

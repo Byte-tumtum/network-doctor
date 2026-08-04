@@ -469,9 +469,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.jobsRunning() {
 			return m, m.watchCmd()
 		}
+		// A watch pass refreshes results underneath the user, so it must leave
+		// everything they are mid-way through alone: open modals and their typed
+		// contents, the last notice, and a cursor they moved themselves.
 		cur, other := m.cur, m.otherJobs
+		pending, confirm, ssh := m.pending, m.confirmTool, m.sshPrompt
+		notice, selMoved := m.notice, m.selMoved
 		cmd := m.doRestart()
 		m.cur, m.otherJobs = cur, other
+		m.pending, m.confirmTool, m.sshPrompt = pending, confirm, ssh
+		m.notice, m.selMoved = notice, selMoved
 		if m.viewing {
 			m.refreshViewport()
 		}
