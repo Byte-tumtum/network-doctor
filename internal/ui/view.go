@@ -421,7 +421,8 @@ func (m model) discoveryNetwork() (net.IP, string) {
 	for _, id := range []diagnostic.ProbeID{diagnostic.ProbeInternet, diagnostic.ProbeProxy, diagnostic.ProbeTargetTCP} {
 		ip := m.results[id].Source
 		if v4 := ip.To4(); v4 != nil && ip.IsPrivate() {
-			// ponytail: cap discovery at the source /24; widen only if larger LANs matter.
+			// The source /24 is the sweep, not the interface's real prefix: a
+			// /16 is 65k hosts, far past what the scan's 60s timeout can cover.
 			return ip, v4.Mask(net.CIDRMask(24, 32)).String() + "/24"
 		}
 	}
