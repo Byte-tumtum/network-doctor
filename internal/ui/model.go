@@ -577,7 +577,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reverse DNS runs only for what advertised nothing, one command per
 		// address: each row stops spinning as its own name lands, and no row
 		// ever shows a PTR guess that an advertised name would then replace.
-		// ponytail: unbounded fan-out — a /24 tops out at a couple dozen Up hosts.
 		var cmds []tea.Cmd
 		for _, ip := range msg.ips {
 			if m.hostNames[ip] != "" {
