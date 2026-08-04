@@ -292,6 +292,23 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 		t.Errorf("non-redirect interception = %+v, want portal evidence without a URL", r)
 	}
 
+	// Portals that drop 443 entirely still answer plain HTTP; the evidence
+	// must survive having no handshake to attach it to.
+	blocked443 := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("connection refused")
+		},
+		interfaces: ifaces,
+		portalCheck: func(context.Context) (int, string, error) {
+			return http.StatusFound, "https://portal.example/signin", nil
+		},
+	}
+	if r := blocked443.internetProbe(context.Background(), nil); r.Status != StatusFail ||
+		r.Portal == nil || r.Portal.RedirectURL != "https://portal.example/signin" ||
+		!strings.Contains(r.Fix, "sign in") {
+		t.Errorf("portal blocking 443 = %+v, want portal evidence, not a bare no-egress verdict", r)
+	}
+
 	// An unreachable check is not evidence of a portal — the dial result stands.
 	broken := &netops{
 		dialContext: dialOK, interfaces: ifaces,

@@ -647,6 +647,16 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		r.Detail = "no direct TCP egress to " + joinIPs(all) + " (port 443)"
 		src, iface := o.pathIdentity(ctx, nil, all[0], 443)
 		r.Status, r.Source, r.Iface = StatusFail, src, iface
+		// Portals commonly drop 443 outright while still intercepting plain
+		// HTTP. The 204 endpoint answering anything else is proof of a portal
+		// even with no handshake to show for it — report that, not "check
+		// upstream".
+		if portalCode != 0 && portalCode != http.StatusNoContent {
+			r.Portal = &Portal{RedirectURL: portalURL}
+			r.Detail += fmt.Sprintf(", and HTTP is intercepted: %s answered %d, want 204", portalProbeURL, portalCode)
+			r.Fix = "captive portal or transparent filter — open a browser and sign in to the network"
+			return r
+		}
 		r.Fix = "no internet egress — proxy-only/filtered network? check upstream"
 		return r
 	}
