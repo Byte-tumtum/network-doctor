@@ -58,6 +58,35 @@ jobs:
           path: dist/checksums.txt
           if-no-files-found: error
 
+  copr:
+    # spectool pulls both tarballs off the published release, so it has to exist.
+    needs: [release]
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    permissions:
+      contents: read
+    steps:
+      - run: dnf install -y copr-cli rpm-build rpmdevtools git-core
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure copr-cli
+        run: |
+          mkdir -p ~/.config
+          printf '%s' "$COPR_CONFIG" > ~/.config/copr
+          chmod 600 ~/.config/copr
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+      # The tag is the single source of version truth; the spec's own Version is
+      # only what `mock` picks up when building the package by hand.
+      - name: Build and submit SRPM
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^Version:.*/Version:        ${VERSION}/" packaging/network-doctor.spec
+          spectool -g -R packaging/network-doctor.spec
+          rpmbuild -bs packaging/network-doctor.spec
+          copr-cli build heymaikol/network-doctor ~/rpmbuild/SRPMS/*.src.rpm
+
   attest:
     needs: [release]
     runs-on: ubuntu-latest
