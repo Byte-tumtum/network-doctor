@@ -39,10 +39,13 @@ source:
 
 checksum:
   name_template: "checksums.txt"
+  # The vendor tarball is what COPR actually compiles, so it has to be a
+  # checksums.txt subject like everything else — that is what the release
+  # attestation covers, and what the copr job verifies before building.
+  extra_files:
+    - glob: ./network-doctor-*-vendor.tar.gz
 
 release:
-  # Uploaded alongside the build artifacts but outside checksums.txt, so no
-  # attestation covers it. Reproduce it with `go mod vendor` if that matters.
   extra_files:
     - glob: ./network-doctor-*-vendor.tar.gz
 

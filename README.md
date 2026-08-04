@@ -86,7 +86,7 @@ gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
 
 Proves bytes built from tagged commit by release workflow; that workflow gates release on CI and ancestor-of-`main` check. Source tarball attested too, as are `.deb`/`.rpm`/`.apk` and Windows `.zip` — pass whichever filename you downloaded.
 
-Two exceptions. `*-vendor.tar.gz` (Go deps, exists so COPR can build offline) sits outside `checksums.txt`, so nothing attests it — reproduce with `go mod vendor` at the tag if you care. COPR packages get rebuilt on Fedora's builders, so COPR's signature covers them, not this attestation.
+`*-vendor.tar.gz` (Go deps, exists so COPR can build offline) is attested as well — it is what COPR compiles, and `-mod=vendor` never checks `go.sum`, so the COPR job verifies it against this attestation before it builds anything. One exception: COPR packages get rebuilt on Fedora's builders, so COPR's signature covers them, not this attestation.
 
 ## How it diagnoses
 
