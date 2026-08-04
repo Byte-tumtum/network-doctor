@@ -360,9 +360,9 @@ func lookupIPWithDial(ctx context.Context, host string, dial func(context.Contex
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			mu.Lock()
-			// ponytail: last dial wins rather than the provably-answering one —
-			// right for a single server, and right on failover, since the
-			// resolver exhausts one server before trying the next.
+			// Last dial wins rather than the provably-answering one — right for
+			// a single server, and right on failover, since the resolver
+			// exhausts one server before trying the next.
 			server = addr
 			mu.Unlock()
 			return dial(ctx, network, addr)
