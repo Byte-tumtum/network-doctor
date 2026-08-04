@@ -116,7 +116,9 @@ func sshHostValue(t *diagnostic.Target) string {
 
 // listSSHKeys returns the private keys in ~/.ssh, recognized by their public
 // half sitting next to them — which costs no parsing and never opens the
-// secret. ponytail: ~/.ssh only; a key elsewhere is what ssh_config is for.
+// secret. Only that directory is scanned; a key kept anywhere else is what an
+// IdentityFile line in ssh_config is for, and ssh will find it there without
+// this list having to guess at the path.
 func listSSHKeys() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
