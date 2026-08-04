@@ -310,9 +310,9 @@ func (c *cancelAfter) Write(p []byte) (int, error) {
 // The watch stream's promise is one self-contained, timestamped report per
 // line — anything indented or unterminated breaks every line-oriented reader.
 func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
-	origRun, origEvery := runAll, diagnostic.WatchEvery
-	t.Cleanup(func() { runAll, diagnostic.WatchEvery = origRun, origEvery })
-	diagnostic.WatchEvery = time.Millisecond
+	origRun, origEvery := runAll, ui.WatchEvery
+	t.Cleanup(func() { runAll, ui.WatchEvery = origRun, origEvery })
+	ui.WatchEvery = time.Millisecond
 	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {

@@ -111,6 +111,11 @@ const (
 	ctrlCNotice   = "Press Ctrl+C again to quit"
 )
 
+// WatchEvery is the gap between repeat passes in watch mode, shared so the TUI
+// and the headless -json -watch loop can't drift apart. A var so tests don't
+// have to sleep through it.
+var WatchEvery = 5 * time.Second
+
 type model struct {
 	target  *diagnostic.Target
 	probes  []diagnostic.Probe
@@ -633,5 +638,5 @@ func (m *model) recordRun() {
 
 func (m model) watchCmd() tea.Cmd {
 	gen := m.generation
-	return tea.Tick(diagnostic.WatchEvery, func(time.Time) tea.Msg { return watchMsg{gen: gen} })
+	return tea.Tick(WatchEvery, func(time.Time) tea.Msg { return watchMsg{gen: gen} })
 }

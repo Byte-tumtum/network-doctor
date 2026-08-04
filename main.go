@@ -348,7 +348,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, source net.IP, watch boo
 		select {
 		case <-ctx.Done():
 			return code
-		case <-time.After(diagnostic.WatchEvery):
+		case <-time.After(ui.WatchEvery):
 		}
 	}
 }
