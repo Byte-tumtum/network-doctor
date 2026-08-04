@@ -120,10 +120,17 @@ func TestRunAsAskpass(t *testing.T) {
 			proxied: true, want: 1,
 		},
 		{
-			// The passphrase unlocks a local file, so no host is on the
-			// receiving end of it and a proxy changes nothing.
+			// A real key passphrase names no host either, so under a proxy it is
+			// indistinguishable from the case below and goes to the terminal.
 			name: "passphrase on a proxied connection", prompt: "Enter passphrase for key '/home/a/.ssh/id_ed25519':",
-			proxied: true, want: 0, wantStdout: "hunter2\n",
+			proxied: true, want: 1,
+		},
+		{
+			// Why the line above can't be relaxed: the prompt a jump host sends
+			// over keyboard-interactive is text it chose, so "passphrase" in it
+			// is a claim, not evidence.
+			name: "jump host calling its prompt a passphrase", prompt: "Enter passphrase for key '/home/a/.ssh/id_ed25519': ",
+			proxied: true, want: 1,
 		},
 		// A helper whose job is to refuse what it doesn't recognize has no
 		// business guessing at a prompt that isn't there.

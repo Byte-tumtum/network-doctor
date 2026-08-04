@@ -74,10 +74,14 @@ func askpass(args []string, secret, host string, proxied bool, stdout, stderr io
 		fmt.Fprintln(stderr, "netdoc: not answering a password prompt for", h)
 		return 1
 	}
-	// A key passphrase is answered whatever the topology: it unlocks a file
-	// here, so no host can be on the receiving end of it.
-	if h == "" && proxied && !strings.Contains(prompt, "passphrase") {
-		fmt.Fprintln(stderr, "netdoc: not answering an unattributed password prompt on a proxied connection")
+	// With a proxy in the way an unattributed prompt could be either end's, and
+	// the wording is no help: a keyboard-interactive prompt is the far end's to
+	// write, so a jump host that calls its question a passphrase would collect
+	// the target's password. Nothing in the text is evidence, so refuse them
+	// all — the run with the password field blank puts the question back on the
+	// terminal, where the user can see who is asking.
+	if h == "" && proxied {
+		fmt.Fprintln(stderr, "netdoc: not answering an unattributed prompt on a proxied connection")
 		return 1
 	}
 	fmt.Fprintln(stdout, secret)
@@ -98,7 +102,8 @@ func askpass(args []string, secret, host string, proxied bool, stdout, stderr io
 //
 // A key passphrase carries no host, and neither does a keyboard-interactive
 // prompt from a client too old to prefix them (< OpenSSH 8.6). Both stay
-// answerable unless a proxy makes it ambiguous which end is asking.
+// answerable only while there is one machine it could be — a proxy makes them
+// indistinguishable from each other, and the wording can't tell them apart.
 func promptHost(prompt string) string {
 	if rest, ok := strings.CutPrefix(prompt, "("); ok {
 		if head, _, ok := strings.Cut(rest, ")"); ok {
