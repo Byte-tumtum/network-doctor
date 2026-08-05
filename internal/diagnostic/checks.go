@@ -911,11 +911,9 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Ti
 // tunnel to host:port. Credentials are never offered: the SOCKS5
 // username/password exchange (RFC 1929) is cleartext, and this probe already
 // refuses to spend credentials on an unencrypted hop. Every read is a fixed,
-// small size — the replies are attacker-controlled.
+// small size — the replies are attacker-controlled. host must be at most 255
+// bytes; the only caller passes the probeHost constant.
 func socks5Connect(conn net.Conn, host string, port int) error {
-	if len(host) > 255 {
-		return errors.New("hostname too long for SOCKS5")
-	}
 	// VER 5, offering exactly one method: 0 (no authentication).
 	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
 		return fmt.Errorf("greeting failed: %w", err)
