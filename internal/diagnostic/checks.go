@@ -898,7 +898,7 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Ti
 		r.Detail = "cannot set proxy deadline: " + err.Error()
 		return r
 	}
-	if err := socks5Connect(conn, probeHost, 443); err != nil {
+	if err := socks5Connect(conn); err != nil {
 		r.Status = StatusFail
 		r.Detail = "SOCKS5 proxy " + addr + ": " + err.Error()
 		r.Fix = "check that ALL_PROXY names a SOCKS5 port and that the proxy allows this destination"
@@ -908,12 +908,11 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Ti
 }
 
 // socks5Connect runs the RFC 1928 no-auth handshake on conn and requests a
-// tunnel to host:port. Credentials are never offered: the SOCKS5
+// tunnel to probeHost:443. Credentials are never offered: the SOCKS5
 // username/password exchange (RFC 1929) is cleartext, and this probe already
 // refuses to spend credentials on an unencrypted hop. Every read is a fixed,
-// small size — the replies are attacker-controlled. host must be at most 255
-// bytes; the only caller passes the probeHost constant.
-func socks5Connect(conn net.Conn, host string, port int) error {
+// small size — the replies are attacker-controlled.
+func socks5Connect(conn net.Conn) error {
 	// VER 5, offering exactly one method: 0 (no authentication).
 	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
 		return fmt.Errorf("greeting failed: %w", err)
@@ -929,8 +928,8 @@ func socks5Connect(conn net.Conn, host string, port int) error {
 		return errors.New("requires authentication; SOCKS5 credentials travel in cleartext, so this probe does not send them")
 	}
 	// CONNECT, reserved, ATYP 3 (domain name) so the proxy does the lookup.
-	req := append([]byte{5, 1, 0, 3, byte(len(host))}, host...)
-	req = append(req, byte(port>>8), byte(port))
+	req := append([]byte{5, 1, 0, 3, byte(len(probeHost))}, probeHost...)
+	req = append(req, 1, 187) // port 443, network byte order
 	if _, err := conn.Write(req); err != nil {
 		return fmt.Errorf("CONNECT failed: %w", err)
 	}
