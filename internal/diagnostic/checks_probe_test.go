@@ -393,8 +393,11 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			detail: "24 KiB drained past the measured 4 KiB TCP send buffer",
 		},
 		{
-			name:   "peer hangs up",
-			serve:  func(c net.Conn) { c.Close() },
+			name: "peer hangs up",
+			// Take a byte before hanging up: the read blocks until the probe's
+			// Write, so the close lands during the write rather than racing the
+			// setup that precedes it.
+			serve:  func(c net.Conn) { _, _ = c.Read(make([]byte, 1)); c.Close() },
 			status: StatusNA,
 			detail: "inconclusive — the peer dropped the connection after 0 KiB",
 		},
