@@ -262,6 +262,7 @@ func (c *scriptConn) Read(p []byte) (int, error)         { return c.r.Read(p) }
 func (c *scriptConn) Write(p []byte) (int, error)        { return c.w.Write(p) }
 func (*scriptConn) SetReadDeadline(time.Time) error      { return nil }
 func (c *scriptConn) SetWriteDeadline(d time.Time) error { c.writeDeadline = d; return nil }
+func (c *scriptConn) SetDeadline(d time.Time) error      { c.writeDeadline = d; return nil }
 
 func proxyOps(proxy string, dial func(context.Context, string, string) (net.Conn, error)) *netops {
 	return &netops{
@@ -282,15 +283,122 @@ func TestProxyProbeNoProxyIsNA(t *testing.T) {
 	}
 }
 
-func TestProxyProbeSocksIsNA(t *testing.T) {
-	ops := proxyOps("socks5://proxy.corp", func(context.Context, string, string) (net.Conn, error) {
-		t.Fatal("SOCKS proxy must not receive an HTTP CONNECT probe")
+func TestProxyProbeUnknownSchemeIsNA(t *testing.T) {
+	ops := proxyOps("socks4://proxy.corp", func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("an unsupported proxy scheme must not be dialed")
 		return nil, nil
 	})
 	r := ops.proxyProbe(context.Background(), nil)
-	if r.Status != StatusNA || !strings.Contains(r.Detail, "socks5") {
-		t.Errorf("SOCKS proxy = %+v, want N/A", r)
+	if r.Status != StatusNA || !strings.Contains(r.Detail, "socks4") {
+		t.Errorf("SOCKS4 proxy = %+v, want N/A", r)
 	}
+}
+
+// socks5Reply is a granted CONNECT: greeting picks no-auth, then reply code 0
+// with a bound IPv4 address.
+var socks5Reply = string([]byte{5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+
+// A SOCKS5 proxy (ALL_PROXY's usual scheme) is probed with a real handshake,
+// and the destination goes over the wire as a name for the proxy to resolve.
+func TestProxyProbeSocks5(t *testing.T) {
+	for _, scheme := range []string{"socks5", "socks5h"} {
+		t.Run(scheme, func(t *testing.T) {
+			conn := &scriptConn{r: strings.NewReader(socks5Reply)}
+			var dialed string
+			ops := proxyOps(scheme+"://proxy.corp", func(_ context.Context, _, addr string) (net.Conn, error) {
+				dialed = addr
+				return conn, nil
+			})
+			r := ops.proxyProbe(context.Background(), nil)
+			if r.Status != StatusPass || !strings.Contains(r.Detail, "proxy proxy.corp:1080 tunnels") {
+				t.Errorf("granted SOCKS5 CONNECT = %+v, want PASS", r)
+			}
+			if dialed != "proxy.corp:1080" {
+				t.Errorf("dialed %q, want proxy.corp:1080 (default SOCKS port)", dialed)
+			}
+			want := string([]byte{5, 1, 0, 5, 1, 0, 3, byte(len(probeHost))}) + probeHost + string([]byte{1, 187})
+			if conn.w.String() != want {
+				t.Errorf("wire bytes = %q, want %q", conn.w.String(), want)
+			}
+			if conn.writeDeadline.IsZero() {
+				t.Error("deadline is zero, want the probe budget as a leash")
+			}
+		})
+	}
+}
+
+func TestProxyProbeSocks5Failures(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply []byte
+		want  string
+	}{
+		{"auth demanded", []byte{5, 2}, "cleartext"},
+		{"no acceptable method", []byte{5, 255}, "cleartext"},
+		{"refused", []byte{5, 0, 5, 5, 0, 1, 0, 0, 0, 0, 0, 0}, "connection refused"},
+		{"unknown reply code", []byte{5, 0, 5, 99, 0, 1, 0, 0, 0, 0, 0, 0}, "reply code 99"},
+		{"not a SOCKS port", []byte("HTTP/1.1 400 Bad Request\r\n"), "not a SOCKS5 proxy"},
+		{"truncated", []byte{5, 0, 5, 0, 0, 1}, "truncated"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			conn := &scriptConn{r: strings.NewReader(string(c.reply))}
+			ops := proxyOps("socks5h://user:pw@proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
+				return conn, nil
+			})
+			r := ops.proxyProbe(context.Background(), nil)
+			if r.Status != StatusFail || !strings.Contains(r.Detail, c.want) {
+				t.Errorf("SOCKS5 %s = %+v, want FAIL mentioning %q", c.name, r, c.want)
+			}
+			if strings.Contains(conn.w.String(), "pw") {
+				t.Errorf("SOCKS5 handshake leaked credentials: %q", conn.w.String())
+			}
+		})
+	}
+}
+
+func TestProxyProbeSocks5Unreachable(t *testing.T) {
+	ops := proxyOps("socks5h://proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("connection refused")
+	})
+	r := ops.proxyProbe(context.Background(), nil)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot reach proxy") {
+		t.Errorf("unreachable SOCKS5 proxy = %+v, want FAIL", r)
+	}
+}
+
+// Go's own ProxyFromEnvironment ignores ALL_PROXY; netdoc must not, or a box
+// proxied only through ALL_PROXY reads as having no proxy at all.
+func TestProxyFromEnvironmentAllProxy(t *testing.T) {
+	req := &http.Request{URL: &url.URL{Scheme: "https", Host: probeHost}}
+	if u, err := http.ProxyFromEnvironment(req); u != nil || err != nil {
+		t.Skipf("test environment already has HTTP(S)_PROXY set (%v, %v)", u, err)
+	}
+	for _, name := range []string{"ALL_PROXY", "all_proxy"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("ALL_PROXY", "")
+			t.Setenv("all_proxy", "")
+			t.Setenv(name, "socks5h://proxy.corp:1080")
+			u, err := proxyFromEnvironment(req)
+			if err != nil || u == nil || u.Scheme != "socks5h" || u.Host != "proxy.corp:1080" {
+				t.Errorf("proxyFromEnvironment = %v, %v; want socks5h://proxy.corp:1080", u, err)
+			}
+		})
+	}
+	t.Run("bare host defaults to http", func(t *testing.T) {
+		t.Setenv("ALL_PROXY", "proxy.corp:3128")
+		u, err := proxyFromEnvironment(req)
+		if err != nil || u == nil || u.Scheme != "http" || u.Host != "proxy.corp:3128" {
+			t.Errorf("proxyFromEnvironment = %v, %v; want http://proxy.corp:3128", u, err)
+		}
+	})
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("ALL_PROXY", "")
+		t.Setenv("all_proxy", "")
+		if u, err := proxyFromEnvironment(req); u != nil || err != nil {
+			t.Errorf("proxyFromEnvironment = %v, %v; want no proxy", u, err)
+		}
+	})
 }
 
 func TestProxyProbeUnreachable(t *testing.T) {
