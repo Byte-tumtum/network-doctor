@@ -390,13 +390,3 @@ The UI depends on diagnostics; diagnostics do not depend on the UI. Add network 
 ## License
 
 Network Doctor is free software under the [GNU General Public License](LICENSE), either version 3 of the License, or (at your option) any later version. Package metadata declares this as `GPL-3.0-or-later`.
-
-## Star History
-
-<a href="https://star-history.com/#heymaikol/network-doctor&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=heymaikol/network-doctor&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=heymaikol/network-doctor&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=heymaikol/network-doctor&type=Date" />
-  </picture>
-</a>
