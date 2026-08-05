@@ -104,10 +104,17 @@ func TestJobCancel(t *testing.T) {
 	}
 }
 
+// helperTimeout is the deadline the timeout tests give a helper subprocess. It
+// has to outlast re-execing the test binary: expire before that and exec.Start
+// returns the context error, failing the test somewhere short of the timeout
+// classification it exists to check. A second is far past a normal spawn and
+// still cheap, since these tests wait it out.
+const helperTimeout = time.Second
+
 func TestJobTimeout(t *testing.T) {
 	// A short parent deadline makes the job's context time out well before the
 	// 12s tool timeout; the cause propagates → JobTimedOut.
-	parent, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	parent, cancel := context.WithTimeout(context.Background(), helperTimeout)
 	defer cancel()
 	j := startHelper(t, parent, "sleep")
 	_, done := drain(t, j.ch)
@@ -121,7 +128,7 @@ func TestJobTimeout(t *testing.T) {
 func TestJobPerToolTimeout(t *testing.T) {
 	env := append(os.Environ(), "GO_HELPER=1", "GO_HELPER_MODE=sleep")
 	j, _, err := startTool(context.Background(), 0, "test-timeout", os.Args[0],
-		[]string{"-test.run=TestHelperProcess"}, env, 300*time.Millisecond)
+		[]string{"-test.run=TestHelperProcess"}, env, helperTimeout)
 	if err != nil {
 		t.Fatalf("startTool: %v", err)
 	}

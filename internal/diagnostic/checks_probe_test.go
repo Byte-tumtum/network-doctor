@@ -365,6 +365,14 @@ func TestTLSProbeTimeoutReportsMTU(t *testing.T) {
 	}
 }
 
+// pmtuTestBudget is the probe budget the stall cases run under. The probe
+// derives its write deadline as budget minus pmtuHeadroom, so this same figure
+// is how long a descheduled goroutine may sit between the deadline being set
+// here and the probe reading it back before the probe gives up with "not enough
+// of the probe budget left" instead of measuring the stall under test. The
+// stall cases wait it out, so it buys loaded-runner margin at its own cost.
+const pmtuTestBudget = pmtuHeadroom + time.Second
+
 // The PMTU probe reads one asymmetry: a payload that must travel as full-size
 // segments either drains the (deliberately small) send buffer or stalls in it.
 // A stall is the black-hole evidence and never more than a WARN; a peer that
@@ -415,7 +423,7 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			}
 			deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1"), Iface: "wg0"}}
 			// Short budget so the stall case doesn't wait out pmtuWriteWait.
-			ctx, cancel := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
 			defer cancel()
 
 			r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps)
@@ -444,7 +452,7 @@ func TestPMTUProbeWarnNamesInterfaceMTU(t *testing.T) {
 		tcpMSS:      func(net.Conn) (int, error) { return 1380, nil },
 	}
 	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1"), Iface: "wg0"}}
-	ctx, cancel := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
 	defer cancel()
 
 	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps); !strings.Contains(r.Detail, "wg0 advertises a 1420-byte MTU") {
@@ -455,7 +463,7 @@ func TestPMTUProbeWarnNamesInterfaceMTU(t *testing.T) {
 	client2, server2 := net.Pipe()
 	t.Cleanup(func() { _ = server2.Close() })
 	ops.dialContext = func(context.Context, string, string) (net.Conn, error) { return client2, nil }
-	ctx2, cancel2 := context.WithTimeout(context.Background(), pmtuHeadroom+300*time.Millisecond)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), pmtuTestBudget)
 	defer cancel2()
 	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx2, deps); r.Status != StatusWarn || strings.Contains(r.Detail, "advertises") {
 		t.Errorf("pmtu without a readable MTU = %+v, want WARN with no MTU note", r)
