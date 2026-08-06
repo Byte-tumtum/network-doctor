@@ -402,6 +402,30 @@ func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 	}
 }
 
+func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing.T) {
+	probes := []diagnostic.Probe{{ID: diagnostic.ProbeInternet, Name: "Internet"}, {ID: diagnostic.ProbeIface, Name: "Interface"}}
+	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbeInternet: {Status: diagnostic.StatusWarn, Families: &diagnostic.FamilyConnectivity{
+			IPv4: diagnostic.FamilyReachable, IPv6: diagnostic.FamilyUnreachable,
+		}},
+		diagnostic.ProbeIface: {Status: diagnostic.StatusPass},
+	}
+	rep := buildReport(nil, probes, results)
+	if rep.Checks[0].Families == nil || rep.Checks[0].Families.IPv4 != "reachable" || rep.Checks[0].Families.IPv6 != "unreachable" {
+		t.Errorf("internet families = %+v", rep.Checks[0].Families)
+	}
+	if rep.Checks[1].Families != nil {
+		t.Errorf("unrelated row gained family evidence: %+v", rep.Checks[1])
+	}
+	blob, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(blob, []byte(`"address_families":{"ipv4":"reachable","ipv6":"unreachable"}`)) {
+		t.Errorf("JSON missing address families: %s", blob)
+	}
+}
+
 func TestBuildReport(t *testing.T) {
 	target, err := diagnostic.ParseTarget("example.com:443")
 	if err != nil {

@@ -43,15 +43,24 @@ type Topology struct {
 
 // Segment is one simulator-owned Linux bridge.
 type Segment struct {
-	Name   string `yaml:"name"`
+	Name string `yaml:"name"`
+	// Subnet is the backward-compatible IPv4 spelling used by the original
+	// routed scenarios. IPv4 and IPv6 let one logical L2 segment carry both
+	// families without manufacturing a second interface.
 	Subnet string `yaml:"subnet"`
+	IPv4   string `yaml:"ipv4"`
+	IPv6   string `yaml:"ipv6"`
 }
 
 // Interface attaches a node to one logical segment. Scenario authors never
 // provide the kernel interface name; the backend derives a short safe name.
 type Interface struct {
 	Segment string `yaml:"segment"`
+	// Address is the backward-compatible IPv4 spelling. IPv4 and IPv6 are
+	// installed on this same generated kernel interface.
 	Address string `yaml:"address"`
+	IPv4    string `yaml:"ipv4"`
+	IPv6    string `yaml:"ipv6"`
 }
 
 // Route is a validated unicast route. Destination is either "default" or a
@@ -62,6 +71,7 @@ type Route struct {
 	Via         string `yaml:"via"`
 	Metric      int    `yaml:"metric"`
 	Default     bool   `yaml:"-"`
+	Family      string `yaml:"-"`
 }
 
 // Node is one network namespace on the segment.
@@ -95,6 +105,9 @@ type Service struct {
 	// Zone maps a name to an address for ServiceDNS. A name that is absent
 	// answers NXDOMAIN, which is how "DNS returns NXDOMAIN" is expressed.
 	Zone map[string]string `yaml:"zone"`
+	// Records is the dual-stack form. Zone remains the compatible single-record
+	// shorthand; both forms describe static address records only.
+	Records []DNSRecord `yaml:"records"`
 	// Body and Status shape the ServiceHTTP reply; /generate_204 always answers
 	// 204 so netdoc's captive-portal check passes.
 	Status int    `yaml:"status"`
@@ -102,6 +115,13 @@ type Service struct {
 	// Certificate describes simulator-generated TLS identity. Scenario files
 	// select intent only; they cannot provide keys, PEM, paths, or algorithms.
 	Certificate *TLSCertificate `yaml:"certificate"`
+}
+
+// DNSRecord is one static A or AAAA answer. Type is derived from Address so a
+// scenario cannot claim an A record while supplying IPv6 bytes, or vice versa.
+type DNSRecord struct {
+	Name    string `yaml:"name"`
+	Address string `yaml:"address"`
 }
 
 // TLSCertificate is the narrow certificate intent accepted by a TLS service.
@@ -131,6 +151,7 @@ const (
 	TLSCertificateExpired          = "expired"
 	TLSCertificateHostnameMismatch = "hostname_mismatch"
 	tlsMaxDNSNames                 = 16
+	dnsMaxRecords                  = 64
 )
 
 // Fault types.
@@ -164,6 +185,9 @@ type Fault struct {
 	Segment string `yaml:"segment"`
 	Via     string `yaml:"via"`
 	Metric  int    `yaml:"metric"`
+	// Family restricts route faults to ipv4 or ipv6. Empty preserves the
+	// original IPv4 behavior of existing scenarios.
+	Family string `yaml:"family"`
 	// To, Protocol and Port select the traffic FaultDrop discards. An empty To
 	// matches every destination; a zero Port matches every port.
 	To       string `yaml:"to"`
@@ -229,6 +253,8 @@ type ExpectedCheck struct {
 	ID     string `yaml:"id"`
 	Status string `yaml:"status"`
 	Cause  string `yaml:"cause"`
+	IPv4   string `yaml:"ipv4"`
+	IPv6   string `yaml:"ipv6"`
 }
 
 // knownProbeIDs is the set a scenario may name. It references the constants so
@@ -263,6 +289,8 @@ var knownCauses = []string{
 	diagnostic.RouteCauseGatewayUnreachable,
 	diagnostic.RouteCauseSelectedPathFailed,
 	diagnostic.RouteCausePreferredPathFailed,
+	diagnostic.FamilyCauseIPv4Unreachable,
+	diagnostic.FamilyCauseIPv6Unreachable,
 }
 
 // verdicts is netdoc's verdict vocabulary. Incomplete is omitted on purpose —
@@ -397,6 +425,9 @@ func parseAddr(raw string) (netip.Addr, string, error) {
 	if addr.Zone() != "" {
 		return netip.Addr{}, "", fmt.Errorf("%q: scoped addresses (the %%zone suffix) are not supported", raw)
 	}
+	if addr.Is4In6() {
+		return netip.Addr{}, "", fmt.Errorf("%q: IPv4-mapped IPv6 addresses are not supported", raw)
+	}
 	return addr, addr.String(), nil
 }
 
@@ -420,21 +451,46 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Certificate != nil || svc.Status != 0 || svc.Body != "" {
 				return fmt.Errorf("node %q: dns service has unsupported options", n.Name)
 			}
-			zoneNames := make(map[string]string, len(svc.Zone))
+			if len(svc.Zone)+len(svc.Records) > dnsMaxRecords {
+				return fmt.Errorf("node %q: dns service has %d records, maximum is %d", n.Name, len(svc.Zone)+len(svc.Records), dnsMaxRecords)
+			}
+			zoneNames := make(map[string]string, len(svc.Zone)+len(svc.Records))
 			for name, ip := range svc.Zone {
 				if !isSafeHostname(name) {
 					return fmt.Errorf("node %q: zone name %q is not a hostname", n.Name, name)
 				}
-				key := dnsKey(name)
+				addr, canonical, err := parseAddr(ip)
+				if err != nil {
+					return fmt.Errorf("node %q: zone %s: %w", n.Name, name, err)
+				}
+				if err := validateInterfaceAddr(addr); err != nil {
+					return fmt.Errorf("node %q: zone %s: %w", n.Name, name, err)
+				}
+				key := dnsKey(name) + "\x00" + addressFamily(addr)
 				if previous, exists := zoneNames[key]; exists {
 					return fmt.Errorf("node %q: duplicate DNS record %q conflicts with %q", n.Name, name, previous)
 				}
 				zoneNames[key] = name
-				_, canonical, err := parseAddr(ip)
-				if err != nil {
-					return fmt.Errorf("node %q: zone %s: %w", n.Name, name, err)
-				}
 				svc.Zone[name] = canonical
+			}
+			for ri := range svc.Records {
+				record := &svc.Records[ri]
+				if !isSafeHostname(record.Name) {
+					return fmt.Errorf("node %q: record name %q is not a hostname", n.Name, record.Name)
+				}
+				addr, canonical, err := parseAddr(record.Address)
+				if err != nil {
+					return fmt.Errorf("node %q: record %s: %w", n.Name, record.Name, err)
+				}
+				if err := validateInterfaceAddr(addr); err != nil {
+					return fmt.Errorf("node %q: record %s: %w", n.Name, record.Name, err)
+				}
+				key := dnsKey(record.Name) + "\x00" + addressFamily(addr)
+				if previous, exists := zoneNames[key]; exists {
+					return fmt.Errorf("node %q: duplicate DNS record %q conflicts with %q", n.Name, record.Name, previous)
+				}
+				zoneNames[key] = record.Name
+				record.Name, record.Address = dnsKey(record.Name), canonical
 			}
 		case ServiceHTTP:
 			if svc.Port == 0 {
@@ -446,14 +502,14 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Status < 100 || svc.Status > 599 {
 				return fmt.Errorf("node %q: http status %d is out of range", n.Name, svc.Status)
 			}
-			if svc.Certificate != nil || len(svc.Zone) != 0 {
+			if svc.Certificate != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 {
 				return fmt.Errorf("node %q: http service has unsupported options", n.Name)
 			}
 		case ServiceTCP:
 			if svc.Port == 0 {
 				return fmt.Errorf("node %q: tcp service needs a port", n.Name)
 			}
-			if svc.Certificate != nil || len(svc.Zone) != 0 || svc.Status != 0 || svc.Body != "" {
+			if svc.Certificate != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" {
 				return fmt.Errorf("node %q: tcp service has unsupported options", n.Name)
 			}
 		case ServiceSOCKS5:
@@ -463,7 +519,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if n.Resolver == "" {
 				return fmt.Errorf("node %q: socks5 service needs the node resolver", n.Name)
 			}
-			if len(svc.Zone) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil {
+			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil {
 				return fmt.Errorf("node %q: socks5 service has unsupported options", n.Name)
 			}
 		case ServiceTLS:
@@ -473,7 +529,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Name == "" {
 				return fmt.Errorf("node %q: tls service needs a name", n.Name)
 			}
-			if len(svc.Zone) != 0 || svc.Status != 0 || svc.Body != "" {
+			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" {
 				return fmt.Errorf("node %q: tls service has unsupported options", n.Name)
 			}
 			if err := validateTLSCertificate(svc.Certificate); err != nil {
@@ -494,6 +550,9 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		return fmt.Errorf("unknown node %q", f.Node)
 	}
 	node := topology.node(f.Node)
+	if f.Family != "" && f.Family != "ipv4" && f.Family != "ipv6" {
+		return fmt.Errorf("unknown family %q (ipv4 or ipv6)", f.Family)
+	}
 	switch f.Type {
 	case FaultDrop:
 		if f.Segment != "" || f.Via != "" || f.Metric != 0 {
@@ -508,8 +567,14 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		}
 		if f.To != "" {
 			var err error
-			if _, f.To, err = parseAddr(f.To); err != nil {
+			var addr netip.Addr
+			if addr, f.To, err = parseAddr(f.To); err != nil {
 				return fmt.Errorf("to: %w", err)
+			}
+			if f.Family == "" {
+				f.Family = addressFamily(addr)
+			} else if addressFamily(addr) != f.Family {
+				return fmt.Errorf("to address is %s but family is %s", addressFamily(addr), f.Family)
 			}
 		}
 		switch f.Protocol {
@@ -525,7 +590,7 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 			return fmt.Errorf("port %d is out of range", f.Port)
 		}
 	case FaultNetem:
-		if f.Via != "" || f.Metric != 0 {
+		if f.Via != "" || f.Metric != 0 || f.Family != "" {
 			return errors.New("netem has unsupported route options")
 		}
 		if f.Segment == "" {
@@ -561,6 +626,9 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		if f.Segment != "" || f.Via != "" || f.Metric != 0 {
 			return errors.New("no_default_route has unsupported options")
 		}
+		if f.Family == "" {
+			f.Family = "ipv4"
+		}
 	case FaultReplaceDefaultRoute:
 		if f.Segment != "" {
 			return errors.New("replace_default_route does not accept segment; it is derived from via")
@@ -575,9 +643,17 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		if _, ok := nodeSegmentForAddress(node, via); !ok {
 			return fmt.Errorf("gateway %s is not on a directly connected subnet for node %q", via, f.Node)
 		}
+		if err := validateGateway(via); err != nil {
+			return fmt.Errorf("via: %w", err)
+		}
+		if f.Family == "" {
+			f.Family = addressFamily(via)
+		} else if addressFamily(via) != f.Family {
+			return fmt.Errorf("gateway is %s but family is %s", addressFamily(via), f.Family)
+		}
 		f.Via = canonical
 	case FaultLinkDown:
-		if f.Via != "" || f.Metric != 0 {
+		if f.Via != "" || f.Metric != 0 || f.Family != "" {
 			return errors.New("link_down has unsupported options")
 		}
 		if _, ok := node.interfaceOn(f.Segment); !ok {
@@ -747,6 +823,11 @@ func (e *Expect) validate() error {
 			}
 			if !contains(knownCauses, c.Cause) {
 				return fmt.Errorf("expect.checks[%d]: unknown cause %q", i, c.Cause)
+			}
+		}
+		for family, value := range map[string]string{"ipv4": c.IPv4, "ipv6": c.IPv6} {
+			if value != "" && value != diagnostic.FamilyReachable && value != diagnostic.FamilyUnreachable {
+				return fmt.Errorf("expect.checks[%d].%s: unknown family status %q", i, family, value)
 			}
 		}
 	}

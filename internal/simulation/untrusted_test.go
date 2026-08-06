@@ -138,16 +138,22 @@ func TestScopedAddressesRejected(t *testing.T) {
 // spelling of the address, not the bytes that were in the file.
 func TestAddressesAreCanonicalised(t *testing.T) {
 	s, err := ParseScenario(strings.NewReader(strings.Replace(minimalScenario,
-		"address: 10.77.0.1}", "address: 10.77.0.1, aliases: ['0:0:0:0:0:0:0:1', '::FFFF:1.2.3.4']}", 1)))
+		"address: 10.77.0.1}", "address: 10.77.0.1, aliases: ['0:0:0:0:0:0:0:1']}", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := s.Topology.Nodes[1].Aliases
-	want := []string{"::1", "::ffff:1.2.3.4"}
+	want := []string{"::1"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("alias[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestIPv4MappedIPv6AddressRejected(t *testing.T) {
+	if _, _, err := parseAddr("::FFFF:1.2.3.4"); err == nil {
+		t.Error("IPv4-mapped IPv6 address must be rejected")
 	}
 }
 

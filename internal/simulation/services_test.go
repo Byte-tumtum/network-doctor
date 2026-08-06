@@ -22,12 +22,12 @@ func dnsQuery(name string, qtype uint16) []byte {
 	return binary.BigEndian.AppendUint16(msg, dnsClassIN)
 }
 
-func testZone(t *testing.T) map[string]netip.Addr {
+func testZone(t *testing.T) map[string][]netip.Addr {
 	t.Helper()
 	zone, err := parseZone(map[string]string{
 		"example.test": "10.77.0.20",
 		"v6.test":      "2001:db8::1",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +88,26 @@ func TestDNSReplyCases(t *testing.T) {
 	}
 }
 
+func TestDNSReplyDualStackName(t *testing.T) {
+	zone, err := parseZone(nil, []DNSRecord{
+		{Name: "dual.test", Address: "10.77.0.20"},
+		{Name: "dual.test", Address: "fd77::20"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, qtype := range []uint16{dnsTypeA, dnsTypeAAAA} {
+		reply := dnsReply(dnsQuery("dual.test", qtype), zone)
+		if reply == nil || rcode(reply) != dnsRcodeSuccess || answers(reply) != 1 {
+			t.Errorf("qtype %d reply = %v", qtype, reply)
+		}
+		_, observed, result, ok := dnsObservation(dnsQuery("dual.test", qtype), zone)
+		if !ok || observed != qtype || result != "ANSWER" {
+			t.Errorf("qtype %d observation = %d %q %t", qtype, observed, result, ok)
+		}
+	}
+}
+
 func TestDNSReplyRejectsJunk(t *testing.T) {
 	zone := testZone(t)
 	// An answer, not a query: replying would make two of these servers talk to
@@ -113,7 +133,7 @@ func TestDNSReplyRejectsJunk(t *testing.T) {
 }
 
 func TestParseZoneRejectsBadAddress(t *testing.T) {
-	if _, err := parseZone(map[string]string{"a.test": "not-an-ip"}); err == nil {
+	if _, err := parseZone(map[string]string{"a.test": "not-an-ip"}, nil); err == nil {
 		t.Error("want an error")
 	}
 }

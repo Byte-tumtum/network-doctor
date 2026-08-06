@@ -277,6 +277,7 @@ type reportCheck struct {
 	Name       string          `json:"name"`
 	Status     string          `json:"status"`
 	Cause      string          `json:"cause,omitempty"`
+	Families   *reportFamilies `json:"address_families,omitempty"`
 	Ms         int64           `json:"ms"` // wall time, truncated but floored at 1; 0 means the check never ran
 	Detail     string          `json:"detail"`
 	Fix        string          `json:"fix,omitempty"`
@@ -287,6 +288,11 @@ type reportCheck struct {
 	Network    string          `json:"network,omitempty"`
 	Portal     *reportPortal   `json:"portal,omitempty"`
 	Attempts   []reportAttempt `json:"attempts,omitempty"`
+}
+
+type reportFamilies struct {
+	IPv4 string `json:"ipv4"`
+	IPv6 string `json:"ipv6"`
 }
 
 type reportPortal struct {
@@ -380,6 +386,9 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			Fix:     r.Fix,
 			Iface:   r.Iface,
 			Network: r.Network,
+		}
+		if r.Families != nil {
+			c.Families = &reportFamilies{IPv4: r.Families.IPv4, IPv6: r.Families.IPv6}
 		}
 		if r.Portal != nil {
 			c.Portal = &reportPortal{RedirectURL: r.Portal.RedirectURL}

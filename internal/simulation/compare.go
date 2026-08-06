@@ -21,13 +21,19 @@ type Diagnosis struct {
 
 // DiagnosisCheck is one probe row.
 type DiagnosisCheck struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Cause  string `json:"cause,omitempty"`
-	Ms     int64  `json:"ms"`
-	Detail string `json:"detail"`
-	Fix    string `json:"fix"`
+	ID       string             `json:"id"`
+	Name     string             `json:"name"`
+	Status   string             `json:"status"`
+	Cause    string             `json:"cause,omitempty"`
+	Ms       int64              `json:"ms"`
+	Detail   string             `json:"detail"`
+	Fix      string             `json:"fix"`
+	Families *DiagnosisFamilies `json:"address_families,omitempty"`
+}
+
+type DiagnosisFamilies struct {
+	IPv4 string `json:"ipv4"`
+	IPv6 string `json:"ipv6"`
 }
 
 // Check outcomes, in the order the report prints them.
@@ -35,6 +41,7 @@ const (
 	OutcomeMatched     = "matched"
 	OutcomeWrongStatus = "wrong_status"
 	OutcomeWrongCause  = "wrong_cause"
+	OutcomeWrongFamily = "wrong_family"
 	OutcomeMissing     = "missing"
 	OutcomeUnexpected  = "unexpected"
 )
@@ -49,6 +56,10 @@ type CheckComparison struct {
 	ExpectedCause string `json:"expected_cause,omitempty"`
 	Actual        string `json:"actual,omitempty"`
 	Cause         string `json:"cause,omitempty"`
+	ExpectedIPv4  string `json:"expected_ipv4,omitempty"`
+	ExpectedIPv6  string `json:"expected_ipv6,omitempty"`
+	ActualIPv4    string `json:"actual_ipv4,omitempty"`
+	ActualIPv6    string `json:"actual_ipv6,omitempty"`
 	Outcome       string `json:"outcome"`
 	Detail        string `json:"detail,omitempty"`
 	Fix           string `json:"fix,omitempty"`
@@ -129,7 +140,11 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 		expected[e.ID] = e.Status
 		c, ran := actual[e.ID]
 		cmp := CheckComparison{ID: e.ID, Name: c.Name, Expected: e.Status, ExpectedCause: e.Cause, Actual: c.Status,
+			ExpectedIPv4: e.IPv4, ExpectedIPv6: e.IPv6,
 			Outcome: OutcomeMatched, Cause: c.Cause, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms}
+		if c.Families != nil {
+			cmp.ActualIPv4, cmp.ActualIPv6 = c.Families.IPv4, c.Families.IPv6
+		}
 		switch {
 		case !ran:
 			cmp.Outcome = OutcomeMissing
@@ -137,6 +152,8 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 			cmp.Outcome = OutcomeWrongStatus
 		case e.Cause != "" && c.Cause != e.Cause:
 			cmp.Outcome = OutcomeWrongCause
+		case e.IPv4 != "" && cmp.ActualIPv4 != e.IPv4, e.IPv6 != "" && cmp.ActualIPv6 != e.IPv6:
+			cmp.Outcome = OutcomeWrongFamily
 		}
 		o.Checks = append(o.Checks, cmp)
 	}
@@ -249,6 +266,10 @@ func (o *TestOutcome) suggest() []Suggestion {
 			addCheck(SuggestWrongCause, c, fmt.Sprintf(
 				"%s reported cause %q, expected %q — the failure was detected but classified at the wrong stage.",
 				c.ID, c.Cause, c.ExpectedCause), c.Detail)
+		case c.Outcome == OutcomeWrongFamily:
+			addCheck(SuggestWrongCause, c, fmt.Sprintf(
+				"%s reported address families IPv4=%q IPv6=%q, expected IPv4=%q IPv6=%q.",
+				c.ID, c.ActualIPv4, c.ActualIPv6, c.ExpectedIPv4, c.ExpectedIPv6), c.Detail)
 		case c.Outcome == OutcomeUnexpected:
 			addCheck(SuggestFalsePositive, c, fmt.Sprintf(
 				"%s reported %s in a network where the scenario expects it to be fine — likely false positive.", c.ID, c.Actual), c.Detail)

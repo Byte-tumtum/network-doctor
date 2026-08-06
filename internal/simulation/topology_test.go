@@ -148,3 +148,81 @@ func TestWarningExpectationMayCarryRouteCause(t *testing.T) {
 		t.Fatalf("warning route cause rejected: %v", err)
 	}
 }
+
+const dualStackScenario = `
+name: dual
+topology:
+  segments:
+    - {name: lan, ipv4: 10.88.1.0/24, ipv6: fd88:1::/64}
+    - {name: up, ipv4: 10.88.2.0/24, ipv6: fd88:2::/64}
+  nodes:
+    - name: client
+      role: client
+      interfaces:
+        - {segment: lan, ipv4: 10.88.1.10/24, ipv6: fd88:1::10/64}
+    - name: router
+      role: router
+      interfaces:
+        - {segment: lan, ipv4: 10.88.1.1/24, ipv6: fd88:1::1/64}
+        - {segment: up, ipv4: 10.88.2.1/24, ipv6: fd88:2::1/64}
+    - name: target
+      interfaces:
+        - {segment: up, ipv4: 10.88.2.20/24, ipv6: fd88:2::20/64}
+  routes:
+    - {node: client, destination: default, via: 10.88.1.1, metric: 100}
+    - {node: client, destination: "::/0", via: "fd88:1::1", metric: 100}
+tests: [{node: client, target: "[fd88:2::20]:80"}]
+expect: {verdict: ok}
+`
+
+func TestDualStackTopologyValidation(t *testing.T) {
+	s, err := ParseScenario(strings.NewReader(dualStackScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iface := s.Topology.Nodes[0].Interfaces[0]
+	if iface.IPv4 != "10.88.1.10/24" || iface.IPv6 != "fd88:1::10/64" || iface.Address != "" {
+		t.Errorf("dual interface = %+v", iface)
+	}
+	if routes := s.Topology.routeForNode("client", "default"); len(routes) != 1 || routes[0].Family != "ipv4" {
+		t.Errorf("IPv4 default = %+v", routes)
+	}
+	if routes := s.Topology.routeForNode("client", "::/0"); len(routes) != 1 || routes[0].Family != "ipv6" {
+		t.Errorf("IPv6 default = %+v", routes)
+	}
+}
+
+func TestDualStackTopologyRejectsInvalidFamilies(t *testing.T) {
+	cases := []struct{ name, old, replacement, want string }{
+		{"IPv6 outside segment", "fd88:2::20/64", "fd88:3::20/64", "outside segment"},
+		{"duplicate IPv6", "fd88:2::20/64", "fd88:2::1/64", "duplicate interface address"},
+		{"cross-family gateway", "via: \"fd88:1::1\"", "via: 10.88.1.1", "cannot be used"},
+		{"scoped IPv6", "via: \"fd88:1::1\"", "via: \"fe80::1%eth0\"", "scoped"},
+		{"mapped IPv6", "fd88:1::10/64", "\"::ffff:10.88.1.10/64\"", "IPv4-mapped"},
+		{"multicast gateway", "via: \"fd88:1::1\"", "via: \"ff02::1\"", "usable simulator"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(dualStackScenario, tc.old, tc.replacement, 1)
+			_, err := ParseScenario(strings.NewReader(raw))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestFamilySpecificFaultValidation(t *testing.T) {
+	for _, fault := range []string{
+		"faults: [{type: no_default_route, node: client, family: ipv6}]\n",
+		"faults: [{type: drop, node: router, family: ipv4, direction: outbound}]\n",
+	} {
+		if _, err := ParseScenario(strings.NewReader(dualStackScenario + fault)); err != nil {
+			t.Errorf("valid family fault: %v", err)
+		}
+	}
+	bad := dualStackScenario + "faults: [{type: no_default_route, node: client, family: ipx}]\n"
+	if _, err := ParseScenario(strings.NewReader(bad)); err == nil || !strings.Contains(err.Error(), "unknown family") {
+		t.Fatalf("bad family error = %v", err)
+	}
+}

@@ -4,6 +4,7 @@ package simulation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -33,15 +34,26 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 			if res.Err != nil || res.ExitCode != 0 {
 				return Evidence{}, fmt.Errorf("inspect link %s/%s: %w", np.node.Name, iface.logical.Segment, execResultError(res))
 			}
+			address := iface.logical.Address
+			if address == "" {
+				address = iface.logical.IPv4
+				if address == "" {
+					address = iface.logical.IPv6
+				}
+			}
 			out.Links = append(out.Links, LinkEvidence{Node: np.node.Name, Segment: iface.logical.Segment,
-				Address: iface.logical.Address, Up: parseLinkUp(string(res.Stdout))})
+				Address: address, IPv4: iface.logical.IPv4, IPv6: iface.logical.IPv6, Up: parseLinkUp(string(res.Stdout))})
 		}
 		if np.node.Role == "router" {
 			raw, readErr := os.ReadFile(filepath.Join(e.work, np.node.Name+"-forwarding"))
 			if readErr != nil {
 				return Evidence{}, fmt.Errorf("read router %s forwarding status: %w", np.node.Name, readErr)
 			}
-			out.Routers = append(out.Routers, RouterEvidence{Node: np.node.Name, IPv4Forwarding: strings.TrimSpace(string(raw)) == "1"})
+			var status forwardingStatus
+			if err := json.Unmarshal(raw, &status); err != nil {
+				return Evidence{}, fmt.Errorf("parse router %s forwarding status: %w", np.node.Name, err)
+			}
+			out.Routers = append(out.Routers, RouterEvidence{Node: np.node.Name, IPv4Forwarding: status.IPv4, IPv6Forwarding: status.IPv6})
 		}
 	}
 
@@ -49,26 +61,34 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		np := e.byName[route.Node]
 		segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(route.Via))
 		item := RouteEvidence{Node: route.Node, Destination: route.Destination, Via: route.Via,
-			Segment: segment, Metric: route.Metric}
-		item.GatewayReachable = e.gatewayReachability(ctx, np, segment, route.Via)
+			Segment: segment, Metric: route.Metric, Family: route.Family}
+		item.GatewayReachable = e.gatewayReachability(ctx, np, segment, route.Via, route.Family)
 		out.Routes = append(out.Routes, item)
 	}
 
 	for node, destinations := range e.evidenceDestinations() {
 		np := e.byName[node]
 		for _, destination := range destinations {
-			res := e.Exec(ctx, node, []string{"ip", "route", "get", destination}, nil)
+			addr, parseAddrErr := netip.ParseAddr(destination)
+			if parseAddrErr != nil {
+				continue
+			}
+			family, flag := addressFamily(addr), "-6"
+			if addr.Is4() {
+				flag = "-4"
+			}
+			res := e.Exec(ctx, node, []string{"ip", flag, "route", "get", destination}, nil)
 			if res.Err != nil || res.ExitCode != 0 {
 				continue
 			}
-			selected, parseErr := parseRouteGet(res.Stdout, np)
+			selected, parseErr := parseRouteGet(res.Stdout, np, family)
 			if parseErr != nil {
 				return Evidence{}, fmt.Errorf("parse route selection for %s to %s: %w", node, destination, parseErr)
 			}
 			selected.Node, selected.Destination, selected.Selected = node, destination, true
 			selected.Metric = selectedRouteMetric(e.scenario.Topology.Routes, node, destination, selected.Via)
 			if selected.Via != "" {
-				selected.GatewayReachable = e.gatewayReachability(ctx, np, selected.Segment, selected.Via)
+				selected.GatewayReachable = e.gatewayReachability(ctx, np, selected.Segment, selected.Via, family)
 			}
 			out.Routes = append(out.Routes, selected)
 		}
@@ -92,7 +112,7 @@ func selectedRouteMetric(routes []Route, node, destination, via string) int {
 	}
 	bestBits, metric := -1, 0
 	for _, configured := range routes {
-		if configured.Node != node || configured.Via != via {
+		if configured.Node != node || configured.Via != via || configured.Family != addressFamily(addr) {
 			continue
 		}
 		bits := 0
@@ -130,7 +150,7 @@ func parseLinkUp(raw string) bool {
 	return false
 }
 
-func parseRouteGet(raw []byte, np *nodeProc) (RouteEvidence, error) {
+func parseRouteGet(raw []byte, np *nodeProc, family string) (RouteEvidence, error) {
 	if len(raw) == 0 || len(raw) > maxRouteGetOutput {
 		return RouteEvidence{}, errors.New("route output is empty or oversized")
 	}
@@ -142,10 +162,10 @@ func parseRouteGet(raw []byte, np *nodeProc) (RouteEvidence, error) {
 	if len(fields) < 3 {
 		return RouteEvidence{}, errors.New("route output has too few fields")
 	}
-	var out RouteEvidence
+	out := RouteEvidence{Family: family}
 	for i := 1; i < len(fields); i++ {
 		switch fields[i] {
-		case "via", "src", "dev":
+		case "via", "src", "dev", "metric":
 			if i+1 >= len(fields) {
 				return RouteEvidence{}, fmt.Errorf("%s is missing a value", fields[i])
 			}
@@ -153,13 +173,13 @@ func parseRouteGet(raw []byte, np *nodeProc) (RouteEvidence, error) {
 			switch fields[i] {
 			case "via":
 				addr, canonical, err := parseAddr(value)
-				if err != nil || !addr.Is4() {
+				if err != nil || addressFamily(addr) != family {
 					return RouteEvidence{}, fmt.Errorf("invalid via %q", value)
 				}
 				out.Via = canonical
 			case "src":
-				_, canonical, err := parseAddr(value)
-				if err != nil {
+				addr, canonical, err := parseAddr(value)
+				if err != nil || addressFamily(addr) != family {
 					return RouteEvidence{}, fmt.Errorf("invalid source %q", value)
 				}
 				out.Source = canonical
@@ -174,6 +194,12 @@ func parseRouteGet(raw []byte, np *nodeProc) (RouteEvidence, error) {
 				if !found {
 					return RouteEvidence{}, fmt.Errorf("unknown selected interface %q", value)
 				}
+			case "metric":
+				metric, err := strconv.Atoi(value)
+				if err != nil || metric < 0 || metric > maxRouteMetric {
+					return RouteEvidence{}, fmt.Errorf("invalid metric %q", value)
+				}
+				out.Metric = metric
 			}
 			i++
 		}
@@ -184,12 +210,16 @@ func parseRouteGet(raw []byte, np *nodeProc) (RouteEvidence, error) {
 	return out, nil
 }
 
-func (e *netnsEnv) gatewayReachability(ctx context.Context, np *nodeProc, segment, via string) *bool {
+func (e *netnsEnv) gatewayReachability(ctx context.Context, np *nodeProc, segment, via, family string) *bool {
 	iface := np.interfaceForSegment(segment)
 	if iface == nil {
 		return nil
 	}
-	res := e.Exec(ctx, np.node.Name, []string{"ip", "neigh", "show", "to", via, "dev", iface.iface}, nil)
+	flag := "-4"
+	if family == "ipv6" {
+		flag = "-6"
+	}
+	res := e.Exec(ctx, np.node.Name, []string{"ip", flag, "neigh", "show", "to", via, "dev", iface.iface}, nil)
 	if res.Err != nil || res.ExitCode != 0 || strings.TrimSpace(string(res.Stdout)) == "" {
 		return nil
 	}
@@ -205,9 +235,11 @@ func (e *netnsEnv) evidenceDestinations() map[string][]string {
 		if byNode[test.Node] == nil {
 			byNode[test.Node] = make(map[string]bool)
 		}
+		byNode[test.Node]["1.1.1.1"] = true
+		byNode[test.Node]["8.8.8.8"] = true
+		byNode[test.Node]["2606:4700:4700::1111"] = true
+		byNode[test.Node]["2001:4860:4860::8888"] = true
 		if test.Target == "" {
-			byNode[test.Node]["1.1.1.1"] = true
-			byNode[test.Node]["8.8.8.8"] = true
 			continue
 		}
 		target, err := diagnostic.ParseTarget(test.Target)
@@ -224,6 +256,11 @@ func (e *netnsEnv) evidenceDestinations() map[string][]string {
 					for name, raw := range service.Zone {
 						if dnsKey(name) == dnsKey(target.Host) {
 							byNode[test.Node][raw] = true
+						}
+					}
+					for _, record := range service.Records {
+						if dnsKey(record.Name) == dnsKey(target.Host) {
+							byNode[test.Node][record.Address] = true
 						}
 					}
 				}

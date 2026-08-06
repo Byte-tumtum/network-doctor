@@ -140,13 +140,31 @@ func (r *Report) addReachabilityEvidence() {
 		if test.Diagnosis == nil {
 			continue
 		}
-		probeID, destination := string(diagnostic.ProbeTargetTCP), test.Target
-		if destination == "" {
-			probeID, destination = string(diagnostic.ProbeInternet), "internet endpoints"
+		var internet *DiagnosisCheck
+		for _, check := range test.Diagnosis.Checks {
+			if check.ID == string(diagnostic.ProbeInternet) {
+				copy := check
+				internet = &copy
+				break
+			}
+		}
+		if internet != nil && internet.Families != nil {
+			for _, item := range []struct{ family, state, target string }{
+				{"ipv4", internet.Families.IPv4, "IPv4 internet endpoints"},
+				{"ipv6", internet.Families.IPv6, "IPv6 internet endpoints"},
+			} {
+				r.Evidence.Reachability = append(r.Evidence.Reachability, ReachabilityEvidence{
+					From: test.Node, To: item.target, Family: item.family,
+					Via: r.selectedPath(test.Node, item.family), Reachable: item.state == diagnostic.FamilyReachable,
+				})
+			}
+		}
+		if test.Target == "" {
+			continue
 		}
 		status := ""
 		for _, check := range test.Diagnosis.Checks {
-			if check.ID == probeID {
+			if check.ID == string(diagnostic.ProbeTargetTCP) {
 				status = check.Status
 				break
 			}
@@ -154,6 +172,7 @@ func (r *Report) addReachabilityEvidence() {
 		if status == "" {
 			continue
 		}
+		destination := test.Target
 		via := []string{}
 		if test.SourceSegment != "" {
 			via = append(via, test.SourceSegment)
@@ -172,6 +191,19 @@ func (r *Report) addReachabilityEvidence() {
 			From: test.Node, To: destination, Via: via, Reachable: status == "PASS" || status == "WARN",
 		})
 	}
+}
+
+func (r *Report) selectedPath(node, family string) []string {
+	for _, route := range r.Evidence.Routes {
+		if route.Node == node && route.Selected && route.Family == family {
+			via := []string{route.Segment}
+			if route.Via != "" {
+				via = append(via, route.Via)
+			}
+			return via
+		}
+	}
+	return nil
 }
 
 // runTest runs netdoc inside a node and compares the diagnosis. Repeats reuse

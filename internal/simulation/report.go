@@ -60,6 +60,8 @@ type NodeInfo struct {
 type InterfaceInfo struct {
 	Segment string `json:"segment"`
 	Address string `json:"address"`
+	IPv4    string `json:"ipv4,omitempty"`
+	IPv6    string `json:"ipv6,omitempty"`
 }
 
 type RouteInfo struct {
@@ -67,12 +69,14 @@ type RouteInfo struct {
 	Via         string `json:"via"`
 	Segment     string `json:"segment"`
 	Metric      int    `json:"metric"`
+	Family      string `json:"family,omitempty"`
 }
 
 // FaultInfo is one injected impairment and the exact command that injected it.
 type FaultInfo struct {
 	Type    string   `json:"type"`
 	Node    string   `json:"node"`
+	Family  string   `json:"family,omitempty"`
 	Summary string   `json:"summary"`
 	Command []string `json:"command"`
 }
@@ -233,7 +237,11 @@ func (r *Report) WriteText(w io.Writer) {
 		}
 		p("  %-10s %-14s %s", n.Name, n.Address, strings.Join(extra, ", "))
 		for _, iface := range n.Interfaces {
-			p("      link %-16s %s", iface.Segment, iface.Address)
+			addresses := iface.Address
+			if iface.IPv4 != "" || iface.IPv6 != "" {
+				addresses = strings.TrimSpace(strings.Join([]string{iface.IPv4, iface.IPv6}, " "))
+			}
+			p("      link %-16s %s", iface.Segment, addresses)
 		}
 		for _, route := range n.Routes {
 			p("      route %-15s via %-15s on %s metric %d", route.Destination, route.Via, route.Segment, route.Metric)
@@ -246,7 +254,7 @@ func (r *Report) WriteText(w io.Writer) {
 		p("  (none — healthy network)")
 	}
 	for _, f := range r.Faults {
-		p("  %-18s %s", f.Type, f.Summary)
+		p("  %-18s %-4s %s", f.Type, f.Family, f.Summary)
 	}
 	p("")
 
@@ -261,7 +269,7 @@ func (r *Report) WriteText(w io.Writer) {
 			p("  LINK  %-10s %-16s %-18s up=%t", e.Node, e.Segment, e.Address, e.Up)
 		}
 		for _, e := range r.Evidence.Routers {
-			p("  ROUTER %-10s IPv4 forwarding=%t", e.Node, e.IPv4Forwarding)
+			p("  ROUTER %-10s IPv4 forwarding=%t IPv6 forwarding=%t", e.Node, e.IPv4Forwarding, e.IPv6Forwarding)
 		}
 		for _, e := range r.Evidence.Routes {
 			selected := "configured"
@@ -272,11 +280,11 @@ func (r *Report) WriteText(w io.Writer) {
 			if e.GatewayReachable != nil {
 				gateway = fmt.Sprint(*e.GatewayReachable)
 			}
-			p("  ROUTE %-10s %-15s via %-15s %-16s metric=%d %s gateway=%s", e.Node, e.Destination,
-				e.Via, e.Segment, e.Metric, selected, gateway)
+			p("  ROUTE %-10s %-15s via %-15s %-16s metric=%d %s %s gateway=%s", e.Node, e.Destination,
+				e.Via, e.Segment, e.Metric, e.Family, selected, gateway)
 		}
 		for _, e := range r.Evidence.Reachability {
-			p("  PATH  %-10s -> %-24s via %-32s reachable=%t", e.From, e.To, strings.Join(e.Via, " -> "), e.Reachable)
+			p("  PATH  %-10s -> %-24s via %-32s %-4s reachable=%t", e.From, e.To, strings.Join(e.Via, " -> "), e.Family, e.Reachable)
 		}
 		for _, e := range r.Evidence.DNS {
 			p("  DNS   %-10s from %-13s %-6s %-28s %-8s %s ×%d", e.Node, e.Source, e.QueryType, e.Name, e.Result, e.Service, e.Count)

@@ -77,11 +77,16 @@ func (t *Topology) normalizeLegacy() error {
 	return nil
 }
 
-func (t *Topology) validateSegments() (map[string]netip.Prefix, error) {
+type segmentPrefixes struct {
+	v4 netip.Prefix
+	v6 netip.Prefix
+}
+
+func (t *Topology) validateSegments() (map[string]segmentPrefixes, error) {
 	if len(t.Segments) == 0 {
 		return nil, errors.New("topology.segments: at least one segment is required")
 	}
-	out := make(map[string]netip.Prefix, len(t.Segments))
+	out := make(map[string]segmentPrefixes, len(t.Segments))
 	for i := range t.Segments {
 		segment := &t.Segments[i]
 		if !isSafeName(segment.Name) {
@@ -90,25 +95,55 @@ func (t *Topology) validateSegments() (map[string]netip.Prefix, error) {
 		if _, exists := out[segment.Name]; exists {
 			return nil, fmt.Errorf("duplicate segment name %q", segment.Name)
 		}
-		prefix, err := parsePrefix(segment.Subnet)
-		if err != nil {
-			return nil, fmt.Errorf("segment %q subnet: %w", segment.Name, err)
+		if segment.Subnet != "" && segment.IPv4 != "" {
+			return nil, fmt.Errorf("segment %q: subnet and ipv4 are alternate spellings and cannot be combined", segment.Name)
 		}
-		if !prefix.Addr().Is4() {
-			return nil, fmt.Errorf("segment %q: only IPv4 segments are supported", segment.Name)
+		if segment.Subnet != "" {
+			segment.IPv4 = segment.Subnet
 		}
-		for otherName, other := range out {
-			if prefixesOverlap(prefix, other) {
-				return nil, fmt.Errorf("segment %q subnet %s overlaps segment %q subnet %s", segment.Name, prefix, otherName, other)
+		if segment.IPv4 == "" && segment.IPv6 == "" {
+			return nil, fmt.Errorf("segment %q: ipv4 or ipv6 prefix is required", segment.Name)
+		}
+		var prefixes segmentPrefixes
+		for _, item := range []struct {
+			label string
+			raw   *string
+			want4 bool
+			dst   *netip.Prefix
+		}{{"ipv4", &segment.IPv4, true, &prefixes.v4}, {"ipv6", &segment.IPv6, false, &prefixes.v6}} {
+			if *item.raw == "" {
+				continue
 			}
+			prefix, err := parsePrefix(*item.raw)
+			if err != nil {
+				return nil, fmt.Errorf("segment %q %s: %w", segment.Name, item.label, err)
+			}
+			if prefix.Addr().Is4() != item.want4 {
+				return nil, fmt.Errorf("segment %q %s has the wrong address family", segment.Name, item.label)
+			}
+			if err := validateNetworkPrefix(prefix); err != nil {
+				return nil, fmt.Errorf("segment %q %s: %w", segment.Name, item.label, err)
+			}
+			for otherName, other := range out {
+				otherPrefix := other.v6
+				if item.want4 {
+					otherPrefix = other.v4
+				}
+				if otherPrefix.IsValid() && prefixesOverlap(prefix, otherPrefix) {
+					return nil, fmt.Errorf("segment %q %s %s overlaps segment %q %s", segment.Name, item.label, prefix, otherName, otherPrefix)
+				}
+			}
+			*item.raw, *item.dst = prefix.String(), prefix
 		}
-		segment.Subnet = prefix.String()
-		out[segment.Name] = prefix
+		if segment.Subnet != "" {
+			segment.Subnet = segment.IPv4
+		}
+		out[segment.Name] = prefixes
 	}
 	return out, nil
 }
 
-func (t *Topology) validateInterfaces(segments map[string]netip.Prefix) error {
+func (t *Topology) validateInterfaces(segments map[string]segmentPrefixes) error {
 	addresses := make(map[netip.Addr]string)
 	aliases := make(map[netip.Addr]string)
 	for ni := range t.Nodes {
@@ -130,28 +165,70 @@ func (t *Topology) validateInterfaces(segments map[string]netip.Prefix) error {
 				return fmt.Errorf("node %q: duplicate interface on segment %q", n.Name, iface.Segment)
 			}
 			seenSegments[iface.Segment] = true
-			prefix, err := parseInterfacePrefix(iface.Address)
-			if err != nil {
-				return fmt.Errorf("node %q interface %q: %w", n.Name, iface.Segment, err)
+			if iface.Address != "" && iface.IPv4 != "" {
+				return fmt.Errorf("node %q interface %q: address and ipv4 are alternate spellings and cannot be combined", n.Name, iface.Segment)
 			}
-			if prefix.Bits() != segment.Bits() || !segment.Contains(prefix.Addr()) {
-				return fmt.Errorf("node %q interface address %s is outside segment %q %s", n.Name, prefix, iface.Segment, segment)
+			if iface.Address != "" {
+				iface.IPv4 = iface.Address
 			}
-			if owner, exists := addresses[prefix.Addr()]; exists {
-				return fmt.Errorf("duplicate interface address %s on %s and %s", prefix.Addr(), owner, n.Name)
+			if iface.IPv4 == "" && iface.IPv6 == "" {
+				return fmt.Errorf("node %q interface %q: ipv4 or ipv6 address is required", n.Name, iface.Segment)
 			}
-			if owner, exists := aliases[prefix.Addr()]; exists {
-				return fmt.Errorf("interface address %s conflicts with alias on %s", prefix.Addr(), owner)
+			for _, item := range []struct {
+				label string
+				raw   *string
+				want4 bool
+				seg   netip.Prefix
+			}{{"ipv4", &iface.IPv4, true, segment.v4}, {"ipv6", &iface.IPv6, false, segment.v6}} {
+				if *item.raw == "" {
+					continue
+				}
+				if !item.seg.IsValid() {
+					return fmt.Errorf("node %q interface %q has %s but the segment does not", n.Name, iface.Segment, item.label)
+				}
+				prefix, err := parseInterfacePrefix(*item.raw)
+				if err != nil {
+					return fmt.Errorf("node %q interface %q %s: %w", n.Name, iface.Segment, item.label, err)
+				}
+				if prefix.Addr().Is4() != item.want4 {
+					return fmt.Errorf("node %q interface %q %s has the wrong address family", n.Name, iface.Segment, item.label)
+				}
+				if err := validateInterfaceAddr(prefix.Addr()); err != nil {
+					return fmt.Errorf("node %q interface %q %s: %w", n.Name, iface.Segment, item.label, err)
+				}
+				if prefix.Bits() != item.seg.Bits() || !item.seg.Contains(prefix.Addr()) {
+					return fmt.Errorf("node %q interface address %s is outside segment %q %s", n.Name, prefix, iface.Segment, item.seg)
+				}
+				if owner, exists := addresses[prefix.Addr()]; exists {
+					return fmt.Errorf("duplicate interface address %s on %s and %s", prefix.Addr(), owner, n.Name)
+				}
+				if owner, exists := aliases[prefix.Addr()]; exists {
+					return fmt.Errorf("interface address %s conflicts with alias on %s", prefix.Addr(), owner)
+				}
+				addresses[prefix.Addr()] = n.Name
+				*item.raw = prefix.String()
 			}
-			addresses[prefix.Addr()] = n.Name
-			iface.Address = prefix.String()
+			if iface.Address != "" {
+				iface.Address = iface.IPv4
+			}
 		}
 		if n.Role == "router" && len(seenSegments) < 2 {
 			return fmt.Errorf("router %q needs interfaces on at least two segments", n.Name)
 		}
+		if n.Role == "router" && !n.forwardsFamily("ipv4") && !n.forwardsFamily("ipv6") {
+			return fmt.Errorf("router %q needs at least two interfaces carrying the same address family", n.Name)
+		}
 		if n.Address == "" {
-			prefix, _ := netip.ParsePrefix(n.Interfaces[0].Address)
-			n.Address = prefix.Addr().String()
+			for _, iface := range n.Interfaces {
+				raw := iface.IPv4
+				if raw == "" {
+					raw = iface.IPv6
+				}
+				if prefix, err := netip.ParsePrefix(raw); err == nil {
+					n.Address = prefix.Addr().String()
+					break
+				}
+			}
 		}
 		for i, raw := range n.Aliases {
 			addr, canonical, err := parseAddr(raw)
@@ -168,8 +245,11 @@ func (t *Topology) validateInterfaces(segments map[string]netip.Prefix) error {
 			n.Aliases[i] = canonical
 		}
 		if n.Resolver != "" {
-			_, canonical, err := parseAddr(n.Resolver)
+			resolver, canonical, err := parseAddr(n.Resolver)
 			if err != nil {
+				return fmt.Errorf("node %q: resolver: %w", n.Name, err)
+			}
+			if err := validateInterfaceAddr(resolver); err != nil {
 				return fmt.Errorf("node %q: resolver: %w", n.Name, err)
 			}
 			n.Resolver = canonical
@@ -194,26 +274,30 @@ func (t *Topology) validateRoutes(nodes map[string]*Node) error {
 		if err != nil {
 			return fmt.Errorf("topology.routes[%d].via: %w", i, err)
 		}
-		if !via.Is4() {
-			return fmt.Errorf("topology.routes[%d]: only IPv4 routes are supported", i)
+		if err := validateGateway(via); err != nil {
+			return fmt.Errorf("topology.routes[%d].via: %w", i, err)
 		}
 		segment, onLink := nodeSegmentForAddress(node, via)
 		if !onLink {
 			return fmt.Errorf("topology.routes[%d]: gateway %s is not on a directly connected subnet for node %q", i, via, route.Node)
 		}
 		route.Via = canonicalVia
+		route.Family = addressFamily(via)
 		route.Default = route.Destination == "default"
 		if !route.Default {
 			prefix, err := parsePrefix(route.Destination)
 			if err != nil {
 				return fmt.Errorf("topology.routes[%d].destination: %w", i, err)
 			}
-			if !prefix.Addr().Is4() {
-				return fmt.Errorf("topology.routes[%d]: IPv4 gateway cannot be used for IPv6 destination %s", i, prefix)
+			if prefix.Addr().Is4() != via.Is4() {
+				return fmt.Errorf("topology.routes[%d]: %s gateway cannot be used for %s destination %s", i, route.Family, addressFamily(prefix.Addr()), prefix)
+			}
+			if err := validateNetworkPrefix(prefix); err != nil {
+				return fmt.Errorf("topology.routes[%d].destination: %w", i, err)
 			}
 			route.Destination = prefix.String()
 		}
-		key := route.Node + "\x00" + route.Destination + "\x00" + strconv.Itoa(route.Metric)
+		key := route.Node + "\x00" + route.Family + "\x00" + route.Destination + "\x00" + strconv.Itoa(route.Metric)
 		if previous, exists := seen[key]; exists {
 			if previous.Via != route.Via {
 				return fmt.Errorf("conflicting routes for node %q destination %s metric %d", route.Node, route.Destination, route.Metric)
@@ -222,22 +306,27 @@ func (t *Topology) validateRoutes(nodes map[string]*Node) error {
 		}
 		seen[key] = *route
 		if route.Default {
-			defaults[route.Node] = append(defaults[route.Node], *route)
+			defaults[route.Node+"\x00"+route.Family] = append(defaults[route.Node+"\x00"+route.Family], *route)
 		}
 		_ = segment
 	}
-	for nodeName, routes := range defaults {
+	for key, routes := range defaults {
 		sort.Slice(routes, func(i, j int) bool { return routes[i].Metric < routes[j].Metric })
-		nodes[nodeName].Gateway = routes[0].Via
+		nodeName, family, _ := strings.Cut(key, "\x00")
+		if family == "ipv4" || nodes[nodeName].Gateway == "" {
+			nodes[nodeName].Gateway = routes[0].Via
+		}
 	}
 	return nil
 }
 
 func nodeSegmentForAddress(node *Node, addr netip.Addr) (string, bool) {
 	for _, iface := range node.Interfaces {
-		prefix, err := netip.ParsePrefix(iface.Address)
-		if err == nil && prefix.Contains(addr) {
-			return iface.Segment, true
+		for _, raw := range []string{iface.IPv4, iface.IPv6} {
+			prefix, err := netip.ParsePrefix(raw)
+			if err == nil && prefix.Contains(addr) {
+				return iface.Segment, true
+			}
 		}
 	}
 	return "", false
@@ -253,13 +342,39 @@ func (n *Node) interfaceOn(segment string) (*Interface, bool) {
 }
 
 func (n *Node) addresses() []string {
-	out := make([]string, 0, len(n.Interfaces)+len(n.Aliases))
+	out := make([]string, 0, 2*len(n.Interfaces)+len(n.Aliases))
 	for _, iface := range n.Interfaces {
-		if prefix, err := netip.ParsePrefix(iface.Address); err == nil {
-			out = append(out, prefix.Addr().String())
+		for _, raw := range []string{iface.IPv4, iface.IPv6} {
+			if prefix, err := netip.ParsePrefix(raw); err == nil {
+				out = append(out, prefix.Addr().String())
+			}
 		}
 	}
 	return append(out, n.Aliases...)
+}
+
+func (n *Node) forwardsFamily(family string) bool {
+	connected := 0
+	for _, iface := range n.Interfaces {
+		if _, ok := iface.addressForFamily(family); ok {
+			connected++
+		}
+	}
+	return connected >= 2
+}
+
+func (n *Node) hasFamily(family string) bool {
+	for _, iface := range n.Interfaces {
+		if _, ok := iface.addressForFamily(family); ok {
+			return true
+		}
+	}
+	for _, raw := range n.Aliases {
+		if addr, err := netip.ParseAddr(raw); err == nil && addressFamily(addr) == family {
+			return true
+		}
+	}
+	return false
 }
 
 func parsePrefix(raw string) (netip.Prefix, error) {
@@ -281,10 +396,61 @@ func parseInterfacePrefix(raw string) (netip.Prefix, error) {
 	if prefix.Addr().Zone() != "" {
 		return netip.Prefix{}, fmt.Errorf("%q: scoped addresses are not supported", raw)
 	}
-	if !prefix.Addr().Is4() {
-		return netip.Prefix{}, errors.New("only IPv4 interfaces are supported")
-	}
 	return prefix, nil
+}
+
+func validateNetworkPrefix(prefix netip.Prefix) error {
+	addr := prefix.Addr()
+	if addr.Is4In6() {
+		return errors.New("IPv4-mapped IPv6 prefixes are not supported")
+	}
+	if addr.IsMulticast() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return fmt.Errorf("prefix %s is not a simulator unicast network", prefix)
+	}
+	return nil
+}
+
+func validateInterfaceAddr(addr netip.Addr) error {
+	if addr.Is4In6() {
+		return errors.New("IPv4-mapped IPv6 addresses are not supported")
+	}
+	if addr.IsUnspecified() || addr.IsMulticast() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return fmt.Errorf("address %s is not a usable simulator unicast address", addr)
+	}
+	return nil
+}
+
+func validateGateway(addr netip.Addr) error {
+	if err := validateInterfaceAddr(addr); err != nil {
+		return err
+	}
+	return nil
+}
+
+func addressFamily(addr netip.Addr) string {
+	if addr.Is4() {
+		return "ipv4"
+	}
+	return "ipv6"
+}
+
+func (i Interface) prefixes() []netip.Prefix {
+	var out []netip.Prefix
+	for _, raw := range []string{i.IPv4, i.IPv6} {
+		if prefix, err := netip.ParsePrefix(raw); err == nil {
+			out = append(out, prefix)
+		}
+	}
+	return out
+}
+
+func (i Interface) addressForFamily(family string) (netip.Prefix, bool) {
+	raw := i.IPv6
+	if family == "ipv4" {
+		raw = i.IPv4
+	}
+	prefix, err := netip.ParsePrefix(raw)
+	return prefix, err == nil
 }
 
 func prefixesOverlap(a, b netip.Prefix) bool {

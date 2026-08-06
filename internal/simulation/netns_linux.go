@@ -360,8 +360,11 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 		Evidence:         filepath.Join(e.work, np.node.Name+"-evidence.jsonl"),
 		TrustDir:         e.work,
 		ForwardIPv4:      np.node.Role == "router",
+		ForwardIPv6:      np.node.Role == "router" && np.node.forwardsFamily("ipv6"),
+		EnableIPv6:       np.node.hasFamily("ipv6"),
 		ForwardingStatus: filepath.Join(e.work, np.node.Name+"-forwarding"),
 	}
+	cfg.ForwardIPv4 = np.node.Role == "router" && np.node.forwardsFamily("ipv4")
 	path := filepath.Join(e.work, np.node.Name+".json")
 	blob, err := json.Marshal(cfg)
 	if err != nil {
@@ -413,7 +416,22 @@ func (e *netnsEnv) wireNode(ctx context.Context, np *nodeProc) error {
 			[]string{"ip", "link", "set", iface.peer, "master", bridge.bridge},
 			[]string{"ip", "link", "set", iface.peer, "up"},
 			[]string{"ip", "link", "set", iface.iface, "netns", pid},
-			[]string{"nsenter", "-t", pid, "-n", "--", "ip", "addr", "add", iface.logical.Address, "dev", iface.iface},
+		)
+		for _, prefix := range iface.logical.prefixes() {
+			family := "-6"
+			if prefix.Addr().Is4() {
+				family = "-4"
+			}
+			addrStep := []string{"nsenter", "-t", pid, "-n", "--", "ip", family, "addr", "add", prefix.String(), "dev", iface.iface}
+			if prefix.Addr().Is6() {
+				// Scenario validation already rejects duplicate addresses. Skipping
+				// DAD avoids a race where services bind while a fresh veth address
+				// is still tentative.
+				addrStep = append(addrStep, "nodad")
+			}
+			steps = append(steps, addrStep)
+		}
+		steps = append(steps,
 			[]string{"nsenter", "-t", pid, "-n", "--", "ip", "link", "set", iface.iface, "up"},
 		)
 	}
@@ -440,7 +458,11 @@ func (e *netnsEnv) installRoutes(ctx context.Context) error {
 		np := e.byName[route.Node]
 		segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(route.Via))
 		iface := np.interfaceForSegment(segment)
-		argv := []string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "--", "ip", "route", "add", route.Destination,
+		family := "-6"
+		if route.Family == "ipv4" {
+			family = "-4"
+		}
+		argv := []string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "--", "ip", family, "route", "add", route.Destination,
 			"via", route.Via, "dev", iface.iface}
 		if route.Metric != 0 {
 			argv = append(argv, "metric", strconv.Itoa(route.Metric))
@@ -536,12 +558,20 @@ func (e *netnsEnv) Nodes() []NodeInfo {
 			Resolver: np.node.Resolver, PID: np.pid,
 		}
 		for _, iface := range np.ifaces {
-			info.Interfaces = append(info.Interfaces, InterfaceInfo{Segment: iface.logical.Segment, Address: iface.logical.Address})
+			address := iface.logical.Address
+			if address == "" {
+				address = iface.logical.IPv4
+				if address == "" {
+					address = iface.logical.IPv6
+				}
+			}
+			info.Interfaces = append(info.Interfaces, InterfaceInfo{Segment: iface.logical.Segment, Address: address,
+				IPv4: iface.logical.IPv4, IPv6: iface.logical.IPv6})
 		}
 		for _, route := range e.scenario.Topology.Routes {
 			if route.Node == np.node.Name {
 				segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(route.Via))
-				info.Routes = append(info.Routes, RouteInfo{Destination: route.Destination, Via: route.Via, Segment: segment, Metric: route.Metric})
+				info.Routes = append(info.Routes, RouteInfo{Destination: route.Destination, Via: route.Via, Segment: segment, Metric: route.Metric, Family: route.Family})
 			}
 		}
 		for _, s := range np.node.Services {
@@ -568,7 +598,7 @@ func (e *netnsEnv) ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo
 				return out, fmt.Errorf("fault %s on %s: %w", f.Type, f.Node, err)
 			}
 		}
-		out = append(out, FaultInfo{Type: f.Type, Node: f.Node, Summary: summary, Command: steps[len(steps)-1]})
+		out = append(out, FaultInfo{Type: f.Type, Node: f.Node, Family: f.Family, Summary: summary, Command: steps[len(steps)-1]})
 	}
 	return out, nil
 }
@@ -600,6 +630,14 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		}
 		rule := in("nft", "add", "rule", "inet", nftTable, chain)
 		what := "all traffic"
+		if f.To == "" && f.Family != "" {
+			nfproto := "ipv4"
+			if f.Family == "ipv6" {
+				nfproto = "ipv6"
+			}
+			rule = append(rule, "meta", "nfproto", nfproto)
+			what = f.Family + " traffic"
+		}
 		if f.To != "" {
 			family := "ip"
 			if addr, err := netip.ParseAddr(f.To); err == nil && addr.Is6() {
@@ -638,15 +676,23 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		}
 		return [][]string{argv}, np.node.Name + " link: " + strings.Join(parts, ", "), nil
 	case FaultNoDefaultRoute:
-		return [][]string{in("ip", "route", "del", "default")}, np.node.Name + " has no default route", nil
+		flag := "-4"
+		if f.Family == "ipv6" {
+			flag = "-6"
+		}
+		return [][]string{in("ip", flag, "route", "del", "default")}, np.node.Name + " has no " + f.Family + " default route", nil
 	case FaultReplaceDefaultRoute:
 		segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(f.Via))
 		iface := np.interfaceForSegment(segment)
-		add := in("ip", "route", "add", "default", "via", f.Via, "dev", iface.iface)
+		flag := "-4"
+		if f.Family == "ipv6" {
+			flag = "-6"
+		}
+		add := in("ip", flag, "route", "add", "default", "via", f.Via, "dev", iface.iface)
 		if f.Metric != 0 {
 			add = append(add, "metric", strconv.Itoa(f.Metric))
 		}
-		return [][]string{in("ip", "route", "flush", "default"), add},
+		return [][]string{in("ip", flag, "route", "flush", "default"), add},
 			fmt.Sprintf("%s default route now uses %s on %s", np.node.Name, f.Via, segment), nil
 	case FaultLinkDown:
 		iface := np.interfaceForSegment(f.Segment)

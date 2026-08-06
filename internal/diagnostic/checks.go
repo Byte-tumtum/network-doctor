@@ -51,7 +51,22 @@ const (
 	RouteCauseGatewayUnreachable  = "gateway_unreachable"
 	RouteCauseSelectedPathFailed  = "selected_path_failed"
 	RouteCausePreferredPathFailed = "preferred_route_failed"
+	FamilyCauseIPv4Unreachable    = "ipv4_unreachable"
+	FamilyCauseIPv6Unreachable    = "ipv6_unreachable"
 )
+
+const (
+	FamilyReachable   = "reachable"
+	FamilyUnreachable = "unreachable"
+)
+
+// FamilyConnectivity records the independently tested direct-egress result
+// for each address family. It is additive JSON evidence: generic hostname
+// fallback cannot turn one family's failure into an apparent success here.
+type FamilyConnectivity struct {
+	IPv4 string
+	IPv6 string
+}
 
 func (s Status) String() string {
 	if s < StatusPass || s > StatusNA {
@@ -116,6 +131,7 @@ type ProbeResult struct {
 	// Cause is an optional stable machine-readable reason for failures where a
 	// single probe has materially different remediation paths.
 	Cause       string
+	Families    *FamilyConnectivity
 	downgraded  bool     // downgradeEgress rewrote a direct-egress failure to Warn.
 	Portal      *Portal  // non-nil when egress is intercepted, not dead.
 	Addrs       []net.IP // DNS publishes all A records here
@@ -679,6 +695,13 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		})
 	}
 	wg.Wait()
+	r.Families = &FamilyConnectivity{IPv4: FamilyUnreachable, IPv6: FamilyUnreachable}
+	if v4.conn != nil {
+		r.Families.IPv4 = FamilyReachable
+	}
+	if v6.conn != nil {
+		r.Families.IPv6 = FamilyReachable
+	}
 
 	// IPv4 headlines the result unless it lost and IPv6 won — not a value
 	// judgment, just a stable order for the Detail string and warnings.
@@ -742,6 +765,13 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// and from browsers, but not from software that dials AAAA and waits.
 	if sec.conn == nil && secName == "IPv6" && o.hasGlobalV6() {
 		extra = append(extra, "IPv6 address configured but no IPv6 egress (black-holed)")
+		r.Cause = FamilyCauseIPv6Unreachable
+		r.Fix = "check the IPv6 default route, gateway, and forwarding path"
+	}
+	if sec.conn == nil && secName == "IPv4" && o.hasGlobalV4() {
+		extra = append(extra, "IPv4 address configured but no IPv4 egress (black-holed)")
+		r.Cause = FamilyCauseIPv4Unreachable
+		r.Fix = "check the IPv4 default route, gateway, and forwarding path"
 	}
 	applyDialWarnings(&r, prim.rtt, extra...)
 	r.Attempts = append(prim.attempts, sec.attempts...)
@@ -1705,7 +1735,11 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 			}
 			go func(ip net.IP) {
 				start := time.Now()
-				conn, err := o.dialContext(dctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
+				network := "tcp6"
+				if ip.To4() != nil {
+					network = "tcp4"
+				}
+				conn, err := o.dialContext(dctx, network, net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 				att := Attempt{IP: ip, Dur: since(start), Err: err}
 				if err != nil {
 					fails <- att
@@ -1794,6 +1828,28 @@ func (o *netops) hasGlobalV6() bool {
 		}
 		for _, a := range addrs {
 			if n, ok := a.(*net.IPNet); ok && n.IP.To4() == nil && n.IP.IsGlobalUnicast() && n.IP[0]&0xfe != 0xfc {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (o *netops) hasGlobalV4() bool {
+	ifaces, err := o.interfaces()
+	if err != nil {
+		return false
+	}
+	for _, ifi := range ifaces {
+		if ifi.Flags&net.FlagLoopback != 0 || ifi.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := o.interfaceAddrs(&ifi)
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && n.IP.IsGlobalUnicast() && !n.IP.IsLinkLocalUnicast() {
 				return true
 			}
 		}

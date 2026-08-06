@@ -32,14 +32,14 @@ func TestKernelInterfaceNamesAreBoundedAndCollisionFree(t *testing.T) {
 
 func TestParseRouteGetMapsOnlyKnownKernelInterfaces(t *testing.T) {
 	np := &nodeProc{ifaces: []*interfaceProc{{logical: &Interface{Segment: "client-lan"}, iface: "neabc1230"}}}
-	got, err := parseRouteGet([]byte("10.77.2.20 via 10.77.1.1 dev neabc1230 src 10.77.1.10 uid 0\n"), np)
+	got, err := parseRouteGet([]byte("10.77.2.20 via 10.77.1.1 dev neabc1230 src 10.77.1.10 uid 0\n"), np, "ipv4")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Via != "10.77.1.1" || got.Source != "10.77.1.10" || got.Segment != "client-lan" {
 		t.Errorf("route = %+v", got)
 	}
-	if _, err := parseRouteGet([]byte("10.77.2.20 via 10.77.1.1 dev neabc1230 src 10.77.1.10\n    cache\n"), np); err != nil {
+	if _, err := parseRouteGet([]byte("10.77.2.20 via 10.77.1.1 dev neabc1230 src 10.77.1.10\n    cache\n"), np, "ipv4"); err != nil {
 		t.Errorf("kernel cache continuation rejected: %v", err)
 	}
 	for _, raw := range [][]byte{
@@ -48,8 +48,33 @@ func TestParseRouteGetMapsOnlyKnownKernelInterfaces(t *testing.T) {
 		[]byte("one\ntwo\n"),
 		make([]byte, maxRouteGetOutput+1),
 	} {
-		if _, err := parseRouteGet(raw, np); err == nil {
+		if _, err := parseRouteGet(raw, np, "ipv4"); err == nil {
 			t.Errorf("malformed route output accepted: %q", raw)
+		}
+	}
+}
+
+func TestParseIPv6RouteGet(t *testing.T) {
+	np := &nodeProc{ifaces: []*interfaceProc{{logical: &Interface{Segment: "client-lan"}, iface: "neabc1230"}}}
+	got, err := parseRouteGet([]byte("2001:db8:77:2::20 via 2001:db8:77:1::1 dev neabc1230 src 2001:db8:77:1::10 metric 100 pref medium\n"), np, "ipv6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Family != "ipv6" || got.Via != "2001:db8:77:1::1" || got.Source != "2001:db8:77:1::10" || got.Metric != 100 {
+		t.Errorf("IPv6 route = %+v", got)
+	}
+	direct, err := parseRouteGet([]byte("2001:db8:77:1::53 dev neabc1230 src 2001:db8:77:1::10 pref medium\n"), np, "ipv6")
+	if err != nil || direct.Via != "" || direct.Segment != "client-lan" {
+		t.Errorf("direct IPv6 route = %+v, %v", direct, err)
+	}
+	for _, raw := range []string{
+		"2001:db8::1 via 10.0.0.1 dev neabc1230 src 2001:db8::2",
+		"2001:db8::1 dev neabc1230 src 10.0.0.2",
+		"2001:db8::1 dev neabc1230 metric huge",
+		"2001:db8::1 dev",
+	} {
+		if _, err := parseRouteGet([]byte(raw), np, "ipv6"); err == nil {
+			t.Errorf("malformed IPv6 route accepted: %q", raw)
 		}
 	}
 }
@@ -84,7 +109,34 @@ func TestMultiSegmentDryPlanUsesOneBridgePerSegmentAndInterface(t *testing.T) {
 	if got := strings.Count(log.String(), "type veth peer name"); got != 4 {
 		t.Errorf("veth creates = %d, want 4:\n%s", got, log.String())
 	}
-	if !strings.Contains(log.String(), "ip route add default via 10.77.1.1") || !strings.Contains(log.String(), "ip route add 10.77.1.0/24 via 10.77.2.1") {
+	if !strings.Contains(log.String(), "ip -4 route add default via 10.77.1.1") || !strings.Contains(log.String(), "ip -4 route add 10.77.1.0/24 via 10.77.2.1") {
 		t.Errorf("route plan missing:\n%s", log.String())
+	}
+}
+
+func TestDualStackDryPlanUsesOneInterfaceAndFamilyRoutes(t *testing.T) {
+	s, err := ParseScenario(strings.NewReader(dualStackScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	env, err := (&netnsBackend{dry: true, log: &log}).Prepare(context.Background(), s, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer env.Cleanup(context.Background(), false)
+	plan := log.String()
+	if got := strings.Count(plan, "type veth peer name"); got != 4 {
+		t.Errorf("veth creates = %d, want one per logical interface (4):\n%s", got, plan)
+	}
+	for _, want := range []string{
+		"ip -4 addr add 10.88.1.10/24",
+		"ip -6 addr add fd88:1::10/64",
+		"ip -4 route add default via 10.88.1.1",
+		"ip -6 route add ::/0 via fd88:1::1",
+	} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("dual-stack plan missing %q:\n%s", want, plan)
+		}
 	}
 }

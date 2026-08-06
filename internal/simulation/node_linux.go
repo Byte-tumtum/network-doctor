@@ -41,9 +41,28 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 			return err
 		}
 	}
-	if cfg.ForwardIPv4 {
-		if err := enableIPv4Forwarding(cfg.ForwardingStatus); err != nil {
+	if cfg.EnableIPv6 {
+		if err := enableIPv6(); err != nil {
 			return err
+		}
+	}
+	if cfg.ForwardIPv4 {
+		if err := enableForwarding(ipv4ForwardPath, "IPv4"); err != nil {
+			return err
+		}
+	}
+	if cfg.ForwardIPv6 {
+		if err := enableForwarding(ipv6ForwardPath, "IPv6"); err != nil {
+			return err
+		}
+	}
+	if cfg.ForwardingStatus != "" && (cfg.ForwardIPv4 || cfg.ForwardIPv6) {
+		status, err := json.Marshal(forwardingStatus{IPv4: cfg.ForwardIPv4, IPv6: cfg.ForwardIPv6})
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(cfg.ForwardingStatus, status, 0o600); err != nil {
+			return fmt.Errorf("record namespace forwarding: %w", err)
 		}
 	}
 	fmt.Fprintln(stdout, holderNSReady)
@@ -73,25 +92,47 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 }
 
 const ipv4ForwardPath = "/proc/sys/net/ipv4/ip_forward"
+const ipv6ForwardPath = "/proc/sys/net/ipv6/conf/all/forwarding"
+
+var ipv6DisablePaths = []string{
+	"/proc/sys/net/ipv6/conf/all/disable_ipv6",
+	"/proc/sys/net/ipv6/conf/default/disable_ipv6",
+}
+
+type forwardingStatus struct {
+	IPv4 bool `json:"ipv4"`
+	IPv6 bool `json:"ipv6"`
+}
 
 // enableIPv4Forwarding runs in the router holder's network namespace. Linux
 // virtualizes this sysctl per network namespace; writing it here cannot alter
 // the director or host value. The status file lets the director report the
 // value read back from this exact namespace without invoking a shell.
-func enableIPv4Forwarding(statusPath string) error {
-	if err := os.WriteFile(ipv4ForwardPath, []byte("1\n"), 0o600); err != nil {
-		return fmt.Errorf("enable namespace IPv4 forwarding: %w", err)
+func enableForwarding(path, family string) error {
+	if err := os.WriteFile(path, []byte("1\n"), 0o600); err != nil {
+		return fmt.Errorf("enable namespace %s forwarding: %w", family, err)
 	}
-	raw, err := os.ReadFile(ipv4ForwardPath)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("verify namespace IPv4 forwarding: %w", err)
+		return fmt.Errorf("verify namespace %s forwarding: %w", family, err)
 	}
 	if strings.TrimSpace(string(raw)) != "1" {
-		return fmt.Errorf("namespace IPv4 forwarding remained %q", strings.TrimSpace(string(raw)))
+		return fmt.Errorf("namespace %s forwarding remained %q", family, strings.TrimSpace(string(raw)))
 	}
-	if statusPath != "" {
-		if err := os.WriteFile(statusPath, []byte("1\n"), 0o600); err != nil {
-			return fmt.Errorf("record namespace IPv4 forwarding: %w", err)
+	return nil
+}
+
+func enableIPv6() error {
+	for _, path := range ipv6DisablePaths {
+		if err := os.WriteFile(path, []byte("0\n"), 0o600); err != nil {
+			return fmt.Errorf("enable IPv6 in simulator namespace through %s: %w", path, err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("verify IPv6 in simulator namespace through %s: %w", path, err)
+		}
+		if strings.TrimSpace(string(raw)) != "0" {
+			return fmt.Errorf("simulator namespace IPv6 remained disabled at %s", path)
 		}
 	}
 	return nil

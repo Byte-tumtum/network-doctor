@@ -16,8 +16,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -35,7 +37,7 @@ func (silentConn) SetReadDeadline(time.Time) error { return nil }
 func TestTargetTCPProbeAttemptCap(t *testing.T) {
 	calls := 0
 	ops := &netops{dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
-		if network == "tcp" {
+		if network == "tcp4" {
 			calls++
 		}
 		return nil, errors.New("connection refused")
@@ -203,6 +205,9 @@ func TestInternetProbeFamilies(t *testing.T) {
 	if r.Status != StatusPass || !strings.Contains(r.Detail, "IPv4 egress via") || !strings.Contains(r.Detail, "no IPv6 egress") {
 		t.Errorf("v4-only network = %+v, want PASS naming the missing IPv6 egress", r)
 	}
+	if r.Families == nil || r.Families.IPv4 != FamilyReachable || r.Families.IPv6 != FamilyUnreachable {
+		t.Errorf("v4-only families = %+v", r.Families)
+	}
 
 	down := &netops{
 		dialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -215,6 +220,9 @@ func TestInternetProbeFamilies(t *testing.T) {
 	r = down.internetProbe(ctx, nil)
 	if r.Status != StatusFail || !strings.Contains(r.Detail, "1.1.1.1") || !strings.Contains(r.Detail, "2606:4700:4700::1111") {
 		t.Errorf("both families down = %+v, want FAIL naming endpoints from both families", r)
+	}
+	if r.Families == nil || r.Families.IPv4 != FamilyUnreachable || r.Families.IPv6 != FamilyUnreachable {
+		t.Errorf("down families = %+v", r.Families)
 	}
 }
 
@@ -257,7 +265,7 @@ func TestInternetProbeBlackHoledIPv6(t *testing.T) {
 		},
 	}
 	r := blackholed.internetProbe(context.Background(), nil)
-	if r.Status != StatusWarn || !strings.Contains(r.Detail, "black-holed") {
+	if r.Status != StatusWarn || r.Cause != FamilyCauseIPv6Unreachable || !strings.Contains(r.Detail, "black-holed") {
 		t.Errorf("black-holed IPv6 = %+v, want WARN naming it", r)
 	}
 
@@ -275,6 +283,44 @@ func TestInternetProbeBlackHoledIPv6(t *testing.T) {
 	}
 	if r := ulaOnly.internetProbe(context.Background(), nil); r.Status != StatusPass {
 		t.Errorf("ULA-only network = %+v, want PASS — fc00::/7 was never meant to reach the internet", r)
+	}
+}
+
+func TestInternetProbeBlackHoledIPv4WithWorkingIPv6(t *testing.T) {
+	ops := &netops{
+		dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+			if network == "tcp4" {
+				return nil, errors.New("connection timed out")
+			}
+			return fakeConn{}, nil
+		},
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{{Name: "eth0", Flags: net.FlagUp | net.FlagRunning}}, nil
+		},
+		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) {
+			return []net.Addr{&net.IPNet{IP: net.ParseIP("10.77.0.10"), Mask: net.CIDRMask(24, 32)}}, nil
+		},
+	}
+	r := ops.internetProbe(context.Background(), nil)
+	if r.Status != StatusWarn || r.Cause != FamilyCauseIPv4Unreachable || r.Families == nil ||
+		r.Families.IPv4 != FamilyUnreachable || r.Families.IPv6 != FamilyReachable {
+		t.Errorf("black-holed IPv4 = %+v", r)
+	}
+}
+
+func TestDialIPsConstrainsAddressFamily(t *testing.T) {
+	var networks []string
+	var mu sync.Mutex
+	ops := &netops{dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+		mu.Lock()
+		networks = append(networks, network)
+		mu.Unlock()
+		return nil, errors.New("refused")
+	}}
+	_, _, _, _ = ops.dialIPs(context.Background(), []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")}, 443)
+	sort.Strings(networks)
+	if fmt.Sprint(networks) != "[tcp4 tcp6]" {
+		t.Errorf("networks = %v", networks)
 	}
 }
 

@@ -32,6 +32,8 @@ type LinkEvidence struct {
 	Node    string `json:"node"`
 	Segment string `json:"segment"`
 	Address string `json:"address"`
+	IPv4    string `json:"ipv4,omitempty"`
+	IPv6    string `json:"ipv6,omitempty"`
 	Up      bool   `json:"up"`
 }
 
@@ -43,6 +45,7 @@ type RouteEvidence struct {
 	Via              string `json:"via,omitempty"`
 	Segment          string `json:"segment"`
 	Metric           int    `json:"metric"`
+	Family           string `json:"family,omitempty"`
 	Selected         bool   `json:"selected"`
 	Source           string `json:"source,omitempty"`
 	GatewayReachable *bool  `json:"gateway_reachable,omitempty"`
@@ -51,11 +54,13 @@ type RouteEvidence struct {
 type RouterEvidence struct {
 	Node           string `json:"node"`
 	IPv4Forwarding bool   `json:"ipv4_forwarding"`
+	IPv6Forwarding bool   `json:"ipv6_forwarding"`
 }
 
 type ReachabilityEvidence struct {
 	From      string   `json:"from"`
 	To        string   `json:"to"`
+	Family    string   `json:"family,omitempty"`
 	Via       []string `json:"via"`
 	Reachable bool     `json:"reachable"`
 }

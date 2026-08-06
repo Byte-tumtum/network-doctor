@@ -782,8 +782,8 @@ func TestTargetTCPProbe(t *testing.T) {
 
 	ops := &netops{
 		dialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
-			if network != "tcp" || addr != "192.0.2.1:443" {
-				t.Errorf("dialed %s %s, want tcp 192.0.2.1:443", network, addr)
+			if network != "tcp4" || addr != "192.0.2.1:443" {
+				t.Errorf("dialed %s %s, want tcp4 192.0.2.1:443", network, addr)
 			}
 			return fakeConn{local: &net.TCPAddr{IP: net.ParseIP("192.0.2.7"), Port: 40000}}, nil
 		},

@@ -34,6 +34,8 @@ type nodeConfig struct {
 	Evidence         string `json:"evidence,omitempty"`
 	TrustDir         string `json:"trust_dir,omitempty"`
 	ForwardIPv4      bool   `json:"forward_ipv4,omitempty"`
+	ForwardIPv6      bool   `json:"forward_ipv6,omitempty"`
+	EnableIPv6       bool   `json:"enable_ipv6,omitempty"`
 	ForwardingStatus string `json:"forwarding_status,omitempty"`
 	// Addresses is every address the node answers on. UDP needs them by name:
 	// a wildcard-bound socket replies from whatever source the route table
@@ -67,7 +69,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 	port := strconv.Itoa(svc.Port)
 	switch svc.Type {
 	case ServiceDNS:
-		zone, err := parseZone(svc.Zone)
+		zone, err := parseZone(svc.Zone, svc.Records)
 		if err != nil {
 			return nil, err
 		}
@@ -87,21 +89,23 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 		}
 		return open, nil
 	case ServiceHTTP:
-		// TCP needs no such care: a connection's replies carry the local
-		// address the handshake settled on.
-		ln, err := net.Listen("tcp", ":"+port)
+		listeners, err := listenTCPFamilies(addresses, port)
 		if err != nil {
 			return nil, err
 		}
-		go serveHTTP(ln, svc)
-		return []io.Closer{ln}, nil
+		for _, ln := range listeners {
+			go serveHTTP(ln, svc)
+		}
+		return listenersAsClosers(listeners), nil
 	case ServiceTCP:
-		ln, err := net.Listen("tcp", ":"+port)
+		listeners, err := listenTCPFamilies(addresses, port)
 		if err != nil {
 			return nil, err
 		}
-		go serveSink(ln)
-		return []io.Closer{ln}, nil
+		for _, ln := range listeners {
+			go serveSink(ln)
+		}
+		return listenersAsClosers(listeners), nil
 	case ServiceSOCKS5:
 		ln, err := net.Listen("tcp", ":"+port)
 		if err != nil {
@@ -118,6 +122,55 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 	return nil, fmt.Errorf("unknown service type %q", svc.Type)
 }
 
+func listenTCPFamilies(addresses []string, port string) ([]net.Listener, error) {
+	want4, want6 := false, false
+	for _, raw := range addresses {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			continue
+		}
+		if addr.Is4() {
+			want4 = true
+		} else {
+			want6 = true
+		}
+	}
+	if !want4 && !want6 {
+		want4 = true
+	}
+	var listeners []net.Listener
+	open := func(network, host string) error {
+		ln, err := net.Listen(network, net.JoinHostPort(host, port))
+		if err != nil {
+			for _, existing := range listeners {
+				_ = existing.Close()
+			}
+			return err
+		}
+		listeners = append(listeners, ln)
+		return nil
+	}
+	if want4 {
+		if err := open("tcp4", "0.0.0.0"); err != nil {
+			return nil, err
+		}
+	}
+	if want6 {
+		if err := open("tcp6", "::"); err != nil {
+			return nil, err
+		}
+	}
+	return listeners, nil
+}
+
+func listenersAsClosers(listeners []net.Listener) []io.Closer {
+	out := make([]io.Closer, len(listeners))
+	for i, listener := range listeners {
+		out[i] = listener
+	}
+	return out
+}
+
 // bindAddresses falls back to the wildcard when a node declares none, which is
 // what unit tests and a single-address host want.
 func bindAddresses(addresses []string) []string {
@@ -127,14 +180,21 @@ func bindAddresses(addresses []string) []string {
 	return addresses
 }
 
-func parseZone(zone map[string]string) (map[string]netip.Addr, error) {
-	out := make(map[string]netip.Addr, len(zone))
+func parseZone(zone map[string]string, records []DNSRecord) (map[string][]netip.Addr, error) {
+	out := make(map[string][]netip.Addr, len(zone)+len(records))
 	for name, ip := range zone {
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
 			return nil, fmt.Errorf("zone %s: %w", name, err)
 		}
-		out[dnsKey(name)] = addr
+		out[dnsKey(name)] = append(out[dnsKey(name)], addr)
+	}
+	for _, record := range records {
+		addr, err := netip.ParseAddr(record.Address)
+		if err != nil {
+			return nil, fmt.Errorf("record %s: %w", record.Name, err)
+		}
+		out[dnsKey(record.Name)] = append(out[dnsKey(record.Name)], addr)
 	}
 	return out, nil
 }
@@ -208,7 +268,7 @@ const (
 // scenario's zone, NODATA for a name it knows in a family it does not have, and
 // NXDOMAIN for everything else. That is the whole resolver — a scenario proves
 // things about netdoc, not about DNS, and this is small enough to audit.
-func serveDNS(pc net.PacketConn, zone map[string]netip.Addr, service string, recorder *evidenceRecorder) {
+func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, recorder *evidenceRecorder) {
 	buf := make([]byte, dnsMaxMsg)
 	for {
 		n, from, err := pc.ReadFrom(buf)
@@ -230,7 +290,7 @@ func serveDNS(pc net.PacketConn, zone map[string]netip.Addr, service string, rec
 	}
 }
 
-func dnsObservation(msg []byte, zone map[string]netip.Addr) (string, uint16, string, bool) {
+func dnsObservation(msg []byte, zone map[string][]netip.Addr) (string, uint16, string, bool) {
 	if len(msg) < dnsHeaderLen || binary.BigEndian.Uint16(msg[2:4])&dnsFlagResponse != 0 ||
 		binary.BigEndian.Uint16(msg[4:6]) != 1 {
 		return "", 0, "", false
@@ -244,12 +304,14 @@ func dnsObservation(msg []byte, zone map[string]netip.Addr) (string, uint16, str
 	if qclass != dnsClassIN {
 		return name, qtype, "NOT_IMPLEMENTED", true
 	}
-	addr, known := zone[dnsKey(name)]
+	addrs, known := zone[dnsKey(name)]
 	if !known {
 		return name, qtype, "NXDOMAIN", true
 	}
-	if qtype == dnsTypeA && addr.Is4() || qtype == dnsTypeAAAA && addr.Is6() {
-		return name, qtype, "ANSWER", true
+	for _, addr := range addrs {
+		if qtype == dnsTypeA && addr.Is4() || qtype == dnsTypeAAAA && addr.Is6() {
+			return name, qtype, "ANSWER", true
+		}
 	}
 	return name, qtype, "NODATA", true
 }
@@ -267,7 +329,7 @@ func dnsTypeName(qtype uint16) string {
 
 // dnsReply builds the response to one query, or nil when the message is not a
 // query worth answering.
-func dnsReply(msg []byte, zone map[string]netip.Addr) []byte {
+func dnsReply(msg []byte, zone map[string][]netip.Addr) []byte {
 	if len(msg) < dnsHeaderLen {
 		return nil
 	}
@@ -295,19 +357,27 @@ func dnsReply(msg []byte, zone map[string]netip.Addr) []byte {
 	if qclass != dnsClassIN {
 		return append(dnsHeader(id, out, dnsRcodeNotImpl, 1, 0), question...)
 	}
-	addr, known := zone[dnsKey(name)]
+	addrs, known := zone[dnsKey(name)]
 	if !known {
 		return append(dnsHeader(id, out, dnsRcodeNXDomain, 1, 0), question...)
 	}
 	// The name exists. A family it does not have is NODATA — NOERROR with no
 	// records — which is what makes an A-only name resolve cleanly for a client
 	// that asks for both.
-	match := qtype == dnsTypeA && addr.Is4() || qtype == dnsTypeAAAA && addr.Is6()
-	if !match {
+	var matches []netip.Addr
+	for _, addr := range addrs {
+		if qtype == dnsTypeA && addr.Is4() || qtype == dnsTypeAAAA && addr.Is6() {
+			matches = append(matches, addr)
+		}
+	}
+	if len(matches) == 0 {
 		return append(dnsHeader(id, out, dnsRcodeSuccess, 1, 0), question...)
 	}
-	reply := append(dnsHeader(id, out, dnsRcodeSuccess, 1, 1), question...)
-	return append(reply, dnsAnswer(question[:len(question)-4], qtype, addr)...)
+	reply := append(dnsHeader(id, out, dnsRcodeSuccess, 1, len(matches)), question...)
+	for _, addr := range matches {
+		reply = append(reply, dnsAnswer(question[:len(question)-4], qtype, addr)...)
+	}
+	return reply
 }
 
 func dnsHeader(id, flags, rcode uint16, qd, an int) []byte {
