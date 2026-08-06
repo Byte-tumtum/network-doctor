@@ -2,7 +2,12 @@
 
 package simulation
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestKernelInterfaceNamesAreBoundedAndCollisionFree(t *testing.T) {
 	seen := map[string]bool{}
@@ -55,5 +60,31 @@ func TestParseLinkUp(t *testing.T) {
 	}
 	if parseLinkUp("2: eth0: <BROADCAST,MULTICAST> mtu 1500") {
 		t.Error("down link reported up")
+	}
+}
+
+func TestMultiSegmentDryPlanUsesOneBridgePerSegmentAndInterface(t *testing.T) {
+	s, err := ParseScenario(strings.NewReader(routedScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	backend := &netnsBackend{dry: true, log: &log}
+	env, err := backend.Prepare(context.Background(), s, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := env.Cleanup(context.Background(), false)
+	if !cleanup.Done {
+		t.Fatalf("dry cleanup = %+v", cleanup)
+	}
+	if got := strings.Count(log.String(), "type bridge"); got != 2 {
+		t.Errorf("bridge creates = %d, want 2:\n%s", got, log.String())
+	}
+	if got := strings.Count(log.String(), "type veth peer name"); got != 4 {
+		t.Errorf("veth creates = %d, want 4:\n%s", got, log.String())
+	}
+	if !strings.Contains(log.String(), "ip route add default via 10.77.1.1") || !strings.Contains(log.String(), "ip route add 10.77.1.0/24 via 10.77.2.1") {
+		t.Errorf("route plan missing:\n%s", log.String())
 	}
 }

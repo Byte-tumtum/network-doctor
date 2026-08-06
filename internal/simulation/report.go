@@ -95,6 +95,7 @@ func (r *Report) finish() {
 	for i := range r.Tests {
 		r.Suggestions = append(r.Suggestions, r.Tests[i].suggest()...)
 	}
+	r.Suggestions = append(r.Suggestions, r.routeSuggestions()...)
 	// Empty lists, not null: a consumer iterating report.faults on a healthy
 	// scenario should get nothing to do, not a type error.
 	if r.Suggestions == nil {
@@ -150,6 +151,47 @@ func (r *Report) finish() {
 	default:
 		r.Result = ResultPartial
 	}
+}
+
+func (r *Report) routeSuggestions() []Suggestion {
+	for _, route := range r.Evidence.Routes {
+		if route.Selected && route.GatewayReachable != nil && !*route.GatewayReachable {
+			return []Suggestion{{Code: "gateway_unreachable", Message: "A default path was selected but its next-hop neighbor was unreachable; expose this distinction from an absent route in the diagnostic result.",
+				Evidence: fmt.Sprintf("%s selected %s via %s on %s; neighbor state failed", route.Node, route.Destination, route.Via, route.Segment)}}
+		}
+	}
+	if len(r.Tests) < 2 || r.Tests[0].Diagnosis == nil || r.Tests[1].Diagnosis == nil {
+		return nil
+	}
+	firstInternet := diagnosisStatus(r.Tests[0].Diagnosis, "internet_tcp")
+	secondTarget := diagnosisStatus(r.Tests[1].Diagnosis, "target_tcp")
+	if (firstInternet == "FAIL" || firstInternet == "WARN") && secondTarget == "PASS" {
+		selectedSegment := ""
+		for _, route := range r.Evidence.Routes {
+			if route.Node == r.Tests[0].Node && route.Selected && (route.Destination == "1.1.1.1" || route.Destination == "8.8.8.8") {
+				selectedSegment = route.Segment
+				break
+			}
+		}
+		code := "wrong_default_route_evidence"
+		message := "The selected default path failed while a controlled specific path reached the target; consider exposing selected-route evidence in the diagnostic result."
+		if r.Tests[1].SourceSegment != "" && r.Tests[1].SourceSegment != selectedSegment {
+			code = "alternate_route_available"
+			message = "The preferred path failed while a controlled test through another live interface reached the target; consider reporting the alternate working path and route metrics."
+		}
+		return []Suggestion{{Code: code, Message: message,
+			Evidence: fmt.Sprintf("selected segment %s failed; %s reached %s", selectedSegment, r.Tests[1].SourceSegment, r.Tests[1].Target)}}
+	}
+	return nil
+}
+
+func diagnosisStatus(d *Diagnosis, id string) string {
+	for _, check := range d.Checks {
+		if check.ID == id {
+			return check.Status
+		}
+	}
+	return ""
 }
 
 // WriteJSON prints the machine-readable report.

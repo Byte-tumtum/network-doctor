@@ -79,7 +79,7 @@ func TestParseScenarioRejects(t *testing.T) {
 		{
 			"cause on passing expectation",
 			strings.Replace(minimalScenario, "  verdict: ok", "  checks: [{id: tls, status: PASS, cause: hostname_mismatch}]", 1),
-			"requires FAIL",
+			"requires FAIL or WARN",
 		},
 		{
 			"duplicate expectation",

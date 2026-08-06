@@ -66,12 +66,7 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 				return Evidence{}, fmt.Errorf("parse route selection for %s to %s: %w", node, destination, parseErr)
 			}
 			selected.Node, selected.Destination, selected.Selected = node, destination, true
-			for _, configured := range e.scenario.Topology.Routes {
-				if configured.Node == node && configured.Via == selected.Via {
-					selected.Metric = configured.Metric
-					break
-				}
-			}
+			selected.Metric = selectedRouteMetric(e.scenario.Topology.Routes, node, destination, selected.Via)
 			if selected.Via != "" {
 				selected.GatewayReachable = e.gatewayReachability(ctx, np, selected.Segment, selected.Via)
 			}
@@ -88,6 +83,31 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 			b.Node+b.Destination+b.Via+strconv.Itoa(b.Metric)+strconv.FormatBool(b.Selected)
 	})
 	return out, nil
+}
+
+func selectedRouteMetric(routes []Route, node, destination, via string) int {
+	addr, err := netip.ParseAddr(destination)
+	if err != nil {
+		return 0
+	}
+	bestBits, metric := -1, 0
+	for _, configured := range routes {
+		if configured.Node != node || configured.Via != via {
+			continue
+		}
+		bits := 0
+		if configured.Destination != "default" {
+			prefix, parseErr := netip.ParsePrefix(configured.Destination)
+			if parseErr != nil || !prefix.Contains(addr) {
+				continue
+			}
+			bits = prefix.Bits()
+		}
+		if bits > bestBits {
+			bestBits, metric = bits, configured.Metric
+		}
+	}
+	return metric
 }
 
 func execResultError(res ExecResult) error {

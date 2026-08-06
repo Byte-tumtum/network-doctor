@@ -162,6 +162,10 @@ func TestValidatedScenarioHasNoSurprisingStrings(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		t.Run(name, func(t *testing.T) {
+			for _, segment := range s.Topology.Segments {
+				assertTame(t, "segment name", segment.Name)
+				assertTame(t, "segment subnet", segment.Subnet)
+			}
 			for _, n := range s.Topology.Nodes {
 				assertTame(t, "node name", n.Name)
 				assertTame(t, "address", n.Address)
@@ -169,6 +173,10 @@ func TestValidatedScenarioHasNoSurprisingStrings(t *testing.T) {
 				assertTame(t, "resolver", n.Resolver)
 				for _, a := range n.Aliases {
 					assertTame(t, "alias", a)
+				}
+				for _, iface := range n.Interfaces {
+					assertTame(t, "interface segment", iface.Segment)
+					assertTame(t, "interface address", iface.Address)
 				}
 				for _, svc := range n.Services {
 					assertTame(t, "service name", svc.Name)
@@ -179,7 +187,13 @@ func TestValidatedScenarioHasNoSurprisingStrings(t *testing.T) {
 					}
 				}
 			}
+			for _, route := range s.Topology.Routes {
+				assertTame(t, "route node", route.Node)
+				assertTame(t, "route destination", route.Destination)
+				assertTame(t, "route gateway", route.Via)
+			}
 			for _, test := range s.Tests {
+				assertTame(t, "test source segment", test.SourceSegment)
 				if test.Proxy != nil {
 					assertTame(t, "proxy scheme", test.Proxy.Scheme)
 					assertTame(t, "proxy node", test.Proxy.Node)
@@ -188,6 +202,8 @@ func TestValidatedScenarioHasNoSurprisingStrings(t *testing.T) {
 			}
 			for _, f := range s.Faults {
 				assertTame(t, "fault type", f.Type)
+				assertTame(t, "fault segment", f.Segment)
+				assertTame(t, "fault gateway", f.Via)
 				assertTame(t, "fault node", f.Node)
 				assertTame(t, "fault to", f.To)
 				assertTame(t, "fault protocol", f.Protocol)
@@ -201,7 +217,7 @@ func TestValidatedScenarioHasNoSurprisingStrings(t *testing.T) {
 // assertTame rejects anything outside the charset the validators permit.
 func assertTame(t *testing.T, what, s string) {
 	t.Helper()
-	const allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-_%"
+	const allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-_%/"
 	for _, r := range s {
 		if !strings.ContainsRune(allowed, r) {
 			t.Errorf("%s %q contains %q, which no validator should have let through", what, s, r)

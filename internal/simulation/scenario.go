@@ -259,6 +259,10 @@ var knownCauses = []string{
 	diagnostic.TLSCauseTCPUnreachable,
 	diagnostic.TLSCauseTimeout,
 	diagnostic.TLSCauseConnectionClosed,
+	diagnostic.RouteCauseNoDefaultRoute,
+	diagnostic.RouteCauseGatewayUnreachable,
+	diagnostic.RouteCauseSelectedPathFailed,
+	diagnostic.RouteCausePreferredPathFailed,
 }
 
 // verdicts is netdoc's verdict vocabulary. Incomplete is omitted on purpose —
@@ -763,8 +767,8 @@ func (e *Expect) validate() error {
 			return fmt.Errorf("expect.checks[%d]: unknown status %q (one of %s)", i, c.Status, strings.Join(statuses, ", "))
 		}
 		if c.Cause != "" {
-			if c.Status != "FAIL" {
-				return fmt.Errorf("expect.checks[%d]: cause requires FAIL status", i)
+			if c.Status != "FAIL" && c.Status != "WARN" {
+				return fmt.Errorf("expect.checks[%d]: cause requires FAIL or WARN status", i)
 			}
 			if !contains(knownCauses, c.Cause) {
 				return fmt.Errorf("expect.checks[%d]: unknown cause %q", i, c.Cause)

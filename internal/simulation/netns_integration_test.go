@@ -138,6 +138,9 @@ func TestNoDefaultRouteScenario(t *testing.T) {
 	if rep.Result != ResultPass {
 		t.Errorf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
 	}
+	if cause := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)).Cause; cause != diagnostic.RouteCauseNoDefaultRoute {
+		t.Errorf("internet_tcp cause = %q, want %q", cause, diagnostic.RouteCauseNoDefaultRoute)
+	}
 	assertCleanedUp(t, rep)
 }
 
@@ -254,6 +257,108 @@ func TestTLSHostnameMismatchScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+func TestHealthyRoutedNetworkScenario(t *testing.T) {
+	requireBackend(t)
+	hostForwardingBefore, err := os.ReadFile(ipv4ForwardPath)
+	if err != nil {
+		t.Fatalf("read host forwarding before scenario: %v", err)
+	}
+	rep := runScenario(t, "healthy-routed-network")
+	hostForwardingAfter, err := os.ReadFile(ipv4ForwardPath)
+	if err != nil {
+		t.Fatalf("read host forwarding after scenario: %v", err)
+	}
+	if string(hostForwardingBefore) != string(hostForwardingAfter) {
+		t.Errorf("host IPv4 forwarding changed from %q to %q", hostForwardingBefore, hostForwardingAfter)
+	}
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
+	}
+	if !hasLink(rep, "client", "client-lan", true) || !hasLink(rep, "target", "upstream", true) {
+		t.Errorf("client and target were not proven on distinct live segments: %+v", rep.Evidence.Links)
+	}
+	if countNodeLinks(rep, "gateway") != 2 || !hasForwarding(rep, "gateway") {
+		t.Errorf("gateway topology/forwarding evidence = links %+v routers %+v", rep.Evidence.Links, rep.Evidence.Routers)
+	}
+	if !hasSelectedRoute(rep, "client", "10.77.2.20", "10.77.1.1", "client-lan", nil) {
+		t.Errorf("no selected routed target path: %+v", rep.Evidence.Routes)
+	}
+	if target := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeTargetTCP)); target.Status != "PASS" {
+		t.Errorf("target_tcp = %+v", target)
+	}
+	if rep.Tests[0].FalsePositives != 0 || rep.Tests[0].FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d", rep.Tests[0].FalsePositives, rep.Tests[0].FalseNegatives)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestGatewayUnreachableScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "gateway-unreachable")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; routes: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Evidence.Routes)
+	}
+	unreachable := false
+	if !hasSelectedRoute(rep, "client", "1.1.1.1", "10.77.1.254", "client-lan", &unreachable) {
+		t.Errorf("dead gateway selection/neighbor failure not proven: %+v", rep.Evidence.Routes)
+	}
+	if !hasDefaultRoute(rep, "client") {
+		t.Error("default route was absent from topology report")
+	}
+	if check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)); check.Status != "FAIL" {
+		t.Errorf("internet_tcp = %+v", check)
+	} else if check.Cause != diagnostic.RouteCauseGatewayUnreachable {
+		t.Errorf("internet_tcp cause = %q", check.Cause)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestWrongDefaultRouteScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "wrong-default-route")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests: %+v; suggestions: %+v; routes: %+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions, rep.Evidence.Routes)
+	}
+	reachable := true
+	if !hasSelectedRoute(rep, "client", "1.1.1.1", "10.77.1.254", "client-lan", &reachable) {
+		t.Errorf("wrong but locally reachable gateway not selected: %+v", rep.Evidence.Routes)
+	}
+	if len(rep.Tests) != 2 || diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)).Status != "WARN" ||
+		diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeTargetTCP)).Status != "PASS" {
+		t.Errorf("wrong/default and correct/specific paths were not distinguished: %+v", rep.Tests)
+	}
+	if cause := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)).Cause; cause != diagnostic.RouteCauseSelectedPathFailed {
+		t.Errorf("wrong default cause = %q", cause)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestMultipleInterfacesWrongPreferredRouteScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "multiple-interfaces-wrong-preferred-route")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests: %+v; suggestions: %+v; routes: %+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions, rep.Evidence.Routes)
+	}
+	if countNodeLinks(rep, "client") != 2 || !hasLink(rep, "client", "working-lan", true) || !hasLink(rep, "client", "wrong-lan", true) {
+		t.Errorf("client link evidence = %+v", rep.Evidence.Links)
+	}
+	reachable := true
+	if !hasSelectedRoute(rep, "client", "1.1.1.1", "10.77.3.1", "wrong-lan", &reachable) {
+		t.Errorf("lower-metric wrong route was not selected: %+v", rep.Evidence.Routes)
+	}
+	if !hasGatewayState(rep, "client", "10.77.1.1", true) || !hasGatewayState(rep, "client", "10.77.3.1", true) {
+		t.Errorf("both gateway neighbor states were not reachable: %+v", rep.Evidence.Routes)
+	}
+	if len(rep.Tests) != 2 || diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)).Status != "WARN" ||
+		diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeTargetTCP)).Status != "PASS" || rep.Tests[1].SourceSegment != "working-lan" {
+		t.Errorf("preferred failure/alternate success evidence missing: %+v", rep.Tests)
+	}
+	if cause := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)).Cause; cause != diagnostic.RouteCausePreferredPathFailed {
+		t.Errorf("preferred route cause = %q", cause)
+	}
+	assertCleanedUp(t, rep)
+}
+
 func runTLSScenario(t *testing.T, name string) Report {
 	t.Helper()
 	requireBackend(t)
@@ -327,6 +432,69 @@ func hasSOCKSEvidence(rep Report, event, addressType, result string) bool {
 	for _, item := range rep.Evidence.SOCKSRequests {
 		if item.Event == event && item.AddressType == addressType && item.Result == result && item.Count > 0 {
 			return true
+		}
+	}
+	return false
+}
+
+func hasLink(rep Report, node, segment string, up bool) bool {
+	for _, item := range rep.Evidence.Links {
+		if item.Node == node && item.Segment == segment && item.Up == up {
+			return true
+		}
+	}
+	return false
+}
+
+func countNodeLinks(rep Report, node string) int {
+	count := 0
+	for _, item := range rep.Evidence.Links {
+		if item.Node == node {
+			count++
+		}
+	}
+	return count
+}
+
+func hasForwarding(rep Report, node string) bool {
+	for _, item := range rep.Evidence.Routers {
+		if item.Node == node && item.IPv4Forwarding {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSelectedRoute(rep Report, node, destination, via, segment string, gateway *bool) bool {
+	for _, item := range rep.Evidence.Routes {
+		if item.Node != node || item.Destination != destination || item.Via != via || item.Segment != segment || !item.Selected {
+			continue
+		}
+		if gateway == nil || item.GatewayReachable != nil && *item.GatewayReachable == *gateway {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGatewayState(rep Report, node, via string, want bool) bool {
+	for _, item := range rep.Evidence.Routes {
+		if item.Node == node && item.Via == via && item.GatewayReachable != nil && *item.GatewayReachable == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDefaultRoute(rep Report, node string) bool {
+	for _, item := range rep.Topology {
+		if item.Name != node {
+			continue
+		}
+		for _, route := range item.Routes {
+			if route.Destination == "default" {
+				return true
+			}
 		}
 	}
 	return false

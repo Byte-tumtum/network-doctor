@@ -141,3 +141,10 @@ func TestUnknownRoutedFieldsAreRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestWarningExpectationMayCarryRouteCause(t *testing.T) {
+	raw := strings.Replace(routedScenario, "  verdict: ok", "  checks: [{id: internet_tcp, status: WARN, cause: preferred_route_failed}]", 1)
+	if _, err := ParseScenario(strings.NewReader(raw)); err != nil {
+		t.Fatalf("warning route cause rejected: %v", err)
+	}
+}
