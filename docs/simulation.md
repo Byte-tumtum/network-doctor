@@ -17,6 +17,9 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run broken-dns          # the whole thing
 ./netdoc-sim run socks5-local-dns-fails
 ./netdoc-sim run socks5h-remote-dns-succeeds
+./netdoc-sim run tls-valid
+./netdoc-sim run tls-expired-certificate
+./netdoc-sim run tls-hostname-mismatch
 ./netdoc-sim run broken-dns -json    # the same report, machine-readable
 ./netdoc-sim run broken-dns -dry-run # every privileged command, run none of them
 ./netdoc-sim run broken-dns -keep    # leave it up so you can walk around inside
@@ -110,7 +113,7 @@ launcher (netdoc-sim run)              host namespaces, no privileges
   └── director                         new user + net + mount namespace
         ├── bridge nb<id>              the shared L2 segment
         ├── node holder × N            each in its own net + mount namespace
-        │     └── test services        dns / http / tcp / socks5
+        │     └── test services        dns / http / tcp / socks5 / tls
         └── nsenter … netdoc -json     the diagnostic under test, inside a node
 ```
 
@@ -253,6 +256,60 @@ and proxy chaining are unsupported. Domain resolution is explicitly dialed to
 the proxy node's validated resolver; it never falls back to the director or
 host resolver. No new dependency or external daemon is used.
 
+### Deterministic TLS failures
+
+Three built-ins run the real netdoc TLS path without a public CA or internet
+connection:
+
+```sh
+./netdoc-sim run tls-valid
+./netdoc-sim run tls-expired-certificate
+./netdoc-sim run tls-hostname-mismatch
+```
+
+All three resolve `secure-target.test` to a local TLS service and leave TCP,
+ordinary HTTP, simulated egress, and both DNS views healthy. This isolates the
+certificate property under test:
+
+- `tls-valid` presents a currently valid leaf for `secure-target.test`, signed
+  by the trusted simulator CA. TLS and the follow-up HTTPS check pass.
+- `tls-expired-certificate` presents an otherwise valid, trusted,
+  hostname-matching leaf whose `NotAfter` is 24 hours before service startup.
+  The `tls` row fails with `certificate_expired`; HTTPS is skipped because its
+  TLS prerequisite failed.
+- `tls-hostname-mismatch` presents a currently valid, trusted leaf for
+  `different-target.test`. The requested SNI remains `secure-target.test`, and
+  the `tls` row fails with `hostname_mismatch` rather than expiry or issuer.
+
+The node holder generates a private ECDSA P-256 CA and leaf with Go's standard
+library. Serial numbers, SANs, key usages, and validity offsets are explicit;
+unit tests use a fixed evaluation instant, while a live service derives its
+wide valid or unambiguously expired window once at startup so the real netdoc
+process can continue using its normal clock. Private keys remain in the target
+holder's memory and are never written, logged, or reported.
+
+Only the public CA certificate crosses the holder boundary. It is created with
+mode `0600` under the run's mode-`0700` simulator workspace. A validated
+`trust: {service: tls-target}` reference causes trusted simulator code—not
+scenario YAML—to derive that path and add `SSL_CERT_FILE` to that one netdoc
+process. The runner strips inherited `SSL_CERT_FILE` and `SSL_CERT_DIR` first.
+It never changes `/etc/ssl`, `/etc/pki`, or the host trust store, and cleanup
+removes the bundle and workspace. Scenario files cannot supply paths, PEM,
+private keys, algorithms, or arbitrary environment variables.
+
+TLS evidence records the node/service, certificate mode, requested SNI, SANs,
+`NotBefore`/`NotAfter`, whether certificate selection occurred, server-side
+handshake result, and count. A raw TCP control connection is distinguishable
+from a certificate-bearing handshake. The report contains no key material.
+
+The service accepts bounded concurrent TLS 1.2-or-later handshakes and answers
+a successfully parsed HTTP request with a minimal HTTP/1.1 `204`. That response
+exists because netdoc's HTTPS row follows a successful TLS row; it is not full
+HTTPS response validation. OCSP, CRLs, mutual TLS, TLS-version matrices, cipher
+testing, session resumption, and arbitrary application protocols are outside
+this slice. The topology remains IPv4-only even though Go's TLS listener itself
+is not certificate-family-specific.
+
 ### Faults
 
 | type | fields | effect |
@@ -278,7 +335,10 @@ changes what the scenario tests.
 Matching is on netdoc's stable machine-readable contract — the probe ids from
 `internal/diagnostic` (`dns`, `internet_tcp`, `target_tcp`, `tls`, `http`, …),
 the `PASS`/`WARN`/`FAIL`/`SKIP`/`N/A` vocabulary, and the one-word verdict.
-Never on the English prose, which is free to change.
+Never on the English prose, which is free to change. A failing expected check
+may also name a stable `cause`; a status match with the wrong cause becomes a
+`wrong_cause` comparison without being counted as a false positive or false
+negative.
 
 An unknown probe id is a validation error, so a scenario cannot silently expect
 something that does not exist.
@@ -286,11 +346,14 @@ something that does not exist.
 ## The report
 
 Both renderings carry the same data; `-json` is the one to consume from CI.
-The JSON report also includes `evidence.dns` and
-`evidence.socks_requests`; empty collections are rendered as `[]`. Netdoc's
-existing `proxy_connect` row carries an optional stable `cause` when it fails:
+The JSON report also includes `evidence.dns`, `evidence.socks_requests`, and
+`evidence.tls`; empty collections are rendered as `[]`. Netdoc's existing
+`proxy_connect` row carries an optional stable `cause` when it fails:
 `proxy_unreachable`, `client_dns_failure`, `proxy_side_dns_failure`,
 `destination_unreachable_from_proxy`, or `proxy_protocol_failure`.
+The existing `tls` row uses `certificate_expired`,
+`certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`,
+`tls_handshake_failure`, `tcp_unreachable`, `timeout`, or `connection_closed`.
 
 ```
 Test: name that will not resolve — netdoc example.test:80 in client (4.016s)
@@ -321,6 +384,7 @@ the ones a scenario is known to trip.
 | --- | --- |
 | `missed_finding` | the scenario broke something and netdoc did not say so |
 | `wrong_severity` | the finding was made, at the wrong level |
+| `wrong_cause` | the failure status matched but its structured cause did not |
 | `false_positive` | netdoc flagged something the scenario expects to be fine |
 | `wrong_verdict` | the headline classification does not match the injected cause |
 | `probe_timed_out` | a probe failed by exhausting its deadline rather than answering |
@@ -357,9 +421,9 @@ kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
   interfaces with a wrong preferred route, and IPv4-vs-IPv6 asymmetry all need a
   second link type and per-node routing tables. The scenario schema has room for
   it; the backend does not do it yet.
-- **Four service types.** `dns`, `http`, `tcp`, and the deliberately limited
-  `socks5` CONNECT service described above. A TLS service for expired and
-  invalid-certificate scenarios is not implemented.
+- **Five service types.** `dns`, `http`, `tcp`, and the deliberately limited
+  `socks5` and `tls` services described above. Neither is a general-purpose
+  daemon or protocol conformance suite.
 - **The DNS server is deliberately tiny.** Static A/AAAA from a zone map, one
   address per name, `NODATA` for a family it does not have, `NXDOMAIN` for
   everything else. No PTR, no CNAME, no delegation, no TCP.
@@ -369,15 +433,16 @@ kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
 
 ## Roadmap
 
-The scenario library ships six: `healthy`, `broken-dns`, `no-default-route`,
-`high-latency`, `socks5-local-dns-fails`, and
-`socks5h-remote-dns-succeeds`. In rough order of what each additional scenario
-costs:
+The scenario library ships nine: `healthy`, `broken-dns`, `no-default-route`,
+`high-latency`, `socks5-local-dns-fails`,
+`socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
+`tls-hostname-mismatch`. In rough order of what each additional scenario costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
    zone), TCP port blocked, connection refused, packet loss, DNS is slow,
    gateway unreachable, HTTP returns an error.
-2. Needs a TLS service — expired/invalid certificate, MITM.
+2. Extends the TLS service — an untrusted-issuer scenario, client certificates,
+   revocation, or version/cipher policy.
 3. Extends the SOCKS service/scenarios — authentication policy, proxy reachable
    but destination unreachable, and deliberately broken proxy-side DNS.
 4. Needs multi-segment topology — IPv6-broken-while-IPv4-works and its mirror,
