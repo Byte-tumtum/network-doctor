@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/textsafe"
@@ -160,6 +161,19 @@ const (
 	ProxyCauseProxyDNS               = "proxy_side_dns_failure"
 	ProxyCauseDestinationUnreachable = "destination_unreachable_from_proxy"
 	ProxyCauseProtocol               = "proxy_protocol_failure"
+)
+
+// TLS failure causes preserve the existing TLS row while making its distinct
+// remediation paths available to JSON consumers without parsing Go errors.
+const (
+	TLSCauseCertificateExpired = "certificate_expired"
+	TLSCauseCertificateNotYet  = "certificate_not_yet_valid"
+	TLSCauseHostnameMismatch   = "hostname_mismatch"
+	TLSCauseUntrustedIssuer    = "untrusted_issuer"
+	TLSCauseHandshake          = "tls_handshake_failure"
+	TLSCauseTCPUnreachable     = "tcp_unreachable"
+	TLSCauseTimeout            = "timeout"
+	TLSCauseConnectionClosed   = "connection_closed"
 )
 
 // Path-MTU probe sizes. See pmtuProbe for what the asymmetry between them
@@ -1227,6 +1241,7 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			// Name the address: the cert that failed belongs to whatever the
 			// resolver handed us, and that's often the actual culprit.
 			r.Status, r.SelectedIP = StatusFail, ip
+			r.Cause = tlsFailureCause(err, time.Now())
 			r.timedOut = timeoutError(err)
 			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
 			r.Fix = tlsFix(err)
@@ -1240,6 +1255,34 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 		conn.Close()
 		r.Status, r.SelectedIP, r.Detail = StatusPass, ip, "TLS handshake OK (SNI "+host+")"
 		return r
+	}
+}
+
+func tlsFailureCause(err error, now time.Time) string {
+	var (
+		hostErr x509.HostnameError
+		invalid x509.CertificateInvalidError
+		unknown x509.UnknownAuthorityError
+	)
+	switch {
+	case errors.As(err, &hostErr):
+		return TLSCauseHostnameMismatch
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
+		if invalid.Cert != nil && now.Before(invalid.Cert.NotBefore) {
+			return TLSCauseCertificateNotYet
+		}
+		return TLSCauseCertificateExpired
+	case errors.As(err, &unknown):
+		return TLSCauseUntrustedIssuer
+	case timeoutError(err):
+		return TLSCauseTimeout
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed),
+		errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE):
+		return TLSCauseConnectionClosed
+	case errors.Is(err, syscall.ECONNREFUSED), errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
+		return TLSCauseTCPUnreachable
+	default:
+		return TLSCauseHandshake
 	}
 }
 

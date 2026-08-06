@@ -18,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -341,6 +342,55 @@ func TestTLSProbeHandshakeFailure(t *testing.T) {
 	if r.Status != StatusFail || !strings.Contains(r.Detail, "TLS handshake to 192.0.2.1 failed") ||
 		!strings.Contains(r.Detail, "certificate has expired") || r.Fix == "" {
 		t.Errorf("handshake failure = %+v, want FAIL with error detail and a fix", r)
+	}
+}
+
+func TestTLSProbeClassifiesStructuredFailures(t *testing.T) {
+	now := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+	leaf := &x509.Certificate{
+		DNSNames:  []string{"secure-target.test"},
+		NotBefore: now.Add(-24 * time.Hour), NotAfter: now.Add(24 * time.Hour),
+	}
+	tests := []struct {
+		name  string
+		err   error
+		cause string
+	}{
+		{"expired", x509.CertificateInvalidError{Cert: &x509.Certificate{NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-24 * time.Hour)}, Reason: x509.Expired}, TLSCauseCertificateExpired},
+		{"not yet valid", x509.CertificateInvalidError{Cert: &x509.Certificate{NotBefore: now.Add(24 * time.Hour), NotAfter: now.Add(48 * time.Hour)}, Reason: x509.Expired}, TLSCauseCertificateNotYet},
+		{"hostname", x509.HostnameError{Certificate: leaf, Host: "wrong.test"}, TLSCauseHostnameMismatch},
+		{"unknown issuer", x509.UnknownAuthorityError{Cert: leaf}, TLSCauseUntrustedIssuer},
+		{"timeout", context.DeadlineExceeded, TLSCauseTimeout},
+		{"closed", io.ErrUnexpectedEOF, TLSCauseConnectionClosed},
+		{"reset", syscall.ECONNRESET, TLSCauseConnectionClosed},
+		{"refused", syscall.ECONNREFUSED, TLSCauseTCPUnreachable},
+		{"protocol", tls.RecordHeaderError{Msg: "not TLS"}, TLSCauseHandshake},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, err := range []error{tc.err, fmt.Errorf("wrapped TLS failure: %w", tc.err)} {
+				if got := tlsFailureCause(err, now); got != tc.cause {
+					t.Errorf("tlsFailureCause(%T) = %q, want %q", tc.err, got, tc.cause)
+				}
+			}
+		})
+	}
+}
+
+func TestTLSProbeIncludesBackwardCompatibleCause(t *testing.T) {
+	now := time.Now()
+	errExpired := x509.CertificateInvalidError{
+		Cert:   &x509.Certificate{NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-24 * time.Hour)},
+		Reason: x509.Expired,
+	}
+	ops := &netops{dialTLS: func(context.Context, string, string, *tls.Config) (net.Conn, error) {
+		return nil, fmt.Errorf("verify peer: %w", errExpired)
+	}}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	r := ops.tlsProbe("secure-target.test", 443)(context.Background(), deps)
+	if r.Status != StatusFail || r.Cause != TLSCauseCertificateExpired ||
+		!strings.HasPrefix(r.Detail, "TLS handshake to 192.0.2.1 failed:") || r.Fix == "" {
+		t.Fatalf("TLS result = %+v", r)
 	}
 }
 
