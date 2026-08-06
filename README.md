@@ -289,7 +289,7 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 }
 ```
 
-`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. Failed proxy and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. On Linux, failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable — safe to script against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
+`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`; it is not inferred from a hostname dial that may fall back. A configured family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed proxy and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. On Linux, failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable — safe to script against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
 
 `failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`, …) and is omitted when none did — enough to route a bug report without reading any prose.
 
@@ -397,6 +397,9 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run gateway-unreachable
 ./netdoc-sim run wrong-default-route
 ./netdoc-sim run multiple-interfaces-wrong-preferred-route
+./netdoc-sim run dual-stack-healthy
+./netdoc-sim run ipv4-works-ipv6-broken
+./netdoc-sim run ipv6-works-ipv4-broken
 ```
 
 ```text
@@ -454,7 +457,8 @@ full HTTPS response semantics.
 The routed scenarios use explicit L2 segments, node interfaces, routes, and
 metrics. Each segment becomes one bridge inside the director namespace; router
 nodes receive a veth on each named segment and enable IPv4 forwarding only in
-their own network namespace. `healthy-routed-network` is the two-segment
+their own network namespace (and IPv6 forwarding when the topology carries
+IPv6). `healthy-routed-network` is the two-segment
 control. `gateway-unreachable` retains a selected default route but proves its
 next-hop neighbor failed. `wrong-default-route` selects a reachable gateway
 whose isolated upstream cannot carry egress. The multiple-interface scenario
@@ -468,9 +472,26 @@ stable route cause (`no_default_route`, `gateway_unreachable`,
 `selected_path_failed`, or `preferred_route_failed`) without changing its
 wording, status, or verdict. All endpoints remain local: no host route,
 forwarding sysctl, firewall, public DNS server, or internet service is used.
-This first routed slice is static IPv4 unicast only: it does not implement NAT,
-IPv6 routing, ECMP, policy routing, routing loops, dynamic routing, or VPN/tunnel
-interfaces.
+The dual-stack trio puts static IPv4 and IPv6 addresses on each logical
+interface and installs independent defaults through the same router.
+`dual-stack-healthy` proves A and AAAA resolution plus successful TCP egress in
+both families. The two mirror scenarios keep both DNS records and both routes
+but drop one forwarded family inside the router namespace. Netdoc dials the
+numeric IPv4 and IPv6 endpoints with `tcp4` and `tcp6`, so Happy Eyeballs cannot
+hide the broken family; JSON and simulator reachability evidence record each
+result separately.
+
+IPv4 and IPv6 forwarding and `disable_ipv6` are written and read back only in
+node-holder namespaces. The integration control snapshots host forwarding,
+IPv4/IPv6 routes, and interfaces before and after the run and requires byte-for-
+byte equality. DNS `records` may contain one A and one AAAA address for the same
+name, and query evidence retains the type. Everything is statically addressed;
+no public DNS or internet service participates.
+
+Routing remains deliberately small: static IPv4/IPv6 unicast, defaults,
+specific routes, and metrics. NAT/NAT66, SLAAC, router advertisements, DHCPv6,
+ECMP, policy routing, link-local routing, routing loops, dynamic routing, and
+VPN/tunnel interfaces are not implemented.
 
 **Changing a probe endpoint in `internal/diagnostic/checks.go` will break the
 `healthy` scenario on purpose.** Scenarios claim netdoc's hardcoded addresses

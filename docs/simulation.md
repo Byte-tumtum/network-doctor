@@ -21,6 +21,9 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run tls-expired-certificate
 ./netdoc-sim run tls-hostname-mismatch
 ./netdoc-sim run healthy-routed-network
+./netdoc-sim run dual-stack-healthy
+./netdoc-sim run ipv4-works-ipv6-broken
+./netdoc-sim run ipv6-works-ipv4-broken
 ./netdoc-sim run gateway-unreachable
 ./netdoc-sim run wrong-default-route
 ./netdoc-sim run multiple-interfaces-wrong-preferred-route
@@ -86,9 +89,9 @@ node and the `zone` of their DNS service. The two SOCKS scenarios intentionally
 omit `probeHost` from the client resolver and expose it only in the proxy
 resolver; that split is the behavior they test.
 
-The IPv6 endpoints are deliberately **not** simulated. The scenarios are
-IPv4-only, so `internet_tcp` reports "no IPv6 egress", which is correct for the
-network being simulated and is what the expectations assume.
+The original IPv4 scenarios deliberately do **not** claim the IPv6 endpoints,
+so `internet_tcp` reports "no IPv6 egress" there. The three dual-stack scenarios
+claim both endpoint lists and assert their family results independently.
 
 ### The `healthy` scenario is the canary, and it fails on purpose
 
@@ -227,6 +230,31 @@ base-36 index, stay within the 15-byte kernel limit, and never appear in the
 logical evidence fields. Route metrics use the kernel's normal lowest-value
 preference.
 
+A logical segment and interface may carry both families without creating a
+second veth:
+
+```yaml
+topology:
+  segments:
+    - {name: client-lan, ipv4: 10.78.1.0/24, ipv6: 2001:db8:77:1::/64}
+    - {name: upstream, ipv4: 10.78.2.0/24, ipv6: 2001:db8:77:2::/64}
+  nodes:
+    - name: client
+      role: client
+      interfaces:
+        - {segment: client-lan, ipv4: 10.78.1.10/24, ipv6: 2001:db8:77:1::10/64}
+  routes:
+    - {node: client, destination: default, via: 10.78.1.1}
+    - {node: client, destination: "::/0", via: "2001:db8:77:1::1"}
+```
+
+`subnet` and interface `address` remain IPv4 compatibility spellings; old YAML
+loads unchanged. A route's gateway determines its family, and an explicit
+destination must match it. Scoped, mapped, multicast, unspecified, loopback,
+off-link, duplicate, and cross-family topology addresses fail validation.
+Static addresses use `nodad`: validation already proves uniqueness, and this
+prevents listeners racing an IPv6 address that is still tentative.
+
 ### Routed network scenarios
 
 ```sh
@@ -251,17 +279,68 @@ preference.
   the working default at metric 100; a source-selected netdoc run and specific
   route prove the other interface reaches the target.
 
-The backend runs `ip route get <validated-address>` inside the client namespace
-and parses only `via`, `dev`, and `src`. It maps the generated device back to a
+The backend runs family-specific `ip route get <validated-address>` inside the
+client namespace and parses only `via`, `dev`, `src`, and `metric`. It maps the generated device back to a
 logical segment and rejects unknown, oversized, or unexpected output. Neighbor
 state comes from `ip neigh` after the real probes. Reports therefore prove the
 kernel's choice rather than repeating the YAML configuration.
 
-Router holders write `1` to `/proc/sys/net/ipv4/ip_forward` and read it back
-from inside their own network namespace. The integration test also reads the
-host value before and after a routed run and requires it to remain identical.
+Router holders write and read back IPv4 and/or IPv6 forwarding from inside
+their own network namespace. The integration test also reads the host values
+before and after a routed run and requires them to remain identical.
 If namespaced forwarding cannot be enabled, setup fails clearly; the simulator
 never retries against the host sysctl or asks for elevated execution.
+
+### Dual-stack scenarios
+
+```sh
+./netdoc-sim run dual-stack-healthy
+./netdoc-sim run ipv4-works-ipv6-broken
+./netdoc-sim run ipv6-works-ipv4-broken
+```
+
+The control assigns static IPv4 plus IPv6 to both routed segments, installs
+both default routes, enables both forwarding families in the router holder,
+and serves the fixed netdoc endpoints on both families. The mirror failures
+leave both families configured and DNS healthy but add one validated nftables
+rule in the router's `postrouting` hook, restricted by `meta nfproto`, that
+drops only forwarded IPv6 or only forwarded IPv4.
+
+These built-ins use the RFC 3849 documentation prefix `2001:db8::/32`, still
+entirely inside the private namespaces. Netdoc intentionally does not interpret
+a ULA alone as a promise of public IPv6 egress, so a ULA would weaken the
+diagnostic assertion. Neither choice creates a host or public route.
+
+The DNS service's `records` list allows an A and AAAA address for one name:
+
+```yaml
+services:
+  - name: dual-resolver
+    type: dns
+    records:
+      - {name: dual-target.test, address: 10.78.2.20}
+      - {name: dual-target.test, address: 2001:db8:77:2::20}
+```
+
+Query evidence records `A` and `AAAA` independently. DNS success is never
+treated as transport success. The real `internet_tcp` probe separately dials
+numeric endpoints using `tcp4` and `tcp6` and emits the additive JSON object
+`address_families: {ipv4: ..., ipv6: ...}`. Thus normal hostname fallback
+cannot hide a failed family. A configured family failure produces WARN with
+`ipv4_unreachable` or `ipv6_unreachable`; complete failure remains FAIL.
+
+Route evidence runs `ip -4 route get` and `ip -6 route get` in the client
+namespace and maps the returned kernel device to its logical segment. Family-
+specific reachability evidence comes from the actual netdoc attempts rather
+than the YAML. The dual-stack integration control snapshots host IPv4 and IPv6
+forwarding, both host route tables, and host interfaces before and after the
+run. All must be identical.
+
+Every IPv6 node holder first writes and reads back its namespace-local
+`conf/all/disable_ipv6` and `conf/default/disable_ipv6`; routers independently
+write and read back IPv4 and IPv6 forwarding only when that family is present
+on two interfaces. If these operations are unavailable, setup reports the
+specific namespace sysctl instead of changing the host or requesting root.
 
 Proxy configuration is deliberately not a raw URL or environment map. The
 schema accepts only `socks5` or `socks5h`, a validated node reference, and a
@@ -392,17 +471,17 @@ a successfully parsed HTTP request with a minimal HTTP/1.1 `204`. That response
 exists because netdoc's HTTPS row follows a successful TLS row; it is not full
 HTTPS response validation. OCSP, CRLs, mutual TLS, TLS-version matrices, cipher
 testing, session resumption, and arbitrary application protocols are outside
-this slice. The topology remains IPv4-only even though Go's TLS listener itself
-is not certificate-family-specific.
+this slice. The existing TLS scenarios remain IPv4-only; certificate validation
+stays hostname-based and is not changed by dual-stack topology support.
 
 ### Faults
 
 | type | fields | effect |
 | --- | --- | --- |
-| `drop` | `direction`, `to`, `protocol`, `port` | discards matching packets |
+| `drop` | `family`, `direction`, `to`, `protocol`, `port` | discards matching packets, optionally for one family |
 | `netem` | `segment`, `delay`, `jitter`, `loss` | impairs one logical node link (`tc netem`) |
-| `no_default_route` | — | deletes the node's default route |
-| `replace_default_route` | `via`, `metric` | replaces defaults with one validated on-link gateway |
+| `no_default_route` | `family` | deletes that family's default (IPv4 when omitted for compatibility) |
+| `replace_default_route` | `family`, `via`, `metric` | replaces that family's defaults with one validated on-link gateway |
 | `link_down` | `segment` | administratively lowers one logical interface |
 
 `drop` has two directions and they are **not** interchangeable:
@@ -425,7 +504,8 @@ the `PASS`/`WARN`/`FAIL`/`SKIP`/`N/A` vocabulary, and the one-word verdict.
 Never on the English prose, which is free to change. A failing or warning
 expected check may also name a stable `cause`; a status match with the wrong cause becomes a
 `wrong_cause` comparison without being counted as a false positive or false
-negative.
+negative. An `internet_tcp` expectation may additionally require `ipv4` and
+`ipv6` to be `reachable` or `unreachable`.
 
 An unknown probe id is a validation error, so a scenario cannot silently expect
 something that does not exist.
@@ -447,6 +527,9 @@ On Linux the existing `internet_tcp` row may carry `no_default_route`,
 `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`.
 The last cause means only that the kernel preferred one of multiple configured
 defaults and that selected path failed; it does not claim an alternate works.
+For partial-family connectivity the row carries `ipv4_unreachable` or
+`ipv6_unreachable` and an additive `address_families` object. Route and
+reachability evidence also name their family.
 
 ```
 Test: name that will not resolve — netdoc example.test:80 in client (4.016s)
@@ -506,6 +589,8 @@ Set `NETDOC_SIM_REQUIRE_NETNS=1` when a machine or CI job is required to run
 them. Without it, unavailable user namespaces produce a skip; with it, the
 same condition is a failure. `netdoc-sim capabilities` names the relevant
 kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
+Dual-stack setup tests IPv6 in the created node namespaces themselves; a host
+knob alone is not treated as proof that child namespaces can use it.
 
 ## Limitations
 
@@ -513,15 +598,16 @@ kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
   clear capability message elsewhere, but the only implementation is
   `linux-netns`. Podman, libvirt/QEMU, Hyper-V network compartments and macOS
   VMs would slot in behind the same two interfaces.
-- **Static IPv4 unicast routing only.** Multiple L2 segments, router nodes,
-  default/specific routes, metrics, and multiple interfaces are supported. NAT,
-  IPv6 routing, ECMP, policy routing, routing loops, dynamic routing protocols,
-  VPN/tunnel devices, and bridge VLAN filtering are not.
+- **Static IPv4/IPv6 unicast routing only.** Multiple L2 segments, dual-stack
+  interfaces, router nodes, default/specific routes, and metrics are supported.
+  NAT/NAT66, SLAAC, router advertisements, DHCPv6, IPv6 policy routing, ECMP,
+  link-local routing, routing loops, dynamic routing protocols, VPN/tunnel
+  devices, and bridge VLAN filtering are not.
 - **Five service types.** `dns`, `http`, `tcp`, and the deliberately limited
   `socks5` and `tls` services described above. Neither is a general-purpose
   daemon or protocol conformance suite.
-- **The DNS server is deliberately tiny.** Static A/AAAA from a zone map, one
-  address per name, `NODATA` for a family it does not have, `NXDOMAIN` for
+- **The DNS server is deliberately tiny.** Static A/AAAA from a compatibility
+  zone map or records list, `NODATA` for a family it does not have, `NXDOMAIN` for
   everything else. No PTR, no CNAME, no delegation, no TCP.
 - **Faults are static.** Injected once, after setup. Intermittent failures need
   a fault schedule.
@@ -529,12 +615,13 @@ kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
 
 ## Roadmap
 
-The scenario library ships thirteen: `healthy`, `broken-dns`,
+The scenario library ships sixteen: `healthy`, `broken-dns`,
 `no-default-route`, `high-latency`, `socks5-local-dns-fails`,
 `socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
 `tls-hostname-mismatch`, plus `healthy-routed-network`,
 `gateway-unreachable`, `wrong-default-route`, and
-`multiple-interfaces-wrong-preferred-route`. In rough order of what each
+`multiple-interfaces-wrong-preferred-route`, plus `dual-stack-healthy`,
+`ipv4-works-ipv6-broken`, and `ipv6-works-ipv4-broken`. In rough order of what each
 additional scenario costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
@@ -544,5 +631,5 @@ additional scenario costs:
    revocation, or version/cipher policy.
 3. Extends the SOCKS service/scenarios — authentication policy, proxy reachable
    but destination unreachable, and deliberately broken proxy-side DNS.
-4. Extends multi-segment topology — IPv6-broken-while-IPv4-works and its mirror,
-   routing loops, policy routing, tunnels, and split DNS across routed segments.
+4. Extends multi-segment topology — routing loops, policy routing, tunnels,
+   NAT/NAT66, and split DNS across routed segments.
