@@ -194,7 +194,7 @@ func TestVerdict(t *testing.T) {
 			ProbeTargetTCP: {Status: StatusWarn},
 		}, VerdictDegraded},
 		// The target and direct egress both work; only the configured proxy
-		// check failed. Apps that honor HTTP(S)_PROXY will still fail, so
+		// check failed. Apps that use the proxy will still fail, so
 		// this can't be a clean pass.
 		{"target fine, configured proxy broken", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbeProxy: {Status: StatusFail},

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -235,7 +236,7 @@ var defaultOps = &netops{
 		return d.DialContext(ctx, network, addr)
 	},
 	ssid:         ssid,
-	proxyFromEnv: http.ProxyFromEnvironment,
+	proxyFromEnv: proxyFromEnvironment,
 	portalCheck: func(ctx context.Context) (int, string, error) {
 		return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
 	},
@@ -701,9 +702,67 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	return r
 }
 
+// proxyFromEnvironment is http.ProxyFromEnvironment plus ALL_PROXY, which Go
+// ignores but curl, ssh and the SOCKS ecosystem honor — a box whose only proxy
+// setting is ALL_PROXY=socks5h://... is proxied, and the report has to say so.
+func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
+	u, err := http.ProxyFromEnvironment(req)
+	if u != nil || err != nil {
+		return u, err
+	}
+	// net/http already applied NO_PROXY to HTTP(S)_PROXY, so a nil here can
+	// equally mean "exempted" — falling back to ALL_PROXY on that would report
+	// a proxy nothing would use for this host.
+	if noProxyBypasses(req.URL.Hostname()) {
+		return nil, nil
+	}
+	all := os.Getenv("ALL_PROXY")
+	if all == "" {
+		all = os.Getenv("all_proxy")
+	}
+	if all == "" {
+		return nil, nil
+	}
+	// Same tolerance net/http grants HTTP_PROXY: a bare host:port means http.
+	if u, err := url.Parse(all); err == nil && u.Scheme != "" && u.Host != "" {
+		return u, nil
+	}
+	return url.Parse("http://" + all)
+}
+
+// noProxyBypasses reports whether NO_PROXY exempts host from proxying — the
+// check net/http applies to HTTP(S)_PROXY and this file has to apply itself to
+// the ALL_PROXY fallback.
+// ponytail: suffix and "*" matching only, no IP or CIDR entries; the only host
+// asked about is probeHost, a fixed public name that is never a literal IP.
+// The day a caller passes a host the user chose, drop this for
+// golang.org/x/net/http/httpproxy, the matcher net/http itself uses.
+func noProxyBypasses(host string) bool {
+	np := os.Getenv("NO_PROXY")
+	if np == "" {
+		np = os.Getenv("no_proxy")
+	}
+	host = strings.ToLower(host)
+	for _, entry := range strings.Split(np, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "*" {
+			return true
+		}
+		entry = strings.TrimPrefix(entry, ".")
+		if entry == "" {
+			continue
+		}
+		if host == entry || strings.HasSuffix(host, "."+entry) {
+			return true
+		}
+	}
+	return false
+}
+
 // proxyProbe checks egress through the environment-configured proxy: dial the
-// proxy and ask for a CONNECT tunnel to probeHost:443. This is exactly what
-// proxied HTTPS clients do, minus the TLS handshake inside the tunnel.
+// proxy and ask it to tunnel to probeHost:443, by HTTP CONNECT or a SOCKS5
+// handshake. This is exactly what proxied HTTPS clients do, minus the TLS
+// handshake inside the tunnel.
 func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 	var r ProbeResult
 	var proxyURL *url.URL
@@ -719,22 +778,23 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	}
 	if err != nil {
 		r.Status = StatusFail
-		r.Detail = "bad proxy configuration: HTTPS_PROXY/HTTP_PROXY is not a valid proxy URL"
-		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
+		r.Detail = "bad proxy configuration: HTTPS_PROXY/HTTP_PROXY/ALL_PROXY is not a valid proxy URL"
+		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY/ALL_PROXY value"
 		return r
 	}
 	if proxyURL == nil {
 		r.Status = StatusNA
-		r.Detail = "no proxy in environment (HTTPS_PROXY/HTTP_PROXY unset)"
+		r.Detail = "no proxy in environment (HTTPS_PROXY/HTTP_PROXY/ALL_PROXY unset)"
 		return r
 	}
 	if proxyURL.Hostname() == "" || proxyURL.Path != "" || proxyURL.RawQuery != "" || proxyURL.ForceQuery || proxyURL.Fragment != "" {
 		r.Status = StatusFail
 		r.Detail = "bad proxy configuration: proxy URL must have a valid host and no path, query, or fragment"
-		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
+		r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY/ALL_PROXY value"
 		return r
 	}
-	if proxyURL.Scheme != "http" && proxyURL.Scheme != "https" {
+	socks := proxyURL.Scheme == "socks5" || proxyURL.Scheme == "socks5h"
+	if !socks && proxyURL.Scheme != "http" && proxyURL.Scheme != "https" {
 		r.Status = StatusNA
 		r.Detail = "proxy scheme " + proxyURL.Scheme + " is not supported by this probe"
 		return r
@@ -743,15 +803,18 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		if _, err := parsePort(port); err != nil {
 			r.Status = StatusFail
 			r.Detail = "bad proxy configuration: " + err.Error()
-			r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY value"
+			r.Fix = "fix the HTTPS_PROXY/HTTP_PROXY/ALL_PROXY value"
 			return r
 		}
 	}
 	addr := proxyURL.Host
 	if proxyURL.Port() == "" {
 		port := "80"
-		if proxyURL.Scheme == "https" {
+		switch proxyURL.Scheme {
+		case "https":
 			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
 		}
 		addr = net.JoinHostPort(proxyURL.Hostname(), port)
 	}
@@ -764,6 +827,9 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	if !ok {
 		dl = time.Now().Add(ProbeTimeout)
 	}
+	if socks {
+		return o.socks5Probe(ctx, addr, dl, start)
+	}
 	var resp *http.Response
 	auth := false
 	for {
@@ -775,7 +841,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		if err != nil {
 			r.Status = StatusFail
 			r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
-			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY and the proxy host"
+			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
 			return r
 		}
 		req := "CONNECT " + probeHost + ":443 HTTP/1.1\r\nHost: " + probeHost + ":443\r\n"
@@ -825,17 +891,116 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		r.Status = StatusFail
 		r.Detail = "proxy " + addr + " refused CONNECT: " + resp.Status
 		if resp.StatusCode == http.StatusProxyAuthRequired {
-			r.Fix = "proxy requires credentials — set user:pass@host in HTTPS_PROXY"
+			r.Fix = "proxy requires credentials — set user:pass@host in the proxy URL"
 		} else {
 			r.Fix = "proxy reachable but refusing tunnels — check proxy policy"
 		}
 		return r
 	}
+	return o.proxyTunnelOK(ctx, conn, addr, rtt)
+}
+
+// proxyTunnelOK builds the PASS result shared by the CONNECT and SOCKS5 paths.
+func (o *netops) proxyTunnelOK(ctx context.Context, conn net.Conn, addr string, rtt time.Duration) ProbeResult {
+	var r ProbeResult
 	src, iface := o.pathIdentity(ctx, conn, nil, 0)
 	r.Status, r.Source, r.Iface = StatusPass, src, iface
 	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, probeHost, Ms(rtt))
 	applyDialWarnings(&r, rtt)
 	return r
+}
+
+// socks5Probe dials a SOCKS5 proxy and asks it to tunnel to probeHost:443.
+// The hostname travels unresolved (socks5h semantics) for both schemes: the
+// proxy is the side with the DNS view that matters, and resolving locally
+// would only re-test what the DNS row already covers.
+func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Time) ProbeResult {
+	var r ProbeResult
+	conn, err := o.dialContext(ctx, "tcp", addr)
+	if err != nil {
+		r.Status = StatusFail
+		r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
+		r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
+		return r
+	}
+	defer conn.Close()
+	// net.Conn reads don't know ctx exists; the deadline is the only leash.
+	if err := conn.SetDeadline(dl); err != nil {
+		r.Status = StatusFail
+		r.Detail = "cannot set proxy deadline: " + err.Error()
+		return r
+	}
+	if err := socks5Connect(conn); err != nil {
+		r.Status = StatusFail
+		r.Detail = "SOCKS5 proxy " + addr + ": " + err.Error()
+		r.Fix = "check that the proxy URL names a SOCKS5 port and that the proxy allows this destination"
+		return r
+	}
+	return o.proxyTunnelOK(ctx, conn, addr, since(start))
+}
+
+// socks5Connect runs the RFC 1928 no-auth handshake on conn and requests a
+// tunnel to probeHost:443. Every read is a fixed, small size — the replies are
+// attacker-controlled.
+func socks5Connect(conn net.Conn) error {
+	// VER 5, offering exactly one method: 0 (no authentication).
+	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
+		return fmt.Errorf("greeting failed: %w", err)
+	}
+	hello := make([]byte, 2)
+	if _, err := io.ReadFull(conn, hello); err != nil {
+		return fmt.Errorf("no SOCKS5 greeting reply: %w", err)
+	}
+	if hello[0] != 5 {
+		return fmt.Errorf("not a SOCKS5 proxy (reply version %d) — wrong port or scheme?", hello[0])
+	}
+	if hello[1] != 0 {
+		return errors.New("requires authentication; SOCKS5 credentials travel in cleartext, so this probe does not send them")
+	}
+	// CONNECT, reserved, ATYP 3 (domain name) so the proxy does the lookup.
+	req := append([]byte{5, 1, 0, 3, byte(len(probeHost))}, probeHost...)
+	req = append(req, 1, 187) // port 443, network byte order
+	if _, err := conn.Write(req); err != nil {
+		return fmt.Errorf("CONNECT failed: %w", err)
+	}
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		return fmt.Errorf("no CONNECT reply: %w", err)
+	}
+	if reply[1] != 0 {
+		return errors.New("refused CONNECT: " + socks5Error(reply[1]))
+	}
+	// Drain the bound address so the conn sits at the tunnel's first byte.
+	var n int
+	switch reply[3] {
+	case 1:
+		n = 4
+	case 4:
+		n = 16
+	case 3:
+		var b [1]byte
+		if _, err := io.ReadFull(conn, b[:]); err != nil {
+			return fmt.Errorf("truncated CONNECT reply: %w", err)
+		}
+		n = int(b[0])
+	default:
+		return fmt.Errorf("bad address type %d in CONNECT reply", reply[3])
+	}
+	if _, err := io.ReadFull(conn, make([]byte, n+2)); err != nil {
+		return fmt.Errorf("truncated CONNECT reply: %w", err)
+	}
+	return nil
+}
+
+// socks5Error names an RFC 1928 reply code. Codes 6-7 can't come back from a
+// CONNECT, so they fall through to the number; 8 can, because this probe always
+// asks for ATYP 3.
+func socks5Error(code byte) string {
+	msgs := [...]string{1: "general failure", 2: "not allowed by ruleset", 3: "network unreachable", 4: "host unreachable", 5: "connection refused", 8: "address type not supported"}
+	if int(code) < len(msgs) && msgs[code] != "" {
+		return msgs[code]
+	}
+	return "reply code " + strconv.Itoa(int(code))
 }
 
 func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
