@@ -63,6 +63,19 @@ func TestCompareFalsePositive(t *testing.T) {
 	if !contains(suggestionCodes(&o), SuggestFalsePositive) {
 		t.Errorf("codes = %v", suggestionCodes(&o))
 	}
+	// Naming the row must not downgrade the finding: a scenario that says this
+	// probe passes and gets a FAIL is the same false positive as an unmentioned
+	// one. The healthy scenario names every row it cares about, so this is the
+	// shape a netdoc regression actually arrives in.
+	o3 := TestOutcome{Name: "t", Diagnosis: diag("dns", check("dns", "FAIL"))}
+	o3.compare(Expect{Verdict: "ok", Checks: []ExpectedCheck{{ID: "dns", Status: "PASS"}}}, 4*time.Second)
+	if o3.FalsePositives != 1 || o3.FalseNegatives != 0 {
+		t.Errorf("expected PASS, got FAIL: fp=%d fn=%d, want 1/0", o3.FalsePositives, o3.FalseNegatives)
+	}
+	if codes := suggestionCodes(&o3); !contains(codes, SuggestFalsePositive) || contains(codes, SuggestWrongSeverity) {
+		t.Errorf("codes = %v: a flag on a working probe is a false positive, not a severity mistake", codes)
+	}
+
 	// A PASS nobody mentioned is not a false positive.
 	o2 := TestOutcome{Name: "t", Diagnosis: diag("ok", check("iface", "PASS"), check("http", "PASS"))}
 	o2.compare(Expect{Verdict: "ok", Checks: []ExpectedCheck{{ID: "iface", Status: "PASS"}}}, 4*time.Second)

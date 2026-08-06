@@ -150,6 +150,12 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 		case flagged(c.Expected) && !flagged(c.Actual):
 			// The scenario broke something and netdoc did not say so.
 			o.FalseNegatives++
+		case !flagged(c.Expected) && flagged(c.Actual):
+			// The scenario said this part works and netdoc flagged it anyway.
+			// Naming the row in expect.checks must not make the false positive
+			// count for less than an unmentioned one — the healthy scenario names
+			// every row it cares about, and that is where this shows up.
+			o.FalsePositives++
 		}
 	}
 
@@ -214,6 +220,10 @@ func (o *TestOutcome) suggest() []Suggestion {
 		case c.Outcome == OutcomeWrongStatus && flagged(c.Expected) && !flagged(c.Actual):
 			add(SuggestMissedFinding, c.ID, fmt.Sprintf(
 				"%s reported %s where the scenario broke it and expected %s — the probe does not detect this fault.",
+				c.ID, c.Actual, c.Expected), c.Detail)
+		case c.Outcome == OutcomeWrongStatus && !flagged(c.Expected) && flagged(c.Actual):
+			add(SuggestFalsePositive, c.ID, fmt.Sprintf(
+				"%s reported %s where the scenario expected %s — netdoc flagged a part of the network the scenario left working.",
 				c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeWrongStatus:
 			add(SuggestWrongSeverity, c.ID, fmt.Sprintf(
