@@ -778,10 +778,10 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	addr := proxyURL.Host
 	if proxyURL.Port() == "" {
 		port := "80"
-		switch {
-		case proxyURL.Scheme == "https":
+		switch proxyURL.Scheme {
+		case "https":
 			port = "443"
-		case socks:
+		case "socks5", "socks5h":
 			port = "1080"
 		}
 		addr = net.JoinHostPort(proxyURL.Hostname(), port)
