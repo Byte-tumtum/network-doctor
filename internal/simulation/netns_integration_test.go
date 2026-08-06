@@ -359,6 +359,91 @@ func TestMultipleInterfacesWrongPreferredRouteScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+func TestDualStackHealthyScenario(t *testing.T) {
+	requireBackend(t)
+	before := captureHostNetworkState(t)
+	rep := runScenario(t, "dual-stack-healthy")
+	after := captureHostNetworkState(t)
+	if before != after {
+		t.Errorf("host network state changed across dual-stack run\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	assertDualStackScenario(t, rep, diagnostic.FamilyReachable, diagnostic.FamilyReachable, "")
+	if !hasForwardingFamilies(rep, "gateway", true, true) {
+		t.Errorf("dual forwarding evidence = %+v", rep.Evidence.Routers)
+	}
+	if !hasSelectedFamilyRoute(rep, "client", "1.1.1.1", "ipv4") ||
+		!hasSelectedFamilyRoute(rep, "client", "2606:4700:4700::1111", "ipv6") {
+		t.Errorf("family route selections = %+v", rep.Evidence.Routes)
+	}
+}
+
+func TestIPv4WorksIPv6BrokenScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "ipv4-works-ipv6-broken")
+	assertDualStackScenario(t, rep, diagnostic.FamilyReachable, diagnostic.FamilyUnreachable, diagnostic.FamilyCauseIPv6Unreachable)
+	if len(rep.Faults) != 1 || rep.Faults[0].Family != "ipv6" {
+		t.Errorf("IPv6 fault evidence = %+v", rep.Faults)
+	}
+}
+
+func TestIPv6WorksIPv4BrokenScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "ipv6-works-ipv4-broken")
+	assertDualStackScenario(t, rep, diagnostic.FamilyUnreachable, diagnostic.FamilyReachable, diagnostic.FamilyCauseIPv4Unreachable)
+	if len(rep.Faults) != 1 || rep.Faults[0].Family != "ipv4" {
+		t.Errorf("IPv4 fault evidence = %+v", rep.Faults)
+	}
+}
+
+func assertDualStackScenario(t *testing.T, rep Report, ipv4, ipv6, cause string) {
+	t.Helper()
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s error=%q tests=%+v suggestions=%+v evidence=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions, rep.Evidence)
+	}
+	if !hasDualStackLink(rep, "client", "client-lan") || !hasDualStackLink(rep, "gateway", "upstream") {
+		t.Errorf("dual-stack links = %+v", rep.Evidence.Links)
+	}
+	check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
+	if check.Families == nil || check.Families.IPv4 != ipv4 || check.Families.IPv6 != ipv6 || check.Cause != cause {
+		t.Errorf("internet family diagnosis = %+v, want IPv4=%s IPv6=%s cause=%q", check, ipv4, ipv6, cause)
+	}
+	dnsName := proxyProbeName
+	if rep.Tests[0].Target != "" {
+		dnsName = "dual-target.test"
+	}
+	if !hasDNSQueryType(rep, dnsName, "A") || !hasDNSQueryType(rep, dnsName, "AAAA") {
+		t.Errorf("A/AAAA query evidence = %+v", rep.Evidence.DNS)
+	}
+	if !hasReachabilityFamily(rep, "ipv4", ipv4 == diagnostic.FamilyReachable) ||
+		!hasReachabilityFamily(rep, "ipv6", ipv6 == diagnostic.FamilyReachable) {
+		t.Errorf("family reachability = %+v", rep.Evidence.Reachability)
+	}
+	if rep.Tests[0].FalsePositives != 0 || rep.Tests[0].FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d", rep.Tests[0].FalsePositives, rep.Tests[0].FalseNegatives)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func captureHostNetworkState(t *testing.T) string {
+	t.Helper()
+	var parts []string
+	for _, path := range []string{"/proc/sys/net/ipv4/ip_forward", "/proc/sys/net/ipv6/conf/all/forwarding"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read host network setting %s: %v", path, err)
+		}
+		parts = append(parts, path+"="+string(raw))
+	}
+	for _, argv := range [][]string{{"ip", "-4", "route", "show"}, {"ip", "-6", "route", "show"}, {"ip", "-o", "link", "show"}} {
+		out, err := exec.Command(argv[0], argv[1:]...).Output()
+		if err != nil {
+			t.Fatalf("capture host network state %v: %v", argv, err)
+		}
+		parts = append(parts, strings.Join(argv, " ")+"\n"+string(out))
+	}
+	return strings.Join(parts, "\n")
+}
+
 func runTLSScenario(t *testing.T, name string) Report {
 	t.Helper()
 	requireBackend(t)
@@ -459,6 +544,51 @@ func countNodeLinks(rep Report, node string) int {
 func hasForwarding(rep Report, node string) bool {
 	for _, item := range rep.Evidence.Routers {
 		if item.Node == node && item.IPv4Forwarding {
+			return true
+		}
+	}
+	return false
+}
+
+func hasForwardingFamilies(rep Report, node string, ipv4, ipv6 bool) bool {
+	for _, item := range rep.Evidence.Routers {
+		if item.Node == node && item.IPv4Forwarding == ipv4 && item.IPv6Forwarding == ipv6 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDualStackLink(rep Report, node, segment string) bool {
+	for _, item := range rep.Evidence.Links {
+		if item.Node == node && item.Segment == segment && item.Up && item.IPv4 != "" && item.IPv6 != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSelectedFamilyRoute(rep Report, node, destination, family string) bool {
+	for _, item := range rep.Evidence.Routes {
+		if item.Node == node && item.Destination == destination && item.Family == family && item.Selected {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDNSQueryType(rep Report, name, queryType string) bool {
+	for _, item := range rep.Evidence.DNS {
+		if item.Name == name && item.QueryType == queryType && item.Result == "ANSWER" && item.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasReachabilityFamily(rep Report, family string, reachable bool) bool {
+	for _, item := range rep.Evidence.Reachability {
+		if item.Family == family && item.Reachable == reachable {
 			return true
 		}
 	}

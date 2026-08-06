@@ -1,0 +1,58 @@
+name: ipv6-works-ipv4-broken
+description: >-
+  Both families are addressed and routed and DNS returns A plus AAAA, but the
+  router deliberately drops forwarded IPv4. IPv6 remains a complete working
+  path, preventing an IPv4 failure from becoming a generic offline diagnosis.
+
+topology:
+  segments:
+    - {name: client-lan, ipv4: 10.78.1.0/24, ipv6: 2001:db8:77:1::/64}
+    - {name: upstream, ipv4: 10.78.2.0/24, ipv6: 2001:db8:77:2::/64}
+  nodes:
+    - name: client
+      role: client
+      resolver: 10.78.1.53
+      interfaces:
+        - {segment: client-lan, ipv4: 10.78.1.10/24, ipv6: 2001:db8:77:1::10/64}
+    - name: resolver
+      interfaces:
+        - {segment: client-lan, ipv4: 10.78.1.53/24, ipv6: 2001:db8:77:1::53/64}
+      services:
+        - name: dual-resolver
+          type: dns
+          records:
+            - {name: dual-target.test, address: 10.78.2.20}
+            - {name: dual-target.test, address: 2001:db8:77:2::20}
+            - {name: connectivitycheck.gstatic.com, address: 10.78.2.20}
+            - {name: connectivitycheck.gstatic.com, address: 2001:db8:77:2::20}
+    - name: gateway
+      role: router
+      interfaces:
+        - {segment: client-lan, ipv4: 10.78.1.1/24, ipv6: 2001:db8:77:1::1/64}
+        - {segment: upstream, ipv4: 10.78.2.1/24, ipv6: 2001:db8:77:2::1/64}
+    - name: target
+      interfaces:
+        - {segment: upstream, ipv4: 10.78.2.20/24, ipv6: 2001:db8:77:2::20/64}
+      aliases: [1.1.1.1, 8.8.8.8, "2606:4700:4700::1111", "2001:4860:4860::8888"]
+      services:
+        - {name: dual-http, type: http, port: 80}
+        - {name: dual-tcp, type: tcp, port: 443}
+  routes:
+    - {node: client, destination: default, via: 10.78.1.1}
+    - {node: client, destination: "::/0", via: "2001:db8:77:1::1"}
+    - {node: gateway, destination: 1.1.1.1/32, via: 10.78.2.20}
+    - {node: gateway, destination: 8.8.8.8/32, via: 10.78.2.20}
+    - {node: gateway, destination: "2606:4700:4700::1111/128", via: "2001:db8:77:2::20"}
+    - {node: gateway, destination: "2001:4860:4860::8888/128", via: "2001:db8:77:2::20"}
+    - {node: target, destination: 10.78.1.0/24, via: 10.78.2.1}
+    - {node: target, destination: "2001:db8:77:1::/64", via: "2001:db8:77:2::1"}
+faults:
+  - {type: drop, node: gateway, family: ipv4, direction: outbound}
+tests:
+  - {name: IPv6 survives the forwarded IPv4 fault, node: client}
+expect:
+  verdict: degraded
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: WARN, cause: ipv4_unreachable, ipv4: unreachable, ipv6: reachable}
+    - {id: dns, status: PASS}
