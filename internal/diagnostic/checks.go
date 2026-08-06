@@ -43,6 +43,16 @@ const (
 	StatusNA
 )
 
+// Route failure causes are attached to the existing direct-egress row. They
+// describe only evidence the local kernel exposes; none claims an alternate
+// path works without a successful probe proving that separately.
+const (
+	RouteCauseNoDefaultRoute      = "no_default_route"
+	RouteCauseGatewayUnreachable  = "gateway_unreachable"
+	RouteCauseSelectedPathFailed  = "selected_path_failed"
+	RouteCausePreferredPathFailed = "preferred_route_failed"
+)
+
 func (s Status) String() string {
 	if s < StatusPass || s > StatusNA {
 		return "?"
@@ -246,6 +256,9 @@ type netops struct {
 	// optional validated HTTP(S) redirect URL.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
 	portalCheck func(ctx context.Context) (int, string, error)
+	// routeCause classifies a failed direct IPv4 path from OS route/neighbor
+	// state. Nil keeps deterministic probe unit tests independent of the host.
+	routeCause func(net.IP) string
 }
 
 var defaultOps = &netops{
@@ -269,6 +282,7 @@ var defaultOps = &netops{
 	portalCheck: func(ctx context.Context) (int, string, error) {
 		return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
 	},
+	routeCause: routeFailureCause,
 }
 
 // SourceIP resolves an interface name (or exact local IP) to the source
@@ -689,6 +703,9 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 			return r
 		}
 		r.Fix = "no internet egress — proxy-only/filtered network? check upstream"
+		if o.routeCause != nil {
+			r.Cause = o.routeCause(all[0])
+		}
 		return r
 	}
 	defer prim.conn.Close()

@@ -218,6 +218,24 @@ func TestInternetProbeFamilies(t *testing.T) {
 	}
 }
 
+func TestInternetProbeAddsBackwardCompatibleRouteCause(t *testing.T) {
+	called := false
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("no route to host")
+		},
+		interfaces: func() ([]net.Interface, error) { return nil, nil },
+		routeCause: func(destination net.IP) string {
+			called = destination.Equal(net.ParseIP("1.1.1.1"))
+			return RouteCauseNoDefaultRoute
+		},
+	}
+	r := ops.internetProbe(context.Background(), nil)
+	if r.Status != StatusFail || r.Cause != RouteCauseNoDefaultRoute || !called {
+		t.Errorf("route-classified egress = %+v, called=%t", r, called)
+	}
+}
+
 // Same dial outcome, two verdicts: a v4-only network passes, but a machine
 // holding a global IPv6 address with no IPv6 egress is black-holed and warns.
 func TestInternetProbeBlackHoledIPv6(t *testing.T) {
