@@ -420,6 +420,40 @@ func TestSOCKS5ReplyCausesDistinguishFailureStages(t *testing.T) {
 	}
 }
 
+func TestSOCKS5HostUnreachableCauseDependsOnResolutionLocation(t *testing.T) {
+	for _, tc := range []struct {
+		scheme string
+		cause  string
+	}{
+		{"socks5", ProxyCauseDestinationUnreachable},
+		{"socks5h", ProxyCauseProxyDNS},
+	} {
+		conn := &scriptConn{r: strings.NewReader(string([]byte{5, 0, 5, 4, 0, 1, 0, 0, 0, 0, 0, 0}))}
+		ops := proxyOps(tc.scheme+"://proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
+			return conn, nil
+		})
+		if got := ops.proxyProbe(context.Background(), nil).Cause; got != tc.cause {
+			t.Errorf("%s reply 4 cause = %q, want %q", tc.scheme, got, tc.cause)
+		}
+	}
+}
+
+func TestSOCKS5RejectsInvalidConnectReplyHeader(t *testing.T) {
+	for _, reply := range [][]byte{
+		{4, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+		{5, 0, 1, 1, 0, 0, 0, 0, 0, 0},
+	} {
+		conn := &scriptConn{r: strings.NewReader(string(append([]byte{5, 0}, reply...)))}
+		ops := proxyOps("socks5h://proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
+			return conn, nil
+		})
+		r := ops.proxyProbe(context.Background(), nil)
+		if r.Status != StatusFail || r.Cause != ProxyCauseProtocol || !strings.Contains(r.Detail, "invalid CONNECT reply header") {
+			t.Errorf("reply %v result = %+v", reply[:4], r)
+		}
+	}
+}
+
 // Go's own ProxyFromEnvironment ignores ALL_PROXY; netdoc must not, or a box
 // proxied only through ALL_PROXY reads as having no proxy at all.
 func TestProxyFromEnvironmentAllProxy(t *testing.T) {

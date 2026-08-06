@@ -985,7 +985,7 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, remoteDNS bool, d
 	}
 	if err := socks5Request(conn, destination); err != nil {
 		r.Status = StatusFail
-		r.Cause = proxyCauseForSOCKSError(err)
+		r.Cause = proxyCauseForSOCKSError(err, remoteDNS)
 		r.Detail = "SOCKS5 proxy " + addr + ": " + err.Error()
 		r.Fix = "check that the proxy URL names a SOCKS5 port and that the proxy allows this destination"
 		return r
@@ -1046,6 +1046,9 @@ func socks5Request(conn net.Conn, destination socks5Destination) error {
 	if _, err := io.ReadFull(conn, reply); err != nil {
 		return fmt.Errorf("no CONNECT reply: %w", err)
 	}
+	if reply[0] != 5 || reply[2] != 0 {
+		return fmt.Errorf("invalid CONNECT reply header (version %d, reserved %d)", reply[0], reply[2])
+	}
 	if reply[1] != 0 {
 		return socks5ReplyError{code: reply[1]}
 	}
@@ -1075,14 +1078,21 @@ type socks5ReplyError struct{ code byte }
 
 func (e socks5ReplyError) Error() string { return "refused CONNECT: " + socks5Error(e.code) }
 
-func proxyCauseForSOCKSError(err error) string {
+func proxyCauseForSOCKSError(err error, remoteDNS bool) string {
 	var reply socks5ReplyError
 	if errors.As(err, &reply) {
 		switch reply.code {
 		case 3, 5:
 			return ProxyCauseDestinationUnreachable
 		case 4:
-			return ProxyCauseProxyDNS
+			// RFC 1928 names code 4 "host unreachable"; it can only
+			// represent proxy-side name resolution in this probe when the
+			// request actually carried a domain name. A locally resolving
+			// socks5 request sent an address and must not be labelled DNS.
+			if remoteDNS {
+				return ProxyCauseProxyDNS
+			}
+			return ProxyCauseDestinationUnreachable
 		}
 	}
 	return ProxyCauseProtocol
