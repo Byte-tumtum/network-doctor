@@ -908,10 +908,8 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Ti
 }
 
 // socks5Connect runs the RFC 1928 no-auth handshake on conn and requests a
-// tunnel to probeHost:443. Credentials are never offered: the SOCKS5
-// username/password exchange (RFC 1929) is cleartext, and this probe already
-// refuses to spend credentials on an unencrypted hop. Every read is a fixed,
-// small size — the replies are attacker-controlled.
+// tunnel to probeHost:443. Every read is a fixed, small size — the replies are
+// attacker-controlled.
 func socks5Connect(conn net.Conn) error {
 	// VER 5, offering exactly one method: 0 (no authentication).
 	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
