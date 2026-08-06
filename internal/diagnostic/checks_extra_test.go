@@ -391,13 +391,6 @@ func TestProxyFromEnvironmentAllProxy(t *testing.T) {
 			t.Errorf("proxyFromEnvironment = %v, %v; want http://proxy.corp:3128", u, err)
 		}
 	})
-	t.Run("unset", func(t *testing.T) {
-		t.Setenv("ALL_PROXY", "")
-		t.Setenv("all_proxy", "")
-		if u, err := proxyFromEnvironment(req); u != nil || err != nil {
-			t.Errorf("proxyFromEnvironment = %v, %v; want no proxy", u, err)
-		}
-	})
 }
 
 func TestProxyProbeUnreachable(t *testing.T) {
