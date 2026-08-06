@@ -367,6 +367,7 @@ go vet ./...
 CGO_ENABLED=0 go build ./...
 go test ./...
 go test -tags integration ./internal/diagnostic
+go test -tags netns_integration ./internal/simulation
 go test -race ./...
 go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
@@ -374,7 +375,41 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
 ```
 
-Race and fuzz checks run only on Linux in CI.
+Race, fuzz, and network-namespace checks run only on Linux in CI. The
+`netns_integration` tests skip themselves on a host without unprivileged user
+namespaces; they never need root.
+
+## Testing Network Doctor against broken networks
+
+`netdoc-sim` builds a throwaway virtual network from a YAML scenario, breaks it
+on purpose, runs netdoc inside it, and reports whether the diagnosis matched the
+fault that was actually injected:
+
+```sh
+go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
+./netdoc-sim run broken-dns
+```
+
+```text
+Test: name that will not resolve — netdoc example.test:80 in client (4.016s)
+  Summary: System DNS cannot resolve example.test, but public DNS can — …
+  Verdict: dns   ✓
+  Expected findings: 6   matched: 6   false negatives: 0   false positives: 0
+```
+
+It needs no root: everything lives in an unprivileged user namespace that holds
+no privileges over the host's interfaces, routes, resolver or firewall, so it
+cannot touch them even by mistake. Grading is deterministic — probe ids and
+statuses, never the prose — and a mismatch comes with a suggested improvement
+to netdoc.
+
+**Changing a probe endpoint in `internal/diagnostic/checks.go` will break the
+`healthy` scenario on purpose.** Scenarios claim netdoc's hardcoded addresses
+(`internetEndpoints4`, `publicDNSIP`, `probeHost`) for a node inside the
+simulation, so they have to be updated together. See
+**[docs/simulation.md](docs/simulation.md)** for that coupling, plus the
+scenario format, the fault types, the suggestion rules, and the known
+limitations.
 
 ## Development
 
@@ -384,8 +419,9 @@ The code is split by responsibility:
 - `internal/diagnostic` owns target parsing, native probes, per-OS route/SSID lookups, verdict logic without depending on terminal presentation.
 - `internal/ui` owns Bubble Tea state, rendering, tool jobs.
 - `internal/textsafe` sanitizes untrusted remote and subprocess text shared by both layers.
+- `internal/simulation` + `cmd/netdoc-sim` build virtual networks to test the diagnosis engine against; nothing here ships in the `netdoc` binary.
 
-The UI depends on diagnostics; diagnostics do not depend on the UI. Add network semantics under `internal/diagnostic`, and interaction or rendering behavior under `internal/ui`.
+The UI depends on diagnostics; diagnostics do not depend on the UI. Add network semantics under `internal/diagnostic`, and interaction or rendering behavior under `internal/ui`. The simulator depends on `internal/diagnostic` for probe ids and target parsing, and on nothing in `internal/ui`.
 
 ## License
 
