@@ -72,6 +72,16 @@ func TestParseScenarioRejects(t *testing.T) {
 			"unknown status",
 		},
 		{
+			"unknown cause",
+			strings.Replace(minimalScenario, "  verdict: ok", "  checks: [{id: tls, status: FAIL, cause: invented}]", 1),
+			"unknown cause",
+		},
+		{
+			"cause on passing expectation",
+			strings.Replace(minimalScenario, "  verdict: ok", "  checks: [{id: tls, status: PASS, cause: hostname_mismatch}]", 1),
+			"requires FAIL",
+		},
+		{
 			"duplicate expectation",
 			strings.Replace(minimalScenario, "  verdict: ok", "  checks: [{id: dns, status: PASS}, {id: dns, status: FAIL}]", 1),
 			"duplicate probe id",

@@ -143,6 +143,7 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options) 
 		commandEnv = []string{"ALL_PROXY=" + out.Proxy}
 	}
 	if t.Trust != nil {
+		out.Trust = t.Trust.Service
 		bundle, err := env.TrustAnchor(t.Trust.Service)
 		if err != nil {
 			out.Error = textsafe.Clean(err.Error())

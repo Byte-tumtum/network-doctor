@@ -189,6 +189,7 @@ type Expect struct {
 type ExpectedCheck struct {
 	ID     string `yaml:"id"`
 	Status string `yaml:"status"`
+	Cause  string `yaml:"cause"`
 }
 
 // knownProbeIDs is the set a scenario may name. It references the constants so
@@ -204,6 +205,22 @@ var knownProbeIDs = []diagnostic.ProbeID{
 
 // statuses is netdoc's status vocabulary as it appears in the JSON report.
 var statuses = []string{"PASS", "WARN", "FAIL", "SKIP", "N/A"}
+
+var knownCauses = []string{
+	diagnostic.ProxyCauseUnreachable,
+	diagnostic.ProxyCauseClientDNS,
+	diagnostic.ProxyCauseProxyDNS,
+	diagnostic.ProxyCauseDestinationUnreachable,
+	diagnostic.ProxyCauseProtocol,
+	diagnostic.TLSCauseCertificateExpired,
+	diagnostic.TLSCauseCertificateNotYet,
+	diagnostic.TLSCauseHostnameMismatch,
+	diagnostic.TLSCauseUntrustedIssuer,
+	diagnostic.TLSCauseHandshake,
+	diagnostic.TLSCauseTCPUnreachable,
+	diagnostic.TLSCauseTimeout,
+	diagnostic.TLSCauseConnectionClosed,
+}
 
 // verdicts is netdoc's verdict vocabulary. Incomplete is omitted on purpose —
 // a finished run never reports it, so expecting it is always a scenario bug.
@@ -650,6 +667,14 @@ func (e *Expect) validate() error {
 		seen[c.ID] = true
 		if !contains(statuses, c.Status) {
 			return fmt.Errorf("expect.checks[%d]: unknown status %q (one of %s)", i, c.Status, strings.Join(statuses, ", "))
+		}
+		if c.Cause != "" {
+			if c.Status != "FAIL" {
+				return fmt.Errorf("expect.checks[%d]: cause requires FAIL status", i)
+			}
+			if !contains(knownCauses, c.Cause) {
+				return fmt.Errorf("expect.checks[%d]: unknown cause %q", i, c.Cause)
+			}
 		}
 	}
 	if e.Verdict == "" && len(e.Checks) == 0 {

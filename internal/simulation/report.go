@@ -264,6 +264,8 @@ func (o *TestOutcome) writeText(w io.Writer) {
 			mark, note = "✗", "no such row in the report"
 		case OutcomeWrongStatus:
 			mark, note = "✗", "expected "+c.Expected
+		case OutcomeWrongCause:
+			mark, note = "✗", "expected cause "+c.ExpectedCause
 		case OutcomeUnexpected:
 			mark, note = "!", "not expected by the scenario"
 		}

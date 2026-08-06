@@ -1,0 +1,58 @@
+name: tls-expired-certificate
+description: >-
+  TCP and HTTP remain reachable, but the TLS target presents a trusted,
+  hostname-matching certificate whose NotAfter is deterministically before the
+  handshake. Netdoc must classify expiration rather than reachability, name, or
+  issuer failure.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - name: resolver
+          type: dns
+          zone:
+            secure-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {name: portal, type: http, port: 80}
+        - {name: internet-tls, type: tcp, port: 443}
+
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {name: target-http, type: http, port: 80}
+        - name: tls-target
+          type: tls
+          port: 9443
+          certificate:
+            mode: expired
+            dns_names: [secure-target.test]
+
+tests:
+  - name: trusted certificate is expired
+    node: client
+    target: https://secure-target.test:9443
+    trust: {service: tls-target}
+
+expect:
+  verdict: service
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: proxy_connect, status: N/A}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    - {id: target_tcp, status: PASS}
+    - {id: path_mtu, status: PASS}
+    - {id: tls, status: FAIL, cause: certificate_expired}
+    - {id: http, status: PASS}
+    - {id: https, status: SKIP}

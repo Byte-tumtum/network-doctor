@@ -95,6 +95,28 @@ func TestProxySuggestionPreservesStructuredCause(t *testing.T) {
 	}
 }
 
+func TestCompareExpectedCause(t *testing.T) {
+	actual := DiagnosisCheck{ID: "tls", Name: "TLS", Status: "FAIL", Cause: "hostname_mismatch", Detail: "wrong name", Fix: "fix cert", Ms: 1}
+	matching := TestOutcome{Name: "tls", Diagnosis: diag("service", actual)}
+	matching.compare(Expect{Verdict: "service", Checks: []ExpectedCheck{{
+		ID: "tls", Status: "FAIL", Cause: "hostname_mismatch",
+	}}}, time.Second)
+	if !matching.ok() || matching.FalseNegatives != 0 || matching.FalsePositives != 0 {
+		t.Fatalf("matching cause = %+v", matching)
+	}
+
+	wrong := TestOutcome{Name: "tls", Diagnosis: diag("service", actual)}
+	wrong.compare(Expect{Verdict: "service", Checks: []ExpectedCheck{{
+		ID: "tls", Status: "FAIL", Cause: "certificate_expired",
+	}}}, time.Second)
+	if wrong.ok() || wrong.Checks[0].Outcome != OutcomeWrongCause || wrong.FalseNegatives != 0 || wrong.FalsePositives != 0 {
+		t.Fatalf("wrong cause comparison = %+v", wrong)
+	}
+	if !contains(suggestionCodes(&wrong), SuggestWrongCause) {
+		t.Errorf("suggestions = %+v", wrong.suggest())
+	}
+}
+
 func TestCompareMissingRow(t *testing.T) {
 	o := TestOutcome{Name: "t", Diagnosis: diag("ok", check("iface", "PASS"))}
 	o.compare(Expect{Checks: []ExpectedCheck{{ID: "dns", Status: "FAIL"}}}, 4*time.Second)

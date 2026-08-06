@@ -141,6 +141,15 @@ func TestNoDefaultRouteScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+func TestHighLatencyScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "high-latency")
+	if rep.Result != ResultPass {
+		t.Errorf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
+	}
+	assertCleanedUp(t, rep)
+}
+
 func TestSOCKS5LocalDNSScenario(t *testing.T) {
 	requireBackend(t)
 	rep := runScenario(t, "socks5-local-dns-fails")
@@ -193,6 +202,95 @@ func TestSOCKS5hRemoteDNSScenario(t *testing.T) {
 		t.Errorf("no proxy-side answer evidence: %+v", rep.Evidence.DNS)
 	}
 	assertCleanedUp(t, rep)
+}
+
+func TestTLSValidScenario(t *testing.T) {
+	rep := runTLSScenario(t, "tls-valid")
+	out := rep.Tests[0]
+	assertTLSCheck(t, out, "PASS", "")
+	if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+		t.Errorf("target_tcp = %+v", tcp)
+	}
+	if https := diagnosisCheck(out, string(diagnostic.ProbeHTTPS)); https.Status != "PASS" {
+		t.Errorf("https = %+v", https)
+	}
+	if out.Trust != "tls-target" {
+		t.Errorf("trusted service = %q", out.Trust)
+	}
+	if !hasTLSEvidence(rep, TLSCertificateValid, "secure-target.test", "secure-target.test", true, "passed") {
+		t.Errorf("no successful valid handshake evidence: %+v", rep.Evidence.TLS)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestTLSExpiredCertificateScenario(t *testing.T) {
+	rep := runTLSScenario(t, "tls-expired-certificate")
+	out := rep.Tests[0]
+	assertTLSCheck(t, out, "FAIL", diagnostic.TLSCauseCertificateExpired)
+	if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+		t.Errorf("target_tcp = %+v", tcp)
+	}
+	if !hasTLSEvidence(rep, TLSCertificateExpired, "secure-target.test", "secure-target.test", true, "client_rejected_certificate") {
+		t.Errorf("no expired certificate rejection evidence: %+v", rep.Evidence.TLS)
+	}
+	for _, item := range rep.Evidence.TLS {
+		if item.CertificateMode == TLSCertificateExpired && !item.NotAfter.Before(rep.StartedAt) {
+			t.Errorf("expired NotAfter %s is not before evaluation %s", item.NotAfter, rep.StartedAt)
+		}
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestTLSHostnameMismatchScenario(t *testing.T) {
+	rep := runTLSScenario(t, "tls-hostname-mismatch")
+	out := rep.Tests[0]
+	assertTLSCheck(t, out, "FAIL", diagnostic.TLSCauseHostnameMismatch)
+	if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+		t.Errorf("target_tcp = %+v", tcp)
+	}
+	if !hasTLSEvidence(rep, TLSCertificateHostnameMismatch, "secure-target.test", "different-target.test", true, "client_rejected_certificate") {
+		t.Errorf("no hostname mismatch evidence: %+v", rep.Evidence.TLS)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func runTLSScenario(t *testing.T, name string) Report {
+	t.Helper()
+	requireBackend(t)
+	rep := runScenario(t, name)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; evidence: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Evidence)
+	}
+	if len(rep.Tests) != 1 {
+		t.Fatalf("tests = %+v", rep.Tests)
+	}
+	out := rep.Tests[0]
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Fatalf("comparison fp=%d fn=%d", out.FalsePositives, out.FalseNegatives)
+	}
+	return rep
+}
+
+func assertTLSCheck(t *testing.T, out TestOutcome, status, cause string) {
+	t.Helper()
+	check := diagnosisCheck(out, string(diagnostic.ProbeTLS))
+	if check.Status != status || check.Cause != cause {
+		t.Errorf("tls = %+v, want status %s cause %q", check, status, cause)
+	}
+}
+
+func hasTLSEvidence(rep Report, mode, requested, certName string, presented bool, result string) bool {
+	for _, item := range rep.Evidence.TLS {
+		if item.CertificateMode != mode || item.RequestedServer != requested || item.CertificatePresented != presented || item.Result != result || item.Count < 1 {
+			continue
+		}
+		for _, name := range item.CertificateDNS {
+			if name == certName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func diagnosisCheck(out TestOutcome, id string) DiagnosisCheck {

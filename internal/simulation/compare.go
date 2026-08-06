@@ -34,6 +34,7 @@ type DiagnosisCheck struct {
 const (
 	OutcomeMatched     = "matched"
 	OutcomeWrongStatus = "wrong_status"
+	OutcomeWrongCause  = "wrong_cause"
 	OutcomeMissing     = "missing"
 	OutcomeUnexpected  = "unexpected"
 )
@@ -43,12 +44,15 @@ type CheckComparison struct {
 	ID       string `json:"id"`
 	Name     string `json:"name,omitempty"`
 	Expected string `json:"expected,omitempty"`
-	Actual   string `json:"actual,omitempty"`
-	Cause    string `json:"cause,omitempty"`
-	Outcome  string `json:"outcome"`
-	Detail   string `json:"detail,omitempty"`
-	Fix      string `json:"fix,omitempty"`
-	Ms       int64  `json:"ms,omitempty"`
+	// ExpectedCause is optional so existing status-only scenarios retain their
+	// comparison contract.
+	ExpectedCause string `json:"expected_cause,omitempty"`
+	Actual        string `json:"actual,omitempty"`
+	Cause         string `json:"cause,omitempty"`
+	Outcome       string `json:"outcome"`
+	Detail        string `json:"detail,omitempty"`
+	Fix           string `json:"fix,omitempty"`
+	Ms            int64  `json:"ms,omitempty"`
 }
 
 // TestOutcome is one netdoc run and how its diagnosis lined up.
@@ -57,6 +61,7 @@ type TestOutcome struct {
 	Node     string        `json:"node"`
 	Target   string        `json:"target,omitempty"`
 	Proxy    string        `json:"proxy,omitempty"`
+	Trust    string        `json:"trust,omitempty"`
 	Command  []string      `json:"command"`
 	Duration time.Duration `json:"duration_ms"`
 	ExitCode int           `json:"exit_code"`
@@ -95,6 +100,7 @@ type Suggestion struct {
 const (
 	SuggestMissedFinding    = "missed_finding"
 	SuggestWrongSeverity    = "wrong_severity"
+	SuggestWrongCause       = "wrong_cause"
 	SuggestFalsePositive    = "false_positive"
 	SuggestWrongVerdict     = "wrong_verdict"
 	SuggestProbeTimedOut    = "probe_timed_out"
@@ -121,13 +127,15 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 	for _, e := range expect.Checks {
 		expected[e.ID] = e.Status
 		c, ran := actual[e.ID]
-		cmp := CheckComparison{ID: e.ID, Name: c.Name, Expected: e.Status, Actual: c.Status,
+		cmp := CheckComparison{ID: e.ID, Name: c.Name, Expected: e.Status, ExpectedCause: e.Cause, Actual: c.Status,
 			Outcome: OutcomeMatched, Cause: c.Cause, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms}
 		switch {
 		case !ran:
 			cmp.Outcome = OutcomeMissing
 		case c.Status != e.Status:
 			cmp.Outcome = OutcomeWrongStatus
+		case e.Cause != "" && c.Cause != e.Cause:
+			cmp.Outcome = OutcomeWrongCause
 		}
 		o.Checks = append(o.Checks, cmp)
 	}
@@ -236,6 +244,10 @@ func (o *TestOutcome) suggest() []Suggestion {
 		case c.Outcome == OutcomeWrongStatus:
 			addCheck(SuggestWrongSeverity, c, fmt.Sprintf(
 				"%s reported %s, expected %s — same finding, wrong severity.", c.ID, c.Actual, c.Expected), c.Detail)
+		case c.Outcome == OutcomeWrongCause:
+			addCheck(SuggestWrongCause, c, fmt.Sprintf(
+				"%s reported cause %q, expected %q — the failure was detected but classified at the wrong stage.",
+				c.ID, c.Cause, c.ExpectedCause), c.Detail)
 		case c.Outcome == OutcomeUnexpected:
 			addCheck(SuggestFalsePositive, c, fmt.Sprintf(
 				"%s reported %s in a network where the scenario expects it to be fine — likely false positive.", c.ID, c.Actual), c.Detail)
