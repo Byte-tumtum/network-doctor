@@ -1,0 +1,67 @@
+name: socks5h-remote-dns-succeeds
+description: >-
+  The same private name is absent from the client's DNS view, but socks5h sends
+  it to the proxy. The proxy namespace resolves it and reaches the private
+  destination, so the environment-proxy check should pass.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.20
+      resolver: 10.77.0.20
+
+    - name: client-dns
+      address: 10.77.0.20
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - name: client-resolver
+          type: dns
+          zone: {}
+        - {name: portal, type: http, port: 80}
+        - {name: internet-tls, type: tcp, port: 443}
+        - {name: control-target, type: tcp, port: 9999}
+
+    - name: proxy
+      address: 10.77.0.30
+      resolver: 10.77.0.30
+      services:
+        - name: private-resolver
+          type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.40
+        - name: socks-proxy
+          type: socks5
+          port: 1080
+
+    - name: destination
+      address: 10.77.0.40
+      services:
+        - {name: private-destination, type: tcp, port: 443}
+
+faults:
+  - type: drop
+    node: client
+    direction: outbound
+    to: 10.77.0.40
+    protocol: tcp
+    port: 443
+
+tests:
+  - name: remotely resolving SOCKS5h reaches the private destination
+    node: client
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5h, node: proxy, port: 1080}
+
+expect:
+  verdict: ok
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: proxy_connect, status: PASS}
+    - {id: dns, status: N/A}
+    - {id: dns_public, status: N/A}
+    - {id: target_tcp, status: PASS}
+    - {id: path_mtu, status: PASS}

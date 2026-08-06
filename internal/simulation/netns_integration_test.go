@@ -18,7 +18,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
+
+const proxyProbeName = "connectivitycheck.gstatic.com"
 
 // buildBinaries produces the two binaries an end-to-end run needs, from the
 // tree under test rather than whatever is installed.
@@ -135,6 +139,99 @@ func TestNoDefaultRouteScenario(t *testing.T) {
 		t.Errorf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
 	}
 	assertCleanedUp(t, rep)
+}
+
+func TestSOCKS5LocalDNSScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "socks5-local-dns-fails")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; evidence: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Evidence)
+	}
+	out := rep.Tests[0]
+	proxy := diagnosisCheck(out, string(diagnostic.ProbeProxy))
+	if proxy.Status != "FAIL" || !strings.Contains(proxy.Detail, "is reachable, but local DNS cannot resolve") {
+		t.Errorf("proxy_connect = %+v", proxy)
+	}
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d", out.FalsePositives, out.FalseNegatives)
+	}
+	if !hasSOCKSEvidence(rep, "greeting", "", "accepted") {
+		t.Errorf("no accepted SOCKS greeting evidence: %+v", rep.Evidence.SOCKSRequests)
+	}
+	if hasSOCKSEvidence(rep, "connect", "domain", "connected") {
+		t.Errorf("local SOCKS unexpectedly sent a domain request: %+v", rep.Evidence.SOCKSRequests)
+	}
+	if !hasDNSEvidence(rep, "client-dns", "10.77.0.10", proxyProbeName, "NXDOMAIN") {
+		t.Errorf("no client-side NXDOMAIN evidence: %+v", rep.Evidence.DNS)
+	}
+	if hasDNSEvidence(rep, "proxy", "10.77.0.30", proxyProbeName, "ANSWER") {
+		t.Errorf("proxy resolved a name it never received: %+v", rep.Evidence.DNS)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestSOCKS5hRemoteDNSScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "socks5h-remote-dns-succeeds")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; evidence: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Evidence)
+	}
+	out := rep.Tests[0]
+	if proxy := diagnosisCheck(out, string(diagnostic.ProbeProxy)); proxy.Status != "PASS" {
+		t.Errorf("proxy_connect = %+v", proxy)
+	}
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d", out.FalsePositives, out.FalseNegatives)
+	}
+	if !hasSOCKSEvidence(rep, "connect", "domain", "connected") {
+		t.Errorf("no successful domain CONNECT evidence: %+v", rep.Evidence.SOCKSRequests)
+	}
+	if hasDNSQuery(rep, "10.77.0.10", proxyProbeName) {
+		t.Errorf("SOCKS5h caused a client-side lookup: %+v", rep.Evidence.DNS)
+	}
+	if !hasDNSEvidence(rep, "proxy", "10.77.0.30", proxyProbeName, "ANSWER") {
+		t.Errorf("no proxy-side answer evidence: %+v", rep.Evidence.DNS)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func diagnosisCheck(out TestOutcome, id string) DiagnosisCheck {
+	if out.Diagnosis == nil {
+		return DiagnosisCheck{}
+	}
+	for _, check := range out.Diagnosis.Checks {
+		if check.ID == id {
+			return check
+		}
+	}
+	return DiagnosisCheck{}
+}
+
+func hasDNSEvidence(rep Report, node, source, name, result string) bool {
+	for _, item := range rep.Evidence.DNS {
+		if item.Node == node && item.Source == source && item.Name == name && item.Result == result && item.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDNSQuery(rep Report, source, name string) bool {
+	for _, item := range rep.Evidence.DNS {
+		if item.Source == source && item.Name == name && item.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSOCKSEvidence(rep Report, event, addressType, result string) bool {
+	for _, item := range rep.Evidence.SOCKSRequests {
+		if item.Event == event && item.AddressType == addressType && item.Result == result && item.Count > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // assertCleanedUp proves the run released everything, and — the part that

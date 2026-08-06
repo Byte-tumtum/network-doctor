@@ -1,0 +1,73 @@
+name: socks5-local-dns-fails
+description: >-
+  The SOCKS proxy is reachable, but socks5 resolves the tunnel destination on
+  the client. The private name is absent from the client's DNS view, so netdoc
+  should identify local DNS failure before sending a CONNECT request.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.20
+      resolver: 10.77.0.20
+
+    # This is both the simulated direct internet and the client's resolver.
+    # The private name is deliberately absent, so it answers NXDOMAIN locally.
+    - name: client-dns
+      address: 10.77.0.20
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - name: client-resolver
+          type: dns
+          zone: {}
+        - {name: portal, type: http, port: 80}
+        - {name: internet-tls, type: tcp, port: 443}
+        - {name: control-target, type: tcp, port: 9999}
+
+    - name: proxy
+      address: 10.77.0.30
+      resolver: 10.77.0.30
+      services:
+        - name: private-resolver
+          type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.40
+        - name: socks-proxy
+          type: socks5
+          port: 1080
+
+    - name: destination
+      address: 10.77.0.40
+      services:
+        - {name: private-destination, type: tcp, port: 443}
+
+faults:
+  # The private service is on the shared segment, but the client cannot bypass
+  # the proxy. The proxy namespace is unaffected and can reach it directly.
+  - type: drop
+    node: client
+    direction: outbound
+    to: 10.77.0.40
+    protocol: tcp
+    port: 443
+
+tests:
+  - name: locally resolving SOCKS5 cannot resolve the private destination
+    node: client
+    # A literal, working control target keeps netdoc's ordinary DNS row from
+    # duplicating the private-name lookup being tested by proxy_connect.
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5, node: proxy, port: 1080}
+
+expect:
+  verdict: degraded
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: proxy_connect, status: FAIL}
+    - {id: dns, status: N/A}
+    - {id: dns_public, status: N/A}
+    - {id: target_tcp, status: PASS}
+    - {id: path_mtu, status: PASS}
