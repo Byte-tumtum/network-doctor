@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ type Report struct {
 	Topology    []NodeInfo    `json:"topology"`
 	Faults      []FaultInfo   `json:"faults"`
 	Tests       []TestOutcome `json:"tests"`
+	Evidence    Evidence      `json:"evidence"`
 	Cleanup     CleanupInfo   `json:"cleanup"`
 	Suggestions []Suggestion  `json:"suggestions"`
 }
@@ -90,6 +92,12 @@ func (r *Report) finish() {
 	}
 	if r.Tests == nil {
 		r.Tests = []TestOutcome{}
+	}
+	if r.Evidence.DNS == nil {
+		r.Evidence.DNS = []DNSEvidence{}
+	}
+	if r.Evidence.SOCKSRequests == nil {
+		r.Evidence.SOCKSRequests = []SOCKSEvidence{}
 	}
 	if r.Error != "" {
 		r.Result = ResultError
@@ -167,10 +175,29 @@ func (r *Report) WriteText(w io.Writer) {
 		r.Tests[i].writeText(w)
 	}
 
+	if len(r.Evidence.DNS) > 0 || len(r.Evidence.SOCKSRequests) > 0 {
+		p("Structured evidence")
+		for _, e := range r.Evidence.DNS {
+			p("  DNS   %-10s from %-13s %-6s %-28s %-8s %s ×%d", e.Node, e.Source, e.QueryType, e.Name, e.Result, e.Service, e.Count)
+		}
+		for _, e := range r.Evidence.SOCKSRequests {
+			destination := e.Destination
+			if e.Port != 0 {
+				destination = net.JoinHostPort(destination, fmt.Sprint(e.Port))
+			}
+			p("  SOCKS %-10s %-8s %-7s %-28s %-22s ×%d", e.Node, e.Event, e.AddressType,
+				textsafe.Clean(destination), e.Result, e.Count)
+		}
+		p("")
+	}
+
 	if len(r.Suggestions) > 0 {
 		p("Suggested improvements")
 		for _, s := range r.Suggestions {
 			p("  [%s] %s", s.Code, textsafe.Clean(s.Message))
+			if s.Cause != "" {
+				p("      cause: %s", textsafe.Clean(s.Cause))
+			}
 			if s.Evidence != "" {
 				p("      evidence: %s", textsafe.Clean(s.Evidence))
 			}
@@ -232,6 +259,9 @@ func (o *TestOutcome) writeText(w io.Writer) {
 		line := fmt.Sprintf("  %s %-14s %-5s %s", mark, c.ID, c.Actual, textsafe.Clean(c.Detail))
 		if note != "" {
 			line += "   (" + note + ")"
+		}
+		if c.Cause != "" {
+			line += "   [cause: " + textsafe.Clean(c.Cause) + "]"
 		}
 		p("%s", line)
 	}

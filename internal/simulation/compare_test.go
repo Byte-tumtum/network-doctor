@@ -84,6 +84,17 @@ func TestCompareFalsePositive(t *testing.T) {
 	}
 }
 
+func TestProxySuggestionPreservesStructuredCause(t *testing.T) {
+	o := TestOutcome{Name: "proxy", Diagnosis: diag("degraded", DiagnosisCheck{
+		ID: "proxy_connect", Status: "FAIL", Cause: "client_dns_failure", Detail: "local DNS failed", Fix: "fix DNS",
+	})}
+	o.compare(Expect{Verdict: "degraded", Checks: []ExpectedCheck{{ID: "proxy_connect", Status: "PASS"}}}, time.Second)
+	suggestions := o.suggest()
+	if len(suggestions) == 0 || suggestions[0].Cause != "client_dns_failure" {
+		t.Errorf("suggestions = %+v", suggestions)
+	}
+}
+
 func TestCompareMissingRow(t *testing.T) {
 	o := TestOutcome{Name: "t", Diagnosis: diag("ok", check("iface", "PASS"))}
 	o.compare(Expect{Checks: []ExpectedCheck{{ID: "dns", Status: "FAIL"}}}, 4*time.Second)
@@ -221,9 +232,37 @@ func TestWriteJSONIsValid(t *testing.T) {
 	if err := rep.WriteJSON(&sb); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"scenario": "s"`, `"result": "ERROR"`, `"id": "abc123"`} {
+	for _, want := range []string{`"scenario": "s"`, `"result": "ERROR"`, `"id": "abc123"`,
+		`"dns": []`, `"socks_requests": []`} {
 		if !strings.Contains(sb.String(), want) {
 			t.Errorf("json is missing %s:\n%s", want, sb.String())
+		}
+	}
+}
+
+func TestReportRendersStructuredProxyEvidence(t *testing.T) {
+	rep := Report{
+		Scenario: "proxy", ID: "abc123", Backend: "fake",
+		Evidence: Evidence{
+			DNS:           []DNSEvidence{{Node: "proxy", Service: "private-dns", Source: "10.77.0.30", Name: "private.test", QueryType: "A", Result: "ANSWER", Count: 1}},
+			SOCKSRequests: []SOCKSEvidence{{Node: "proxy", Service: "socks-proxy", Event: "connect", AddressType: "domain", Destination: "private.test", Port: 443, Result: "connected", Count: 1}},
+		},
+	}
+	rep.finish()
+	var text strings.Builder
+	rep.WriteText(&text)
+	for _, want := range []string{"Structured evidence", "10.77.0.30", "private.test", "domain", "connected"} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("text missing %q:\n%s", want, text.String())
+		}
+	}
+	var jsonText strings.Builder
+	if err := rep.WriteJSON(&jsonText); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"source": "10.77.0.30"`, `"address_type": "domain"`, `"result": "connected"`} {
+		if !strings.Contains(jsonText.String(), want) {
+			t.Errorf("JSON missing %s:\n%s", want, jsonText.String())
 		}
 	}
 }

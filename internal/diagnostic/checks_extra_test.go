@@ -273,6 +273,9 @@ func proxyOps(proxy string, dial func(context.Context, string, string) (net.Conn
 			return url.Parse(proxy)
 		},
 		dialContext: dial,
+		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+			return []net.IP{net.ParseIP("192.0.2.10")}, "192.0.2.53:53", nil
+		},
 	}
 }
 
@@ -298,8 +301,8 @@ func TestProxyProbeUnknownSchemeIsNA(t *testing.T) {
 // with a bound IPv4 address.
 var socks5Reply = string([]byte{5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 
-// A SOCKS5 proxy (ALL_PROXY's usual scheme) is probed with a real handshake,
-// and the destination goes over the wire as a name for the proxy to resolve.
+// Both SOCKS schemes use a real handshake. socks5 sends the address resolved
+// by the client; socks5h sends the hostname for the proxy to resolve.
 func TestProxyProbeSocks5(t *testing.T) {
 	for _, scheme := range []string{"socks5", "socks5h"} {
 		t.Run(scheme, func(t *testing.T) {
@@ -316,7 +319,13 @@ func TestProxyProbeSocks5(t *testing.T) {
 			if dialed != "proxy.corp:1080" {
 				t.Errorf("dialed %q, want proxy.corp:1080 (default SOCKS port)", dialed)
 			}
-			want := string([]byte{5, 1, 0, 5, 1, 0, 3, byte(len(probeHost))}) + probeHost + string([]byte{1, 187})
+			want := string([]byte{5, 1, 0, 5, 1, 0})
+			if scheme == "socks5h" {
+				want += string([]byte{3, byte(len(probeHost))}) + probeHost
+			} else {
+				want += string([]byte{1, 192, 0, 2, 10})
+			}
+			want += string([]byte{1, 187})
 			if conn.w.String() != want {
 				t.Errorf("wire bytes = %q, want %q", conn.w.String(), want)
 			}
@@ -324,6 +333,27 @@ func TestProxyProbeSocks5(t *testing.T) {
 				t.Error("deadline is zero, want the probe budget as a leash")
 			}
 		})
+	}
+}
+
+func TestProxyProbeSocks5LocalDNSFailure(t *testing.T) {
+	conn := &scriptConn{r: strings.NewReader(string([]byte{5, 0}))}
+	ops := proxyOps("socks5://proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
+		return conn, nil
+	})
+	ops.lookupIP = func(context.Context, string) ([]net.IP, string, error) {
+		return nil, "192.0.2.53:53", errors.New("no such host")
+	}
+	r := ops.proxyProbe(context.Background(), nil)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "is reachable, but local DNS cannot resolve") ||
+		!strings.Contains(r.Detail, "192.0.2.53") {
+		t.Errorf("local DNS failure = %+v, want reachable proxy and resolver evidence", r)
+	}
+	if r.Cause != ProxyCauseClientDNS {
+		t.Errorf("cause = %q, want %q", r.Cause, ProxyCauseClientDNS)
+	}
+	if got := conn.w.String(); got != string([]byte{5, 1, 0}) {
+		t.Errorf("wire bytes = %q, want greeting only", got)
 	}
 }
 
@@ -364,6 +394,29 @@ func TestProxyProbeSocks5Unreachable(t *testing.T) {
 	r := ops.proxyProbe(context.Background(), nil)
 	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot reach proxy") {
 		t.Errorf("unreachable SOCKS5 proxy = %+v, want FAIL", r)
+	}
+	if r.Cause != ProxyCauseUnreachable {
+		t.Errorf("cause = %q, want %q", r.Cause, ProxyCauseUnreachable)
+	}
+}
+
+func TestSOCKS5ReplyCausesDistinguishFailureStages(t *testing.T) {
+	for _, tc := range []struct {
+		code  byte
+		cause string
+	}{
+		{3, ProxyCauseDestinationUnreachable},
+		{4, ProxyCauseProxyDNS},
+		{5, ProxyCauseDestinationUnreachable},
+		{8, ProxyCauseProtocol},
+	} {
+		conn := &scriptConn{r: strings.NewReader(string([]byte{5, 0, 5, tc.code, 0, 1, 0, 0, 0, 0, 0, 0}))}
+		ops := proxyOps("socks5h://proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
+			return conn, nil
+		})
+		if got := ops.proxyProbe(context.Background(), nil).Cause; got != tc.cause {
+			t.Errorf("reply %d cause = %q, want %q", tc.code, got, tc.cause)
+		}
 	}
 }
 

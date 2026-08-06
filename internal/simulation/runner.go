@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -123,6 +124,10 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	for _, t := range s.Tests {
 		rep.Tests = append(rep.Tests, runTest(ctx, env, t, s.Expect, opts))
 	}
+	rep.Evidence, err = env.Evidence()
+	if err != nil {
+		rep.Error = "collecting evidence failed: " + textsafe.Clean(err.Error())
+	}
 	return rep
 }
 
@@ -132,6 +137,11 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options) TestOutcome {
 	out := TestOutcome{Name: t.Name, Node: t.Node, Target: t.Target}
 	argv := []string{opts.Netdoc, "-json", "-timeout", opts.ProbeTimeout.String()}
+	var commandEnv []string
+	if t.Proxy != nil {
+		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))
+		commandEnv = []string{"ALL_PROXY=" + out.Proxy}
+	}
 	if t.Target != "" {
 		argv = append(argv, t.Target)
 	}
@@ -139,7 +149,7 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options) 
 
 	for i := 0; i < opts.Repeat; i++ {
 		tctx, cancel := context.WithTimeout(ctx, opts.TestTimeout)
-		res := env.Exec(tctx, t.Node, argv)
+		res := env.Exec(tctx, t.Node, argv, commandEnv)
 		cancel()
 		diag, err := decodeDiagnosis(res)
 		if i == 0 {

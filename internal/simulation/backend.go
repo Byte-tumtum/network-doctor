@@ -35,7 +35,9 @@ type Env interface {
 	ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo, error)
 	// Exec runs argv inside a node's namespaces. argv is passed to the kernel
 	// as a slice; no shell is involved anywhere in this package.
-	Exec(ctx context.Context, node string, argv []string) ExecResult
+	Exec(ctx context.Context, node string, argv, env []string) ExecResult
+	// Evidence reads structured service observations collected so far.
+	Evidence() (Evidence, error)
 	// Cleanup releases everything. It is idempotent, safe after a partial
 	// Prepare, and reports errors rather than swallowing them. With keep set it
 	// leaves the environment running and says how to reach it.

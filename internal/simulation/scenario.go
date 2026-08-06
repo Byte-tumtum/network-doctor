@@ -59,6 +59,10 @@ type Node struct {
 // Service is a test server the node runs. Ports are bound inside the node's
 // namespace, so two nodes may both serve :53 or :443.
 type Service struct {
+	// Name is optional for existing scenarios, but required when another
+	// scenario object needs to identify the service. Non-empty names are unique
+	// across the topology.
+	Name string `yaml:"name"`
 	Type string `yaml:"type"`
 	Port int    `yaml:"port"`
 	// Zone maps a name to an address for ServiceDNS. A name that is absent
@@ -77,6 +81,10 @@ const (
 	// ServiceTCP accepts a connection and closes it — enough for the direct
 	// egress probe, which only proves a handshake completes.
 	ServiceTCP = "tcp"
+	// ServiceSOCKS5 is a simulator-owned, no-auth CONNECT proxy. It supports
+	// address and domain destinations; BIND and UDP ASSOCIATE are intentionally
+	// outside the simulator's needs.
+	ServiceSOCKS5 = "socks5"
 )
 
 // Fault types.
@@ -121,10 +129,21 @@ type Fault struct {
 // Test is one netdoc run inside a node. An empty Target runs the generic
 // (no-target) checks, exactly as `netdoc` with no argument does.
 type Test struct {
-	Name   string `yaml:"name"`
-	Type   string `yaml:"type"`
-	Node   string `yaml:"node"`
-	Target string `yaml:"target"`
+	Name   string     `yaml:"name"`
+	Type   string     `yaml:"type"`
+	Node   string     `yaml:"node"`
+	Target string     `yaml:"target"`
+	Proxy  *TestProxy `yaml:"proxy"`
+}
+
+// TestProxy selects one SOCKS service and the public URL scheme netdoc should
+// receive. The address is derived from the validated node; scenarios cannot
+// supply a raw proxy URL or environment variable.
+type TestProxy struct {
+	Scheme  string `yaml:"scheme"`
+	Node    string `yaml:"node"`
+	Port    int    `yaml:"port"`
+	address string
 }
 
 // TestNetdoc is the only test type. Named so a scenario can be explicit, and
@@ -221,6 +240,8 @@ func (s *Scenario) Validate() error {
 		return errors.New("topology.nodes: at least one node is required")
 	}
 	seen := make(map[string]bool, len(s.Topology.Nodes))
+	nodes := make(map[string]*Node, len(s.Topology.Nodes))
+	serviceNames := make(map[string]bool)
 	clients := 0
 	for i := range s.Topology.Nodes {
 		n := &s.Topology.Nodes[i]
@@ -233,6 +254,7 @@ func (s *Scenario) Validate() error {
 			return fmt.Errorf("node %q: name must be letters, digits or dashes", n.Name)
 		}
 		seen[n.Name] = true
+		nodes[n.Name] = n
 		switch n.Role {
 		case "client":
 			clients++
@@ -244,7 +266,7 @@ func (s *Scenario) Validate() error {
 		if err := n.validateAddrs(subnet); err != nil {
 			return err
 		}
-		if err := n.validateServices(); err != nil {
+		if err := n.validateServices(serviceNames); err != nil {
 			return err
 		}
 	}
@@ -260,7 +282,7 @@ func (s *Scenario) Validate() error {
 		return errors.New("tests: at least one test is required")
 	}
 	for i := range s.Tests {
-		if err := s.Tests[i].validate(seen); err != nil {
+		if err := s.Tests[i].validate(nodes); err != nil {
 			return fmt.Errorf("tests[%d]: %w", i, err)
 		}
 	}
@@ -320,18 +342,33 @@ func (n *Node) validateAddrs(subnet netip.Prefix) error {
 	return nil
 }
 
-func (n *Node) validateServices() error {
+func (n *Node) validateServices(names map[string]bool) error {
 	for i := range n.Services {
 		svc := &n.Services[i]
+		if svc.Name != "" {
+			if !isSafeName(svc.Name) {
+				return fmt.Errorf("node %q: service name %q must be letters, digits or dashes", n.Name, svc.Name)
+			}
+			if names[svc.Name] {
+				return fmt.Errorf("duplicate service name %q", svc.Name)
+			}
+			names[svc.Name] = true
+		}
 		switch svc.Type {
 		case ServiceDNS:
 			if svc.Port == 0 {
 				svc.Port = 53
 			}
+			zoneNames := make(map[string]string, len(svc.Zone))
 			for name, ip := range svc.Zone {
 				if !isSafeHostname(name) {
 					return fmt.Errorf("node %q: zone name %q is not a hostname", n.Name, name)
 				}
+				key := dnsKey(name)
+				if previous, exists := zoneNames[key]; exists {
+					return fmt.Errorf("node %q: duplicate DNS record %q conflicts with %q", n.Name, name, previous)
+				}
+				zoneNames[key] = name
 				_, canonical, err := parseAddr(ip)
 				if err != nil {
 					return fmt.Errorf("node %q: zone %s: %w", n.Name, name, err)
@@ -351,6 +388,16 @@ func (n *Node) validateServices() error {
 		case ServiceTCP:
 			if svc.Port == 0 {
 				return fmt.Errorf("node %q: tcp service needs a port", n.Name)
+			}
+		case ServiceSOCKS5:
+			if svc.Port == 0 {
+				svc.Port = 1080
+			}
+			if n.Resolver == "" {
+				return fmt.Errorf("node %q: socks5 service needs the node resolver", n.Name)
+			}
+			if len(svc.Zone) != 0 || svc.Status != 0 || svc.Body != "" {
+				return fmt.Errorf("node %q: socks5 service has unsupported options", n.Name)
 			}
 		default:
 			return fmt.Errorf("node %q: unknown service type %q", n.Name, svc.Type)
@@ -422,15 +469,20 @@ func (f *Fault) validate(nodes map[string]bool) error {
 	return nil
 }
 
-func (t *Test) validate(nodes map[string]bool) error {
+func (t *Test) validate(nodes map[string]*Node) error {
 	if t.Type == "" {
 		t.Type = TestNetdoc
 	}
 	if t.Type != TestNetdoc {
 		return fmt.Errorf("unknown test type %q", t.Type)
 	}
-	if !nodes[t.Node] {
+	if nodes[t.Node] == nil {
 		return fmt.Errorf("unknown node %q", t.Node)
+	}
+	if t.Proxy != nil {
+		if err := t.Proxy.validate(nodes); err != nil {
+			return fmt.Errorf("proxy: %w", err)
+		}
 	}
 	if t.Name == "" {
 		t.Name = t.Node + " " + t.Target
@@ -445,6 +497,31 @@ func (t *Test) validate(nodes map[string]bool) error {
 	// target netdoc would reject.
 	_, err := diagnostic.ParseTarget(t.Target)
 	return err
+}
+
+func (p *TestProxy) validate(nodes map[string]*Node) error {
+	switch p.Scheme {
+	case "socks5", "socks5h":
+	default:
+		return fmt.Errorf("unsupported scheme %q (socks5 or socks5h)", p.Scheme)
+	}
+	n := nodes[p.Node]
+	if n == nil {
+		return fmt.Errorf("unknown node %q", p.Node)
+	}
+	if p.Port == 0 {
+		p.Port = 1080
+	}
+	if p.Port < 1 || p.Port > 65535 {
+		return fmt.Errorf("port %d is out of range", p.Port)
+	}
+	for _, svc := range n.Services {
+		if svc.Type == ServiceSOCKS5 && svc.Port == p.Port {
+			p.address = n.Address
+			return nil
+		}
+	}
+	return fmt.Errorf("node %q has no socks5 service on port %d", p.Node, p.Port)
 }
 
 func (e *Expect) validate() error {
@@ -521,11 +598,20 @@ func isSafeHostname(s string) bool {
 		return false
 	}
 	for _, label := range strings.Split(strings.TrimSuffix(s, "."), ".") {
-		if !isSafeName(label) || len(label) > 63 {
+		if len(label) == 0 || len(label) > 63 || !isASCIIAlnum(label[0]) || !isASCIIAlnum(label[len(label)-1]) {
 			return false
+		}
+		for i := 1; i < len(label)-1; i++ {
+			if !isASCIIAlnum(label[i]) && label[i] != '-' {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+func isASCIIAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 func isPercent(s string) bool {

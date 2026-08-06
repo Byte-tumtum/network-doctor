@@ -81,6 +81,24 @@ func TestParseScenarioRejects(t *testing.T) {
 			"unknown service type",
 		},
 		{
+			"duplicate service name",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: duplicate, type: tcp, port: 80}, {name: duplicate, type: tcp, port: 81}]}", 1),
+			"duplicate service name",
+		},
+		{
+			"conflicting DNS record spelling",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{type: dns, zone: {Example.Test: 10.77.0.1, example.test.: 10.77.0.2}}]}", 1),
+			"duplicate DNS record",
+		},
+		{
+			"unsupported SOCKS option",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, resolver: 10.77.0.1, services: [{type: socks5, body: nope}]}", 1),
+			"unsupported options",
+		},
+		{
 			"zone name is not a hostname",
 			strings.Replace(minimalScenario, "address: 10.77.0.1}",
 				"address: 10.77.0.1, services: [{type: dns, zone: {'a b': 10.77.0.1}}]}", 1),
@@ -126,6 +144,31 @@ func TestParseScenarioRejects(t *testing.T) {
 			strings.Replace(minimalScenario, "  - {node: client,", "  - {type: fuzz, node: client,", 1),
 			"unknown test type",
 		},
+		{
+			"unsupported proxy scheme",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks4, node: server}", 1),
+			"unsupported scheme",
+		},
+		{
+			"proxy on unknown node",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5, node: missing}", 1),
+			"unknown node",
+		},
+		{
+			"proxy port out of range",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5, node: server, port: 70000}", 1),
+			"out of range",
+		},
+		{
+			"proxy references no service",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5, node: server}", 1),
+			"has no socks5 service",
+		},
+		{
+			"unknown proxy option",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5, node: server, command: sh}", 1),
+			"command",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,6 +191,23 @@ func TestFaultDefaults(t *testing.T) {
 	}
 	if s.Faults[0].Direction != DirectionOutbound {
 		t.Errorf("direction default = %q, want %q", s.Faults[0].Direction, DirectionOutbound)
+	}
+}
+
+func TestProxyDefaultsAndUsesValidatedNodeAddress(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, resolver: 10.77.0.1, services: [{name: proxy, type: socks5}]}", 1)
+	raw = strings.Replace(raw, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5h, node: server}", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := s.Tests[0].Proxy
+	if proxy == nil || proxy.Port != 1080 || proxy.address != "10.77.0.1" {
+		t.Errorf("proxy = %+v", proxy)
+	}
+	if got := s.Topology.Nodes[1].Services[0].Port; got != 1080 {
+		t.Errorf("service port = %d", got)
 	}
 }
 
@@ -200,6 +260,19 @@ func TestIsSafeName(t *testing.T) {
 	for _, bad := range []string{"", "-lead", "a b", "a;b", "a/b", "a$b", "a\nb", strings.Repeat("a", 33)} {
 		if isSafeName(bad) {
 			t.Errorf("isSafeName(%q) = true", bad)
+		}
+	}
+}
+
+func TestIsSafeHostname(t *testing.T) {
+	for _, ok := range []string{"private-target.test", "EXAMPLE.test.", strings.Repeat("a", 63) + ".test"} {
+		if !isSafeHostname(ok) {
+			t.Errorf("isSafeHostname(%q) = false", ok)
+		}
+	}
+	for _, bad := range []string{"", ".", "-bad.test", "bad-.test", "bad_name.test", strings.Repeat("a", 64) + ".test"} {
+		if isSafeHostname(bad) {
+			t.Errorf("isSafeHostname(%q) = true", bad)
 		}
 	}
 }

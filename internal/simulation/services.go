@@ -31,6 +31,7 @@ const (
 type nodeConfig struct {
 	Name     string `json:"name"`
 	Resolver string `json:"resolver,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
 	// Addresses is every address the node answers on. UDP needs them by name:
 	// a wildcard-bound socket replies from whatever source the route table
 	// picks, and a resolver whose answer arrives from a different address than
@@ -41,7 +42,7 @@ type nodeConfig struct {
 
 // startServices binds every listener the node declares. On any failure it
 // closes the ones already up, so a node is either fully serving or not at all.
-func startServices(services []Service, addresses []string) ([]io.Closer, error) {
+func startServices(services []Service, addresses []string, resolver string, recorder *evidenceRecorder) ([]io.Closer, error) {
 	var open []io.Closer
 	closeAll := func() {
 		for _, c := range open {
@@ -49,7 +50,7 @@ func startServices(services []Service, addresses []string) ([]io.Closer, error) 
 		}
 	}
 	for _, svc := range services {
-		c, err := startService(svc, addresses)
+		c, err := startService(svc, addresses, resolver, recorder)
 		if err != nil {
 			closeAll()
 			return nil, fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err)
@@ -59,7 +60,7 @@ func startServices(services []Service, addresses []string) ([]io.Closer, error) 
 	return open, nil
 }
 
-func startService(svc Service, addresses []string) ([]io.Closer, error) {
+func startService(svc Service, addresses []string, resolver string, recorder *evidenceRecorder) ([]io.Closer, error) {
 	port := strconv.Itoa(svc.Port)
 	switch svc.Type {
 	case ServiceDNS:
@@ -78,7 +79,7 @@ func startService(svc Service, addresses []string) ([]io.Closer, error) {
 				}
 				return nil, err
 			}
-			go serveDNS(pc, zone)
+			go serveDNS(pc, zone, svc.Name, recorder)
 			open = append(open, pc)
 		}
 		return open, nil
@@ -98,6 +99,12 @@ func startService(svc Service, addresses []string) ([]io.Closer, error) {
 		}
 		go serveSink(ln)
 		return []io.Closer{ln}, nil
+	case ServiceSOCKS5:
+		ln, err := net.Listen("tcp", ":"+port)
+		if err != nil {
+			return nil, err
+		}
+		return []io.Closer{startSOCKS5(ln, svc.Name, resolver, recorder)}, nil
 	}
 	return nil, fmt.Errorf("unknown service type %q", svc.Type)
 }
@@ -192,16 +199,60 @@ const (
 // scenario's zone, NODATA for a name it knows in a family it does not have, and
 // NXDOMAIN for everything else. That is the whole resolver — a scenario proves
 // things about netdoc, not about DNS, and this is small enough to audit.
-func serveDNS(pc net.PacketConn, zone map[string]netip.Addr) {
+func serveDNS(pc net.PacketConn, zone map[string]netip.Addr, service string, recorder *evidenceRecorder) {
 	buf := make([]byte, dnsMaxMsg)
 	for {
 		n, from, err := pc.ReadFrom(buf)
 		if err != nil {
 			return
 		}
-		if reply := dnsReply(buf[:n], zone); reply != nil {
+		msg := buf[:n]
+		if name, qtype, result, ok := dnsObservation(msg, zone); ok {
+			source, _, splitErr := net.SplitHostPort(from.String())
+			if splitErr != nil {
+				source = from.String()
+			}
+			recorder.record(evidenceEvent{Kind: ServiceDNS, Service: service, Name: dnsKey(name),
+				Source: source, QueryType: dnsTypeName(qtype), Result: result})
+		}
+		if reply := dnsReply(msg, zone); reply != nil {
 			_, _ = pc.WriteTo(reply, from)
 		}
+	}
+}
+
+func dnsObservation(msg []byte, zone map[string]netip.Addr) (string, uint16, string, bool) {
+	if len(msg) < dnsHeaderLen || binary.BigEndian.Uint16(msg[2:4])&dnsFlagResponse != 0 ||
+		binary.BigEndian.Uint16(msg[4:6]) != 1 {
+		return "", 0, "", false
+	}
+	name, qend, ok := dnsParseQuestion(msg)
+	if !ok {
+		return "", 0, "", false
+	}
+	qtype := binary.BigEndian.Uint16(msg[qend-4 : qend-2])
+	qclass := binary.BigEndian.Uint16(msg[qend-2 : qend])
+	if qclass != dnsClassIN {
+		return name, qtype, "NOT_IMPLEMENTED", true
+	}
+	addr, known := zone[dnsKey(name)]
+	if !known {
+		return name, qtype, "NXDOMAIN", true
+	}
+	if qtype == dnsTypeA && addr.Is4() || qtype == dnsTypeAAAA && addr.Is6() {
+		return name, qtype, "ANSWER", true
+	}
+	return name, qtype, "NODATA", true
+}
+
+func dnsTypeName(qtype uint16) string {
+	switch qtype {
+	case dnsTypeA:
+		return "A"
+	case dnsTypeAAAA:
+		return "AAAA"
+	default:
+		return "TYPE" + strconv.Itoa(int(qtype))
 	}
 }
 

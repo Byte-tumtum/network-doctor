@@ -24,6 +24,7 @@ type DiagnosisCheck struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
+	Cause  string `json:"cause,omitempty"`
 	Ms     int64  `json:"ms"`
 	Detail string `json:"detail"`
 	Fix    string `json:"fix"`
@@ -43,6 +44,7 @@ type CheckComparison struct {
 	Name     string `json:"name,omitempty"`
 	Expected string `json:"expected,omitempty"`
 	Actual   string `json:"actual,omitempty"`
+	Cause    string `json:"cause,omitempty"`
 	Outcome  string `json:"outcome"`
 	Detail   string `json:"detail,omitempty"`
 	Fix      string `json:"fix,omitempty"`
@@ -54,6 +56,7 @@ type TestOutcome struct {
 	Name     string        `json:"name"`
 	Node     string        `json:"node"`
 	Target   string        `json:"target,omitempty"`
+	Proxy    string        `json:"proxy,omitempty"`
 	Command  []string      `json:"command"`
 	Duration time.Duration `json:"duration_ms"`
 	ExitCode int           `json:"exit_code"`
@@ -82,6 +85,7 @@ type Suggestion struct {
 	Code     string `json:"code"`
 	Test     string `json:"test,omitempty"`
 	Probe    string `json:"probe,omitempty"`
+	Cause    string `json:"cause,omitempty"`
 	Message  string `json:"message"`
 	Evidence string `json:"evidence,omitempty"`
 }
@@ -118,7 +122,7 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 		expected[e.ID] = e.Status
 		c, ran := actual[e.ID]
 		cmp := CheckComparison{ID: e.ID, Name: c.Name, Expected: e.Status, Actual: c.Status,
-			Outcome: OutcomeMatched, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms}
+			Outcome: OutcomeMatched, Cause: c.Cause, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms}
 		switch {
 		case !ran:
 			cmp.Outcome = OutcomeMissing
@@ -138,7 +142,7 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 			continue
 		}
 		o.Checks = append(o.Checks, CheckComparison{ID: c.ID, Name: c.Name, Actual: c.Status,
-			Outcome: OutcomeUnexpected, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms})
+			Outcome: OutcomeUnexpected, Cause: c.Cause, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms})
 	}
 
 	for _, c := range o.Checks {
@@ -207,6 +211,10 @@ func (o *TestOutcome) suggest() []Suggestion {
 	add := func(code, probe, msg, evidence string) {
 		out = append(out, Suggestion{Code: code, Test: o.Name, Probe: probe, Message: msg, Evidence: evidence})
 	}
+	addCheck := func(code string, check CheckComparison, msg, evidence string) {
+		out = append(out, Suggestion{Code: code, Test: o.Name, Probe: check.ID, Cause: check.Cause,
+			Message: msg, Evidence: evidence})
+	}
 	if o.Error != "" || o.Diagnosis == nil {
 		add(SuggestNoDiagnosis, "", "netdoc produced no report for this scenario; the run itself is the bug.", o.Error)
 		return out
@@ -214,25 +222,25 @@ func (o *TestOutcome) suggest() []Suggestion {
 	for _, c := range o.Checks {
 		switch {
 		case c.Outcome == OutcomeMissing:
-			add(SuggestMissedFinding, c.ID, fmt.Sprintf(
+			addCheck(SuggestMissedFinding, c, fmt.Sprintf(
 				"No %s row in the report, but the scenario expected one at %s. The probe never ran — check the DAG dependency that skipped it.",
 				c.ID, c.Expected), "")
 		case c.Outcome == OutcomeWrongStatus && flagged(c.Expected) && !flagged(c.Actual):
-			add(SuggestMissedFinding, c.ID, fmt.Sprintf(
+			addCheck(SuggestMissedFinding, c, fmt.Sprintf(
 				"%s reported %s where the scenario broke it and expected %s — the probe does not detect this fault.",
 				c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeWrongStatus && !flagged(c.Expected) && flagged(c.Actual):
-			add(SuggestFalsePositive, c.ID, fmt.Sprintf(
+			addCheck(SuggestFalsePositive, c, fmt.Sprintf(
 				"%s reported %s where the scenario expected %s — netdoc flagged a part of the network the scenario left working.",
 				c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeWrongStatus:
-			add(SuggestWrongSeverity, c.ID, fmt.Sprintf(
+			addCheck(SuggestWrongSeverity, c, fmt.Sprintf(
 				"%s reported %s, expected %s — same finding, wrong severity.", c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeUnexpected:
-			add(SuggestFalsePositive, c.ID, fmt.Sprintf(
+			addCheck(SuggestFalsePositive, c, fmt.Sprintf(
 				"%s reported %s in a network where the scenario expects it to be fine — likely false positive.", c.ID, c.Actual), c.Detail)
 		case c.Outcome == OutcomeMatched && flagged(c.Actual) && c.Fix == "":
-			add(SuggestNoFixHint, c.ID, fmt.Sprintf(
+			addCheck(SuggestNoFixHint, c, fmt.Sprintf(
 				"%s reported %s with no fix hint — the user is told what broke but not what to do.", c.ID, c.Actual), c.Detail)
 		}
 	}

@@ -47,7 +47,12 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 	if err != nil || strings.TrimSpace(line) != holderStart {
 		return errNoStart
 	}
-	closers, err := startServices(cfg.Services, cfg.Addresses)
+	recorder, err := openEvidenceRecorder(cfg.Evidence, cfg.Name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = recorder.Close() }()
+	closers, err := startServices(cfg.Services, cfg.Addresses, cfg.Resolver, recorder)
 	if err != nil {
 		return err
 	}

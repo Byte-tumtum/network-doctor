@@ -276,6 +276,7 @@ type reportCheck struct {
 	ID         string          `json:"id"`
 	Name       string          `json:"name"`
 	Status     string          `json:"status"`
+	Cause      string          `json:"cause,omitempty"`
 	Ms         int64           `json:"ms"` // wall time, truncated but floored at 1; 0 means the check never ran
 	Detail     string          `json:"detail"`
 	Fix        string          `json:"fix,omitempty"`
@@ -373,6 +374,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			ID:      string(p.ID),
 			Name:    p.Name,
 			Status:  r.Status.String(),
+			Cause:   r.Cause,
 			Ms:      diagnostic.Ms(r.Dur),
 			Detail:  r.Detail,
 			Fix:     r.Fix,

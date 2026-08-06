@@ -40,6 +40,7 @@ type fakeEnv struct {
 	panicOnExec   bool
 	panicOnClean  bool
 	stdout        string
+	lastEnv       []string
 	execCtxErr    error
 	sawCancelled  bool
 	cleanupErrors []string
@@ -49,8 +50,9 @@ func (e *fakeEnv) Nodes() []NodeInfo { return []NodeInfo{{Name: "client", Addres
 
 func (e *fakeEnv) ApplyFaults(context.Context, []Fault) ([]FaultInfo, error) { return nil, nil }
 
-func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string) ExecResult {
+func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string, env []string) ExecResult {
 	e.execs++
+	e.lastEnv = append([]string(nil), env...)
 	if e.panicOnExec {
 		panic("probe exploded")
 	}
@@ -60,6 +62,23 @@ func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string) ExecResult {
 	}
 	return ExecResult{Stdout: []byte(e.stdout), Err: e.execCtxErr}
 }
+
+func TestRunPassesOnlyValidatedProxyEnvironment(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, resolver: 10.77.0.1, services: [{name: proxy, type: socks5, port: 1080}]}", 1)
+	raw = strings.Replace(raw, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5h, node: server, port: 1080}", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &fakeEnv{stdout: okReport}
+	Run(context.Background(), s, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if len(env.lastEnv) != 1 || env.lastEnv[0] != "ALL_PROXY=socks5h://10.77.0.1:1080" {
+		t.Errorf("env = %q", env.lastEnv)
+	}
+}
+
+func (e *fakeEnv) Evidence() (Evidence, error) { return aggregateEvidence(nil), nil }
 
 func (e *fakeEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
 	e.cleanups++

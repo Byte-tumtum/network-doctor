@@ -313,6 +313,7 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 	cfg := nodeConfig{
 		Name: np.node.Name, Resolver: np.node.Resolver, Services: np.node.Services,
 		Addresses: append([]string{np.node.Address}, np.node.Aliases...),
+		Evidence:  filepath.Join(e.work, np.node.Name+"-evidence.jsonl"),
 	}
 	path := filepath.Join(e.work, np.node.Name+".json")
 	blob, err := json.Marshal(cfg)
@@ -568,7 +569,7 @@ func tcDuration(d time.Duration) string {
 	return strconv.FormatInt(d.Microseconds(), 10) + "us"
 }
 
-func (e *netnsEnv) Exec(ctx context.Context, node string, argv []string) ExecResult {
+func (e *netnsEnv) Exec(ctx context.Context, node string, argv, env []string) ExecResult {
 	np, ok := e.byName[node]
 	if !ok {
 		return ExecResult{Err: fmt.Errorf("unknown node %q", node)}
@@ -582,7 +583,7 @@ func (e *netnsEnv) Exec(ctx context.Context, node string, argv []string) ExecRes
 	full := append([]string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "-m", "--"}, argv...)
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, full[0], full[1:]...)
-	cmd.Env = simEnv()
+	cmd.Env = append(simEnv(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -595,6 +596,14 @@ func (e *netnsEnv) Exec(ctx context.Context, node string, argv []string) ExecRes
 		res.Err = err
 	}
 	return res
+}
+
+func (e *netnsEnv) Evidence() (Evidence, error) {
+	paths := make([]string, 0, len(e.nodes))
+	for _, np := range e.nodes {
+		paths = append(paths, filepath.Join(e.work, np.node.Name+"-evidence.jsonl"))
+	}
+	return readEvidence(paths)
 }
 
 // simEnv is the environment commands run with inside a node. The host's proxy

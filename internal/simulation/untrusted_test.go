@@ -94,6 +94,9 @@ func TestScenarioCannotSupplyCommandsOrPaths(t *testing.T) {
 			strings.Replace(minimalScenario, "address: 10.77.0.1}",
 				"address: 10.77.0.1, services: [{type: http, binary: /bin/sh}]}", 1),
 			"binary"},
+		{"a raw proxy URL",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy_url: 'socks5h://host/path'", 1),
+			"proxy_url"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,11 +160,19 @@ func TestValidatedScenarioHasNoSurprisingStrings(t *testing.T) {
 					assertTame(t, "alias", a)
 				}
 				for _, svc := range n.Services {
+					assertTame(t, "service name", svc.Name)
 					assertTame(t, "service type", svc.Type)
 					for zn, zv := range svc.Zone {
 						assertTame(t, "zone name", zn)
 						assertTame(t, "zone address", zv)
 					}
+				}
+			}
+			for _, test := range s.Tests {
+				if test.Proxy != nil {
+					assertTame(t, "proxy scheme", test.Proxy.Scheme)
+					assertTame(t, "proxy node", test.Proxy.Node)
+					assertTame(t, "proxy address", test.Proxy.address)
 				}
 			}
 			for _, f := range s.Faults {
