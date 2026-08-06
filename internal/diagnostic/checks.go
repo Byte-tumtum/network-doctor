@@ -960,9 +960,10 @@ func socks5Connect(conn net.Conn) error {
 	return nil
 }
 
-// socks5Error names an RFC 1928 reply code.
+// socks5Error names an RFC 1928 reply code. Codes 6-8 can't come back from a
+// domain-name CONNECT, so they fall through to the number.
 func socks5Error(code byte) string {
-	msgs := [...]string{1: "general failure", 2: "not allowed by ruleset", 3: "network unreachable", 4: "host unreachable", 5: "connection refused", 6: "TTL expired", 7: "command not supported", 8: "address type not supported"}
+	msgs := [...]string{1: "general failure", 2: "not allowed by ruleset", 3: "network unreachable", 4: "host unreachable", 5: "connection refused"}
 	if int(code) < len(msgs) && msgs[code] != "" {
 		return msgs[code]
 	}
