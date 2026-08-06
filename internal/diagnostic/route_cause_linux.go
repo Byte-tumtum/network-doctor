@@ -42,7 +42,7 @@ func routeFailureCauseFrom(routeData, arpData []byte) string {
 		return RouteCauseNoDefaultRoute
 	}
 	sort.SliceStable(routes, func(i, j int) bool { return routes[i].metric < routes[j].metric })
-	if len(routes) > 1 {
+	if len(routes) > 1 && routes[0].metric < routes[1].metric {
 		return RouteCausePreferredPathFailed
 	}
 	selected := routes[0]

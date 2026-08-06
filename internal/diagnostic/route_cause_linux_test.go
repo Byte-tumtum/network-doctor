@@ -18,6 +18,9 @@ func TestRouteFailureCauseFromKernelTables(t *testing.T) {
 		{"multiple defaults", header +
 			"eth1 00000000 01034D0A 0003 0 0 50 00000000 0 0 0\n" +
 			"eth0 00000000 01014D0A 0003 0 0 100 00000000 0 0 0\n", arpHeader, RouteCausePreferredPathFailed},
+		{"equal metric defaults are ECMP", header +
+			"eth1 00000000 01034D0A 0003 0 0 50 00000000 0 0 0\n" +
+			"eth0 00000000 01014D0A 0003 0 0 50 00000000 0 0 0\n", arpHeader, RouteCauseSelectedPathFailed},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
