@@ -335,6 +335,7 @@ func TestProxyProbeSocks5Failures(t *testing.T) {
 	}{
 		{"auth demanded", []byte{5, 2}, "cleartext"},
 		{"refused", []byte{5, 0, 5, 5, 0, 1, 0, 0, 0, 0, 0, 0}, "connection refused"},
+		{"no domain names", []byte{5, 0, 5, 8, 0, 1, 0, 0, 0, 0, 0, 0}, "address type not supported"},
 		{"unknown reply code", []byte{5, 0, 5, 99, 0, 1, 0, 0, 0, 0, 0, 0}, "reply code 99"},
 		{"not a SOCKS port", []byte("HTTP/1.1 400 Bad Request\r\n"), "not a SOCKS5 proxy"},
 		{"truncated", []byte{5, 0, 5, 0, 0, 1}, "truncated"},
