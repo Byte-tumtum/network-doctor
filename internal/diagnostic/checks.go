@@ -705,13 +705,16 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 // proxyFromEnvironment is http.ProxyFromEnvironment plus ALL_PROXY, which Go
 // ignores but curl, ssh and the SOCKS ecosystem honor — a box whose only proxy
 // setting is ALL_PROXY=socks5h://... is proxied, and the report has to say so.
-// ponytail: NO_PROXY is not applied to the ALL_PROXY fallback; the probe host
-// is a fixed public name, so a NO_PROXY hit would only mean the row describes
-// a proxy this one request would have bypassed.
 func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 	u, err := http.ProxyFromEnvironment(req)
 	if u != nil || err != nil {
 		return u, err
+	}
+	// net/http already applied NO_PROXY to HTTP(S)_PROXY, so a nil here can
+	// equally mean "exempted" — falling back to ALL_PROXY on that would report
+	// a proxy nothing would use for this host.
+	if noProxyBypasses(req.URL.Hostname()) {
+		return nil, nil
 	}
 	all := os.Getenv("ALL_PROXY")
 	if all == "" {
@@ -725,6 +728,33 @@ func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 		return u, nil
 	}
 	return url.Parse("http://" + all)
+}
+
+// noProxyBypasses reports whether NO_PROXY exempts host from proxying — the
+// check net/http applies to HTTP(S)_PROXY and this file has to apply itself to
+// the ALL_PROXY fallback.
+// ponytail: suffix and "*" matching only, no IP or CIDR entries; the only host
+// asked about is probeHost, a fixed public name that is never a literal IP.
+func noProxyBypasses(host string) bool {
+	np := os.Getenv("NO_PROXY")
+	if np == "" {
+		np = os.Getenv("no_proxy")
+	}
+	host = strings.ToLower(host)
+	for _, entry := range strings.Split(np, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "*" {
+			return true
+		}
+		entry = strings.TrimPrefix(entry, ".")
+		if entry == "" {
+			continue
+		}
+		if host == entry || strings.HasSuffix(host, "."+entry) {
+			return true
+		}
+	}
+	return false
 }
 
 // proxyProbe checks egress through the environment-configured proxy: dial the

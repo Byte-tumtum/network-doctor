@@ -385,6 +385,24 @@ func TestProxyFromEnvironmentAllProxy(t *testing.T) {
 			}
 		})
 	}
+	// A NO_PROXY hit is why net/http returned nil; falling back to ALL_PROXY
+	// there would report a proxy this host would never go through.
+	for _, np := range []string{"*", "gstatic.com", ".gstatic.com", "connectivitycheck.gstatic.com"} {
+		t.Run("NO_PROXY="+np, func(t *testing.T) {
+			t.Setenv("ALL_PROXY", "socks5h://proxy.corp:1080")
+			t.Setenv("NO_PROXY", np)
+			if u, err := proxyFromEnvironment(req); u != nil || err != nil {
+				t.Errorf("proxyFromEnvironment = %v, %v; want nil, nil", u, err)
+			}
+		})
+	}
+	t.Run("NO_PROXY miss still falls back", func(t *testing.T) {
+		t.Setenv("ALL_PROXY", "socks5h://proxy.corp:1080")
+		t.Setenv("NO_PROXY", "example.com,notgstatic.com")
+		if u, err := proxyFromEnvironment(req); err != nil || u == nil || u.Host != "proxy.corp:1080" {
+			t.Errorf("proxyFromEnvironment = %v, %v; want socks5h://proxy.corp:1080", u, err)
+		}
+	})
 	t.Run("bare host defaults to http", func(t *testing.T) {
 		t.Setenv("ALL_PROXY", "proxy.corp:3128")
 		u, err := proxyFromEnvironment(req)
