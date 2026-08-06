@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -212,13 +213,36 @@ func launch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	forward := append([]string{directorCommand, "-netdoc", path}, args[1:]...)
-	code, err := simulation.LaunchDirector(ctx, self, forward, stdout, stderr)
+	code, err := simulation.LaunchDirector(ctx, self, directorArgv(f, ref, path), stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
 	}
 	return code
+}
+
+// directorArgv builds the director's command line out of what the launcher
+// parsed, rather than forwarding the user's argv with an extra flag bolted on
+// the front. Forwarding raw would leave two -netdoc flags on the line whenever
+// the user passed one, and the flag package takes the last — quietly throwing
+// away the path the launcher resolved and validated while $PATH and the working
+// directory still meant what the user meant by them.
+//
+// Every value here is the parsed one rendered canonically, so there is nothing
+// left to re-interpret: exactly one occurrence of each flag, and the scenario
+// behind a "--" so a reference that starts with a dash stays a scenario.
+func directorArgv(f *runFlags, ref, netdoc string) []string {
+	return []string{
+		directorCommand,
+		"-netdoc", netdoc,
+		"-timeout", f.timeout.String(),
+		"-repeat", strconv.Itoa(*f.repeat),
+		fmt.Sprintf("-json=%t", *f.json),
+		fmt.Sprintf("-keep=%t", *f.keep),
+		fmt.Sprintf("-dry-run=%t", *f.dry),
+		fmt.Sprintf("-v=%t", *f.verbose),
+		"--", ref,
+	}
 }
 
 // direct is the run, from inside the namespaces the launcher created.
