@@ -38,6 +38,17 @@ jobs:
           CGO_ENABLED: "0"
       - run: go test ./...
       - run: go test -tags integration ./internal/diagnostic
+      # Builds real network namespaces to run netdoc inside deliberately broken
+      # networks. Rootless: it uses an unprivileged user namespace.
+      #
+      # NETDOC_SIM_REQUIRE_NETNS turns "this host cannot simulate" from a skip
+      # into a failure. Without it a runner that loses unprivileged user
+      # namespaces would go green while testing nothing, and a backend
+      # regression would sit unnoticed until someone ran it locally.
+      - if: runner.os == 'Linux'
+        run: go test -tags netns_integration -count=1 ./internal/simulation
+        env:
+          NETDOC_SIM_REQUIRE_NETNS: "1"
       # The job runner does concurrent subprocess cancellation; gate it.
       - if: runner.os == 'Linux'
         run: go test -race ./...

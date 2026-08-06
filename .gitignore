@@ -1,6 +1,7 @@
 # Go Binary
 /network-doctor
 /netdoc
+/netdoc-sim
 
 # Saved reports — recording demo.tape presses 'w', which drops one here
 /network-doctor-*.txt
