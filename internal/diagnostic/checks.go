@@ -809,7 +809,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		if err != nil {
 			r.Status = StatusFail
 			r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
-			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY and the proxy host"
+			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
 			return r
 		}
 		req := "CONNECT " + probeHost + ":443 HTTP/1.1\r\nHost: " + probeHost + ":443\r\n"
@@ -859,7 +859,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		r.Status = StatusFail
 		r.Detail = "proxy " + addr + " refused CONNECT: " + resp.Status
 		if resp.StatusCode == http.StatusProxyAuthRequired {
-			r.Fix = "proxy requires credentials — set user:pass@host in HTTPS_PROXY"
+			r.Fix = "proxy requires credentials — set user:pass@host in the proxy URL"
 		} else {
 			r.Fix = "proxy reachable but refusing tunnels — check proxy policy"
 		}
@@ -888,7 +888,7 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Ti
 	if err != nil {
 		r.Status = StatusFail
 		r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
-		r.Fix = "proxy configured but unreachable — check ALL_PROXY and the proxy host"
+		r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
 		return r
 	}
 	defer conn.Close()
@@ -901,7 +901,7 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, dl, start time.Ti
 	if err := socks5Connect(conn); err != nil {
 		r.Status = StatusFail
 		r.Detail = "SOCKS5 proxy " + addr + ": " + err.Error()
-		r.Fix = "check that ALL_PROXY names a SOCKS5 port and that the proxy allows this destination"
+		r.Fix = "check that the proxy URL names a SOCKS5 port and that the proxy allows this destination"
 		return r
 	}
 	return o.proxyTunnelOK(ctx, conn, addr, since(start))
