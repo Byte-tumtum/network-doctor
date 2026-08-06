@@ -52,7 +52,7 @@ func TestParseScenarioRejects(t *testing.T) {
 		{"two documents", minimalScenario + "\n---\n" + minimalScenario, "exactly one document"},
 		{"no name", strings.Replace(minimalScenario, "name: t", "name: \"\"", 1), "name is required"},
 		{"no client", strings.Replace(minimalScenario, "role: client", "role: server", 1), "exactly one node"},
-		{"unknown role", strings.Replace(minimalScenario, "role: client", "role: router", 1), "unknown role"},
+		{"unknown role", strings.Replace(minimalScenario, "role: client", "role: alien", 1), "unknown role"},
 		{"bad address", strings.Replace(minimalScenario, "10.77.0.10", "not-an-ip", 1), "address"},
 		{"address off subnet", strings.Replace(minimalScenario, "10.77.0.10", "192.0.2.5", 1), "outside"},
 		{"duplicate node", strings.Replace(minimalScenario, "name: server", "name: client", 1), "duplicate node"},

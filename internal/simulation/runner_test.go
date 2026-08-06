@@ -100,7 +100,7 @@ func TestRunPassesOnlyGeneratedTLSRootEnvironment(t *testing.T) {
 	}
 }
 
-func (e *fakeEnv) Evidence() (Evidence, error) { return aggregateEvidence(nil), nil }
+func (e *fakeEnv) Evidence(context.Context) (Evidence, error) { return aggregateEvidence(nil), nil }
 
 func (e *fakeEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
 	e.cleanups++

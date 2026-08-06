@@ -40,7 +40,7 @@ type Env interface {
 	// validated TLS service. Scenario files never supply this path.
 	TrustAnchor(service string) (string, error)
 	// Evidence reads structured service observations collected so far.
-	Evidence() (Evidence, error)
+	Evidence(ctx context.Context) (Evidence, error)
 	// Cleanup releases everything. It is idempotent, safe after a partial
 	// Prepare, and reports errors rather than swallowing them. With keep set it
 	// leaves the environment running and says how to reach it.

@@ -42,15 +42,31 @@ type Report struct {
 
 // NodeInfo is a namespace the simulation created.
 type NodeInfo struct {
-	Name      string   `json:"name"`
-	Role      string   `json:"role"`
-	Address   string   `json:"address"`
-	Aliases   []string `json:"aliases,omitempty"`
-	Interface string   `json:"interface"`
-	Gateway   string   `json:"gateway,omitempty"`
-	Resolver  string   `json:"resolver,omitempty"`
-	Services  []string `json:"services,omitempty"`
-	PID       int      `json:"pid"`
+	Name       string          `json:"name"`
+	Role       string          `json:"role"`
+	Address    string          `json:"address"`
+	Aliases    []string        `json:"aliases,omitempty"`
+	Interface  string          `json:"interface"`
+	Gateway    string          `json:"gateway,omitempty"`
+	Resolver   string          `json:"resolver,omitempty"`
+	Services   []string        `json:"services,omitempty"`
+	PID        int             `json:"pid"`
+	Interfaces []InterfaceInfo `json:"interfaces,omitempty"`
+	Routes     []RouteInfo     `json:"routes,omitempty"`
+}
+
+// InterfaceInfo and RouteInfo expose logical topology names rather than the
+// generated Linux names used to implement them.
+type InterfaceInfo struct {
+	Segment string `json:"segment"`
+	Address string `json:"address"`
+}
+
+type RouteInfo struct {
+	Destination string `json:"destination"`
+	Via         string `json:"via"`
+	Segment     string `json:"segment"`
+	Metric      int    `json:"metric"`
 }
 
 // FaultInfo is one injected impairment and the exact command that injected it.
@@ -101,6 +117,18 @@ func (r *Report) finish() {
 	}
 	if r.Evidence.TLS == nil {
 		r.Evidence.TLS = []TLSEvidence{}
+	}
+	if r.Evidence.Links == nil {
+		r.Evidence.Links = []LinkEvidence{}
+	}
+	if r.Evidence.Routes == nil {
+		r.Evidence.Routes = []RouteEvidence{}
+	}
+	if r.Evidence.Routers == nil {
+		r.Evidence.Routers = []RouterEvidence{}
+	}
+	if r.Evidence.Reachability == nil {
+		r.Evidence.Reachability = []ReachabilityEvidence{}
 	}
 	if r.Error != "" {
 		r.Result = ResultError
@@ -162,6 +190,12 @@ func (r *Report) WriteText(w io.Writer) {
 			extra = append(extra, "serves "+strings.Join(n.Services, ","))
 		}
 		p("  %-10s %-14s %s", n.Name, n.Address, strings.Join(extra, ", "))
+		for _, iface := range n.Interfaces {
+			p("      link %-16s %s", iface.Segment, iface.Address)
+		}
+		for _, route := range n.Routes {
+			p("      route %-15s via %-15s on %s metric %d", route.Destination, route.Via, route.Segment, route.Metric)
+		}
 	}
 	p("")
 
@@ -178,8 +212,30 @@ func (r *Report) WriteText(w io.Writer) {
 		r.Tests[i].writeText(w)
 	}
 
-	if len(r.Evidence.DNS) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 {
+	if len(r.Evidence.DNS) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 ||
+		len(r.Evidence.Links) > 0 || len(r.Evidence.Routes) > 0 || len(r.Evidence.Routers) > 0 || len(r.Evidence.Reachability) > 0 {
 		p("Structured evidence")
+		for _, e := range r.Evidence.Links {
+			p("  LINK  %-10s %-16s %-18s up=%t", e.Node, e.Segment, e.Address, e.Up)
+		}
+		for _, e := range r.Evidence.Routers {
+			p("  ROUTER %-10s IPv4 forwarding=%t", e.Node, e.IPv4Forwarding)
+		}
+		for _, e := range r.Evidence.Routes {
+			selected := "configured"
+			if e.Selected {
+				selected = "selected"
+			}
+			gateway := "unknown"
+			if e.GatewayReachable != nil {
+				gateway = fmt.Sprint(*e.GatewayReachable)
+			}
+			p("  ROUTE %-10s %-15s via %-15s %-16s metric=%d %s gateway=%s", e.Node, e.Destination,
+				e.Via, e.Segment, e.Metric, selected, gateway)
+		}
+		for _, e := range r.Evidence.Reachability {
+			p("  PATH  %-10s -> %-24s via %-32s reachable=%t", e.From, e.To, strings.Join(e.Via, " -> "), e.Reachable)
+		}
 		for _, e := range r.Evidence.DNS {
 			p("  DNS   %-10s from %-13s %-6s %-28s %-8s %s ×%d", e.Node, e.Source, e.QueryType, e.Name, e.Result, e.Service, e.Count)
 		}

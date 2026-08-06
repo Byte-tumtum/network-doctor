@@ -31,13 +31,37 @@ type Scenario struct {
 	Expect      Expect   `yaml:"expect"`
 }
 
-// Topology is a single shared L2 segment with one node per participant. One
-// segment covers every scenario in the initial library; multi-subnet routing
-// (loops, misconfigured masks, multiple interfaces) needs a second link type
-// and is deliberately not modelled yet.
+// Topology describes L2 segments, node interfaces, and routes. Subnet remains
+// the backward-compatible shorthand used by the original single-segment
+// scenarios; validation normalizes it into Segments, Interfaces, and Routes.
 type Topology struct {
+	Subnet   string    `yaml:"subnet"`
+	Segments []Segment `yaml:"segments"`
+	Nodes    []Node    `yaml:"nodes"`
+	Routes   []Route   `yaml:"routes"`
+}
+
+// Segment is one simulator-owned Linux bridge.
+type Segment struct {
+	Name   string `yaml:"name"`
 	Subnet string `yaml:"subnet"`
-	Nodes  []Node `yaml:"nodes"`
+}
+
+// Interface attaches a node to one logical segment. Scenario authors never
+// provide the kernel interface name; the backend derives a short safe name.
+type Interface struct {
+	Segment string `yaml:"segment"`
+	Address string `yaml:"address"`
+}
+
+// Route is a validated unicast route. Destination is either "default" or a
+// canonical prefix; free-form iproute expressions are deliberately impossible.
+type Route struct {
+	Node        string `yaml:"node"`
+	Destination string `yaml:"destination"`
+	Via         string `yaml:"via"`
+	Metric      int    `yaml:"metric"`
+	Default     bool   `yaml:"-"`
 }
 
 // Node is one network namespace on the segment.
@@ -47,6 +71,9 @@ type Node struct {
 	// scenery. Exactly one client per scenario.
 	Role    string `yaml:"role"`
 	Address string `yaml:"address"`
+	// Interfaces is the explicit multi-segment form. Address is retained only
+	// for legacy single-segment scenario compatibility.
+	Interfaces []Interface `yaml:"interfaces"`
 	// Aliases are extra addresses put on the node's loopback, which is how the
 	// simulated internet claims the public IPs netdoc probes (1.1.1.1, 8.8.8.8)
 	// without anything leaving the namespace.
@@ -115,6 +142,11 @@ const (
 	FaultNetem = "netem"
 	// FaultNoDefaultRoute deletes the node's default route.
 	FaultNoDefaultRoute = "no_default_route"
+	// FaultReplaceDefaultRoute replaces every default route on a node with one
+	// validated on-link next hop.
+	FaultReplaceDefaultRoute = "replace_default_route"
+	// FaultLinkDown administratively lowers one logical node interface.
+	FaultLinkDown = "link_down"
 )
 
 // FaultDrop directions.
@@ -127,6 +159,11 @@ const (
 type Fault struct {
 	Type string `yaml:"type"`
 	Node string `yaml:"node"`
+	// Segment identifies an interface by logical topology name. Via and Metric
+	// are used only by replace_default_route.
+	Segment string `yaml:"segment"`
+	Via     string `yaml:"via"`
+	Metric  int    `yaml:"metric"`
 	// To, Protocol and Port select the traffic FaultDrop discards. An empty To
 	// matches every destination; a zero Port matches every port.
 	To       string `yaml:"to"`
@@ -148,12 +185,14 @@ type Fault struct {
 // Test is one netdoc run inside a node. An empty Target runs the generic
 // (no-target) checks, exactly as `netdoc` with no argument does.
 type Test struct {
-	Name   string     `yaml:"name"`
-	Type   string     `yaml:"type"`
-	Node   string     `yaml:"node"`
-	Target string     `yaml:"target"`
-	Proxy  *TestProxy `yaml:"proxy"`
-	Trust  *TestTrust `yaml:"trust"`
+	Name          string     `yaml:"name"`
+	Type          string     `yaml:"type"`
+	Node          string     `yaml:"node"`
+	Target        string     `yaml:"target"`
+	SourceSegment string     `yaml:"source_segment"`
+	Proxy         *TestProxy `yaml:"proxy"`
+	Trust         *TestTrust `yaml:"trust"`
+	Expect        *Expect    `yaml:"expect"`
 }
 
 // TestProxy selects one SOCKS service and the public URL scheme netdoc should
@@ -273,19 +312,11 @@ func (s *Scenario) Validate() error {
 	if s.Name == "" {
 		return errors.New("name is required")
 	}
-	subnet, err := netip.ParsePrefix(s.Topology.subnetOrDefault())
-	if err != nil {
-		return fmt.Errorf("topology.subnet: %w", err)
-	}
-	if !subnet.Addr().Is4() {
-		return errors.New("topology.subnet: only IPv4 segments are supported")
-	}
 	if len(s.Topology.Nodes) == 0 {
 		return errors.New("topology.nodes: at least one node is required")
 	}
 	seen := make(map[string]bool, len(s.Topology.Nodes))
 	nodes := make(map[string]*Node, len(s.Topology.Nodes))
-	serviceNames := make(map[string]bool)
 	clients := 0
 	for i := range s.Topology.Nodes {
 		n := &s.Topology.Nodes[i]
@@ -302,23 +333,27 @@ func (s *Scenario) Validate() error {
 		switch n.Role {
 		case "client":
 			clients++
-		case "server", "":
+		case "server", "router":
+		case "":
 			n.Role = "server"
 		default:
-			return fmt.Errorf("node %q: unknown role %q (client or server)", n.Name, n.Role)
-		}
-		if err := n.validateAddrs(subnet); err != nil {
-			return err
-		}
-		if err := n.validateServices(serviceNames); err != nil {
-			return err
+			return fmt.Errorf("node %q: unknown role %q (client, server or router)", n.Name, n.Role)
 		}
 	}
 	if clients != 1 {
 		return fmt.Errorf("exactly one node must have role client, found %d", clients)
 	}
+	if err := s.Topology.normalizeAndValidate(nodes); err != nil {
+		return err
+	}
+	serviceNames := make(map[string]bool)
+	for i := range s.Topology.Nodes {
+		if err := s.Topology.Nodes[i].validateServices(serviceNames); err != nil {
+			return err
+		}
+	}
 	for i := range s.Faults {
-		if err := s.Faults[i].validate(seen); err != nil {
+		if err := s.Faults[i].validate(&s.Topology, seen); err != nil {
 			return fmt.Errorf("faults[%d]: %w", i, err)
 		}
 	}
@@ -475,12 +510,16 @@ func (n *Node) validateServices(names map[string]bool) error {
 	return nil
 }
 
-func (f *Fault) validate(nodes map[string]bool) error {
+func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 	if !nodes[f.Node] {
 		return fmt.Errorf("unknown node %q", f.Node)
 	}
+	node := topology.node(f.Node)
 	switch f.Type {
 	case FaultDrop:
+		if f.Segment != "" || f.Via != "" || f.Metric != 0 {
+			return errors.New("drop has unsupported route or segment options")
+		}
 		switch f.Direction {
 		case DirectionOutbound, DirectionInbound:
 		case "":
@@ -507,6 +546,17 @@ func (f *Fault) validate(nodes map[string]bool) error {
 			return fmt.Errorf("port %d is out of range", f.Port)
 		}
 	case FaultNetem:
+		if f.Via != "" || f.Metric != 0 {
+			return errors.New("netem has unsupported route options")
+		}
+		if f.Segment == "" {
+			if len(node.Interfaces) != 1 {
+				return errors.New("netem on a multi-interface node requires segment")
+			}
+			f.Segment = node.Interfaces[0].Segment
+		} else if _, ok := node.interfaceOn(f.Segment); !ok {
+			return fmt.Errorf("node %q has no interface on segment %q", f.Node, f.Segment)
+		}
 		if f.Delay == "" && f.Jitter == "" && f.Loss == "" {
 			return errors.New("netem needs delay, jitter or loss")
 		}
@@ -529,8 +579,42 @@ func (f *Fault) validate(nodes map[string]bool) error {
 			return fmt.Errorf("loss: %q is not a percentage such as \"10%%\"", f.Loss)
 		}
 	case FaultNoDefaultRoute:
+		if f.Segment != "" || f.Via != "" || f.Metric != 0 {
+			return errors.New("no_default_route has unsupported options")
+		}
+	case FaultReplaceDefaultRoute:
+		if f.Segment != "" {
+			return errors.New("replace_default_route does not accept segment; it is derived from via")
+		}
+		if f.Metric < 0 || f.Metric > maxRouteMetric {
+			return fmt.Errorf("metric %d is out of range", f.Metric)
+		}
+		via, canonical, err := parseAddr(f.Via)
+		if err != nil {
+			return fmt.Errorf("via: %w", err)
+		}
+		if _, ok := nodeSegmentForAddress(node, via); !ok {
+			return fmt.Errorf("gateway %s is not on a directly connected subnet for node %q", via, f.Node)
+		}
+		f.Via = canonical
+	case FaultLinkDown:
+		if f.Via != "" || f.Metric != 0 {
+			return errors.New("link_down has unsupported options")
+		}
+		if _, ok := node.interfaceOn(f.Segment); !ok {
+			return fmt.Errorf("node %q has no interface on segment %q", f.Node, f.Segment)
+		}
 	default:
 		return fmt.Errorf("unknown fault type %q", f.Type)
+	}
+	return nil
+}
+
+func (t *Topology) node(name string) *Node {
+	for i := range t.Nodes {
+		if t.Nodes[i].Name == name {
+			return &t.Nodes[i]
+		}
 	}
 	return nil
 }
@@ -544,6 +628,11 @@ func (t *Test) validate(nodes map[string]*Node) error {
 	}
 	if nodes[t.Node] == nil {
 		return fmt.Errorf("unknown node %q", t.Node)
+	}
+	if t.SourceSegment != "" {
+		if _, ok := nodes[t.Node].interfaceOn(t.SourceSegment); !ok {
+			return fmt.Errorf("source_segment %q is not an interface on node %q", t.SourceSegment, t.Node)
+		}
 	}
 	if t.Proxy != nil {
 		if err := t.Proxy.validate(nodes); err != nil {
@@ -559,6 +648,11 @@ func (t *Test) validate(nodes map[string]*Node) error {
 		t.Name = t.Node + " " + t.Target
 		if t.Target == "" {
 			t.Name = t.Node + " (generic)"
+		}
+	}
+	if t.Expect != nil {
+		if err := t.Expect.validate(); err != nil {
+			return fmt.Errorf("expect: %w", err)
 		}
 	}
 	if t.Target == "" {

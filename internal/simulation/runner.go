@@ -124,19 +124,80 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	for _, t := range s.Tests {
 		rep.Tests = append(rep.Tests, runTest(ctx, env, t, s.Expect, opts))
 	}
-	rep.Evidence, err = env.Evidence()
+	evidenceCtx, evidenceCancel := context.WithTimeout(ctx, opts.SetupTimeout)
+	rep.Evidence, err = env.Evidence(evidenceCtx)
+	evidenceCancel()
 	if err != nil {
 		rep.Error = "collecting evidence failed: " + textsafe.Clean(err.Error())
+	} else {
+		rep.addReachabilityEvidence()
 	}
 	return rep
+}
+
+func (r *Report) addReachabilityEvidence() {
+	for _, test := range r.Tests {
+		if test.Diagnosis == nil {
+			continue
+		}
+		probeID, destination := string(diagnostic.ProbeTargetTCP), test.Target
+		if destination == "" {
+			probeID, destination = string(diagnostic.ProbeInternet), "internet endpoints"
+		}
+		status := ""
+		for _, check := range test.Diagnosis.Checks {
+			if check.ID == probeID {
+				status = check.Status
+				break
+			}
+		}
+		if status == "" {
+			continue
+		}
+		via := []string{}
+		if test.SourceSegment != "" {
+			via = append(via, test.SourceSegment)
+		} else {
+			for _, route := range r.Evidence.Routes {
+				if route.Node == test.Node && route.Selected {
+					via = append(via, route.Segment)
+					if route.Via != "" {
+						via = append(via, route.Via)
+					}
+					break
+				}
+			}
+		}
+		r.Evidence.Reachability = append(r.Evidence.Reachability, ReachabilityEvidence{
+			From: test.Node, To: destination, Via: via, Reachable: status == "PASS" || status == "WARN",
+		})
+	}
 }
 
 // runTest runs netdoc inside a node and compares the diagnosis. Repeats reuse
 // the first run for the comparison and contribute only their verdict, so a
 // flaky diagnosis shows up as instability rather than as a coin flip.
 func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options) TestOutcome {
-	out := TestOutcome{Name: t.Name, Node: t.Node, Target: t.Target}
+	if t.Expect != nil {
+		expect = *t.Expect
+	}
+	out := TestOutcome{Name: t.Name, Node: t.Node, Target: t.Target, SourceSegment: t.SourceSegment}
 	argv := []string{opts.Netdoc, "-json", "-timeout", opts.ProbeTimeout.String()}
+	if t.SourceSegment != "" {
+		// Use the validated canonical address rather than exposing or accepting a
+		// generated kernel interface name.
+		for _, node := range env.Nodes() {
+			if node.Name != t.Node {
+				continue
+			}
+			for _, iface := range node.Interfaces {
+				if iface.Segment == t.SourceSegment {
+					address, _, _ := strings.Cut(iface.Address, "/")
+					argv = append(argv, "-iface", address)
+				}
+			}
+		}
+	}
 	var commandEnv []string
 	if t.Proxy != nil {
 		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))

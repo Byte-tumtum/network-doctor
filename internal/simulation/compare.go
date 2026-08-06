@@ -57,14 +57,15 @@ type CheckComparison struct {
 
 // TestOutcome is one netdoc run and how its diagnosis lined up.
 type TestOutcome struct {
-	Name     string        `json:"name"`
-	Node     string        `json:"node"`
-	Target   string        `json:"target,omitempty"`
-	Proxy    string        `json:"proxy,omitempty"`
-	Trust    string        `json:"trust,omitempty"`
-	Command  []string      `json:"command"`
-	Duration time.Duration `json:"duration_ms"`
-	ExitCode int           `json:"exit_code"`
+	Name          string        `json:"name"`
+	Node          string        `json:"node"`
+	Target        string        `json:"target,omitempty"`
+	Proxy         string        `json:"proxy,omitempty"`
+	Trust         string        `json:"trust,omitempty"`
+	SourceSegment string        `json:"source_segment,omitempty"`
+	Command       []string      `json:"command"`
+	Duration      time.Duration `json:"duration_ms"`
+	ExitCode      int           `json:"exit_code"`
 	// Error is set when netdoc could not be run or produced no report at all.
 	Error     string     `json:"error,omitempty"`
 	Stderr    string     `json:"stderr,omitempty"`

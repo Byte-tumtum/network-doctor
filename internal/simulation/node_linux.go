@@ -41,6 +41,11 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 			return err
 		}
 	}
+	if cfg.ForwardIPv4 {
+		if err := enableIPv4Forwarding(cfg.ForwardingStatus); err != nil {
+			return err
+		}
+	}
 	fmt.Fprintln(stdout, holderNSReady)
 
 	line, err := bufio.NewReader(stdin).ReadString('\n')
@@ -64,6 +69,31 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 	fmt.Fprintln(stdout, holderServicesReady)
 
 	waitForShutdown(ctx, stdin)
+	return nil
+}
+
+const ipv4ForwardPath = "/proc/sys/net/ipv4/ip_forward"
+
+// enableIPv4Forwarding runs in the router holder's network namespace. Linux
+// virtualizes this sysctl per network namespace; writing it here cannot alter
+// the director or host value. The status file lets the director report the
+// value read back from this exact namespace without invoking a shell.
+func enableIPv4Forwarding(statusPath string) error {
+	if err := os.WriteFile(ipv4ForwardPath, []byte("1\n"), 0o600); err != nil {
+		return fmt.Errorf("enable namespace IPv4 forwarding: %w", err)
+	}
+	raw, err := os.ReadFile(ipv4ForwardPath)
+	if err != nil {
+		return fmt.Errorf("verify namespace IPv4 forwarding: %w", err)
+	}
+	if strings.TrimSpace(string(raw)) != "1" {
+		return fmt.Errorf("namespace IPv4 forwarding remained %q", strings.TrimSpace(string(raw)))
+	}
+	if statusPath != "" {
+		if err := os.WriteFile(statusPath, []byte("1\n"), 0o600); err != nil {
+			return fmt.Errorf("record namespace IPv4 forwarding: %w", err)
+		}
+	}
 	return nil
 }
 

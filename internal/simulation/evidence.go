@@ -17,9 +17,47 @@ import (
 // namespaces. It complements netdoc's report; it is never used to manufacture
 // a diagnostic result.
 type Evidence struct {
-	DNS           []DNSEvidence   `json:"dns"`
-	SOCKSRequests []SOCKSEvidence `json:"socks_requests"`
-	TLS           []TLSEvidence   `json:"tls"`
+	DNS           []DNSEvidence          `json:"dns"`
+	SOCKSRequests []SOCKSEvidence        `json:"socks_requests"`
+	TLS           []TLSEvidence          `json:"tls"`
+	Links         []LinkEvidence         `json:"links"`
+	Routes        []RouteEvidence        `json:"routes"`
+	Routers       []RouterEvidence       `json:"routers"`
+	Reachability  []ReachabilityEvidence `json:"reachability"`
+}
+
+// LinkEvidence describes one actual namespace interface using its logical
+// segment name. Kernel implementation names are intentionally absent.
+type LinkEvidence struct {
+	Node    string `json:"node"`
+	Segment string `json:"segment"`
+	Address string `json:"address"`
+	Up      bool   `json:"up"`
+}
+
+// RouteEvidence combines the validated route with the kernel's selected path.
+// GatewayReachable is omitted when no neighbor observation was available.
+type RouteEvidence struct {
+	Node             string `json:"node"`
+	Destination      string `json:"destination"`
+	Via              string `json:"via,omitempty"`
+	Segment          string `json:"segment"`
+	Metric           int    `json:"metric"`
+	Selected         bool   `json:"selected"`
+	Source           string `json:"source,omitempty"`
+	GatewayReachable *bool  `json:"gateway_reachable,omitempty"`
+}
+
+type RouterEvidence struct {
+	Node           string `json:"node"`
+	IPv4Forwarding bool   `json:"ipv4_forwarding"`
+}
+
+type ReachabilityEvidence struct {
+	From      string   `json:"from"`
+	To        string   `json:"to"`
+	Via       []string `json:"via"`
+	Reachable bool     `json:"reachable"`
 }
 
 // DNSEvidence aggregates identical queries observed by a DNS service.
@@ -218,5 +256,9 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	if out.TLS == nil {
 		out.TLS = []TLSEvidence{}
 	}
+	out.Links = []LinkEvidence{}
+	out.Routes = []RouteEvidence{}
+	out.Routers = []RouterEvidence{}
+	out.Reachability = []ReachabilityEvidence{}
 	return out
 }

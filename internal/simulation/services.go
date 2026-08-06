@@ -29,10 +29,12 @@ const (
 
 // nodeConfig is what the director hands a holder.
 type nodeConfig struct {
-	Name     string `json:"name"`
-	Resolver string `json:"resolver,omitempty"`
-	Evidence string `json:"evidence,omitempty"`
-	TrustDir string `json:"trust_dir,omitempty"`
+	Name             string `json:"name"`
+	Resolver         string `json:"resolver,omitempty"`
+	Evidence         string `json:"evidence,omitempty"`
+	TrustDir         string `json:"trust_dir,omitempty"`
+	ForwardIPv4      bool   `json:"forward_ipv4,omitempty"`
+	ForwardingStatus string `json:"forwarding_status,omitempty"`
 	// Addresses is every address the node answers on. UDP needs them by name:
 	// a wildcard-bound socket replies from whatever source the route table
 	// picks, and a resolver whose answer arrives from a different address than

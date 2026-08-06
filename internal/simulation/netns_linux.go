@@ -27,7 +27,7 @@ import (
 //
 //	launcher (netdoc-sim run)          host namespaces, no privileges
 //	  └── director                     new user + net + mount namespace
-//	        ├── bridge nb<id>          the shared L2 segment, in the director
+//	        ├── bridge nb<id><n> ×N     one per logical L2 segment
 //	        ├── node holder ×N         each in its own net + mount namespace
 //	        └── nsenter … netdoc       diagnostics, inside a node
 //
@@ -116,6 +116,27 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func isRunID(id string) bool {
+	if len(id) != 6 {
+		return false
+	}
+	for _, c := range id {
+		if c < '0' || c > '9' {
+			if c < 'a' || c > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// kernelLinkName is the only generator for bridges and veth ends. The prefix,
+// six-byte validated run id, and base-36 index remain below Linux's 15-byte
+// IFNAMSIZ payload while staying collision-free within a run.
+func kernelLinkName(prefix, id string, index int) string {
+	return prefix + id + strconv.FormatInt(int64(index), 36)
 }
 
 // userNamespaceReason explains why this host will not hand out an unprivileged
@@ -209,14 +230,14 @@ func LaunchDirector(ctx context.Context, self string, argv []string, stdout, std
 
 // netnsEnv is one live simulated network, owned by the director process.
 type netnsEnv struct {
-	backend  *netnsBackend
-	id       string
-	scenario *Scenario
-	work     string
-	bridge   string
-	nodes    []*nodeProc
-	byName   map[string]*nodeProc
-	prefix   netip.Prefix
+	backend   *netnsBackend
+	id        string
+	scenario  *Scenario
+	work      string
+	bridges   []*segmentProc
+	bySegment map[string]*segmentProc
+	nodes     []*nodeProc
+	byName    map[string]*nodeProc
 	// tables records the nodes that already have the simulator's nftables table,
 	// so repeated faults on one node do not re-add it.
 	tables map[string]bool
@@ -242,27 +263,36 @@ type nodeProc struct {
 	stdout  *bufio.Reader
 	logs    *safeLog
 	pid     int
-	iface   string // interface name inside the node
-	peer    string // the same veth's other end, enslaved to the bridge
+	ifaces  []*interfaceProc
 	stopped bool
 }
 
+type segmentProc struct {
+	segment *Segment
+	bridge  string
+}
+
+type interfaceProc struct {
+	logical *Interface
+	iface   string // interface name inside the node
+	peer    string // veth end enslaved to the segment bridge
+}
+
 func (b *netnsBackend) Prepare(ctx context.Context, s *Scenario, id string) (Env, error) {
-	prefix, err := netip.ParsePrefix(s.Topology.subnetOrDefault())
-	if err != nil {
-		return nil, err
+	if !isRunID(id) {
+		return nil, fmt.Errorf("invalid simulation run id %q", id)
 	}
 	e := &netnsEnv{
-		backend: b, id: id, scenario: s, prefix: prefix,
-		bridge: "nb" + id,
-		byName: make(map[string]*nodeProc, len(s.Topology.Nodes)),
-		tables: map[string]bool{},
+		backend: b, id: id, scenario: s,
+		bySegment: make(map[string]*segmentProc, len(s.Topology.Segments)),
+		byName:    make(map[string]*nodeProc, len(s.Topology.Nodes)),
+		tables:    map[string]bool{},
 	}
 	e.holderCtx, e.endHolders = context.WithCancel(context.WithoutCancel(ctx))
 	// Deterministic, not MkdirTemp: derived from the run id so `netdoc-sim
 	// cleanup <id>` can find the workspace of a run whose process is gone.
 	e.work = filepath.Join(os.TempDir(), "netdoc-sim-"+id)
-	if err = os.MkdirAll(e.work, 0o700); err != nil {
+	if err := os.MkdirAll(e.work, 0o700); err != nil {
 		return nil, err
 	}
 	// Every failure past this point still returns e: partially built namespaces
@@ -274,18 +304,29 @@ func (b *netnsBackend) Prepare(ctx context.Context, s *Scenario, id string) (Env
 }
 
 func (e *netnsEnv) build(ctx context.Context) error {
-	if err := e.run(ctx, "ip", "link", "add", e.bridge, "type", "bridge"); err != nil {
-		return err
+	for i := range e.scenario.Topology.Segments {
+		segment := &e.scenario.Topology.Segments[i]
+		sp := &segmentProc{segment: segment, bridge: kernelLinkName("nb", e.id, i)}
+		e.bridges = append(e.bridges, sp)
+		e.bySegment[segment.Name] = sp
+		if err := e.run(ctx, "ip", "link", "add", sp.bridge, "type", "bridge"); err != nil {
+			return fmt.Errorf("segment %s: %w", segment.Name, err)
+		}
+		if err := e.run(ctx, "ip", "link", "set", sp.bridge, "up"); err != nil {
+			return fmt.Errorf("segment %s: %w", segment.Name, err)
+		}
 	}
-	if err := e.run(ctx, "ip", "link", "set", e.bridge, "up"); err != nil {
-		return err
-	}
+	interfaceIndex := 0
 	for i := range e.scenario.Topology.Nodes {
 		n := &e.scenario.Topology.Nodes[i]
-		np := &nodeProc{
-			node:  n,
-			iface: fmt.Sprintf("ne%s%d", e.id, i),
-			peer:  fmt.Sprintf("np%s%d", e.id, i),
+		np := &nodeProc{node: n}
+		for ii := range n.Interfaces {
+			np.ifaces = append(np.ifaces, &interfaceProc{
+				logical: &n.Interfaces[ii],
+				iface:   kernelLinkName("ne", e.id, interfaceIndex),
+				peer:    kernelLinkName("np", e.id, interfaceIndex),
+			})
+			interfaceIndex++
 		}
 		e.nodes = append(e.nodes, np)
 		e.byName[n.Name] = np
@@ -295,6 +336,9 @@ func (e *netnsEnv) build(ctx context.Context) error {
 		if err := e.wireNode(ctx, np); err != nil {
 			return fmt.Errorf("node %s: %w", n.Name, err)
 		}
+	}
+	if err := e.installRoutes(ctx); err != nil {
+		return err
 	}
 	// Services come last: a listener must not be reachable before every node is
 	// addressed, or an early probe could race the topology into existence.
@@ -312,9 +356,11 @@ func (e *netnsEnv) build(ctx context.Context) error {
 func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 	cfg := nodeConfig{
 		Name: np.node.Name, Resolver: np.node.Resolver, Services: np.node.Services,
-		Addresses: append([]string{np.node.Address}, np.node.Aliases...),
-		Evidence:  filepath.Join(e.work, np.node.Name+"-evidence.jsonl"),
-		TrustDir:  e.work,
+		Addresses:        np.node.addresses(),
+		Evidence:         filepath.Join(e.work, np.node.Name+"-evidence.jsonl"),
+		TrustDir:         e.work,
+		ForwardIPv4:      np.node.Role == "router",
+		ForwardingStatus: filepath.Join(e.work, np.node.Name+"-forwarding"),
 	}
 	path := filepath.Join(e.work, np.node.Name+".json")
 	blob, err := json.Marshal(cfg)
@@ -355,18 +401,21 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 	return np.await(ctx, holderNSReady)
 }
 
-// wireNode gives the node its veth, addresses, and route.
+// wireNode gives the node one veth per logical interface and its addresses.
 func (e *netnsEnv) wireNode(ctx context.Context, np *nodeProc) error {
 	n := np.node
 	pid := strconv.Itoa(np.pid)
-	steps := [][]string{
-		{"ip", "link", "add", np.peer, "type", "veth", "peer", "name", np.iface},
-		{"ip", "link", "set", np.peer, "master", e.bridge},
-		{"ip", "link", "set", np.peer, "up"},
-		{"ip", "link", "set", np.iface, "netns", pid},
-		{"nsenter", "-t", pid, "-n", "--", "ip", "link", "set", "lo", "up"},
-		{"nsenter", "-t", pid, "-n", "--", "ip", "addr", "add", n.Address + "/" + strconv.Itoa(e.prefix.Bits()), "dev", np.iface},
-		{"nsenter", "-t", pid, "-n", "--", "ip", "link", "set", np.iface, "up"},
+	steps := [][]string{{"nsenter", "-t", pid, "-n", "--", "ip", "link", "set", "lo", "up"}}
+	for _, iface := range np.ifaces {
+		bridge := e.bySegment[iface.logical.Segment]
+		steps = append(steps,
+			[]string{"ip", "link", "add", iface.peer, "type", "veth", "peer", "name", iface.iface},
+			[]string{"ip", "link", "set", iface.peer, "master", bridge.bridge},
+			[]string{"ip", "link", "set", iface.peer, "up"},
+			[]string{"ip", "link", "set", iface.iface, "netns", pid},
+			[]string{"nsenter", "-t", pid, "-n", "--", "ip", "addr", "add", iface.logical.Address, "dev", iface.iface},
+			[]string{"nsenter", "-t", pid, "-n", "--", "ip", "link", "set", iface.iface, "up"},
+		)
 	}
 	// Aliases go on loopback: an address on lo is answered for on every
 	// interface, which is how one node can be "the internet" at 1.1.1.1 and
@@ -378,12 +427,35 @@ func (e *netnsEnv) wireNode(ctx context.Context, np *nodeProc) error {
 		}
 		steps = append(steps, []string{"nsenter", "-t", pid, "-n", "--", "ip", "addr", "add", a + bits, "dev", "lo"})
 	}
-	if n.Gateway != "" {
-		steps = append(steps, []string{"nsenter", "-t", pid, "-n", "--", "ip", "route", "add", "default", "via", n.Gateway})
-	}
 	for _, argv := range steps {
 		if err := e.run(ctx, argv...); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (e *netnsEnv) installRoutes(ctx context.Context) error {
+	for _, route := range e.scenario.Topology.Routes {
+		np := e.byName[route.Node]
+		segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(route.Via))
+		iface := np.interfaceForSegment(segment)
+		argv := []string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "--", "ip", "route", "add", route.Destination,
+			"via", route.Via, "dev", iface.iface}
+		if route.Metric != 0 {
+			argv = append(argv, "metric", strconv.Itoa(route.Metric))
+		}
+		if err := e.run(ctx, argv...); err != nil {
+			return fmt.Errorf("route %s on %s: %w", route.Destination, route.Node, err)
+		}
+	}
+	return nil
+}
+
+func (np *nodeProc) interfaceForSegment(segment string) *interfaceProc {
+	for _, iface := range np.ifaces {
+		if iface.logical.Segment == segment {
+			return iface
 		}
 	}
 	return nil
@@ -454,10 +526,23 @@ func (np *nodeProc) await(ctx context.Context, want string) error {
 func (e *netnsEnv) Nodes() []NodeInfo {
 	out := make([]NodeInfo, 0, len(e.nodes))
 	for _, np := range e.nodes {
+		primaryInterface := ""
+		if len(np.ifaces) > 0 {
+			primaryInterface = np.ifaces[0].iface
+		}
 		info := NodeInfo{
 			Name: np.node.Name, Role: np.node.Role, Address: np.node.Address,
-			Aliases: np.node.Aliases, Interface: np.iface, Gateway: np.node.Gateway,
+			Aliases: np.node.Aliases, Interface: primaryInterface, Gateway: np.node.Gateway,
 			Resolver: np.node.Resolver, PID: np.pid,
+		}
+		for _, iface := range np.ifaces {
+			info.Interfaces = append(info.Interfaces, InterfaceInfo{Segment: iface.logical.Segment, Address: iface.logical.Address})
+		}
+		for _, route := range e.scenario.Topology.Routes {
+			if route.Node == np.node.Name {
+				segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(route.Via))
+				info.Routes = append(info.Routes, RouteInfo{Destination: route.Destination, Via: route.Via, Segment: segment, Metric: route.Metric})
+			}
 		}
 		for _, s := range np.node.Services {
 			info.Services = append(info.Services, fmt.Sprintf("%s/%d", s.Type, s.Port))
@@ -534,7 +619,8 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		rule = append(rule, "drop")
 		return append(steps, rule), np.node.Name + " " + where + " " + what, nil
 	case FaultNetem:
-		argv := in("tc", "qdisc", "add", "dev", np.iface, "root", "netem")
+		iface := np.interfaceForSegment(f.Segment)
+		argv := in("tc", "qdisc", "add", "dev", iface.iface, "root", "netem")
 		var parts []string
 		if f.Delay != "" {
 			d, _ := time.ParseDuration(f.Delay)
@@ -553,6 +639,19 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		return [][]string{argv}, np.node.Name + " link: " + strings.Join(parts, ", "), nil
 	case FaultNoDefaultRoute:
 		return [][]string{in("ip", "route", "del", "default")}, np.node.Name + " has no default route", nil
+	case FaultReplaceDefaultRoute:
+		segment, _ := nodeSegmentForAddress(np.node, netip.MustParseAddr(f.Via))
+		iface := np.interfaceForSegment(segment)
+		add := in("ip", "route", "add", "default", "via", f.Via, "dev", iface.iface)
+		if f.Metric != 0 {
+			add = append(add, "metric", strconv.Itoa(f.Metric))
+		}
+		return [][]string{in("ip", "route", "flush", "default"), add},
+			fmt.Sprintf("%s default route now uses %s on %s", np.node.Name, f.Via, segment), nil
+	case FaultLinkDown:
+		iface := np.interfaceForSegment(f.Segment)
+		return [][]string{in("ip", "link", "set", iface.iface, "down")},
+			fmt.Sprintf("%s link to %s is down", np.node.Name, f.Segment), nil
 	}
 	return nil, "", fmt.Errorf("unknown fault type %q", f.Type)
 }
@@ -613,14 +712,6 @@ func (e *netnsEnv) TrustAnchor(service string) (string, error) {
 	return "", fmt.Errorf("unknown tls service %q", service)
 }
 
-func (e *netnsEnv) Evidence() (Evidence, error) {
-	paths := make([]string, 0, len(e.nodes))
-	for _, np := range e.nodes {
-		paths = append(paths, filepath.Join(e.work, np.node.Name+"-evidence.jsonl"))
-	}
-	return readEvidence(paths)
-}
-
 // simEnv is the environment commands run with inside a node. The host's proxy
 // variables are stripped: a simulation must not inherit the operator's proxy
 // configuration, or a scenario's result would depend on whose laptop ran it.
@@ -660,11 +751,13 @@ func (e *netnsEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
 			info.Errors = append(info.Errors, fmt.Sprintf("node %s: %v", np.node.Name, err))
 		}
 	}
-	// The bridge lives in the director's own namespace, which outlives a single
-	// scenario when the caller runs several.
-	if !e.backend.dry && e.bridge != "" {
-		if err := e.run(ctx, "ip", "link", "del", e.bridge); err != nil && !isMissingLink(err) {
-			info.Errors = append(info.Errors, err.Error())
+	// Bridges live in the director namespace. Delete each independently so a
+	// partially created later segment cannot prevent earlier cleanup.
+	if !e.backend.dry {
+		for i := len(e.bridges) - 1; i >= 0; i-- {
+			if err := e.run(ctx, "ip", "link", "del", e.bridges[i].bridge); err != nil && !isMissingLink(err) {
+				info.Errors = append(info.Errors, err.Error())
+			}
 		}
 	}
 	if e.work != "" {
