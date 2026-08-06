@@ -400,31 +400,6 @@ func parseAddr(raw string) (netip.Addr, string, error) {
 	return addr, addr.String(), nil
 }
 
-func (n *Node) validateAddrs(subnet netip.Prefix) error {
-	addr, canonical, err := parseAddr(n.Address)
-	if err != nil {
-		return fmt.Errorf("node %q: address: %w", n.Name, err)
-	}
-	if !subnet.Contains(addr) {
-		return fmt.Errorf("node %q: address %s is outside %s", n.Name, addr, subnet)
-	}
-	n.Address = canonical
-	for i, a := range n.Aliases {
-		if _, n.Aliases[i], err = parseAddr(a); err != nil {
-			return fmt.Errorf("node %q: alias: %w", n.Name, err)
-		}
-	}
-	for label, v := range map[string]*string{"gateway": &n.Gateway, "resolver": &n.Resolver} {
-		if *v == "" {
-			continue
-		}
-		if _, *v, err = parseAddr(*v); err != nil {
-			return fmt.Errorf("node %q: %s: %w", n.Name, label, err)
-		}
-	}
-	return nil
-}
-
 func (n *Node) validateServices(names map[string]bool) error {
 	for i := range n.Services {
 		svc := &n.Services[i]
