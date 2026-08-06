@@ -735,6 +735,8 @@ func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 // the ALL_PROXY fallback.
 // ponytail: suffix and "*" matching only, no IP or CIDR entries; the only host
 // asked about is probeHost, a fixed public name that is never a literal IP.
+// The day a caller passes a host the user chose, drop this for
+// golang.org/x/net/http/httpproxy, the matcher net/http itself uses.
 func noProxyBypasses(host string) bool {
 	np := os.Getenv("NO_PROXY")
 	if np == "" {
