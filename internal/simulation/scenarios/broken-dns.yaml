@@ -1,0 +1,64 @@
+name: broken-dns-with-working-ip-connectivity
+description: >-
+  The client's configured resolver is silently unreachable while direct IP
+  connectivity still works. netdoc should say the name did not resolve and, in
+  the same breath, that the network itself is fine — the distinction between a
+  DNS problem and being offline.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            example.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - type: http
+          port: 80
+        - type: tcp
+          port: 443
+
+    - name: server
+      address: 10.77.0.20
+      services:
+        - type: http
+          port: 80
+
+faults:
+  # Swallowed on arrival, not refused: the client's queries vanish and it has to
+  # wait out its own timeout, which is what an unreachable resolver actually
+  # feels like. The same server still answers on 8.8.8.8, so the public-DNS
+  # second opinion works and netdoc can tell "my resolver is broken" from "this
+  # name does not exist".
+  - type: drop
+    node: internet
+    direction: inbound
+    to: 10.77.0.1
+    protocol: udp
+    port: 53
+
+tests:
+  - name: name that will not resolve
+    node: client
+    target: example.test:80
+
+expect:
+  verdict: dns
+  checks:
+    - {id: iface, status: PASS}
+    # The whole point: the path is fine, only the resolver is not.
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: FAIL}
+    - {id: dns_public, status: PASS}
+    # Everything downstream of the name is unanswerable, not broken.
+    - {id: target_tcp, status: SKIP}
+    - {id: http, status: SKIP}

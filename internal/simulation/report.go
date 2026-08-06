@@ -1,0 +1,260 @@
+package simulation
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/heymaikol/network-doctor/internal/textsafe"
+)
+
+// Overall results.
+const (
+	ResultPass    = "PASS"    // every expectation held
+	ResultPartial = "PARTIAL" // some expectations held
+	ResultFail    = "FAIL"    // none did
+	ResultError   = "ERROR"   // the simulation itself did not run
+)
+
+// Report is one simulation, start to finish. It is the machine-readable
+// artifact: `netdoc-sim run --json` prints exactly this.
+type Report struct {
+	Scenario    string        `json:"scenario"`
+	Description string        `json:"description,omitempty"`
+	ID          string        `json:"id"`
+	Backend     string        `json:"backend"`
+	StartedAt   time.Time     `json:"started_at"`
+	Duration    time.Duration `json:"duration_ms"`
+	Result      string        `json:"result"`
+	// Error is set when setup, not diagnosis, is what failed.
+	Error string `json:"error,omitempty"`
+
+	Topology    []NodeInfo    `json:"topology"`
+	Faults      []FaultInfo   `json:"faults"`
+	Tests       []TestOutcome `json:"tests"`
+	Cleanup     CleanupInfo   `json:"cleanup"`
+	Suggestions []Suggestion  `json:"suggestions"`
+}
+
+// NodeInfo is a namespace the simulation created.
+type NodeInfo struct {
+	Name      string   `json:"name"`
+	Role      string   `json:"role"`
+	Address   string   `json:"address"`
+	Aliases   []string `json:"aliases,omitempty"`
+	Interface string   `json:"interface"`
+	Gateway   string   `json:"gateway,omitempty"`
+	Resolver  string   `json:"resolver,omitempty"`
+	Services  []string `json:"services,omitempty"`
+	PID       int      `json:"pid"`
+}
+
+// FaultInfo is one injected impairment and the exact command that injected it.
+type FaultInfo struct {
+	Type    string   `json:"type"`
+	Node    string   `json:"node"`
+	Summary string   `json:"summary"`
+	Command []string `json:"command"`
+}
+
+// CleanupInfo records that the resources went away, and never hides a failure
+// to make them go away.
+type CleanupInfo struct {
+	Done bool `json:"done"`
+	Kept bool `json:"kept"`
+	// Workspace is the scratch directory the run used, set while it still
+	// exists so a kept simulation can be found and swept later.
+	Workspace string   `json:"workspace,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+	Errors    []string `json:"errors,omitempty"`
+}
+
+// finish computes the overall result and collects suggestions. Call once, after
+// every test has run.
+func (r *Report) finish() {
+	for i := range r.Tests {
+		r.Suggestions = append(r.Suggestions, r.Tests[i].suggest()...)
+	}
+	// Empty lists, not null: a consumer iterating report.faults on a healthy
+	// scenario should get nothing to do, not a type error.
+	if r.Suggestions == nil {
+		r.Suggestions = []Suggestion{}
+	}
+	if r.Faults == nil {
+		r.Faults = []FaultInfo{}
+	}
+	if r.Topology == nil {
+		r.Topology = []NodeInfo{}
+	}
+	if r.Tests == nil {
+		r.Tests = []TestOutcome{}
+	}
+	if r.Error != "" {
+		r.Result = ResultError
+		return
+	}
+	pass, total := 0, len(r.Tests)
+	for i := range r.Tests {
+		if r.Tests[i].ok() {
+			pass++
+		}
+	}
+	switch {
+	case total == 0:
+		r.Result = ResultError
+	case pass == total:
+		r.Result = ResultPass
+	case pass == 0:
+		r.Result = ResultFail
+	default:
+		r.Result = ResultPartial
+	}
+}
+
+// WriteJSON prints the machine-readable report.
+func (r *Report) WriteJSON(w io.Writer) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(r)
+}
+
+// WriteText prints the human-readable report. Every string that came from a
+// subprocess goes through textsafe first: netdoc's detail lines carry remote
+// text, and this one lands on a terminal.
+func (r *Report) WriteText(w io.Writer) {
+	p := func(format string, a ...any) { fmt.Fprintf(w, format+"\n", a...) }
+	p("Scenario: %s", textsafe.Clean(r.Scenario))
+	if r.Description != "" {
+		p("          %s", textsafe.Clean(r.Description))
+	}
+	p("Result:   %s   (%s backend, %s, id %s)", r.Result, r.Backend, r.Duration.Round(time.Millisecond), r.ID)
+	if r.Error != "" {
+		p("Error:    %s", textsafe.Clean(r.Error))
+	}
+	p("")
+
+	p("Topology")
+	for _, n := range r.Topology {
+		extra := []string{n.Role}
+		if n.Gateway != "" {
+			extra = append(extra, "gw "+n.Gateway)
+		}
+		if n.Resolver != "" {
+			extra = append(extra, "dns "+n.Resolver)
+		}
+		if len(n.Aliases) > 0 {
+			extra = append(extra, "also "+strings.Join(n.Aliases, ","))
+		}
+		if len(n.Services) > 0 {
+			extra = append(extra, "serves "+strings.Join(n.Services, ","))
+		}
+		p("  %-10s %-14s %s", n.Name, n.Address, strings.Join(extra, ", "))
+	}
+	p("")
+
+	p("Faults injected")
+	if len(r.Faults) == 0 {
+		p("  (none — healthy network)")
+	}
+	for _, f := range r.Faults {
+		p("  %-18s %s", f.Type, f.Summary)
+	}
+	p("")
+
+	for i := range r.Tests {
+		r.Tests[i].writeText(w)
+	}
+
+	if len(r.Suggestions) > 0 {
+		p("Suggested improvements")
+		for _, s := range r.Suggestions {
+			p("  [%s] %s", s.Code, textsafe.Clean(s.Message))
+			if s.Evidence != "" {
+				p("      evidence: %s", textsafe.Clean(s.Evidence))
+			}
+		}
+		p("")
+	}
+
+	switch {
+	case r.Cleanup.Kept:
+		p("Cleanup:  kept — %s", textsafe.Clean(r.Cleanup.Detail))
+	case len(r.Cleanup.Errors) > 0:
+		p("Cleanup:  INCOMPLETE")
+		for _, e := range r.Cleanup.Errors {
+			p("  %s", textsafe.Clean(e))
+		}
+	case r.Cleanup.Done:
+		p("Cleanup:  ok — every namespace and process released")
+	default:
+		p("Cleanup:  not reached")
+	}
+}
+
+func (o *TestOutcome) writeText(w io.Writer) {
+	p := func(format string, a ...any) { fmt.Fprintf(w, format+"\n", a...) }
+	target := o.Target
+	if target == "" {
+		target = "(generic checks)"
+	}
+	p("Test: %s — netdoc %s in %s (%s)", textsafe.Clean(o.Name), textsafe.Clean(target), o.Node, o.Duration.Round(time.Millisecond))
+	if o.Error != "" {
+		p("  ERROR: %s", textsafe.Clean(o.Error))
+		if o.Stderr != "" {
+			p("  stderr: %s", textsafe.Clean(o.Stderr))
+		}
+		p("")
+		return
+	}
+	p("  Summary: %s", textsafe.Clean(o.Diagnosis.Summary))
+	verdict := o.ActualVerdict
+	if !o.verdictMatches() {
+		verdict += fmt.Sprintf("   ✗ expected %s", o.ExpectedVerdict)
+	} else if o.ExpectedVerdict != "" {
+		verdict += "   ✓"
+	}
+	p("  Verdict: %s", verdict)
+	p("  Expected findings: %d   matched: %d   false negatives: %d   false positives: %d",
+		len(o.Checks)-o.countUnexpected(), o.Matched, o.FalseNegatives, o.FalsePositives)
+	for _, c := range o.Checks {
+		mark, note := "✓", ""
+		switch c.Outcome {
+		case OutcomeMatched:
+		case OutcomeMissing:
+			mark, note = "✗", "no such row in the report"
+		case OutcomeWrongStatus:
+			mark, note = "✗", "expected "+c.Expected
+		case OutcomeUnexpected:
+			mark, note = "!", "not expected by the scenario"
+		}
+		line := fmt.Sprintf("  %s %-14s %-5s %s", mark, c.ID, c.Actual, textsafe.Clean(c.Detail))
+		if note != "" {
+			line += "   (" + note + ")"
+		}
+		p("%s", line)
+	}
+	if len(o.TimedOut) > 0 {
+		p("  Timed out: %s", strings.Join(o.TimedOut, ", "))
+	}
+	if len(o.RepeatVerdicts) > 1 {
+		verdicts := uniqueSorted(o.RepeatVerdicts)
+		stability := "stable across " + fmt.Sprint(len(o.RepeatVerdicts)) + " runs"
+		if len(verdicts) > 1 {
+			stability = "UNSTABLE across " + fmt.Sprint(len(o.RepeatVerdicts)) + " runs: " + strings.Join(verdicts, ", ")
+		}
+		p("  Repeats: %s", stability)
+	}
+	p("")
+}
+
+func (o *TestOutcome) countUnexpected() int {
+	n := 0
+	for _, c := range o.Checks {
+		if c.Outcome == OutcomeUnexpected {
+			n++
+		}
+	}
+	return n
+}

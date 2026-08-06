@@ -1,0 +1,46 @@
+name: high-latency-link
+description: >-
+  Everything reaches everything, slowly. Nothing is broken, so netdoc must not
+  report a failure — but a link this slow is not healthy either, and a run that
+  called it "ok" would be hiding the reason the user came looking.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - type: http
+          port: 80
+        - type: tcp
+          port: 443
+
+faults:
+  # Egress-only delay, so the round trip costs about one delay. Well clear of
+  # netdoc's 500ms high-latency threshold at every point of the jitter range —
+  # a scenario that straddles a threshold tests the coin, not the code.
+  - type: netem
+    node: client
+    delay: 700ms
+    jitter: 100ms
+
+tests:
+  - name: slow but working
+    node: client
+
+expect:
+  verdict: degraded
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: WARN}
+    - {id: dns, status: PASS}

@@ -1,0 +1,44 @@
+name: no-default-route
+description: >-
+  The client has a link, an address and a resolver, but no default route.
+  Nothing off-segment is reachable. Run without a target, so this asks the
+  question a user asks first: is it me, or is it the internet?
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      # Off-segment on purpose: an on-link resolver would still answer without
+      # a default route, and this scenario is about losing everything off-net.
+      resolver: 9.9.9.9
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8, 9.9.9.9]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - type: http
+          port: 80
+        - type: tcp
+          port: 443
+
+faults:
+  - type: no_default_route
+    node: client
+
+tests:
+  - name: generic checks with no way out
+    node: client
+
+expect:
+  verdict: network
+  checks:
+    # The link is genuinely up — reporting it as down would be the wrong story.
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: FAIL}
+    - {id: dns, status: FAIL}
