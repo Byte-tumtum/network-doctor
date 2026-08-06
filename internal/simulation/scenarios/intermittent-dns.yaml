@@ -1,0 +1,57 @@
+name: intermittent-dns
+description: The configured resolver returns deterministic SERVFAIL responses before recovering.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: intermittent-resolver
+          type: dns
+          zone:
+            flaky-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+          dns_fault:
+            a: [servfail, servfail, answer, answer, answer, answer]
+            aaaa: [servfail, servfail, answer, answer, answer, answer]
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            flaky-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+tests:
+  - name: resolver temporarily fails
+    node: client
+    target: flaky-target.test:80
+    expect:
+      verdict: dns
+      checks:
+        - {id: internet_tcp, status: PASS}
+        - {id: dns, status: FAIL, cause: dns_temporary_failure}
+  - name: resolver recovers
+    node: client
+    target: flaky-target.test:80
+
+expect:
+  verdict: ok
+  checks:
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}

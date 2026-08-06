@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,22 @@ func TestAwaitReadsHolderLogsSafely(t *testing.T) {
 	}
 	if err := np.stop(context.Background()); err != nil {
 		t.Errorf("stop is called from every exit path, so it has to be idempotent: %v", err)
+	}
+}
+
+func TestNetemFaultArgvIsGeneratedAndSeeded(t *testing.T) {
+	logical := &Interface{Segment: "upstream"}
+	np := &nodeProc{pid: 42, node: &Node{Name: "gateway"}, ifaces: []*interfaceProc{{logical: logical, iface: "neabc1230"}}}
+	env := &netnsEnv{}
+	steps, _, err := env.faultSteps(Fault{Type: FaultNetem, Node: "gateway", Segment: "upstream",
+		Delay: "40ms", Jitter: "20ms", Loss: "15.25%", Seed: 12345}, np)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(steps[0], " ")
+	for _, want := range []string{"tc qdisc replace", "dev neabc1230 root netem", "delay 40ms 20ms", "loss 15.25%", "seed 12345"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("argv %q does not contain %q", got, want)
+		}
 	}
 }

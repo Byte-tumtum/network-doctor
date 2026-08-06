@@ -156,3 +156,26 @@ func TestDoubleDashIsHandled(t *testing.T) {
 		t.Errorf("netdoc = %q, want %q", *f2.netdoc, abs)
 	}
 }
+
+func TestCampaignDirectorReceivesExactSeedAndIteration(t *testing.T) {
+	abs := fakeNetdoc(t)
+	f := newCampaignFlags(io.Discard)
+	ref, err := f.parse([]string{"unstable-connectivity", "--seed", "0", "--runs", "5", "--iteration", "37", "--fail-fast", "--json", "--netdoc", "./netdoc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := findNetdoc(*f.netdoc, filepath.Join(t.TempDir(), "netdoc-sim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := campaignDirectorArgv(f, ref, path)
+	got := newCampaignFlags(io.Discard)
+	gotRef, err := got.parse(argv[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != campaignDirectorCommand || gotRef != ref || !got.seed.set || got.seed.v != 0 ||
+		*got.runs != 5 || *got.iteration != 37 || !*got.failFast || !*got.json || *got.netdoc != abs {
+		t.Fatalf("forwarded campaign = argv %v ref %q seed %+v runs %d iteration %d", argv, gotRef, got.seed, *got.runs, *got.iteration)
+	}
+}

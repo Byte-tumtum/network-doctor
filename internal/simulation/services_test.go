@@ -146,3 +146,37 @@ func TestBindAddressesFallsBackToWildcard(t *testing.T) {
 		t.Errorf("bindAddresses = %q", got)
 	}
 }
+
+func TestDNSScheduleIsPerFamilyAndBounded(t *testing.T) {
+	s := newDNSSchedule(&DNSFault{
+		A:    []string{DNSOutcomeAnswer, DNSOutcomeSERVFAIL},
+		AAAA: []string{DNSOutcomeSERVFAIL},
+	})
+	for _, tc := range []struct {
+		qtype   uint16
+		seq     int
+		outcome string
+	}{
+		{dnsTypeA, 1, DNSOutcomeAnswer},
+		{dnsTypeAAAA, 1, DNSOutcomeSERVFAIL},
+		{dnsTypeA, 2, DNSOutcomeSERVFAIL},
+		{dnsTypeAAAA, 2, DNSOutcomeAnswer}, // exhausted schedules fail open
+		{dnsTypeA, 3, DNSOutcomeAnswer},
+	} {
+		seq, outcome := s.next(tc.qtype)
+		if seq != tc.seq || outcome != tc.outcome {
+			t.Errorf("next(%d) = %d/%s, want %d/%s", tc.qtype, seq, outcome, tc.seq, tc.outcome)
+		}
+	}
+}
+
+func TestDNSErrorReplySERVFAIL(t *testing.T) {
+	query := dnsQuery("example.test", dnsTypeA)
+	reply := dnsErrorReply(query, dnsRcodeServFail)
+	if reply == nil || rcode(reply) != dnsRcodeServFail || questions(reply) != 1 || answers(reply) != 0 {
+		t.Fatalf("SERVFAIL reply = %v", reply)
+	}
+	if got := dnsErrorReply([]byte{1, 2}, dnsRcodeServFail); got != nil {
+		t.Errorf("runt query produced %v", got)
+	}
+}

@@ -53,6 +53,9 @@ const (
 	RouteCausePreferredPathFailed = "preferred_route_failed"
 	FamilyCauseIPv4Unreachable    = "ipv4_unreachable"
 	FamilyCauseIPv6Unreachable    = "ipv6_unreachable"
+	DNSCauseTimeout               = "dns_timeout"
+	DNSCauseTemporaryFailure      = "dns_temporary_failure"
+	ConnectionCauseReset          = "connection_reset"
 )
 
 const (
@@ -985,6 +988,24 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	return o.proxyTunnelOK(ctx, conn, addr, rtt)
 }
 
+func dnsFailureCause(err error) string {
+	var dnsErr *net.DNSError
+	if !errors.As(err, &dnsErr) {
+		return ""
+	}
+	if dnsErr.IsTimeout || timeoutError(err) {
+		return DNSCauseTimeout
+	}
+	// The pure-Go resolver reports a received SERVFAIL as a DNSError whose
+	// IsTemporary bit varies across supported Go versions. Once timeout and
+	// NXDOMAIN are excluded, the remaining resolver failures are retryable
+	// transport/server failures and belong to the temporary class.
+	if dnsErr.IsTemporary || !dnsErr.IsNotFound {
+		return DNSCauseTemporaryFailure
+	}
+	return ""
+}
+
 // proxyTunnelOK builds the PASS result shared by the CONNECT and SOCKS5 paths.
 func (o *netops) proxyTunnelOK(ctx context.Context, conn net.Conn, addr string, rtt time.Duration) ProbeResult {
 	var r ProbeResult
@@ -1188,6 +1209,7 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		}
 		if err != nil {
 			r.Status = StatusFail
+			r.Cause = dnsFailureCause(err)
 			r.DNSNotFound = dnsNotFound(err)
 			r.Detail = "cannot resolve " + host + via + ": " + err.Error()
 			r.Fix = dnsFix(runtime.GOOS)
@@ -1602,10 +1624,13 @@ func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
 		// Strict byte limit: a hostile server streaming without a newline can't
 		// exhaust memory.
 		br := bufio.NewReader(io.LimitReader(conn, 1024))
-		line, _ := br.ReadString('\n')
+		line, readErr := br.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
 		r.SelectedIP = ip
-		if line == "" {
+		if line == "" && errors.Is(readErr, syscall.ECONNRESET) {
+			r.Status, r.Cause = StatusFail, ConnectionCauseReset
+			r.Detail = "peer accepted the connection and reset it before sending a banner"
+		} else if line == "" {
 			// Port answered but the service said nothing: functional, degraded.
 			r.Status, r.Detail = StatusWarn, "connected, no banner within deadline"
 		} else if valid := id == ProbeSSH && strings.HasPrefix(line, "SSH-") ||

@@ -29,6 +29,13 @@ type DiagnosisCheck struct {
 	Detail   string             `json:"detail"`
 	Fix      string             `json:"fix"`
 	Families *DiagnosisFamilies `json:"address_families,omitempty"`
+	Attempts []DiagnosisAttempt `json:"attempts,omitempty"`
+}
+
+type DiagnosisAttempt struct {
+	IP    string `json:"ip"`
+	Ms    int64  `json:"ms"`
+	Error string `json:"error,omitempty"`
 }
 
 type DiagnosisFamilies struct {

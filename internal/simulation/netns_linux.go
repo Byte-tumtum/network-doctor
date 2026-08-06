@@ -598,7 +598,15 @@ func (e *netnsEnv) ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo
 				return out, fmt.Errorf("fault %s on %s: %w", f.Type, f.Node, err)
 			}
 		}
-		out = append(out, FaultInfo{Type: f.Type, Node: f.Node, Family: f.Family, Summary: summary, Command: steps[len(steps)-1]})
+		info := FaultInfo{Type: f.Type, Node: f.Node, Family: f.Family, Summary: summary, Command: steps[len(steps)-1], Seed: f.Seed}
+		if f.Type == FaultNetem {
+			info.Latency, _ = time.ParseDuration(f.Delay)
+			info.Jitter, _ = time.ParseDuration(f.Jitter)
+			if raw, ok := strings.CutSuffix(f.Loss, "%"); ok {
+				info.LossPercent, _ = strconv.ParseFloat(raw, 64)
+			}
+		}
+		out = append(out, info)
 	}
 	return out, nil
 }
@@ -658,7 +666,7 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		return append(steps, rule), np.node.Name + " " + where + " " + what, nil
 	case FaultNetem:
 		iface := np.interfaceForSegment(f.Segment)
-		argv := in("tc", "qdisc", "add", "dev", iface.iface, "root", "netem")
+		argv := in("tc", "qdisc", "replace", "dev", iface.iface, "root", "netem")
 		var parts []string
 		if f.Delay != "" {
 			d, _ := time.ParseDuration(f.Delay)
@@ -673,6 +681,10 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		if f.Loss != "" {
 			argv = append(argv, "loss", f.Loss)
 			parts = append(parts, "loss "+f.Loss)
+		}
+		if f.Seed != 0 {
+			argv = append(argv, "seed", strconv.FormatUint(uint64(f.Seed), 10))
+			parts = append(parts, "seed "+strconv.FormatUint(uint64(f.Seed), 10))
 		}
 		return [][]string{argv}, np.node.Name + " link: " + strings.Join(parts, ", "), nil
 	case FaultNoDefaultRoute:

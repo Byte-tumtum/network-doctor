@@ -17,13 +17,30 @@ import (
 // namespaces. It complements netdoc's report; it is never used to manufacture
 // a diagnostic result.
 type Evidence struct {
-	DNS           []DNSEvidence          `json:"dns"`
-	SOCKSRequests []SOCKSEvidence        `json:"socks_requests"`
-	TLS           []TLSEvidence          `json:"tls"`
-	Links         []LinkEvidence         `json:"links"`
-	Routes        []RouteEvidence        `json:"routes"`
-	Routers       []RouterEvidence       `json:"routers"`
-	Reachability  []ReachabilityEvidence `json:"reachability"`
+	DNS              []DNSEvidence             `json:"dns"`
+	DNSQueries       []DNSQueryEvidence        `json:"dns_queries"`
+	SOCKSRequests    []SOCKSEvidence           `json:"socks_requests"`
+	TLS              []TLSEvidence             `json:"tls"`
+	TCPResets        []TCPResetEvidence        `json:"tcp_resets"`
+	PacketConditions []PacketConditionEvidence `json:"packet_conditions"`
+	Links            []LinkEvidence            `json:"links"`
+	Routes           []RouteEvidence           `json:"routes"`
+	Routers          []RouterEvidence          `json:"routers"`
+	Reachability     []ReachabilityEvidence    `json:"reachability"`
+}
+
+type PacketConditionEvidence struct {
+	Node           string        `json:"node"`
+	Segment        string        `json:"segment"`
+	Latency        time.Duration `json:"latency_ms,omitempty"`
+	Jitter         time.Duration `json:"jitter_ms,omitempty"`
+	LossPercent    float64       `json:"loss_percent,omitempty"`
+	Seed           uint32        `json:"seed,omitempty"`
+	Active         bool          `json:"active"`
+	DroppedPackets uint64        `json:"dropped_packets"`
+	ObservedMinRTT time.Duration `json:"observed_min_rtt_ms,omitempty"`
+	ObservedMaxRTT time.Duration `json:"observed_max_rtt_ms,omitempty"`
+	RTTSamples     int           `json:"rtt_samples"`
 }
 
 // LinkEvidence describes one actual namespace interface using its logical
@@ -76,6 +93,27 @@ type DNSEvidence struct {
 	Count     int    `json:"count"`
 }
 
+// DNSQueryEvidence preserves scheduled query order rather than aggregating it.
+// Sequence is scoped to service and query type.
+type DNSQueryEvidence struct {
+	Node             string `json:"node"`
+	Service          string `json:"service"`
+	Source           string `json:"source"`
+	Name             string `json:"name"`
+	QueryType        string `json:"query_type"`
+	Sequence         int    `json:"sequence"`
+	ScheduledOutcome string `json:"scheduled_outcome"`
+	ActualOutcome    string `json:"actual_outcome"`
+}
+
+type TCPResetEvidence struct {
+	Node    string `json:"node"`
+	Service string `json:"service,omitempty"`
+	Event   string `json:"event"`
+	Result  string `json:"result"`
+	Count   int    `json:"count"`
+}
+
 // SOCKSEvidence aggregates protocol events observed by a SOCKS service.
 // A greeting proves proxy reachability even when local DNS fails before the
 // client can send a CONNECT request.
@@ -106,17 +144,20 @@ type TLSEvidence struct {
 }
 
 type evidenceEvent struct {
-	Kind        string `json:"kind"`
-	Node        string `json:"node"`
-	Service     string `json:"service,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Source      string `json:"source,omitempty"`
-	QueryType   string `json:"query_type,omitempty"`
-	Event       string `json:"event,omitempty"`
-	AddressType string `json:"address_type,omitempty"`
-	Destination string `json:"destination,omitempty"`
-	Port        int    `json:"port,omitempty"`
-	Result      string `json:"result"`
+	Kind             string `json:"kind"`
+	Node             string `json:"node"`
+	Service          string `json:"service,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Source           string `json:"source,omitempty"`
+	QueryType        string `json:"query_type,omitempty"`
+	Event            string `json:"event,omitempty"`
+	AddressType      string `json:"address_type,omitempty"`
+	Destination      string `json:"destination,omitempty"`
+	Port             int    `json:"port,omitempty"`
+	Result           string `json:"result"`
+	Sequence         int    `json:"sequence,omitempty"`
+	ScheduledOutcome string `json:"scheduled_outcome,omitempty"`
+	ActualOutcome    string `json:"actual_outcome,omitempty"`
 
 	CertificateMode      string    `json:"certificate_mode,omitempty"`
 	RequestedServer      string    `json:"requested_server,omitempty"`
@@ -197,6 +238,7 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	dns := make(map[string]DNSEvidence)
 	socks := make(map[string]SOCKSEvidence)
 	tlsEvents := make(map[string]TLSEvidence)
+	resets := make(map[string]TCPResetEvidence)
 	for _, event := range events {
 		switch event.Kind {
 		case ServiceDNS:
@@ -226,6 +268,12 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 			item.CertificatePresented, item.Result = event.CertificatePresented, event.Result
 			item.Count++
 			tlsEvents[key] = item
+		case ServiceTCPReset:
+			key := event.Node + "\x00" + event.Service + "\x00" + event.Event + "\x00" + event.Result
+			item := resets[key]
+			item.Node, item.Service, item.Event, item.Result = event.Node, event.Service, event.Event, event.Result
+			item.Count++
+			resets[key] = item
 		}
 	}
 	var out Evidence
@@ -237,6 +285,16 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	}
 	for _, item := range tlsEvents {
 		out.TLS = append(out.TLS, item)
+	}
+	for _, event := range events {
+		if event.Kind == ServiceDNS && event.Sequence > 0 {
+			out.DNSQueries = append(out.DNSQueries, DNSQueryEvidence{Node: event.Node, Service: event.Service,
+				Source: event.Source, Name: event.Name, QueryType: event.QueryType, Sequence: event.Sequence,
+				ScheduledOutcome: event.ScheduledOutcome, ActualOutcome: event.ActualOutcome})
+		}
+	}
+	for _, item := range resets {
+		out.TCPResets = append(out.TCPResets, item)
 	}
 	sort.Slice(out.DNS, func(i, j int) bool {
 		a, b := out.DNS[i], out.DNS[j]
@@ -252,6 +310,17 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		return a.Node+a.Service+a.CertificateMode+a.RequestedServer+strings.Join(a.CertificateDNS, "\x00")+a.Result <
 			b.Node+b.Service+b.CertificateMode+b.RequestedServer+strings.Join(b.CertificateDNS, "\x00")+b.Result
 	})
+	sort.Slice(out.DNSQueries, func(i, j int) bool {
+		a, b := out.DNSQueries[i], out.DNSQueries[j]
+		if a.Node+a.Service+a.QueryType != b.Node+b.Service+b.QueryType {
+			return a.Node+a.Service+a.QueryType < b.Node+b.Service+b.QueryType
+		}
+		return a.Sequence < b.Sequence
+	})
+	sort.Slice(out.TCPResets, func(i, j int) bool {
+		a, b := out.TCPResets[i], out.TCPResets[j]
+		return a.Node+a.Service+a.Event+a.Result < b.Node+b.Service+b.Event+b.Result
+	})
 	if out.DNS == nil {
 		out.DNS = []DNSEvidence{}
 	}
@@ -261,6 +330,13 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	if out.TLS == nil {
 		out.TLS = []TLSEvidence{}
 	}
+	if out.DNSQueries == nil {
+		out.DNSQueries = []DNSQueryEvidence{}
+	}
+	if out.TCPResets == nil {
+		out.TCPResets = []TCPResetEvidence{}
+	}
+	out.PacketConditions = []PacketConditionEvidence{}
 	out.Links = []LinkEvidence{}
 	out.Routes = []RouteEvidence{}
 	out.Routers = []RouterEvidence{}

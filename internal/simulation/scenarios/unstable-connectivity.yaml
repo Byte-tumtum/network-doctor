@@ -1,0 +1,58 @@
+name: unstable-connectivity
+description: A seeded campaign varies bounded loss, jitter, and resolver SERVFAIL responses.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: campaign-dns
+          type: dns
+          zone:
+            campaign-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            campaign-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+tests:
+  - {name: unstable target, node: client, target: campaign-target.test:80}
+
+expect:
+  verdict: ok
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}
+
+campaign:
+  runs: 6
+  netem:
+    node: client
+    segment: lan
+    latency: {min: 10ms, max: 40ms}
+    jitter: {min: 0ms, max: 40ms}
+    loss_percent: {min: 0, max: 0}
+  dns:
+    service: campaign-dns
+    queries_per_type: 16
+    failure_percent: {min: 0, max: 30}

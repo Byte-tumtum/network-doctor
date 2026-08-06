@@ -327,10 +327,36 @@ func TestIsPercent(t *testing.T) {
 			t.Errorf("isPercent(%q) = false", ok)
 		}
 	}
-	for _, bad := range []string{"", "%", "10", "1.2.3%", "ten%", "10%%"} {
+	for _, bad := range []string{"", "%", ".%", "10", "1.2.3%", "ten%", "10%%", "100.01%", "NaN%", "Inf%"} {
 		if isPercent(bad) {
 			t.Errorf("isPercent(%q) = true", bad)
 		}
+	}
+}
+
+func TestDNSFaultValidation(t *testing.T) {
+	for _, fault := range []*DNSFault{
+		{},
+		{A: []string{"random"}},
+		{A: make([]string, dnsMaxScheduledOutcomes+1)},
+	} {
+		if err := validateDNSFault(fault); err == nil {
+			t.Errorf("accepted invalid DNS fault: %+v", fault)
+		}
+	}
+	if err := validateDNSFault(&DNSFault{A: []string{DNSOutcomeAnswer, DNSOutcomeSERVFAIL}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCampaignRejectsUnknownFields(t *testing.T) {
+	raw := minimalScenario + `
+campaign:
+  runs: 2
+  arbitrary_command: ip route flush table main
+`
+	if _, err := ParseScenario(strings.NewReader(raw)); err == nil {
+		t.Error("accepted unknown campaign field")
 	}
 }
 

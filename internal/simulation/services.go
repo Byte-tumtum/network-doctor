@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -74,6 +75,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			return nil, err
 		}
 		var open []io.Closer
+		schedule := newDNSSchedule(svc.DNSFault)
 		// One socket per address rather than one wildcard socket, so every
 		// answer leaves from the address the question arrived at.
 		for _, a := range bindAddresses(addresses) {
@@ -84,7 +86,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 				}
 				return nil, err
 			}
-			go serveDNS(pc, zone, svc.Name, recorder)
+			go serveDNS(pc, zone, svc.Name, schedule, recorder)
 			open = append(open, pc)
 		}
 		return open, nil
@@ -104,6 +106,15 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 		}
 		for _, ln := range listeners {
 			go serveSink(ln)
+		}
+		return listenersAsClosers(listeners), nil
+	case ServiceTCPReset:
+		listeners, err := listenTCPFamilies(addresses, port)
+		if err != nil {
+			return nil, err
+		}
+		for _, ln := range listeners {
+			go serveTCPReset(ln, svc.Name, recorder)
 		}
 		return listenersAsClosers(listeners), nil
 	case ServiceSOCKS5:
@@ -242,6 +253,32 @@ func serveSink(ln net.Listener) {
 	}
 }
 
+func serveTCPReset(ln net.Listener, service string, recorder *evidenceRecorder) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: service, Event: "accepted", Result: "connected"})
+		go func(conn net.Conn) {
+			tcp, ok := conn.(*net.TCPConn)
+			if !ok {
+				_ = conn.Close()
+				recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: service, Event: "reset", Result: "unsupported_connection"})
+				return
+			}
+			// Give a protocol client a short opportunity to send its greeting, but
+			// never let a silent connection outlive the service's bounded lifecycle.
+			_ = tcp.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			var one [1]byte
+			_, _ = tcp.Read(one[:])
+			_ = tcp.SetLinger(0)
+			_ = tcp.Close()
+			recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: service, Event: "reset", Result: "connection_reset"})
+		}(conn)
+	}
+}
+
 // DNS wire constants. Only what a static A/AAAA zone needs.
 const (
 	dnsTypeA    = 1
@@ -257,6 +294,7 @@ const (
 
 	dnsRcodeSuccess  = 0
 	dnsRcodeFormErr  = 1
+	dnsRcodeServFail = 2
 	dnsRcodeNXDomain = 3
 	dnsRcodeNotImpl  = 4
 
@@ -264,11 +302,25 @@ const (
 	dnsMaxMsg    = 1500
 )
 
+func dnsErrorReply(msg []byte, rcode uint16) []byte {
+	if len(msg) < dnsHeaderLen || binary.BigEndian.Uint16(msg[2:4])&dnsFlagResponse != 0 {
+		return nil
+	}
+	id := binary.BigEndian.Uint16(msg[0:2])
+	flags := binary.BigEndian.Uint16(msg[2:4])
+	out := flags&(dnsOpcodeMask|dnsFlagRD) | dnsFlagResponse | dnsFlagAA | dnsFlagRA
+	_, qend, ok := dnsParseQuestion(msg)
+	if !ok || binary.BigEndian.Uint16(msg[4:6]) != 1 {
+		return dnsHeader(id, out, dnsRcodeFormErr, 0, 0)
+	}
+	return append(dnsHeader(id, out, rcode, 1, 0), msg[dnsHeaderLen:qend]...)
+}
+
 // serveDNS is a static authoritative resolver: it answers A and AAAA from the
 // scenario's zone, NODATA for a name it knows in a family it does not have, and
 // NXDOMAIN for everything else. That is the whole resolver — a scenario proves
 // things about netdoc, not about DNS, and this is small enough to audit.
-func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, recorder *evidenceRecorder) {
+func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, schedule *dnsSchedule, recorder *evidenceRecorder) {
 	buf := make([]byte, dnsMaxMsg)
 	for {
 		n, from, err := pc.ReadFrom(buf)
@@ -281,12 +333,63 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, r
 			if splitErr != nil {
 				source = from.String()
 			}
+			sequence, scheduled := schedule.next(qtype)
+			actual := result
+			if scheduled == DNSOutcomeSERVFAIL {
+				actual = "SERVFAIL"
+			}
 			recorder.record(evidenceEvent{Kind: ServiceDNS, Service: service, Name: dnsKey(name),
-				Source: source, QueryType: dnsTypeName(qtype), Result: result})
+				Source: source, QueryType: dnsTypeName(qtype), Result: actual, Sequence: sequence,
+				ScheduledOutcome: scheduled, ActualOutcome: actual})
+			if scheduled == DNSOutcomeSERVFAIL {
+				if reply := dnsErrorReply(msg, dnsRcodeServFail); reply != nil {
+					_, _ = pc.WriteTo(reply, from)
+				}
+				continue
+			}
 		}
 		if reply := dnsReply(msg, zone); reply != nil {
 			_, _ = pc.WriteTo(reply, from)
 		}
+	}
+}
+
+type dnsSchedule struct {
+	mu        sync.Mutex
+	a         []string
+	aaaa      []string
+	aIndex    int
+	aaaaIndex int
+}
+
+func newDNSSchedule(fault *DNSFault) *dnsSchedule {
+	s := &dnsSchedule{}
+	if fault != nil {
+		s.a = append([]string(nil), fault.A...)
+		s.aaaa = append([]string(nil), fault.AAAA...)
+	}
+	return s
+}
+
+func (s *dnsSchedule) next(qtype uint16) (int, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	outcome := DNSOutcomeAnswer
+	switch qtype {
+	case dnsTypeA:
+		s.aIndex++
+		if s.aIndex <= len(s.a) {
+			outcome = s.a[s.aIndex-1]
+		}
+		return s.aIndex, outcome
+	case dnsTypeAAAA:
+		s.aaaaIndex++
+		if s.aaaaIndex <= len(s.aaaa) {
+			outcome = s.aaaa[s.aaaaIndex-1]
+		}
+		return s.aaaaIndex, outcome
+	default:
+		return 1, outcome
 	}
 }
 

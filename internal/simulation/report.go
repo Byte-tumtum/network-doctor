@@ -74,11 +74,15 @@ type RouteInfo struct {
 
 // FaultInfo is one injected impairment and the exact command that injected it.
 type FaultInfo struct {
-	Type    string   `json:"type"`
-	Node    string   `json:"node"`
-	Family  string   `json:"family,omitempty"`
-	Summary string   `json:"summary"`
-	Command []string `json:"command"`
+	Type        string        `json:"type"`
+	Node        string        `json:"node"`
+	Family      string        `json:"family,omitempty"`
+	Summary     string        `json:"summary"`
+	Command     []string      `json:"command"`
+	Latency     time.Duration `json:"latency_ms,omitempty"`
+	Jitter      time.Duration `json:"jitter_ms,omitempty"`
+	LossPercent float64       `json:"loss_percent,omitempty"`
+	Seed        uint32        `json:"seed,omitempty"`
 }
 
 // CleanupInfo records that the resources went away, and never hides a failure
@@ -100,6 +104,7 @@ func (r *Report) finish() {
 		r.Suggestions = append(r.Suggestions, r.Tests[i].suggest()...)
 	}
 	r.Suggestions = append(r.Suggestions, r.routeSuggestions()...)
+	r.Suggestions = append(r.Suggestions, r.faultSuggestions()...)
 	// Empty lists, not null: a consumer iterating report.faults on a healthy
 	// scenario should get nothing to do, not a type error.
 	if r.Suggestions == nil {
@@ -117,11 +122,20 @@ func (r *Report) finish() {
 	if r.Evidence.DNS == nil {
 		r.Evidence.DNS = []DNSEvidence{}
 	}
+	if r.Evidence.DNSQueries == nil {
+		r.Evidence.DNSQueries = []DNSQueryEvidence{}
+	}
 	if r.Evidence.SOCKSRequests == nil {
 		r.Evidence.SOCKSRequests = []SOCKSEvidence{}
 	}
 	if r.Evidence.TLS == nil {
 		r.Evidence.TLS = []TLSEvidence{}
+	}
+	if r.Evidence.TCPResets == nil {
+		r.Evidence.TCPResets = []TCPResetEvidence{}
+	}
+	if r.Evidence.PacketConditions == nil {
+		r.Evidence.PacketConditions = []PacketConditionEvidence{}
 	}
 	if r.Evidence.Links == nil {
 		r.Evidence.Links = []LinkEvidence{}
@@ -155,6 +169,22 @@ func (r *Report) finish() {
 	default:
 		r.Result = ResultPartial
 	}
+}
+
+func (r *Report) faultSuggestions() []Suggestion {
+	for _, fault := range r.Faults {
+		if fault.Type == FaultNetem && fault.Jitter > 0 {
+			for _, condition := range r.Evidence.PacketConditions {
+				if condition.Node == fault.Node && condition.RTTSamples > 0 {
+					return []Suggestion{{Code: "jitter_sampling_gap",
+						Message: "The simulator injected jitter, but each netdoc probe reports one connection sample and cannot evaluate variance across time.",
+						Evidence: fmt.Sprintf("injected jitter %s; observed successful connection range %s..%s across %d sample(s)",
+							fault.Jitter, condition.ObservedMinRTT, condition.ObservedMaxRTT, condition.RTTSamples)}}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (r *Report) routeSuggestions() []Suggestion {
@@ -262,7 +292,7 @@ func (r *Report) WriteText(w io.Writer) {
 		r.Tests[i].writeText(w)
 	}
 
-	if len(r.Evidence.DNS) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 ||
+	if len(r.Evidence.DNS) > 0 || len(r.Evidence.DNSQueries) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 || len(r.Evidence.TCPResets) > 0 || len(r.Evidence.PacketConditions) > 0 ||
 		len(r.Evidence.Links) > 0 || len(r.Evidence.Routes) > 0 || len(r.Evidence.Routers) > 0 || len(r.Evidence.Reachability) > 0 {
 		p("Structured evidence")
 		for _, e := range r.Evidence.Links {
@@ -275,6 +305,10 @@ func (r *Report) WriteText(w io.Writer) {
 			selected := "configured"
 			if e.Selected {
 				selected = "selected"
+			}
+			for _, e := range r.Evidence.PacketConditions {
+				p("  NETEM %-10s %-16s delay=%s jitter=%s loss=%.2f%% seed=%d active=%t dropped=%d RTT=%s..%s (%d samples)", e.Node, e.Segment,
+					e.Latency, e.Jitter, e.LossPercent, e.Seed, e.Active, e.DroppedPackets, e.ObservedMinRTT, e.ObservedMaxRTT, e.RTTSamples)
 			}
 			gateway := "unknown"
 			if e.GatewayReachable != nil {
@@ -294,6 +328,10 @@ func (r *Report) WriteText(w io.Writer) {
 			if e.Port != 0 {
 				destination = net.JoinHostPort(destination, fmt.Sprint(e.Port))
 			}
+			for _, e := range r.Evidence.DNSQueries {
+				p("  DNSQ  %-10s %-6s #%03d %-28s scheduled=%-8s actual=%s", e.Node, e.QueryType,
+					e.Sequence, e.Name, e.ScheduledOutcome, e.ActualOutcome)
+			}
 			p("  SOCKS %-10s %-8s %-7s %-28s %-22s ×%d", e.Node, e.Event, e.AddressType,
 				textsafe.Clean(destination), e.Result, e.Count)
 		}
@@ -301,6 +339,9 @@ func (r *Report) WriteText(w io.Writer) {
 			presented := "not-presented"
 			if e.CertificatePresented {
 				presented = "presented"
+			}
+			for _, e := range r.Evidence.TCPResets {
+				p("  RESET %-10s %-10s %-24s ×%d", e.Node, e.Event, e.Result, e.Count)
 			}
 			p("  TLS   %-10s %-20s SNI %-24s %-13s %-27s %s ×%d", e.Node, e.CertificateMode,
 				textsafe.Clean(e.RequestedServer), presented, strings.Join(e.CertificateDNS, ","), e.Result, e.Count)

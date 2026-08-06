@@ -27,6 +27,7 @@ import (
 // directorCommand is the hidden argv[1] the launcher re-executes itself with,
 // once it is inside the simulation's namespaces.
 const directorCommand = "__director"
+const campaignDirectorCommand = "__campaign_director"
 
 // Exit codes. Separated so a CI job can tell "netdoc diagnosed this wrong"
 // from "the simulator could not run".
@@ -64,8 +65,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "run":
 		return launch(ctx, args, stdout, stderr)
+	case "campaign":
+		return launchCampaign(ctx, args[1:], stdout, stderr)
 	case directorCommand:
 		return direct(ctx, args[1:], stdout, stderr)
+	case campaignDirectorCommand:
+		return directCampaign(ctx, args[1:], stdout, stderr)
 	case "validate":
 		return validate(args[1:], stdout, stderr)
 	case "scenarios":
@@ -94,7 +99,8 @@ Builds a virtual network from a scenario, runs netdoc inside it, and reports
 whether netdoc's diagnosis matched what the scenario broke.
 
 Commands:
-  run <scenario> [flags]   build the network, run the tests, print the report
+	  run <scenario> [flags]   build the network, run the tests, print the report
+	  campaign <scenario>      run a seeded scenario campaign sequentially
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
   capabilities             report whether this host can simulate, and what a run does
@@ -111,7 +117,17 @@ Flags for run:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -repeat <n>              run each test n times to catch an unstable diagnosis
   -dry-run                 print every privileged command the run would make, and stop
-  -v                       log each privileged command as it runs
+	  -v                       log each privileged command as it runs
+
+Flags for campaign:
+	  -runs <n>                override the campaign's bounded default run count
+	  -seed <int64>            root seed (generated and printed when omitted)
+	  -iteration <n>           run exactly one independently derived iteration
+	  -fail-fast               stop after the first mismatch or simulator error
+	  -json                    print the machine-readable aggregate report
+	  -netdoc <path>           the netdoc binary to run
+	  -timeout <duration>      netdoc's per-probe timeout (default 4s)
+	  -v                       log each privileged command as it runs
 
 Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 3 the simulation could not run.
@@ -119,6 +135,83 @@ Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 Simulations are unprivileged: everything lives in a user namespace that owns
 nothing on the host. Run 'netdoc-sim capabilities' for the details.
 `)
+}
+
+type optionalSeed struct {
+	set bool
+	v   int64
+}
+
+func (s *optionalSeed) String() string {
+	if !s.set {
+		return ""
+	}
+	return strconv.FormatInt(s.v, 10)
+}
+
+func (s *optionalSeed) Set(raw string) error {
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid seed %q: %w", textsafe.Clean(raw), err)
+	}
+	s.set, s.v = true, v
+	return nil
+}
+
+type campaignFlags struct {
+	fs        *flag.FlagSet
+	json      *bool
+	runs      *int
+	seed      optionalSeed
+	iteration *int
+	failFast  *bool
+	netdoc    *string
+	timeout   *time.Duration
+	verbose   *bool
+}
+
+func newCampaignFlags(out io.Writer) *campaignFlags {
+	f := &campaignFlags{fs: flag.NewFlagSet("netdoc-sim campaign", flag.ContinueOnError)}
+	f.fs.SetOutput(out)
+	f.json = f.fs.Bool("json", false, "print the machine-readable aggregate report")
+	f.runs = f.fs.Int("runs", 0, "override campaign run count")
+	f.fs.Var(&f.seed, "seed", "campaign root seed")
+	f.iteration = f.fs.Int("iteration", -1, "run exactly one iteration")
+	f.failFast = f.fs.Bool("fail-fast", false, "stop after the first failure")
+	f.netdoc = f.fs.String("netdoc", "", "path to the netdoc binary")
+	f.timeout = f.fs.Duration("timeout", 4*time.Second, "netdoc per-probe timeout")
+	f.verbose = f.fs.Bool("v", false, "log each privileged command as it runs")
+	return f
+}
+
+func (f *campaignFlags) parse(args []string) (string, error) {
+	var ref string
+	for {
+		if err := f.fs.Parse(args); err != nil {
+			return "", err
+		}
+		if f.fs.NArg() == 0 {
+			break
+		}
+		if ref != "" {
+			return "", fmt.Errorf("unexpected argument %q", textsafe.Clean(f.fs.Arg(0)))
+		}
+		ref = f.fs.Arg(0)
+		args = f.fs.Args()[1:]
+	}
+	if ref == "" {
+		return "", errors.New("a campaign scenario is required")
+	}
+	if *f.runs < 0 || *f.runs > 1000 {
+		return "", errors.New("-runs must be between 1 and 1000 when supplied")
+	}
+	if *f.iteration < -1 || *f.iteration > 999999 {
+		return "", errors.New("-iteration must be between 0 and 999999")
+	}
+	if *f.timeout <= 0 {
+		return "", errors.New("-timeout must be positive")
+	}
+	return ref, nil
 }
 
 // runFlags is the flag set shared by the launcher and the director, so the
@@ -219,6 +312,119 @@ func launch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 	return code
+}
+
+func launchCampaign(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	f := newCampaignFlags(stderr)
+	ref, err := f.parse(args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			usage(stdout)
+			return exitOK
+		}
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitUsage
+	}
+	scenario, err := simulation.Load(ref)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
+		return exitUsage
+	}
+	if scenario.Campaign == nil {
+		fmt.Fprintln(stderr, "netdoc-sim: scenario has no campaign definition")
+		return exitUsage
+	}
+	if caps := simulation.DefaultBackend(false, nil).Capabilities(ctx); !caps.Supported {
+		fmt.Fprintln(stderr, "netdoc-sim:", caps.Reason)
+		return exitError
+	}
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitError
+	}
+	path, err := findNetdoc(*f.netdoc, self)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitUsage
+	}
+	if !f.seed.set {
+		f.seed.v, err = simulation.RandomSeed()
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc-sim: choose campaign seed:", err)
+			return exitError
+		}
+		f.seed.set = true
+	}
+	code, err := simulation.LaunchDirector(ctx, self, campaignDirectorArgv(f, ref, path), stdout, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitError
+	}
+	return code
+}
+
+func campaignDirectorArgv(f *campaignFlags, ref, netdoc string) []string {
+	return []string{campaignDirectorCommand,
+		"-netdoc", netdoc,
+		"-timeout", f.timeout.String(),
+		"-runs", strconv.Itoa(*f.runs),
+		"-seed", strconv.FormatInt(f.seed.v, 10),
+		"-iteration", strconv.Itoa(*f.iteration),
+		fmt.Sprintf("-json=%t", *f.json),
+		fmt.Sprintf("-fail-fast=%t", *f.failFast),
+		fmt.Sprintf("-v=%t", *f.verbose),
+		"--", ref,
+	}
+}
+
+func directCampaign(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	f := newCampaignFlags(stderr)
+	ref, err := f.parse(args)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitUsage
+	}
+	if !f.seed.set {
+		fmt.Fprintln(stderr, "netdoc-sim: internal campaign director did not receive a seed")
+		return exitError
+	}
+	scenario, err := simulation.Load(ref)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
+		return exitUsage
+	}
+	var log io.Writer
+	if *f.verbose {
+		log = stderr
+	}
+	var iteration *int
+	if *f.iteration >= 0 {
+		value := *f.iteration
+		iteration = &value
+	}
+	result := simulation.RunCampaign(ctx, scenario, func() simulation.Backend {
+		return simulation.DefaultBackend(false, log)
+	}, simulation.CampaignOptions{
+		Run:  simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log},
+		Runs: *f.runs, Seed: f.seed.v, Iteration: iteration, FailFast: *f.failFast,
+	})
+	if *f.json {
+		if err := result.WriteJSON(stdout); err != nil {
+			fmt.Fprintln(stderr, "netdoc-sim:", err)
+			return exitError
+		}
+	} else {
+		result.WriteText(stdout)
+	}
+	switch result.Result {
+	case simulation.ResultPass:
+		return exitOK
+	case simulation.ResultError:
+		return exitError
+	default:
+		return exitMismatch
+	}
 }
 
 // directorArgv builds the director's command line out of what the launcher

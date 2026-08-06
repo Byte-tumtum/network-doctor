@@ -1,0 +1,41 @@
+name: high-jitter
+description: Bounded seeded jitter varies repeated RTT observations without making the path slow on average.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+
+faults:
+  - type: netem
+    node: client
+    delay: 120ms
+    jitter: 100ms
+    seed: 2976579765
+
+tests:
+  - {name: jitter sample 1, node: client}
+  - {name: jitter sample 2, node: client}
+  - {name: jitter sample 3, node: client}
+  - {name: jitter sample 4, node: client}
+  - {name: jitter sample 5, node: client}
+
+expect:
+  verdict: ok
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: PASS}

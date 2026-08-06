@@ -33,6 +33,40 @@ type silentConn struct{ fakeConn }
 func (silentConn) Read([]byte) (int, error)        { return 0, os.ErrDeadlineExceeded }
 func (silentConn) SetReadDeadline(time.Time) error { return nil }
 
+type resetConn struct{ fakeConn }
+
+func (resetConn) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("wrapped read: %w", syscall.ECONNRESET)
+}
+func (resetConn) SetReadDeadline(time.Time) error { return nil }
+
+func TestBannerProbeClassifiesWrappedReset(t *testing.T) {
+	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) { return resetConn{}, nil }}
+	probe := ops.bannerProbe(ProbeSSH, "SSH", 22)
+	r := probe.Run(context.Background(), map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}})
+	if r.Status != StatusFail || r.Cause != ConnectionCauseReset {
+		t.Fatalf("reset result = %+v", r)
+	}
+}
+
+func TestDNSFailureCauseUsesStructuredErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"timeout", fmt.Errorf("wrapped: %w", &net.DNSError{IsTimeout: true}), DNSCauseTimeout},
+		{"temporary", fmt.Errorf("wrapped: %w", &net.DNSError{IsTemporary: true}), DNSCauseTemporaryFailure},
+		{"not found", &net.DNSError{IsNotFound: true}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dnsFailureCause(tc.err); got != tc.want {
+				t.Errorf("cause = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Target TCP reports only the addresses dialIPs actually attempted.
 func TestTargetTCPProbeAttemptCap(t *testing.T) {
 	calls := 0

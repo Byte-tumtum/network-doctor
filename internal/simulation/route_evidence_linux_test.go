@@ -88,6 +88,22 @@ func TestParseLinkUp(t *testing.T) {
 	}
 }
 
+func TestParseNetemStats(t *testing.T) {
+	raw := []byte("qdisc netem 8001: root refcnt 2 limit 1000 delay 20ms loss 10% seed 123\n Sent 400 bytes 10 pkt (dropped 3, overlimits 0 requeues 0)\n")
+	active, dropped, err := parseNetemStats(raw)
+	if err != nil || !active || dropped != 3 {
+		t.Fatalf("active=%t dropped=%d err=%v", active, dropped, err)
+	}
+	if active, _, err := parseNetemStats([]byte("qdisc noqueue 0: root\n")); err != nil || active {
+		t.Fatalf("non-netem active=%t err=%v", active, err)
+	}
+	for _, bad := range [][]byte{nil, []byte("qdisc netem 1: root\n(dropped nope, overlimits 0)\n"), make([]byte, maxTCOutput+1)} {
+		if _, _, err := parseNetemStats(bad); err == nil {
+			t.Errorf("accepted malformed tc output %q", bad)
+		}
+	}
+}
+
 func TestMultiSegmentDryPlanUsesOneBridgePerSegmentAndInterface(t *testing.T) {
 	s, err := ParseScenario(strings.NewReader(routedScenario))
 	if err != nil {

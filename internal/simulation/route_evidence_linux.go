@@ -13,11 +13,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 const maxRouteGetOutput = 4096
+const maxTCOutput = 4096
 
 func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 	paths := make([]string, 0, len(e.nodes))
@@ -65,6 +67,29 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		item.GatewayReachable = e.gatewayReachability(ctx, np, segment, route.Via, route.Family)
 		out.Routes = append(out.Routes, item)
 	}
+	for _, fault := range e.scenario.Faults {
+		if fault.Type != FaultNetem {
+			continue
+		}
+		np := e.byName[fault.Node]
+		iface := np.interfaceForSegment(fault.Segment)
+		res := e.Exec(ctx, fault.Node, []string{"tc", "-s", "qdisc", "show", "dev", iface.iface}, nil)
+		if res.Err != nil || res.ExitCode != 0 {
+			return Evidence{}, fmt.Errorf("inspect netem %s/%s: %w", fault.Node, fault.Segment, execResultError(res))
+		}
+		active, dropped, parseErr := parseNetemStats(res.Stdout)
+		if parseErr != nil {
+			return Evidence{}, fmt.Errorf("parse netem %s/%s: %w", fault.Node, fault.Segment, parseErr)
+		}
+		condition := PacketConditionEvidence{Node: fault.Node, Segment: fault.Segment, Seed: fault.Seed,
+			Active: active, DroppedPackets: dropped}
+		condition.Latency, _ = time.ParseDuration(fault.Delay)
+		condition.Jitter, _ = time.ParseDuration(fault.Jitter)
+		if raw, ok := strings.CutSuffix(fault.Loss, "%"); ok {
+			condition.LossPercent, _ = strconv.ParseFloat(raw, 64)
+		}
+		out.PacketConditions = append(out.PacketConditions, condition)
+	}
 
 	for node, destinations := range e.evidenceDestinations() {
 		np := e.byName[node]
@@ -97,12 +122,44 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		return out.Links[i].Node+out.Links[i].Segment < out.Links[j].Node+out.Links[j].Segment
 	})
 	sort.Slice(out.Routers, func(i, j int) bool { return out.Routers[i].Node < out.Routers[j].Node })
+	sort.Slice(out.PacketConditions, func(i, j int) bool {
+		return out.PacketConditions[i].Node+out.PacketConditions[i].Segment < out.PacketConditions[j].Node+out.PacketConditions[j].Segment
+	})
 	sort.Slice(out.Routes, func(i, j int) bool {
 		a, b := out.Routes[i], out.Routes[j]
 		return a.Node+a.Destination+a.Via+strconv.Itoa(a.Metric)+strconv.FormatBool(a.Selected) <
 			b.Node+b.Destination+b.Via+strconv.Itoa(b.Metric)+strconv.FormatBool(b.Selected)
 	})
 	return out, nil
+}
+
+func parseNetemStats(raw []byte) (bool, uint64, error) {
+	if len(raw) == 0 || len(raw) > maxTCOutput {
+		return false, 0, errors.New("tc output is empty or oversized")
+	}
+	text := string(raw)
+	active := strings.Contains(text, "qdisc netem ")
+	if !active {
+		return false, 0, nil
+	}
+	const marker = "(dropped "
+	start := strings.Index(text, marker)
+	if start < 0 {
+		return true, 0, nil
+	}
+	start += len(marker)
+	end := start
+	for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+		end++
+	}
+	if end == start || end >= len(text) || text[end] != ',' {
+		return false, 0, errors.New("tc dropped counter is malformed")
+	}
+	dropped, err := strconv.ParseUint(text[start:end], 10, 64)
+	if err != nil {
+		return false, 0, fmt.Errorf("tc dropped counter: %w", err)
+	}
+	return true, dropped, nil
 }
 
 func selectedRouteMetric(routes []Route, node, destination, via string) int {

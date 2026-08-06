@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,8 +132,40 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 		rep.Error = "collecting evidence failed: " + textsafe.Clean(err.Error())
 	} else {
 		rep.addReachabilityEvidence()
+		rep.addPacketObservations()
 	}
 	return rep
+}
+
+func (r *Report) addPacketObservations() {
+	if len(r.Evidence.PacketConditions) == 0 {
+		return
+	}
+	var samples []time.Duration
+	for _, test := range r.Tests {
+		if test.Diagnosis == nil {
+			continue
+		}
+		for _, check := range test.Diagnosis.Checks {
+			if check.ID != string(diagnostic.ProbeInternet) {
+				continue
+			}
+			for _, attempt := range check.Attempts {
+				if attempt.Error == "" && attempt.Ms > 0 {
+					samples = append(samples, time.Duration(attempt.Ms)*time.Millisecond)
+				}
+			}
+		}
+	}
+	if len(samples) == 0 {
+		return
+	}
+	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	for i := range r.Evidence.PacketConditions {
+		r.Evidence.PacketConditions[i].ObservedMinRTT = samples[0]
+		r.Evidence.PacketConditions[i].ObservedMaxRTT = samples[len(samples)-1]
+		r.Evidence.PacketConditions[i].RTTSamples = len(samples)
+	}
 }
 
 func (r *Report) addReachabilityEvidence() {

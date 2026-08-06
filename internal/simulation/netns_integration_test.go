@@ -88,6 +88,15 @@ func asExitError(err error, target **exec.ExitError) bool {
 	return ok
 }
 
+func hasSuggestion(suggestions []Suggestion, code string) bool {
+	for _, suggestion := range suggestions {
+		if suggestion.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 // TestHealthyScenario is the control: netdoc must find nothing wrong with a
 // network where nothing is wrong.
 func TestHealthyScenario(t *testing.T) {
@@ -151,6 +160,128 @@ func TestHighLatencyScenario(t *testing.T) {
 		t.Errorf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
 	}
 	assertCleanedUp(t, rep)
+}
+
+func TestPacketLossScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "packet-loss")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+	}
+	if len(rep.Faults) != 1 || rep.Faults[0].Type != FaultNetem || rep.Faults[0].LossPercent != 10 || rep.Faults[0].Seed == 0 {
+		t.Fatalf("packet-loss qdisc evidence = %+v", rep.Faults)
+	}
+	if len(rep.Evidence.PacketConditions) != 1 || !rep.Evidence.PacketConditions[0].Active || rep.Evidence.PacketConditions[0].DroppedPackets == 0 {
+		t.Fatalf("tc did not report an active netem qdisc: %+v", rep.Evidence.PacketConditions)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestHighJitterScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "high-jitter")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+	}
+	if len(rep.Faults) != 1 || rep.Faults[0].Jitter != 100000000 {
+		t.Fatalf("jitter evidence = %+v", rep.Faults)
+	}
+	condition := rep.Evidence.PacketConditions[0]
+	if condition.RTTSamples < 5 || condition.ObservedMaxRTT <= condition.ObservedMinRTT {
+		t.Errorf("RTT observations did not vary: %+v", condition)
+	}
+	if !hasSuggestion(rep.Suggestions, "jitter_sampling_gap") {
+		t.Errorf("no deterministic jitter coverage-gap suggestion: %+v", rep.Suggestions)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestIntermittentDNSScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "intermittent-dns")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v DNS=%+v", rep.Result, rep.Error, rep.Tests, rep.Evidence.DNSQueries)
+	}
+	servfail, answer := false, false
+	for _, query := range rep.Evidence.DNSQueries {
+		if query.Service != "intermittent-resolver" {
+			continue
+		}
+		servfail = servfail || query.ScheduledOutcome == DNSOutcomeSERVFAIL && query.ActualOutcome == "SERVFAIL"
+		answer = answer || query.ScheduledOutcome == DNSOutcomeAnswer && query.ActualOutcome == "ANSWER"
+	}
+	if !servfail || !answer {
+		t.Errorf("scheduled resolver did not prove both outcomes: %+v", rep.Evidence.DNSQueries)
+	}
+	if cause := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeDNS)).Cause; cause != diagnostic.DNSCauseTemporaryFailure {
+		t.Errorf("first DNS cause = %q", cause)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestTCPResetScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "tcp-reset")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v reset=%+v", rep.Result, rep.Error, rep.Tests, rep.Evidence.TCPResets)
+	}
+	if target := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeTargetTCP)); target.Status != "PASS" {
+		t.Errorf("target TCP = %+v", target)
+	}
+	if banner := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeSSH)); banner.Status != "FAIL" || banner.Cause != diagnostic.ConnectionCauseReset {
+		t.Errorf("SSH reset classification = %+v", banner)
+	}
+	accepted, reset := false, false
+	for _, event := range rep.Evidence.TCPResets {
+		accepted = accepted || event.Event == "accepted" && event.Count > 0
+		reset = reset || event.Event == "reset" && event.Count > 0
+	}
+	if !accepted || !reset {
+		t.Errorf("reset service evidence = %+v", rep.Evidence.TCPResets)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(iteration string) CampaignResult {
+		args := []string{"campaign", "unstable-connectivity", "--json", "--runs", "5", "--seed", "12345", "--netdoc", netdoc}
+		if iteration != "" {
+			args = append(args, "--iteration", iteration)
+		}
+		cmd := exec.Command(sim, args...)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("campaign: %v", err)
+		}
+		var result CampaignResult
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatalf("campaign JSON: %v: %s", err, out)
+		}
+		return result
+	}
+	first, second := run(""), run("")
+	if len(first.Outcomes) != 5 || len(second.Outcomes) != 5 {
+		t.Fatalf("campaign lengths = %d/%d", len(first.Outcomes), len(second.Outcomes))
+	}
+	for i := range first.Outcomes {
+		a, b := first.Outcomes[i], second.Outcomes[i]
+		if a.IterationSeed != b.IterationSeed || a.ScheduleID != b.ScheduleID || a.Fingerprint.ID != b.Fingerprint.ID {
+			t.Fatalf("iteration %d is not reproducible: %+v != %+v", i, a, b)
+		}
+		assertCleanedUp(t, *a.Report)
+		assertCleanedUp(t, *b.Report)
+	}
+	direct := run("3")
+	if len(direct.Outcomes) != 1 || direct.Outcomes[0].Iteration != 3 ||
+		direct.Outcomes[0].IterationSeed != first.Outcomes[3].IterationSeed ||
+		direct.Outcomes[0].ScheduleID != first.Outcomes[3].ScheduleID ||
+		direct.Outcomes[0].Fingerprint.ID != first.Outcomes[3].Fingerprint.ID {
+		t.Fatalf("direct reproduction differs: direct=%+v original=%+v", direct.Outcomes, first.Outcomes[3])
+	}
+	assertCleanedUp(t, *direct.Outcomes[0].Report)
 }
 
 func TestSOCKS5LocalDNSScenario(t *testing.T) {
