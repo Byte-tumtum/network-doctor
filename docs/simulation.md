@@ -15,6 +15,8 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim scenarios               # the built-in scenario library
 ./netdoc-sim validate broken-dns     # parse and check, build nothing
 ./netdoc-sim run broken-dns          # the whole thing
+./netdoc-sim run socks5-local-dns-fails
+./netdoc-sim run socks5h-remote-dns-succeeds
 ./netdoc-sim run broken-dns -json    # the same report, machine-readable
 ./netdoc-sim run broken-dns -dry-run # every privileged command, run none of them
 ./netdoc-sim run broken-dns -keep    # leave it up so you can walk around inside
@@ -72,8 +74,10 @@ scenarios go stale silently unless the endpoints are updated to match.**
 | `dns_public` | `8.8.8.8:53` | `publicDNSIP`, `publicDNSServer` |
 | `dns` | resolves `connectivitycheck.gstatic.com` when no target is given | `probeHost` |
 
-Each scenario mirrors these in two places: the `aliases` list on its `internet`
-node, and the `zone` of its `dns` service.
+Most scenarios mirror these in the `aliases` list on their simulated internet
+node and the `zone` of their DNS service. The two SOCKS scenarios intentionally
+omit `probeHost` from the client resolver and expose it only in the proxy
+resolver; that split is the behavior they test.
 
 The IPv6 endpoints are deliberately **not** simulated. The scenarios are
 IPv4-only, so `internet_tcp` reports "no IPv6 egress", which is correct for the
@@ -106,7 +110,7 @@ launcher (netdoc-sim run)              host namespaces, no privileges
   └── director                         new user + net + mount namespace
         ├── bridge nb<id>              the shared L2 segment
         ├── node holder × N            each in its own net + mount namespace
-        │     └── test services        dns / http / tcp, bound inside the node
+        │     └── test services        dns / http / tcp / socks5
         └── nsenter … netdoc -json     the diagnostic under test, inside a node
 ```
 
@@ -171,6 +175,14 @@ expect:
 Unknown keys are rejected, so a typo fails loudly. Every address, name, port and
 duration is validated before anything is created.
 
+Proxy configuration is deliberately not a raw URL or environment map. The
+schema accepts only `socks5` or `socks5h`, a validated node reference, and a
+port that belongs to a declared `socks5` service. The runner then constructs
+one canonical `ALL_PROXY` value for the real netdoc process. Scenario files
+cannot name executables, paths, commands, resolver text, or arbitrary SOCKS
+options. Non-empty service names are topology-wide unique; DNS names are
+compared case-insensitively when duplicate records are rejected.
+
 ### `aliases`, and why the simulated internet answers on 1.1.1.1
 
 A scenario claims netdoc's hardcoded probe endpoints for a node inside the
@@ -178,6 +190,68 @@ simulation, so those probes run their real code path against a server that is
 three hops from nowhere. Nothing leaves the namespace. See
 [the endpoint-drift warning above](#-scenarios-depend-on-netdocs-hardcoded-probe-endpoints)
 for the full list and what to do when it changes.
+
+### SOCKS5 versus SOCKS5h
+
+The two built-ins use the same network and the same private destination:
+
+```sh
+./netdoc-sim run socks5-local-dns-fails
+./netdoc-sim run socks5h-remote-dns-succeeds
+```
+
+`socks5://` means netdoc first resolves `connectivitycheck.gstatic.com` with
+the client namespace's resolver and sends an IP-address CONNECT request.
+`socks5h://` means netdoc sends that hostname in the SOCKS request and the
+proxy resolves it with the resolver configured in the proxy namespace. The
+private record exists only in the proxy resolver's zone.
+
+The client is filtered from connecting directly to the private service, so a
+successful tunnel cannot be an ordinary direct connection. These scenarios do
+not use the public internet: `1.1.1.1`, `8.8.8.8`, the probe hostname, proxy,
+resolver, and destination are all simulator-owned addresses and listeners
+inside the throwaway user namespace.
+
+The report proves DNS location with two independent structured sources:
+
+- DNS evidence identifies the resolver node, source address, queried name,
+  query type, result, and count.
+- SOCKS evidence records an accepted greeting separately from CONNECT and, for
+  each request, the address type (`ipv4`, `ipv6`, or `domain`), destination,
+  port, result, and count.
+
+In `socks5-local-dns-fails`, the proxy greeting is accepted, the client
+resolver observes NXDOMAIN from `10.77.0.10`, and no CONNECT is sent. In
+`socks5h-remote-dns-succeeds`, the client sends no matching DNS query, the
+proxy receives a domain CONNECT, its resolver observes A/AAAA queries from
+`10.77.0.30`, and the CONNECT result is `connected`. Success is therefore not
+used as a guess that remote resolution happened.
+
+The scenario fragment is intentionally narrow:
+
+```yaml
+- name: proxy
+  address: 10.77.0.30
+  resolver: 10.77.0.30
+  services:
+    - name: private-resolver
+      type: dns
+      zone:
+        connectivitycheck.gstatic.com: 10.77.0.40
+    - {name: socks-proxy, type: socks5, port: 1080}
+
+tests:
+  - node: client
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5h, node: proxy, port: 1080}
+```
+
+The SOCKS service implements no-auth CONNECT only. It supports IPv4, IPv6,
+and domain-name destinations, valid RFC 1928 reply codes, bounded handshakes,
+connection lifetime, and copied bytes. Authentication, BIND, UDP ASSOCIATE,
+and proxy chaining are unsupported. Domain resolution is explicitly dialed to
+the proxy node's validated resolver; it never falls back to the director or
+host resolver. No new dependency or external daemon is used.
 
 ### Faults
 
@@ -212,6 +286,11 @@ something that does not exist.
 ## The report
 
 Both renderings carry the same data; `-json` is the one to consume from CI.
+The JSON report also includes `evidence.dns` and
+`evidence.socks_requests`; empty collections are rendered as `[]`. Netdoc's
+existing `proxy_connect` row carries an optional stable `cause` when it fails:
+`proxy_unreachable`, `client_dns_failure`, `proxy_side_dns_failure`,
+`destination_unreachable_from_proxy`, or `proxy_protocol_failure`.
 
 ```
 Test: name that will not resolve — netdoc example.test:80 in client (4.016s)
@@ -263,6 +342,11 @@ The integration tests need unprivileged user namespaces but not root. They build
 both binaries from the tree under test, run scenarios end to end, and assert
 that no simulation interface is visible on the host afterwards.
 
+Set `NETDOC_SIM_REQUIRE_NETNS=1` when a machine or CI job is required to run
+them. Without it, unavailable user namespaces produce a skip; with it, the
+same condition is a failure. `netdoc-sim capabilities` names the relevant
+kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
+
 ## Limitations
 
 - **Linux only.** `Backend` is an interface and `DefaultBackend` returns a
@@ -273,9 +357,9 @@ that no simulation interface is visible on the host afterwards.
   interfaces with a wrong preferred route, and IPv4-vs-IPv6 asymmetry all need a
   second link type and per-node routing tables. The scenario schema has room for
   it; the backend does not do it yet.
-- **Three service types.** `dns`, `http`, `tcp`. TLS (for expired and invalid
-  certificate scenarios), SOCKS5 and SOCKS5h are not implemented, so the proxy
-  and TLS scenarios in the roadmap below cannot be written yet.
+- **Four service types.** `dns`, `http`, `tcp`, and the deliberately limited
+  `socks5` CONNECT service described above. A TLS service for expired and
+  invalid-certificate scenarios is not implemented.
 - **The DNS server is deliberately tiny.** Static A/AAAA from a zone map, one
   address per name, `NODATA` for a family it does not have, `NXDOMAIN` for
   everything else. No PTR, no CNAME, no delegation, no TCP.
@@ -285,17 +369,16 @@ that no simulation interface is visible on the host afterwards.
 
 ## Roadmap
 
-The scenario library ships four: `healthy`, `broken-dns`, `no-default-route`,
-`high-latency`. In rough order of what each additional scenario costs:
+The scenario library ships six: `healthy`, `broken-dns`, `no-default-route`,
+`high-latency`, `socks5-local-dns-fails`, and
+`socks5h-remote-dns-succeeds`. In rough order of what each additional scenario
+costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
    zone), TCP port blocked, connection refused, packet loss, DNS is slow,
    gateway unreachable, HTTP returns an error.
 2. Needs a TLS service — expired/invalid certificate, MITM.
-3. Needs SOCKS5 and SOCKS5h services — proxy works, proxy resolves locally,
-   proxy resolves remotely, proxy reachable but destination unreachable. The
-   SOCKS5h distinction is the interesting one: put the target's name only in a
-   zone the proxy's namespace can reach, and a client that resolves locally
-   fails while one that hands the name to the proxy succeeds.
+3. Extends the SOCKS service/scenarios — authentication policy, proxy reachable
+   but destination unreachable, and deliberately broken proxy-side DNS.
 4. Needs multi-segment topology — IPv6-broken-while-IPv4-works and its mirror,
    routing loops, multiple interfaces with a wrong preferred route, split DNS.

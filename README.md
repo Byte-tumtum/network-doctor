@@ -149,7 +149,7 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 |-------|-------------|-------|
 | **Interface** | A non-loopback interface is up and running | |
 | **Internet (TCP egress)** | A TCP connect to well-known anycast `:443` endpoints succeeds | IPv4 and IPv6 probed independently in parallel; either family passes, both are reported |
-| **Internet (env proxy)** | The `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` proxy grants a tunnel | HTTP `CONNECT`, or a SOCKS5 handshake for `socks5`/`socks5h`; N/A when no proxy is configured or `NO_PROXY` exempts the probe host |
+| **Internet (env proxy)** | The `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` proxy grants a tunnel | HTTP `CONNECT`; `socks5` resolves locally and sends an address, while `socks5h` sends the hostname for proxy-side DNS; N/A when no proxy is configured or `NO_PROXY` exempts the probe host |
 | **DNS** | The host resolves to an IPv4 or IPv6 address (system resolution) | IP-literal targets are N/A; all A/AAAA records are retained |
 | **DNS (public 8.8.8.8)** | A direct query to Google Public DNS provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail |
 | **TCP** | A TCP connect to the target port succeeds | races A/AAAA records Happy-Eyeballs style (RFC 8305), pins the winner |
@@ -289,7 +289,7 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 }
 ```
 
-`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable — safe to script against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
+`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. `cause` is currently populated by failed proxy checks so automation can distinguish an unreachable proxy, client DNS failure, proxy-side DNS failure, destination failure from the proxy, and protocol failure without parsing `detail`. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable — safe to script against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
 
 `failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`, …) and is omitted when none did — enough to route a bug report without reading any prose.
 
@@ -388,6 +388,8 @@ fault that was actually injected:
 ```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run broken-dns
+./netdoc-sim run socks5-local-dns-fails
+./netdoc-sim run socks5h-remote-dns-succeeds
 ```
 
 ```text
@@ -402,6 +404,22 @@ no privileges over the host's interfaces, routes, resolver or firewall, so it
 cannot touch them even by mistake. Grading is deterministic — probe ids and
 statuses, never the prose — and a mismatch comes with a suggested improvement
 to netdoc.
+
+The SOCKS pair uses the same private hostname and topology. With `socks5`, the
+client resolver returns NXDOMAIN after the proxy greeting succeeds, so no
+CONNECT request is sent. With `socks5h`, the proxy receives a domain-name
+CONNECT, resolves it through its own namespace-local DNS server, and reaches
+the private destination. Structured report evidence records DNS source,
+name/type/result/count and the SOCKS address type/result; the client is also
+filtered from reaching the destination directly. No public DNS server or
+external internet service participates.
+
+The simulator-owned proxy is intentionally not a full SOCKS implementation: it
+supports bounded no-auth CONNECT for IPv4, IPv6, and domain destinations, but
+not authentication, BIND, UDP ASSOCIATE, or chaining. It adds no dependency or
+external daemon. If user namespaces are unavailable, run
+`netdoc-sim capabilities`; for CI, set `NETDOC_SIM_REQUIRE_NETNS=1` so an
+unavailable namespace backend fails instead of skipping.
 
 **Changing a probe endpoint in `internal/diagnostic/checks.go` will break the
 `healthy` scenario on purpose.** Scenarios claim netdoc's hardcoded addresses
