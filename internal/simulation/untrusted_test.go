@@ -97,6 +97,17 @@ func TestScenarioCannotSupplyCommandsOrPaths(t *testing.T) {
 		{"a raw proxy URL",
 			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy_url: 'socks5h://host/path'", 1),
 			"proxy_url"},
+		{"a certificate path",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, certificate_path: /tmp/cert.pem}]}", 1),
+			"certificate_path"},
+		{"a PEM certificate",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, pem: '-----BEGIN CERTIFICATE-----'}]}", 1),
+			"pem"},
+		{"an arbitrary environment variable",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, env: {SSL_CERT_FILE: /tmp/ca}", 1),
+			"env"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

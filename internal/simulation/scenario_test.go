@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,36 @@ func TestParseScenarioRejects(t *testing.T) {
 			"unsupported options",
 		},
 		{
+			"TLS missing certificate",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443}]}", 1),
+			"configuration is required",
+		},
+		{
+			"TLS unknown certificate mode",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443, certificate: {mode: forged, dns_names: [example.test]}}]}", 1),
+			"unknown mode",
+		},
+		{
+			"TLS empty SAN list",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443, certificate: {mode: valid, dns_names: []}}]}", 1),
+			"must not be empty",
+		},
+		{
+			"TLS IP literal SAN",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443, certificate: {mode: valid, dns_names: [192.0.2.1]}}]}", 1),
+			"IP literal",
+		},
+		{
+			"TLS unknown certificate field",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{name: tls-target, type: tls, certificate: {mode: valid, dns_names: [example.test], private_key: /tmp/key}}]}", 1),
+			"private_key",
+		},
+		{
 			"zone name is not a hostname",
 			strings.Replace(minimalScenario, "address: 10.77.0.1}",
 				"address: 10.77.0.1, services: [{type: dns, zone: {'a b': 10.77.0.1}}]}", 1),
@@ -169,6 +200,16 @@ func TestParseScenarioRejects(t *testing.T) {
 			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5, node: server, command: sh}", 1),
 			"command",
 		},
+		{
+			"unknown trust service",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, trust: {service: missing}", 1),
+			"unknown tls service",
+		},
+		{
+			"unknown trust option",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, trust: {service: tls-target, path: /tmp/ca}", 1),
+			"path",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,6 +249,39 @@ func TestProxyDefaultsAndUsesValidatedNodeAddress(t *testing.T) {
 	}
 	if got := s.Topology.Nodes[1].Services[0].Port; got != 1080 {
 		t.Errorf("service port = %d", got)
+	}
+}
+
+func TestTLSServiceDefaultsAndValidatedTrust(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, services: [{name: tls-target, type: tls, certificate: {mode: valid, dns_names: [Secure-Target.Test.]}}]}", 1)
+	raw = strings.Replace(raw, "target: example.test:80", "target: example.test:80, trust: {service: tls-target}", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := s.Topology.Nodes[1].Services[0]
+	if svc.Port != 443 || svc.Certificate.DNSNames[0] != "secure-target.test" {
+		t.Errorf("TLS service = %+v", svc)
+	}
+	if s.Tests[0].Trust == nil || s.Tests[0].Trust.Service != "tls-target" {
+		t.Errorf("trust = %+v", s.Tests[0].Trust)
+	}
+}
+
+func TestTLSCertificateRejectsExcessiveOrInvalidNames(t *testing.T) {
+	many := make([]string, tlsMaxDNSNames+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("host-%d.test", i)
+	}
+	for _, cfg := range []*TLSCertificate{
+		{Mode: TLSCertificateValid, DNSNames: many},
+		{Mode: TLSCertificateValid, DNSNames: []string{strings.Repeat("a", 64) + ".test"}},
+		{Mode: TLSCertificateValid, DNSNames: []string{"Example.Test", "example.test."}},
+	} {
+		if err := validateTLSCertificate(cfg); err == nil {
+			t.Errorf("accepted invalid TLS certificate intent: %+v", cfg)
+		}
 	}
 }
 

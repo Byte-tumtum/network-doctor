@@ -99,6 +99,9 @@ func (r *Report) finish() {
 	if r.Evidence.SOCKSRequests == nil {
 		r.Evidence.SOCKSRequests = []SOCKSEvidence{}
 	}
+	if r.Evidence.TLS == nil {
+		r.Evidence.TLS = []TLSEvidence{}
+	}
 	if r.Error != "" {
 		r.Result = ResultError
 		return
@@ -175,7 +178,7 @@ func (r *Report) WriteText(w io.Writer) {
 		r.Tests[i].writeText(w)
 	}
 
-	if len(r.Evidence.DNS) > 0 || len(r.Evidence.SOCKSRequests) > 0 {
+	if len(r.Evidence.DNS) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 {
 		p("Structured evidence")
 		for _, e := range r.Evidence.DNS {
 			p("  DNS   %-10s from %-13s %-6s %-28s %-8s %s ×%d", e.Node, e.Source, e.QueryType, e.Name, e.Result, e.Service, e.Count)
@@ -187,6 +190,14 @@ func (r *Report) WriteText(w io.Writer) {
 			}
 			p("  SOCKS %-10s %-8s %-7s %-28s %-22s ×%d", e.Node, e.Event, e.AddressType,
 				textsafe.Clean(destination), e.Result, e.Count)
+		}
+		for _, e := range r.Evidence.TLS {
+			presented := "not-presented"
+			if e.CertificatePresented {
+				presented = "presented"
+			}
+			p("  TLS   %-10s %-20s SNI %-24s %-13s %-27s %s ×%d", e.Node, e.CertificateMode,
+				textsafe.Clean(e.RequestedServer), presented, strings.Join(e.CertificateDNS, ","), e.Result, e.Count)
 		}
 		p("")
 	}

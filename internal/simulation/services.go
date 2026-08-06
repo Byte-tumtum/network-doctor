@@ -32,6 +32,7 @@ type nodeConfig struct {
 	Name     string `json:"name"`
 	Resolver string `json:"resolver,omitempty"`
 	Evidence string `json:"evidence,omitempty"`
+	TrustDir string `json:"trust_dir,omitempty"`
 	// Addresses is every address the node answers on. UDP needs them by name:
 	// a wildcard-bound socket replies from whatever source the route table
 	// picks, and a resolver whose answer arrives from a different address than
@@ -42,7 +43,7 @@ type nodeConfig struct {
 
 // startServices binds every listener the node declares. On any failure it
 // closes the ones already up, so a node is either fully serving or not at all.
-func startServices(services []Service, addresses []string, resolver string, recorder *evidenceRecorder) ([]io.Closer, error) {
+func startServices(ctx context.Context, services []Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, error) {
 	var open []io.Closer
 	closeAll := func() {
 		for _, c := range open {
@@ -50,7 +51,7 @@ func startServices(services []Service, addresses []string, resolver string, reco
 		}
 	}
 	for _, svc := range services {
-		c, err := startService(svc, addresses, resolver, recorder)
+		c, err := startService(ctx, svc, addresses, resolver, trustDir, recorder)
 		if err != nil {
 			closeAll()
 			return nil, fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err)
@@ -60,7 +61,7 @@ func startServices(services []Service, addresses []string, resolver string, reco
 	return open, nil
 }
 
-func startService(svc Service, addresses []string, resolver string, recorder *evidenceRecorder) ([]io.Closer, error) {
+func startService(ctx context.Context, svc Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, error) {
 	port := strconv.Itoa(svc.Port)
 	switch svc.Type {
 	case ServiceDNS:
@@ -105,6 +106,12 @@ func startService(svc Service, addresses []string, resolver string, recorder *ev
 			return nil, err
 		}
 		return []io.Closer{startSOCKS5(ln, svc.Name, resolver, recorder)}, nil
+	case ServiceTLS:
+		server, err := startTLSService(ctx, svc, trustDir, recorder)
+		if err != nil {
+			return nil, err
+		}
+		return []io.Closer{server}, nil
 	}
 	return nil, fmt.Errorf("unknown service type %q", svc.Type)
 }

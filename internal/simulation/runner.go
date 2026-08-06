@@ -142,6 +142,15 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options) 
 		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))
 		commandEnv = []string{"ALL_PROXY=" + out.Proxy}
 	}
+	if t.Trust != nil {
+		bundle, err := env.TrustAnchor(t.Trust.Service)
+		if err != nil {
+			out.Error = textsafe.Clean(err.Error())
+			out.compare(expect, opts.ProbeTimeout)
+			return out
+		}
+		commandEnv = append(commandEnv, "SSL_CERT_FILE="+bundle)
+	}
 	if t.Target != "" {
 		argv = append(argv, t.Target)
 	}

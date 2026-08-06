@@ -233,10 +233,43 @@ func TestWriteJSONIsValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"scenario": "s"`, `"result": "ERROR"`, `"id": "abc123"`,
-		`"dns": []`, `"socks_requests": []`} {
+		`"dns": []`, `"socks_requests": []`, `"tls": []`} {
 		if !strings.Contains(sb.String(), want) {
 			t.Errorf("json is missing %s:\n%s", want, sb.String())
 		}
+	}
+}
+
+func TestReportRendersStructuredTLSEvidence(t *testing.T) {
+	now := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+	rep := Report{
+		Scenario: "tls", ID: "abc123", Backend: "fake",
+		Evidence: Evidence{TLS: []TLSEvidence{{
+			Node: "target", Service: "tls-target", CertificateMode: TLSCertificateExpired,
+			RequestedServer: "secure-target.test", CertificateDNS: []string{"secure-target.test"},
+			NotBefore: now.AddDate(-2, 0, 0), NotAfter: now.Add(-24 * time.Hour),
+			CertificatePresented: true, Result: "client_rejected_certificate", Count: 1,
+		}}},
+	}
+	rep.finish()
+	var text strings.Builder
+	rep.WriteText(&text)
+	for _, want := range []string{"Structured evidence", "expired", "secure-target.test", "presented", "client_rejected_certificate"} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("text missing %q:\n%s", want, text.String())
+		}
+	}
+	var jsonText strings.Builder
+	if err := rep.WriteJSON(&jsonText); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"certificate_mode": "expired"`, `"certificate_presented": true`, `"certificate_dns": [`} {
+		if !strings.Contains(jsonText.String(), want) {
+			t.Errorf("JSON missing %s:\n%s", want, jsonText.String())
+		}
+	}
+	if strings.Contains(jsonText.String(), "PRIVATE KEY") {
+		t.Fatal("private key material appeared in the report")
 	}
 }
 

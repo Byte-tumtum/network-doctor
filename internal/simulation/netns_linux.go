@@ -314,6 +314,7 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 		Name: np.node.Name, Resolver: np.node.Resolver, Services: np.node.Services,
 		Addresses: append([]string{np.node.Address}, np.node.Aliases...),
 		Evidence:  filepath.Join(e.work, np.node.Name+"-evidence.jsonl"),
+		TrustDir:  e.work,
 	}
 	path := filepath.Join(e.work, np.node.Name+".json")
 	blob, err := json.Marshal(cfg)
@@ -598,6 +599,20 @@ func (e *netnsEnv) Exec(ctx context.Context, node string, argv, env []string) Ex
 	return res
 }
 
+func (e *netnsEnv) TrustAnchor(service string) (string, error) {
+	if !isSafeName(service) {
+		return "", fmt.Errorf("invalid tls service %q", service)
+	}
+	for _, node := range e.scenario.Topology.Nodes {
+		for _, svc := range node.Services {
+			if svc.Name == service && svc.Type == ServiceTLS {
+				return filepath.Join(e.work, service+"-ca.pem"), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("unknown tls service %q", service)
+}
+
 func (e *netnsEnv) Evidence() (Evidence, error) {
 	paths := make([]string, 0, len(e.nodes))
 	for _, np := range e.nodes {
@@ -615,7 +630,7 @@ func simEnv() []string {
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		switch strings.ToUpper(name) {
-		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY":
+		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR":
 			continue
 		}
 		out = append(out, kv)

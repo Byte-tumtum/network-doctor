@@ -63,6 +63,13 @@ func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string, env []string) 
 	return ExecResult{Stdout: []byte(e.stdout), Err: e.execCtxErr}
 }
 
+func (e *fakeEnv) TrustAnchor(service string) (string, error) {
+	if service == "tls-target" {
+		return "/simulator/tls-target-ca.pem", nil
+	}
+	return "", errors.New("unknown trust anchor")
+}
+
 func TestRunPassesOnlyValidatedProxyEnvironment(t *testing.T) {
 	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
 		"address: 10.77.0.1, resolver: 10.77.0.1, services: [{name: proxy, type: socks5, port: 1080}]}", 1)
@@ -74,6 +81,21 @@ func TestRunPassesOnlyValidatedProxyEnvironment(t *testing.T) {
 	env := &fakeEnv{stdout: okReport}
 	Run(context.Background(), s, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
 	if len(env.lastEnv) != 1 || env.lastEnv[0] != "ALL_PROXY=socks5h://10.77.0.1:1080" {
+		t.Errorf("env = %q", env.lastEnv)
+	}
+}
+
+func TestRunPassesOnlyGeneratedTLSRootEnvironment(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443, certificate: {mode: valid, dns_names: [example.test]}}]}", 1)
+	raw = strings.Replace(raw, "target: example.test:80", "target: example.test:80, trust: {service: tls-target}", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &fakeEnv{stdout: okReport}
+	Run(context.Background(), s, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if len(env.lastEnv) != 1 || env.lastEnv[0] != "SSL_CERT_FILE=/simulator/tls-target-ca.pem" {
 		t.Errorf("env = %q", env.lastEnv)
 	}
 }

@@ -36,6 +36,9 @@ type Env interface {
 	// Exec runs argv inside a node's namespaces. argv is passed to the kernel
 	// as a slice; no shell is involved anywhere in this package.
 	Exec(ctx context.Context, node string, argv, env []string) ExecResult
+	// TrustAnchor returns the simulator-generated public CA bundle for a
+	// validated TLS service. Scenario files never supply this path.
+	TrustAnchor(service string) (string, error)
 	// Evidence reads structured service observations collected so far.
 	Evidence() (Evidence, error)
 	// Cleanup releases everything. It is idempotent, safe after a partial

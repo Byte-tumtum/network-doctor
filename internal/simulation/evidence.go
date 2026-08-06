@@ -8,7 +8,9 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Evidence is simulator-owned proof collected from services inside node
@@ -17,6 +19,7 @@ import (
 type Evidence struct {
 	DNS           []DNSEvidence   `json:"dns"`
 	SOCKSRequests []SOCKSEvidence `json:"socks_requests"`
+	TLS           []TLSEvidence   `json:"tls"`
 }
 
 // DNSEvidence aggregates identical queries observed by a DNS service.
@@ -44,6 +47,21 @@ type SOCKSEvidence struct {
 	Count       int    `json:"count"`
 }
 
+// TLSEvidence aggregates handshakes observed by a simulator TLS service. It
+// contains certificate metadata only; private keys never enter the recorder.
+type TLSEvidence struct {
+	Node                 string    `json:"node"`
+	Service              string    `json:"service"`
+	CertificateMode      string    `json:"certificate_mode"`
+	RequestedServer      string    `json:"requested_server,omitempty"`
+	CertificateDNS       []string  `json:"certificate_dns"`
+	NotBefore            time.Time `json:"not_before"`
+	NotAfter             time.Time `json:"not_after"`
+	CertificatePresented bool      `json:"certificate_presented"`
+	Result               string    `json:"result"`
+	Count                int       `json:"count"`
+}
+
 type evidenceEvent struct {
 	Kind        string `json:"kind"`
 	Node        string `json:"node"`
@@ -56,6 +74,13 @@ type evidenceEvent struct {
 	Destination string `json:"destination,omitempty"`
 	Port        int    `json:"port,omitempty"`
 	Result      string `json:"result"`
+
+	CertificateMode      string    `json:"certificate_mode,omitempty"`
+	RequestedServer      string    `json:"requested_server,omitempty"`
+	CertificateDNS       []string  `json:"certificate_dns,omitempty"`
+	NotBefore            time.Time `json:"not_before,omitempty"`
+	NotAfter             time.Time `json:"not_after,omitempty"`
+	CertificatePresented bool      `json:"certificate_presented,omitempty"`
 }
 
 // evidenceRecorder serializes events from concurrent service goroutines into
@@ -128,6 +153,7 @@ func readEvidence(paths []string) (Evidence, error) {
 func aggregateEvidence(events []evidenceEvent) Evidence {
 	dns := make(map[string]DNSEvidence)
 	socks := make(map[string]SOCKSEvidence)
+	tlsEvents := make(map[string]TLSEvidence)
 	for _, event := range events {
 		switch event.Kind {
 		case ServiceDNS:
@@ -144,6 +170,19 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 			item.AddressType, item.Destination, item.Port = event.AddressType, event.Destination, event.Port
 			item.Result, item.Count = event.Result, item.Count+1
 			socks[key] = item
+		case ServiceTLS:
+			key := event.Node + "\x00" + event.Service + "\x00" + event.CertificateMode + "\x00" +
+				event.RequestedServer + "\x00" + strings.Join(event.CertificateDNS, "\x00") + "\x00" +
+				event.NotBefore.UTC().Format(time.RFC3339Nano) + "\x00" + event.NotAfter.UTC().Format(time.RFC3339Nano) +
+				"\x00" + strconv.FormatBool(event.CertificatePresented) + "\x00" + event.Result
+			item := tlsEvents[key]
+			item.Node, item.Service = event.Node, event.Service
+			item.CertificateMode, item.RequestedServer = event.CertificateMode, event.RequestedServer
+			item.CertificateDNS = append([]string(nil), event.CertificateDNS...)
+			item.NotBefore, item.NotAfter = event.NotBefore, event.NotAfter
+			item.CertificatePresented, item.Result = event.CertificatePresented, event.Result
+			item.Count++
+			tlsEvents[key] = item
 		}
 	}
 	var out Evidence
@@ -152,6 +191,9 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	}
 	for _, item := range socks {
 		out.SOCKSRequests = append(out.SOCKSRequests, item)
+	}
+	for _, item := range tlsEvents {
+		out.TLS = append(out.TLS, item)
 	}
 	sort.Slice(out.DNS, func(i, j int) bool {
 		a, b := out.DNS[i], out.DNS[j]
@@ -162,11 +204,19 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		return a.Node+a.Service+a.Event+a.AddressType+a.Destination+strconv.Itoa(a.Port)+a.Result <
 			b.Node+b.Service+b.Event+b.AddressType+b.Destination+strconv.Itoa(b.Port)+b.Result
 	})
+	sort.Slice(out.TLS, func(i, j int) bool {
+		a, b := out.TLS[i], out.TLS[j]
+		return a.Node+a.Service+a.CertificateMode+a.RequestedServer+strings.Join(a.CertificateDNS, "\x00")+a.Result <
+			b.Node+b.Service+b.CertificateMode+b.RequestedServer+strings.Join(b.CertificateDNS, "\x00")+b.Result
+	})
 	if out.DNS == nil {
 		out.DNS = []DNSEvidence{}
 	}
 	if out.SOCKSRequests == nil {
 		out.SOCKSRequests = []SOCKSEvidence{}
+	}
+	if out.TLS == nil {
+		out.TLS = []TLSEvidence{}
 	}
 	return out
 }
