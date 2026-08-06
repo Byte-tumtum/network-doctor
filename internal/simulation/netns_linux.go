@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -239,7 +240,7 @@ type nodeProc struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  *bufio.Reader
-	logs    *bytes.Buffer
+	logs    *safeLog
 	pid     int
 	iface   string // interface name inside the node
 	peer    string // the same veth's other end, enslaved to the bridge
@@ -335,7 +336,7 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 		Unshareflags: syscall.CLONE_NEWNS,
 		Pdeathsig:    syscall.SIGKILL,
 	}
-	np.logs = new(bytes.Buffer)
+	np.logs = new(safeLog)
 	cmd.Stderr = np.logs
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -398,6 +399,27 @@ func (e *netnsEnv) startServices(ctx context.Context, np *nodeProc) error {
 		return err
 	}
 	return np.await(ctx, holderServicesReady)
+}
+
+// safeLog collects a holder's stderr. os/exec copies into it from a goroutine
+// of its own for as long as the holder runs, while await reads it to explain a
+// holder that answered wrongly — two goroutines on one buffer, so it needs the
+// lock.
+type safeLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *safeLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *safeLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 // await waits for one line from the holder. A holder that died instead of
