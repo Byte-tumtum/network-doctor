@@ -90,7 +90,7 @@ func TestTLSGenerationCreatesCAAndHonorsCancellation(t *testing.T) {
 	}
 }
 
-func startPipeTLSServer(t *testing.T, material tlsMaterial, mode string) (*tlsServer, *pipeListener, string) {
+func startPipeTLSServer(t *testing.T, material tlsMaterial, mode string) (*tlsServer, *pipeListener, *evidenceRecorder, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "evidence.jsonl")
 	recorder, err := openEvidenceRecorder(path, "target")
@@ -103,7 +103,7 @@ func startPipeTLSServer(t *testing.T, material tlsMaterial, mode string) (*tlsSe
 		_ = server.Close()
 		_ = recorder.Close()
 	})
-	return server, listener, path
+	return server, listener, recorder, path
 }
 
 func pipeTLSClient(t *testing.T, listener *pipeListener, cfg *tls.Config) error {
@@ -131,23 +131,16 @@ func TestTLSServerHandshakeEvidence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			material := testTLSMaterial(t, tc.mode, tc.names...)
-			_, listener, path := startPipeTLSServer(t, material, tc.mode)
+			_, listener, recorder, path := startPipeTLSServer(t, material, tc.mode)
 			err := pipeTLSClient(t, listener, &tls.Config{
 				ServerName: tc.serverName, RootCAs: rootsFromMaterial(t, material), Time: func() time.Time { return tlsTestNow }, MinVersion: tls.VersionTLS12,
 			})
 			if (err == nil) != tc.wantOK {
 				t.Fatalf("handshake error = %v, want success %t", err, tc.wantOK)
 			}
-			evidence, readErr := readEvidence([]string{path})
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			found := false
-			for _, item := range evidence.TLS {
-				if item.RequestedServer == tc.serverName && item.CertificatePresented && item.Result == tc.wantResult {
-					found = true
-				}
-			}
+			evidence, found := waitForTLSEvidence(t, recorder, path, func(item TLSEvidence) bool {
+				return item.RequestedServer == tc.serverName && item.CertificatePresented && item.Result == tc.wantResult
+			})
 			if !found {
 				t.Errorf("TLS evidence = %+v", evidence.TLS)
 			}
@@ -155,9 +148,31 @@ func TestTLSServerHandshakeEvidence(t *testing.T) {
 	}
 }
 
+func waitForTLSEvidence(t *testing.T, recorder *evidenceRecorder, path string, match func(TLSEvidence) bool) (Evidence, bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		recorder.mu.Lock()
+		evidence, err := readEvidence([]string{path})
+		recorder.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range evidence.TLS {
+			if match(item) {
+				return evidence, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return evidence, false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestTLSServerConcurrentConnectionsAndShutdown(t *testing.T) {
 	material := testTLSMaterial(t, TLSCertificateValid, "secure-target.test")
-	server, listener, path := startPipeTLSServer(t, material, TLSCertificateValid)
+	server, listener, _, path := startPipeTLSServer(t, material, TLSCertificateValid)
 	const clients = 12
 	var wg sync.WaitGroup
 	errs := make(chan error, clients)
@@ -206,7 +221,7 @@ func TestTLSServerCancellationClosesSlowAndTruncatedClients(t *testing.T) {
 	for name, input := range map[string][]byte{"silent": nil, "truncated": {0x16, 0x03}} {
 		t.Run(name, func(t *testing.T) {
 			material := testTLSMaterial(t, TLSCertificateValid, "secure-target.test")
-			server, listener, _ := startPipeTLSServer(t, material, TLSCertificateValid)
+			server, listener, _, _ := startPipeTLSServer(t, material, TLSCertificateValid)
 			serverSide, client := net.Pipe()
 			listener.ch <- serverSide
 			if len(input) > 0 {
