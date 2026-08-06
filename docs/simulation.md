@@ -20,6 +20,10 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run tls-valid
 ./netdoc-sim run tls-expired-certificate
 ./netdoc-sim run tls-hostname-mismatch
+./netdoc-sim run healthy-routed-network
+./netdoc-sim run gateway-unreachable
+./netdoc-sim run wrong-default-route
+./netdoc-sim run multiple-interfaces-wrong-preferred-route
 ./netdoc-sim run broken-dns -json    # the same report, machine-readable
 ./netdoc-sim run broken-dns -dry-run # every privileged command, run none of them
 ./netdoc-sim run broken-dns -keep    # leave it up so you can walk around inside
@@ -111,7 +115,7 @@ The `healthy` scenario is the check.
 ```
 launcher (netdoc-sim run)              host namespaces, no privileges
   └── director                         new user + net + mount namespace
-        ├── bridge nb<id>              the shared L2 segment
+        ├── bridge nb<id><n> × N       one per logical L2 segment
         ├── node holder × N            each in its own net + mount namespace
         │     └── test services        dns / http / tcp / socks5 / tls
         └── nsenter … netdoc -json     the diagnostic under test, inside a node
@@ -123,6 +127,12 @@ a shell. A **node holder** exists only to own one simulated machine's network
 and mount namespaces and to run that machine's services inside them; the
 director talks to it over three lines on a pipe, so no probe can race the
 topology into existence.
+
+Each logical segment gets exactly one bridge. A node interface becomes a veth
+whose director end is attached to that segment bridge and whose peer is moved
+into the node namespace. Router nodes are ordinary holders with two or more
+such interfaces; they do not share a bridge with destinations on another
+segment.
 
 Each node gets its own `/etc/resolv.conf` by bind-mounting a generated file
 inside its private mount namespace. That is what lets two simulated machines
@@ -177,6 +187,81 @@ expect:
 
 Unknown keys are rejected, so a typo fails loudly. Every address, name, port and
 duration is validated before anything is created.
+
+The original `topology.subnet`, node `address`, and node `gateway` fields remain
+the backward-compatible single-segment shorthand. New routed scenarios use the
+explicit form:
+
+```yaml
+topology:
+  segments:
+    - {name: client-lan, subnet: 10.77.1.0/24}
+    - {name: upstream, subnet: 10.77.2.0/24}
+  nodes:
+    - name: client
+      role: client
+      interfaces:
+        - {segment: client-lan, address: 10.77.1.10/24}
+    - name: gateway
+      role: router
+      interfaces:
+        - {segment: client-lan, address: 10.77.1.1/24}
+        - {segment: upstream, address: 10.77.2.1/24}
+    - name: target
+      interfaces:
+        - {segment: upstream, address: 10.77.2.20/24}
+  routes:
+    - {node: client, destination: default, via: 10.77.1.1, metric: 100}
+    - {node: target, destination: 10.77.1.0/24, via: 10.77.2.1}
+```
+
+Addresses and prefixes are parsed with `net/netip` and rendered canonically
+before reaching `ip` argv. A gateway must be on one of that node's directly
+connected segments. Conflicting routes at the same metric, duplicate or
+overlapping segments, duplicate addresses, off-segment interfaces, scoped
+addresses, and routers with fewer than two useful interfaces are rejected.
+Scenario authors cannot provide Linux interface names or raw route expressions.
+
+Linux interface names are generated from the validated run id and an internal
+base-36 index, stay within the 15-byte kernel limit, and never appear in the
+logical evidence fields. Route metrics use the kernel's normal lowest-value
+preference.
+
+### Routed network scenarios
+
+```sh
+./netdoc-sim run healthy-routed-network
+./netdoc-sim run gateway-unreachable
+./netdoc-sim run wrong-default-route
+./netdoc-sim run multiple-interfaces-wrong-preferred-route
+```
+
+- `healthy-routed-network` puts client and target on different bridges. The
+  target, DNS, direct egress, and public-DNS checks succeed only through the
+  two-interface gateway.
+- `gateway-unreachable` replaces the healthy default with an on-link address
+  that has no owner. `ip route get` still selects it, while neighbor discovery
+  records failure. This is structurally different from `no-default-route`,
+  where route selection itself fails.
+- `wrong-default-route` selects a locally reachable router attached to an
+  isolated upstream. A second real netdoc run reaches the target over a
+  specific route through the correct router.
+- `multiple-interfaces-wrong-preferred-route` gives the client two UP links and
+  two reachable gateways. Linux selects the isolated default at metric 50 over
+  the working default at metric 100; a source-selected netdoc run and specific
+  route prove the other interface reaches the target.
+
+The backend runs `ip route get <validated-address>` inside the client namespace
+and parses only `via`, `dev`, and `src`. It maps the generated device back to a
+logical segment and rejects unknown, oversized, or unexpected output. Neighbor
+state comes from `ip neigh` after the real probes. Reports therefore prove the
+kernel's choice rather than repeating the YAML configuration.
+
+Router holders write `1` to `/proc/sys/net/ipv4/ip_forward` and read it back
+from inside their own network namespace. The integration test also reads the
+host value before and after a routed run and requires it to remain identical.
+If namespaced forwarding cannot be enabled, setup fails clearly; the simulator
+never retries against the host sysctl or asks for elevated execution.
 
 Proxy configuration is deliberately not a raw URL or environment map. The
 schema accepts only `socks5` or `socks5h`, a validated node reference, and a
@@ -315,8 +400,10 @@ is not certificate-family-specific.
 | type | fields | effect |
 | --- | --- | --- |
 | `drop` | `direction`, `to`, `protocol`, `port` | discards matching packets |
-| `netem` | `delay`, `jitter`, `loss` | impairs the node's link (`tc netem`) |
+| `netem` | `segment`, `delay`, `jitter`, `loss` | impairs one logical node link (`tc netem`) |
 | `no_default_route` | — | deletes the node's default route |
+| `replace_default_route` | `via`, `metric` | replaces defaults with one validated on-link gateway |
+| `link_down` | `segment` | administratively lowers one logical interface |
 
 `drop` has two directions and they are **not** interchangeable:
 
@@ -335,8 +422,8 @@ changes what the scenario tests.
 Matching is on netdoc's stable machine-readable contract — the probe ids from
 `internal/diagnostic` (`dns`, `internet_tcp`, `target_tcp`, `tls`, `http`, …),
 the `PASS`/`WARN`/`FAIL`/`SKIP`/`N/A` vocabulary, and the one-word verdict.
-Never on the English prose, which is free to change. A failing expected check
-may also name a stable `cause`; a status match with the wrong cause becomes a
+Never on the English prose, which is free to change. A failing or warning
+expected check may also name a stable `cause`; a status match with the wrong cause becomes a
 `wrong_cause` comparison without being counted as a false positive or false
 negative.
 
@@ -346,14 +433,20 @@ something that does not exist.
 ## The report
 
 Both renderings carry the same data; `-json` is the one to consume from CI.
-The JSON report also includes `evidence.dns`, `evidence.socks_requests`, and
-`evidence.tls`; empty collections are rendered as `[]`. Netdoc's existing
+The JSON report also includes `evidence.dns`, `evidence.socks_requests`,
+`evidence.tls`, `evidence.links`, `evidence.routes`, `evidence.routers`, and
+`evidence.reachability`; empty collections are rendered as `[]`. Link and route
+entries use logical segment names, not generated Linux device names. Netdoc's existing
 `proxy_connect` row carries an optional stable `cause` when it fails:
 `proxy_unreachable`, `client_dns_failure`, `proxy_side_dns_failure`,
 `destination_unreachable_from_proxy`, or `proxy_protocol_failure`.
 The existing `tls` row uses `certificate_expired`,
 `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`,
 `tls_handshake_failure`, `tcp_unreachable`, `timeout`, or `connection_closed`.
+On Linux the existing `internet_tcp` row may carry `no_default_route`,
+`gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`.
+The last cause means only that the kernel preferred one of multiple configured
+defaults and that selected path failed; it does not claim an alternate works.
 
 ```
 Test: name that will not resolve — netdoc example.test:80 in client (4.016s)
@@ -391,6 +484,9 @@ the ones a scenario is known to trip.
 | `no_fix_hint` | a `FAIL` or `WARN` row told the user what broke but not what to do |
 | `nondeterministic` | `-repeat` runs of an unchanged network disagreed |
 | `no_diagnosis` | netdoc produced no report at all |
+| `gateway_unreachable` | kernel route selection succeeded but neighbor resolution for its next hop failed |
+| `wrong_default_route_evidence` | selected default failed while a controlled specific route reached the target |
+| `alternate_route_available` | preferred path failed while another live interface and controlled route reached the target |
 
 Exit codes: `0` the diagnosis matched, `1` it did not, `2` bad arguments, `3` the
 simulation could not run.
@@ -417,10 +513,10 @@ kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
   clear capability message elsewhere, but the only implementation is
   `linux-netns`. Podman, libvirt/QEMU, Hyper-V network compartments and macOS
   VMs would slot in behind the same two interfaces.
-- **One L2 segment, IPv4 only.** Routing loops, misconfigured subnets, multiple
-  interfaces with a wrong preferred route, and IPv4-vs-IPv6 asymmetry all need a
-  second link type and per-node routing tables. The scenario schema has room for
-  it; the backend does not do it yet.
+- **Static IPv4 unicast routing only.** Multiple L2 segments, router nodes,
+  default/specific routes, metrics, and multiple interfaces are supported. NAT,
+  IPv6 routing, ECMP, policy routing, routing loops, dynamic routing protocols,
+  VPN/tunnel devices, and bridge VLAN filtering are not.
 - **Five service types.** `dns`, `http`, `tcp`, and the deliberately limited
   `socks5` and `tls` services described above. Neither is a general-purpose
   daemon or protocol conformance suite.
@@ -433,17 +529,20 @@ kernel or AppArmor setting and required `ip`, `nsenter`, `nft`, and `tc` tools.
 
 ## Roadmap
 
-The scenario library ships nine: `healthy`, `broken-dns`, `no-default-route`,
-`high-latency`, `socks5-local-dns-fails`,
+The scenario library ships thirteen: `healthy`, `broken-dns`,
+`no-default-route`, `high-latency`, `socks5-local-dns-fails`,
 `socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
-`tls-hostname-mismatch`. In rough order of what each additional scenario costs:
+`tls-hostname-mismatch`, plus `healthy-routed-network`,
+`gateway-unreachable`, `wrong-default-route`, and
+`multiple-interfaces-wrong-preferred-route`. In rough order of what each
+additional scenario costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
    zone), TCP port blocked, connection refused, packet loss, DNS is slow,
-   gateway unreachable, HTTP returns an error.
+   HTTP returns an error, or a missing route to a specific subnet.
 2. Extends the TLS service — an untrusted-issuer scenario, client certificates,
    revocation, or version/cipher policy.
 3. Extends the SOCKS service/scenarios — authentication policy, proxy reachable
    but destination unreachable, and deliberately broken proxy-side DNS.
-4. Needs multi-segment topology — IPv6-broken-while-IPv4-works and its mirror,
-   routing loops, multiple interfaces with a wrong preferred route, split DNS.
+4. Extends multi-segment topology — IPv6-broken-while-IPv4-works and its mirror,
+   routing loops, policy routing, tunnels, and split DNS across routed segments.
