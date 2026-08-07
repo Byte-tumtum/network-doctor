@@ -101,7 +101,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 				for _, c := range open {
 					c.Close()
 				}
-				delays.Close()
+				_ = delays.Close()
 				return nil, nil, err
 			}
 			go serveDNS(pc, zone, svc.Name, state, delays, recorder)
