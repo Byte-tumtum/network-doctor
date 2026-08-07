@@ -629,7 +629,12 @@ func (e *netnsEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) (strin
 		return "", fmt.Errorf("scheduled event targets unknown node %q", event.Node)
 	}
 	if event.Type == FaultScheduledDNS {
-		return holderDNSApplied, np.setDNSOutcome(ctx, event.Service, event.Outcome, event.Delay)
+		// Nothing was observed unless the holder confirmed it: a failed event
+		// must not carry an observation that says the opposite of its result.
+		if err := np.setDNSOutcome(ctx, event.Service, event.Outcome, event.Delay); err != nil {
+			return "", err
+		}
+		return holderDNSApplied, nil
 	}
 	iface := np.interfaceForSegment(event.Segment)
 	if iface == nil {
