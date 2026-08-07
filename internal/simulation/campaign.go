@@ -43,6 +43,11 @@ type FaultEvent struct {
 	QueryType       string        `json:"query_type,omitempty"`
 	Sequence        int           `json:"sequence,omitempty"`
 	ScheduledResult string        `json:"scheduled_result,omitempty"`
+	// Delay and State carry the scheduled DNS and link states. Both are
+	// omitempty, so a campaign that generates neither keeps the schedule
+	// fingerprint it had before timed faults existed.
+	Delay time.Duration `json:"delay_ms,omitempty"`
+	State string        `json:"state,omitempty"`
 }
 
 type ProbeFingerprint struct {
@@ -162,7 +167,19 @@ func RunCampaign(ctx context.Context, scenario *Scenario, backend func() Backend
 			result.finish()
 			return result
 		}
-		iterations = []int{*opts.Iteration}
+		// One iteration, repeated as many times as Runs was explicitly asked
+		// for. Repeating one schedule is the only way the divergence check has
+		// anything to compare: every iteration otherwise draws parameters of its
+		// own, so each schedule fingerprint is a group of one and two runs that
+		// disagree on the same network look like two different networks.
+		repeats := 1
+		if opts.Runs > 0 {
+			repeats = opts.Runs
+		}
+		iterations = make([]int, repeats)
+		for i := range iterations {
+			iterations[i] = *opts.Iteration
+		}
 	}
 
 	for _, iteration := range iterations {
@@ -267,6 +284,17 @@ func compileCampaignIteration(base *Scenario, seed int64) (*Scenario, []FaultEve
 			return nil, nil, fmt.Errorf("campaign DNS service %q disappeared", c.Service)
 		}
 	}
+	if c := base.Campaign.Timeline; c != nil {
+		scenario.Faults = append(scenario.Faults, compileFlappingTimeline(rng, c, &schedule)...)
+	}
+	if c := base.Campaign.DNSDelay; c != nil {
+		// One dimension only: the delay a probe deadline is being walked across.
+		delay := sampleDuration(rng, c.Delay)
+		scenario.Faults = append(scenario.Faults, Fault{Type: FaultScheduledDNS, Service: c.Service,
+			Events: []ScheduledEvent{{At: "0s", Outcome: DNSOutcomeDelay, Delay: delay.String()}}})
+		schedule = append(schedule, FaultEvent{Type: FaultScheduledDNS, Service: c.Service,
+			ScheduledResult: DNSOutcomeDelay, Delay: delay})
+	}
 	nodes := make(map[string]bool, len(scenario.Topology.Nodes))
 	for i := range scenario.Topology.Nodes {
 		nodes[scenario.Topology.Nodes[i].Name] = true
@@ -284,6 +312,62 @@ func compileCampaignIteration(base *Scenario, seed int64) (*Scenario, []FaultEve
 		}
 	}
 	return scenario, schedule, nil
+}
+
+// compileFlappingTimeline resolves the whole flapping shape up front. Three
+// draws, in a fixed order, and every offset derived from them arithmetically —
+// so iteration N is reproducible from its seed alone and nothing is decided
+// once the scheduler starts.
+func compileFlappingTimeline(rng *mathrand.Rand, c *CampaignTimeline, schedule *[]FaultEvent) []Fault {
+	degradeAt := sampleDuration(rng, c.DegradeAt)
+	degradeLoss := sampleNumber(rng, c.DegradeLoss)
+	outageFor := sampleDuration(rng, c.OutageFor)
+	tcSeed := rng.Uint32()
+	if tcSeed == 0 {
+		tcSeed = 1
+	}
+	latency, _ := time.ParseDuration(c.Latency)
+	outageAt := degradeAt + campaignDegradedFor + campaignHealthyGap
+
+	netem := Fault{Type: FaultScheduledNetem, Node: c.Node, Segment: c.Segment, Seed: tcSeed}
+	for _, phase := range []struct {
+		at   time.Duration
+		loss float64
+	}{
+		{0, 0},
+		{degradeAt, degradeLoss},
+		{degradeAt + campaignDegradedFor, 0},
+		{outageAt, 100},
+		{outageAt + outageFor, 0},
+	} {
+		netem.Events = append(netem.Events, ScheduledEvent{At: phase.at.String(), Latency: c.Latency, LossPercent: phase.loss})
+		*schedule = append(*schedule, FaultEvent{Offset: phase.at, Type: FaultScheduledNetem, Node: c.Node,
+			Segment: c.Segment, Latency: latency, LossPercent: phase.loss, NetemSeed: tcSeed})
+	}
+	faults := []Fault{netem}
+	if c.Service == "" {
+		return faults
+	}
+	hold, _ := time.ParseDuration(c.ResolverHold)
+	dns := Fault{Type: FaultScheduledDNS, Service: c.Service}
+	for _, phase := range []struct {
+		at      time.Duration
+		outcome string
+		delay   time.Duration
+	}{
+		{0, DNSOutcomeDelay, hold},
+		{outageAt, DNSOutcomeDrop, 0},
+		{outageAt + outageFor, DNSOutcomeAnswer, 0},
+	} {
+		event := ScheduledEvent{At: phase.at.String(), Outcome: phase.outcome}
+		if phase.delay > 0 {
+			event.Delay = phase.delay.String()
+		}
+		dns.Events = append(dns.Events, event)
+		*schedule = append(*schedule, FaultEvent{Offset: phase.at, Type: FaultScheduledDNS,
+			Service: c.Service, ScheduledResult: phase.outcome, Delay: phase.delay})
+	}
+	return append(faults, dns)
 }
 
 func cloneScenario(base *Scenario) *Scenario {
@@ -421,7 +505,8 @@ func (r *CampaignResult) finish() {
 	}
 	if r.DivergentRuns > 0 {
 		r.Suggestions = append(r.Suggestions, Suggestion{Code: SuggestNondeterministic,
-			Message: "Identical fault schedules produced different structured diagnosis fingerprints; inspect timeout boundaries and probe ordering."})
+			Message: "Identical fault schedules produced different structured diagnosis fingerprints; inspect timeout boundaries and probe ordering.",
+			Evidence: fmt.Sprintf("%d of %d runs shared a schedule with a run that reached a different diagnosis", r.DivergentRuns, r.Runs)})
 	}
 	if r.Error != "" || r.Cancelled || r.Errors > 0 {
 		r.Result = ResultError

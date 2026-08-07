@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func campaignScenario(t *testing.T) *Scenario {
@@ -123,5 +124,132 @@ func TestCampaignAggregateCountsDivergentEquivalentSchedules(t *testing.T) {
 	r.finish()
 	if r.DivergentRuns != 2 || r.StableRuns != 0 || len(r.Fingerprints) != 2 || r.Result != ResultFail {
 		t.Fatalf("aggregate = %+v", r)
+	}
+}
+
+func flappingScenario(t *testing.T) *Scenario {
+	t.Helper()
+	s, err := LibraryScenario("flapping-connectivity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestFlappingTimelineIsDeterministicOrderedAndBounded(t *testing.T) {
+	s := flappingScenario(t)
+	for iteration := 0; iteration < 6; iteration++ {
+		seed := DeriveIterationSeed(12345, s.Name, iteration)
+		first, firstSchedule, err := compileCampaignIteration(s, seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, secondSchedule, err := compileCampaignIteration(s, seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(firstSchedule, secondSchedule) {
+			t.Fatalf("iteration %d schedule differs across compilations", iteration)
+		}
+		timeline := timelineFrom(first.Faults)
+		if timelineFingerprint(timeline) != timelineFingerprint(timelineFrom(second.Faults)) {
+			t.Fatalf("iteration %d timeline fingerprint differs across compilations", iteration)
+		}
+		// Five netem phases and three resolver phases, every offset inside the
+		// declared bound and strictly increasing within each fault.
+		if len(timeline) != 8 {
+			t.Fatalf("iteration %d timeline = %+v", iteration, timeline)
+		}
+		perFault := map[string]time.Duration{}
+		for _, event := range timeline {
+			if event.Offset < 0 || event.Offset > maxScheduledOffset {
+				t.Errorf("iteration %d offset out of range: %+v", iteration, event)
+			}
+			if event.LossPercent < 0 || event.LossPercent > 100 {
+				t.Errorf("iteration %d loss out of range: %+v", iteration, event)
+			}
+			key := event.Type + event.Service
+			if previous, seen := perFault[key]; seen && event.Offset <= previous {
+				t.Errorf("iteration %d offsets not increasing for %s: %+v", iteration, key, timeline)
+			}
+			perFault[key] = event.Offset
+		}
+	}
+}
+
+func TestFlappingIterationsAreIndependentAndDistinct(t *testing.T) {
+	s := flappingScenario(t)
+	fingerprints := map[string]int{}
+	for iteration := 0; iteration < 6; iteration++ {
+		compiled, _, err := compileCampaignIteration(s, DeriveIterationSeed(999, s.Name, iteration))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprints[timelineFingerprint(timelineFrom(compiled.Faults))]++
+	}
+	if len(fingerprints) < 5 {
+		t.Errorf("six iterations produced only %d distinct timelines", len(fingerprints))
+	}
+	// Iteration 4 does not depend on 0..3 having been compiled first.
+	want, _, err := compileCampaignIteration(s, DeriveIterationSeed(999, s.Name, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _, err := compileCampaignIteration(flappingScenario(t), DeriveIterationSeed(999, s.Name, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timelineFingerprint(timelineFrom(want.Faults)) != timelineFingerprint(timelineFrom(fresh.Faults)) {
+		t.Error("iteration 4 depends on its predecessors")
+	}
+}
+
+func TestBoundarySweepVariesOnlyTheDelay(t *testing.T) {
+	s, err := LibraryScenario("dns-timeout-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delays := map[time.Duration]bool{}
+	for iteration := 0; iteration < 6; iteration++ {
+		compiled, schedule, err := compileCampaignIteration(s, DeriveIterationSeed(12345, s.Name, iteration))
+		if err != nil {
+			t.Fatal(err)
+		}
+		timeline := timelineFrom(compiled.Faults)
+		if len(timeline) != 1 || timeline[0].Outcome != DNSOutcomeDelay || timeline[0].Offset != 0 {
+			t.Fatalf("iteration %d timeline = %+v", iteration, timeline)
+		}
+		if timeline[0].Delay < 800*time.Millisecond || timeline[0].Delay > 1300*time.Millisecond {
+			t.Errorf("iteration %d delay %s is outside the declared range", iteration, timeline[0].Delay)
+		}
+		if len(schedule) != 1 || schedule[0].Delay != timeline[0].Delay {
+			t.Errorf("iteration %d schedule does not carry the delay: %+v", iteration, schedule)
+		}
+		delays[timeline[0].Delay] = true
+	}
+	if len(delays) < 4 {
+		t.Errorf("the sweep only reached %d distinct delays", len(delays))
+	}
+}
+
+// Repeating one iteration is what gives the divergence check something to
+// compare: without it every schedule fingerprint is a group of one.
+func TestRunCampaignRepeatsASingleIteration(t *testing.T) {
+	s := campaignScenario(t)
+	iteration := 3
+	result := RunCampaign(context.Background(), s, func() Backend {
+		return &fakeBackend{caps: supported(), env: &fakeEnv{stdout: okReport}}
+	}, CampaignOptions{Seed: 12345, Runs: 4, Iteration: &iteration, Run: Options{Netdoc: "netdoc"}})
+	if len(result.Outcomes) != 4 {
+		t.Fatalf("outcomes = %d, want 4", len(result.Outcomes))
+	}
+	for _, outcome := range result.Outcomes {
+		if outcome.Iteration != 3 || outcome.ScheduleID != result.Outcomes[0].ScheduleID {
+			t.Fatalf("repeat drew a different schedule: %+v", outcome)
+		}
+	}
+	// One schedule shared by every run, all reaching the same diagnosis.
+	if result.DivergentRuns != 0 || result.StableRuns != 4 {
+		t.Errorf("stability = %d stable / %d divergent", result.StableRuns, result.DivergentRuns)
 	}
 }

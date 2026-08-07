@@ -122,7 +122,8 @@ Flags for run:
 Flags for campaign:
   -runs <n>                override the campaign's bounded default run count
   -seed <int64>            root seed (generated and printed when omitted)
-  -iteration <n>           run exactly one independently derived iteration
+  -iteration <n>           run exactly one independently derived iteration,
+                           repeated -runs times when both are given
   -fail-fast               stop after the first mismatch or simulator error
   -json                    print the machine-readable aggregate report
   -netdoc <path>           the netdoc binary to run

@@ -1,0 +1,64 @@
+name: dns-timeout-boundary
+description: A seeded campaign that walks one resolver delay across netdoc's probe deadline.
+
+# One variable dimension and nothing else: the delay the resolver holds every
+# answer for. Run it with a probe timeout inside the swept range and the
+# iterations straddle the deadline —
+#
+#   netdoc-sim campaign dns-timeout-boundary --seed 12345 --runs 6 -timeout 1s
+#
+# What it is looking for is off-by-one deadline behaviour, error classification
+# that changes across the boundary, and cleanup races. Rerun one iteration
+# several times to see whether the same delay lands on both sides:
+#
+#   netdoc-sim campaign dns-timeout-boundary --seed 12345 --iteration 3 --runs 5
+#
+# Not part of the CI set: the interesting iterations spend a probe deadline each.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: boundary-dns
+          type: dns
+          zone:
+            boundary-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            boundary-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+tests:
+  - name: resolve across the deadline
+    node: client
+    target: boundary-target.test:80
+
+# Which side of the deadline an iteration lands on is the measurement, so the
+# only thing asserted on every iteration is that the run produced a report.
+expect:
+  checks:
+    - {id: iface, status: PASS}
+
+campaign:
+  runs: 6
+  dns_delay:
+    service: boundary-dns
+    delay: {min: 800ms, max: 1300ms}

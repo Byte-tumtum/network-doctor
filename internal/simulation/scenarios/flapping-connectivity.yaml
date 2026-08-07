@@ -1,0 +1,74 @@
+name: flapping-connectivity
+description: A seeded campaign that varies when the network degrades, how badly, and how long the outage lasts.
+
+# Every iteration generates the same five-phase shape and varies three bounded
+# dimensions: when degradation starts, its loss percentage, and how long the
+# total outage lasts. The degraded phase is always 400 ms, and the outage always
+# begins 400 ms after it ends, so a failing iteration reads as one sentence.
+#
+#   +0                            healthy
+#   +degrade_at                   degraded
+#   +degrade_at+400ms             healthy
+#   +degrade_at+800ms             outage — 100% loss, resolver silent
+#   +degrade_at+800ms+outage_for  healthy again
+#
+# Reproduce one iteration exactly:
+#   netdoc-sim campaign flapping-connectivity --seed 12345 --iteration 7
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: flapping-dns
+          type: dns
+          zone:
+            flapping-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            flapping-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+tests:
+  - name: through the flap
+    node: client
+    target: flapping-target.test:80
+
+# One run spans the whole flap, so its verdict legitimately depends on which
+# phase each probe landed in. What must hold on every iteration is that the run
+# produced a diagnosis at all and that the interface it ran on was up; anything
+# stronger would be asserting which phase the scheduler happened to hit. The
+# findings this campaign exists for come from the timeline analysis and from
+# equivalent timelines that disagree.
+expect:
+  checks:
+    - {id: iface, status: PASS}
+
+campaign:
+  runs: 6
+  timeline:
+    node: client
+    segment: lan
+    service: flapping-dns
+    resolver_hold: 600ms
+    latency: 10ms
+    degrade_at: {min: 150ms, max: 350ms}
+    degrade_loss_percent: {min: 10, max: 60}
+    outage_for: {min: 300ms, max: 700ms}

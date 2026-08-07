@@ -443,14 +443,82 @@ func TestFaultDuringProbeScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// The flapping campaign's determinism guarantee is the requested timeline, not
+// netdoc's answer to it: a transition that lands on a probe boundary is
+// genuinely a coin flip, and the campaign exists to say so. So the seeds,
+// schedules and timeline fingerprints must reproduce exactly, and the diagnosis
+// is only compared where the campaign itself claims stability.
+func TestFlappingCampaignTimelinesAreReproducible(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(args ...string) CampaignResult {
+		base := []string{"campaign", "flapping-connectivity", "--json", "--seed", "4242",
+			"--netdoc", netdoc, "-timeout", timedTimeout}
+		cmd := exec.Command(sim, append(base, args...)...)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("campaign: %v", err)
+		}
+		var result CampaignResult
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatalf("campaign JSON: %v: %s", err, out)
+		}
+		return result
+	}
+	first, second := run("--runs", "3"), run("--runs", "3")
+	if len(first.Outcomes) != 3 || len(second.Outcomes) != 3 {
+		t.Fatalf("campaign lengths = %d/%d", len(first.Outcomes), len(second.Outcomes))
+	}
+	for i := range first.Outcomes {
+		a, b := first.Outcomes[i], second.Outcomes[i]
+		if a.IterationSeed != b.IterationSeed || a.ScheduleID != b.ScheduleID {
+			t.Fatalf("iteration %d is not reproducible: %+v != %+v", i, a, b)
+		}
+		if a.Report.TimelineID != b.Report.TimelineID {
+			t.Fatalf("iteration %d timeline fingerprint changed: %q != %q", i, a.Report.TimelineID, b.Report.TimelineID)
+		}
+		// Five netem phases and three resolver phases, every one of them either
+		// applied or explicitly skipped, and none applied before its offset.
+		if len(a.Report.Timeline) != 8 {
+			t.Fatalf("iteration %d timeline = %+v", i, a.Report.Timeline)
+		}
+		for _, item := range a.Report.Timeline {
+			switch item.Result {
+			case EventApplied:
+				if item.AppliedOffset < item.ScheduledOffset {
+					t.Errorf("iteration %d applied %s early: %+v", i, item.State, item)
+				}
+			case EventSkipped:
+			default:
+				t.Errorf("iteration %d event failed: %+v", i, item)
+			}
+		}
+		assertCleanedUp(t, *a.Report)
+		assertCleanedUp(t, *b.Report)
+	}
+	// Direct reproduction of one iteration, by the documented command.
+	direct := run("--iteration", "2")
+	if len(direct.Outcomes) != 1 || direct.Outcomes[0].Iteration != 2 ||
+		direct.Outcomes[0].IterationSeed != first.Outcomes[2].IterationSeed ||
+		direct.Outcomes[0].ScheduleID != first.Outcomes[2].ScheduleID ||
+		direct.Outcomes[0].Report.TimelineID != first.Outcomes[2].Report.TimelineID {
+		t.Fatalf("direct reproduction differs: direct=%+v original=%+v", direct.Outcomes, first.Outcomes[2])
+	}
+	assertCleanedUp(t, *direct.Outcomes[0].Report)
+}
+
 func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 	requireBackend(t)
 	hostBefore := captureHostNetworkState(t)
 	netdoc, sim := buildBinaries(t)
 	run := func(iteration string) CampaignResult {
-		args := []string{"campaign", "unstable-connectivity", "--json", "--runs", "5", "--seed", "12345", "--netdoc", netdoc}
+		args := []string{"campaign", "unstable-connectivity", "--json", "--seed", "12345", "--netdoc", netdoc}
 		if iteration != "" {
+			// The documented reproduction command: seed and iteration only.
 			args = append(args, "--iteration", iteration)
+		} else {
+			args = append(args, "--runs", "5")
 		}
 		cmd := exec.Command(sim, args...)
 		out, err := cmd.Output()

@@ -245,6 +245,52 @@ type CampaignSpec struct {
 	Runs  int            `yaml:"runs"`
 	Netem *CampaignNetem `yaml:"netem"`
 	DNS   *CampaignDNS   `yaml:"dns"`
+	// Timeline generates a bounded flapping fault timeline per iteration.
+	Timeline *CampaignTimeline `yaml:"timeline"`
+	// DNSDelay sweeps one resolver delay, which is how a campaign walks a probe
+	// timeout boundary without varying anything else.
+	DNSDelay *CampaignDNSDelay `yaml:"dns_delay"`
+}
+
+// CampaignTimeline generates one flapping timeline per iteration. The shape is
+// fixed and only three dimensions vary — when degradation starts, how bad it
+// is, and how long the total outage lasts — so a failing iteration is still
+// something a person can read.
+//
+//	+0                          healthy
+//	+degrade_at                 degraded (loss = degrade_loss_percent)
+//	+degrade_at+400ms           healthy
+//	+degrade_at+800ms           outage (100% loss, and the resolver silent)
+//	+degrade_at+800ms+outage_for healthy again
+type CampaignTimeline struct {
+	Node    string `yaml:"node"`
+	Segment string `yaml:"segment"`
+	// Service, when named, loses its DNS responses for the outage window too.
+	Service string `yaml:"service"`
+	// ResolverHold is the delay that service opens with. It paces the run so
+	// the generated phases actually overlap a probe: netdoc issues all of its
+	// resolver queries in the first few milliseconds of a run, so without
+	// something holding it there, a timeline measured in hundreds of
+	// milliseconds would be changing a network nobody was looking at.
+	ResolverHold string `yaml:"resolver_hold"`
+	// Latency is the fixed healthy latency every phase carries.
+	Latency     string        `yaml:"latency"`
+	DegradeAt   DurationRange `yaml:"degrade_at"`
+	DegradeLoss NumberRange   `yaml:"degrade_loss_percent"`
+	OutageFor   DurationRange `yaml:"outage_for"`
+}
+
+// campaignTimelineShape is the fixed part of a flapping timeline: how long the
+// degraded phase lasts, and how long the network is healthy again before the
+// total outage begins.
+const (
+	campaignDegradedFor = 400 * time.Millisecond
+	campaignHealthyGap  = 400 * time.Millisecond
+)
+
+type CampaignDNSDelay struct {
+	Service string        `yaml:"service"`
+	Delay   DurationRange `yaml:"delay"`
 }
 
 type CampaignNetem struct {
@@ -923,8 +969,63 @@ func (c *CampaignSpec) validate(s *Scenario) error {
 	if c.Runs < 1 || c.Runs > 1000 {
 		return fmt.Errorf("runs must be between 1 and 1000")
 	}
-	if c.Netem == nil && c.DNS == nil {
-		return errors.New("netem or dns variables are required")
+	if c.Netem == nil && c.DNS == nil && c.Timeline == nil && c.DNSDelay == nil {
+		return errors.New("netem, dns, timeline or dns_delay variables are required")
+	}
+	if t := c.Timeline; t != nil {
+		node := s.Topology.node(t.Node)
+		if node == nil {
+			return fmt.Errorf("timeline: unknown node %q", t.Node)
+		}
+		if _, ok := node.interfaceOn(t.Segment); !ok {
+			return fmt.Errorf("timeline: node %q has no interface on segment %q", t.Node, t.Segment)
+		}
+		if t.Service != "" && s.Topology.dnsServiceNode(t.Service) == "" {
+			return fmt.Errorf("timeline: unknown named dns service %q", t.Service)
+		}
+		if t.Service != "" {
+			hold, err := time.ParseDuration(t.ResolverHold)
+			if err != nil {
+				return fmt.Errorf("timeline.resolver_hold: %w", err)
+			}
+			if hold <= 0 || hold > maxDNSResponseDelay {
+				return fmt.Errorf("timeline.resolver_hold must satisfy 0 < hold <= %s", maxDNSResponseDelay)
+			}
+		}
+		if _, err := time.ParseDuration(t.Latency); err != nil {
+			return fmt.Errorf("timeline.latency: %w", err)
+		}
+		if err := t.DegradeAt.validate("timeline.degrade_at", maxScheduledOffset); err != nil {
+			return err
+		}
+		if err := t.OutageFor.validate("timeline.outage_for", maxScheduledOffset); err != nil {
+			return err
+		}
+		if err := t.DegradeLoss.validate("timeline.degrade_loss_percent", 0, 100); err != nil {
+			return err
+		}
+		// The generated shape must fit inside the bound no matter which end of
+		// each range an iteration lands on.
+		start, _ := time.ParseDuration(t.DegradeAt.Min)
+		if start <= 0 {
+			return errors.New("timeline.degrade_at.min must be positive")
+		}
+		last, _ := time.ParseDuration(t.DegradeAt.Max)
+		longest, _ := time.ParseDuration(t.OutageFor.Max)
+		if last+campaignDegradedFor+campaignHealthyGap+longest > maxScheduledOffset {
+			return fmt.Errorf("timeline: the longest generated timeline exceeds %s", maxScheduledOffset)
+		}
+	}
+	if d := c.DNSDelay; d != nil {
+		if s.Topology.dnsServiceNode(d.Service) == "" {
+			return fmt.Errorf("dns_delay: unknown named dns service %q", d.Service)
+		}
+		if err := d.Delay.validate("dns_delay.delay", maxDNSResponseDelay); err != nil {
+			return err
+		}
+		if min, _ := time.ParseDuration(d.Delay.Min); min <= 0 {
+			return errors.New("dns_delay.delay.min must be positive")
+		}
 	}
 	if c.Netem != nil {
 		node := s.Topology.node(c.Netem.Node)
