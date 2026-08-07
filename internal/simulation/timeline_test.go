@@ -3,6 +3,7 @@ package simulation
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -156,9 +157,16 @@ func TestSchedulerWithNoEventsFinishesImmediately(t *testing.T) {
 }
 
 func TestSchedulerSkipsEverythingAfterCancellation(t *testing.T) {
+	// Cancel at a spread of positions across the timeline: before the first
+	// event, while the timer is sleeping, and around the moment the first event
+	// applies. Whatever the position, everything the scheduler did not reach is
+	// recorded as skipped and the environment saw exactly what it claims.
 	for name, at := range map[string]time.Duration{
 		"before the first event": 0,
+		"during the first sleep": 20 * time.Millisecond,
+		"at the first event":     50 * time.Millisecond,
 		"between events":         80 * time.Millisecond,
+		"well after the first":   200 * time.Millisecond,
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := &fakeEnv{}
@@ -262,6 +270,31 @@ func TestRunJoinsTheSchedulerBeforeCleanup(t *testing.T) {
 	}
 	if rep.TimelineID == "" || rep.Tests[0].EndOffset < rep.Tests[0].StartOffset {
 		t.Errorf("timeline id %q, test window %s..%s", rep.TimelineID, rep.Tests[0].StartOffset, rep.Tests[0].EndOffset)
+	}
+}
+
+// No scheduler goroutine outlives its simulation. Run joins it, so a repeated
+// Run must not accumulate goroutines even though every one of those runs left a
+// 20-second event unreached.
+func TestSchedulerGoroutinesDoNotAccumulate(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "tests:",
+		"faults:\n  - {type: scheduled_netem, node: client, events: [{at: 0s, latency: 5ms}, {at: 20s, latency: 5ms}]}\ntests:", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func() {
+		Run(context.Background(), s, &fakeBackend{caps: supported(), env: &fakeEnv{stdout: okReport}}, Options{Netdoc: "netdoc"})
+	}
+	run()
+	runtime.GC()
+	before := runtime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		run()
+	}
+	runtime.GC()
+	if after := runtime.NumGoroutine(); after > before {
+		t.Errorf("goroutines grew from %d to %d across 20 runs", before, after)
 	}
 }
 
