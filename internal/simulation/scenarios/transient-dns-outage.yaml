@@ -1,0 +1,89 @@
+name: transient-dns-outage
+description: The resolver answers, goes silent while netdoc is running, and recovers before the run ends.
+
+# The timeline is measured from T0, the instant just before the first netdoc
+# process starts. The opening delay state is what makes the transitions land
+# deterministically rather than by luck: the first run's queries arrive within
+# milliseconds of T0 and are answered 200 ms later, so the drop at +150 ms is
+# already in force by the time that run finishes and the second one asks
+# anything. Nothing here depends on how long a netdoc run happens to take.
+#
+#   +0ms      resolver answers, 200 ms late
+#   +150ms    resolver responses dropped
+#   +600ms    resolver answers normally again
+#
+# Recovery lands inside the second run, which is still waiting out its probe
+# deadline on a query nobody answered. Whether netdoc notices is the question
+# this scenario exists to ask.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: outage-resolver
+          type: dns
+          zone:
+            transient-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            transient-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+faults:
+  - type: scheduled_dns
+    service: outage-resolver
+    events:
+      - {at: 0ms, outcome: delay, delay: 200ms}
+      - {at: 150ms, outcome: drop}
+      - {at: 600ms, outcome: answer}
+
+tests:
+  - name: resolver reachable before the outage
+    node: client
+    target: transient-target.test:80
+    expect:
+      verdict: ok
+      checks:
+        - {id: internet_tcp, status: PASS}
+        - {id: dns, status: PASS}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+  - name: resolver silent during the outage
+    node: client
+    target: transient-target.test:80
+    expect:
+      verdict: dns
+      checks:
+        - {id: internet_tcp, status: PASS}
+        - {id: dns, status: FAIL, cause: dns_timeout}
+        - {id: target_tcp, status: SKIP}
+        - {id: http, status: SKIP}
+  - name: resolver reachable after recovery
+    node: client
+    target: transient-target.test:80
+
+expect:
+  verdict: ok
+  checks:
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}

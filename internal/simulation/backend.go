@@ -34,9 +34,10 @@ type Env interface {
 	// ApplyFaults injects impairments into an already-healthy topology.
 	ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo, error)
 	// ApplyTimedEvent applies one already-validated scheduled change while the
-	// tests are running. Only the fault scheduler calls it, and only before
-	// Cleanup begins — the runner joins the scheduler first.
-	ApplyTimedEvent(ctx context.Context, event TimedEvent) error
+	// tests are running, and returns what the kernel says the new state is.
+	// Only the fault scheduler calls it, and only before Cleanup begins — the
+	// runner joins the scheduler first.
+	ApplyTimedEvent(ctx context.Context, event TimedEvent) (string, error)
 	// Exec runs argv inside a node's namespaces. argv is passed to the kernel
 	// as a slice; no shell is involved anywhere in this package.
 	Exec(ctx context.Context, node string, argv, env []string) ExecResult

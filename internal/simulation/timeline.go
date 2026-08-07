@@ -102,8 +102,12 @@ type FaultEventEvidence struct {
 	ScheduledOffset time.Duration `json:"scheduled_offset_ms"`
 	AppliedOffset   time.Duration `json:"applied_offset_ms"`
 	State           string        `json:"state"`
-	Result          string        `json:"result"`
-	Error           string        `json:"error,omitempty"`
+	// Observed is what the environment read back after applying the event —
+	// the kernel's own rendering of the new qdisc or link state, with the
+	// generated device name and qdisc handle left out.
+	Observed string `json:"observed,omitempty"`
+	Result   string `json:"result"`
+	Error    string `json:"error,omitempty"`
 }
 
 // validateEvents checks the shape every scheduled fault shares: a bounded,
@@ -354,8 +358,8 @@ func (s *scheduler) run(ctx context.Context, env Env, events []TimedEvent, t0 ti
 		}
 		item := FaultEventEvidence{Event: event, ScheduledOffset: event.Offset,
 			State: event.summary(), Result: EventApplied}
-		err := env.ApplyTimedEvent(ctx, event)
-		item.AppliedOffset = time.Since(t0)
+		observed, err := env.ApplyTimedEvent(ctx, event)
+		item.AppliedOffset, item.Observed = time.Since(t0), observed
 		if err != nil {
 			item.Result, item.Error = EventFailed, err.Error()
 		}

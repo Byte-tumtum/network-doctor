@@ -1,0 +1,71 @@
+name: latency-spike
+description: A large temporary latency spike opens and closes inside one netdoc run.
+
+# The resolver's opening delay state is a metronome, not the fault under test:
+# it holds the DNS probe for 300 ms so the netem transitions are guaranteed to
+# land while the run is still going, whatever the machine's speed.
+#
+#   +0ms      client egress: 10ms
+#   +200ms    client egress: 700ms with 150ms of jitter   (spike)
+#   +1500ms   client egress: 10ms                          (spike removed)
+#
+# netdoc samples each path once. Whether one sample can see a spike that opened
+# and closed around it is the question; the simulator only states what it did.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: spike-resolver
+          type: dns
+          zone:
+            spike-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            spike-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+faults:
+  - type: scheduled_dns
+    service: spike-resolver
+    events:
+      - {at: 0ms, outcome: delay, delay: 300ms}
+      - {at: 1500ms, outcome: answer}
+  - type: scheduled_netem
+    node: client
+    segment: lan
+    seed: 1414213562
+    events:
+      - {at: 0ms, latency: 10ms, jitter: 2ms}
+      - {at: 200ms, latency: 700ms, jitter: 150ms}
+      - {at: 1500ms, latency: 10ms, jitter: 2ms}
+
+tests:
+  - name: one run spanning the spike
+    node: client
+    target: spike-target.test:80
+
+expect:
+  checks:
+    - {id: iface, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: target_tcp, status: WARN}
+    - {id: http, status: PASS}

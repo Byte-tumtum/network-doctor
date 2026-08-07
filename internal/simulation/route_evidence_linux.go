@@ -68,7 +68,7 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		out.Routes = append(out.Routes, item)
 	}
 	for _, fault := range e.scenario.Faults {
-		if fault.Type != FaultNetem {
+		if fault.Type != FaultNetem && fault.Type != FaultScheduledNetem {
 			continue
 		}
 		np := e.byName[fault.Node]
@@ -83,10 +83,19 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		}
 		condition := PacketConditionEvidence{Node: fault.Node, Segment: fault.Segment, Seed: fault.Seed,
 			Active: active, DroppedPackets: dropped}
-		condition.Latency, _ = time.ParseDuration(fault.Delay)
-		condition.Jitter, _ = time.ParseDuration(fault.Jitter)
-		if raw, ok := strings.CutSuffix(fault.Loss, "%"); ok {
-			condition.LossPercent, _ = strconv.ParseFloat(raw, 64)
+		if fault.Type == FaultScheduledNetem {
+			// A scheduled fault has no single state; the last event is the one
+			// the run finished in, and the timeline carries the rest.
+			last := fault.Events[len(fault.Events)-1]
+			condition.Latency, _ = time.ParseDuration(last.Latency)
+			condition.Jitter, _ = time.ParseDuration(last.Jitter)
+			condition.LossPercent = last.LossPercent
+		} else {
+			condition.Latency, _ = time.ParseDuration(fault.Delay)
+			condition.Jitter, _ = time.ParseDuration(fault.Jitter)
+			if raw, ok := strings.CutSuffix(fault.Loss, "%"); ok {
+				condition.LossPercent, _ = strconv.ParseFloat(raw, 64)
+			}
 		}
 		out.PacketConditions = append(out.PacketConditions, condition)
 	}

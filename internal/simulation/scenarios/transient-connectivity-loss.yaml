@@ -1,0 +1,87 @@
+name: transient-connectivity-loss
+description: The path to the target goes away for 750 ms in the middle of a diagnostic run, then comes back.
+
+# The outage is a scheduled link transition on the target, not on the client:
+# the client's addresses, routes and default gateway are never touched, so the
+# evidence can show that the route configuration itself stayed intact while the
+# transport did not.
+#
+#   +0ms      resolver answers, 250 ms late   (a metronome, not the fault)
+#   +150ms    target link down
+#   +900ms    target link up
+#
+# The first run reaches the target within milliseconds of T0, well before the
+# link drops. The second run's target probe is gated behind the delayed DNS
+# answer, so it always starts after the drop. Recovery lands while that probe is
+# still waiting out its deadline, and the third run sees a healthy network again.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: outage-metronome
+          type: dns
+          zone:
+            flap-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            flap-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+faults:
+  - type: scheduled_dns
+    service: outage-metronome
+    events:
+      - {at: 0ms, outcome: delay, delay: 250ms}
+      - {at: 900ms, outcome: answer}
+  - type: scheduled_link
+    node: target
+    segment: lan
+    events:
+      - {at: 150ms, state: down}
+      - {at: 900ms, state: up}
+
+tests:
+  - name: target reachable before the outage
+    node: client
+    target: 10.77.0.20:80
+    expect:
+      verdict: ok
+      checks:
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+  - name: target unreachable during the outage
+    node: client
+    target: flap-target.test:80
+    expect:
+      checks:
+        - {id: dns, status: PASS}
+        - {id: target_tcp, status: FAIL}
+        - {id: http, status: SKIP}
+  - name: target reachable after recovery
+    node: client
+    target: 10.77.0.20:80
+
+expect:
+  verdict: ok
+  checks:
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}

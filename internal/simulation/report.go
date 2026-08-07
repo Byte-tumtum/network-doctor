@@ -111,6 +111,7 @@ func (r *Report) finish() {
 	}
 	r.Suggestions = append(r.Suggestions, r.routeSuggestions()...)
 	r.Suggestions = append(r.Suggestions, r.faultSuggestions()...)
+	r.Suggestions = append(r.Suggestions, r.timelineSuggestions()...)
 	// Empty lists, not null: a consumer iterating report.faults on a healthy
 	// scenario should get nothing to do, not a type error.
 	if r.Suggestions == nil {
@@ -306,7 +307,8 @@ func (r *Report) WriteText(w io.Writer) {
 		for _, e := range r.Timeline {
 			switch e.Result {
 			case EventApplied:
-				p("  %-9s %-52s applied at +%s", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State), e.AppliedOffset.Round(time.Millisecond))
+				p("  %-9s %-52s applied at +%-8s %s", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State),
+					e.AppliedOffset.Round(time.Millisecond), textsafe.Clean(e.Observed))
 			case EventSkipped:
 				p("  %-9s %-52s skipped — the run ended first", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State))
 			default:

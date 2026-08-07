@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
@@ -72,10 +73,10 @@ func requireBackend(t *testing.T) {
 }
 
 // runScenario runs one scenario end to end and returns the parsed report.
-func runScenario(t *testing.T, name string) Report {
+func runScenario(t *testing.T, name string, extra ...string) Report {
 	t.Helper()
 	netdoc, sim := buildBinaries(t)
-	cmd := exec.Command(sim, "run", name, "-json", "-netdoc", netdoc)
+	cmd := exec.Command(sim, append([]string{"run", name, "-json", "-netdoc", netdoc}, extra...)...)
 	out, err := cmd.Output()
 	var exit *exec.ExitError
 	if err != nil && !asExitError(err, &exit) {
@@ -246,6 +247,198 @@ func TestTCPResetScenario(t *testing.T) {
 	}
 	if !accepted || !reset {
 		t.Errorf("reset service evidence = %+v", rep.Evidence.TCPResets)
+	}
+	assertCleanedUp(t, rep)
+}
+
+// timedTimeout keeps the timed scenarios short in CI. Their timelines are
+// designed so the transitions land the same way at any probe timeout above a
+// few hundred milliseconds; this only decides how long the run that waits out a
+// dropped query takes.
+const timedTimeout = "1s"
+
+func appliedEvent(t *testing.T, rep Report, kind, state string) FaultEventEvidence {
+	t.Helper()
+	for _, item := range rep.Timeline {
+		if item.Result == EventApplied && item.Event.Type == kind &&
+			(item.Event.Outcome == state || item.Event.State == state) {
+			return item
+		}
+	}
+	t.Fatalf("no applied %s event reaching %q: %+v", kind, state, rep.Timeline)
+	return FaultEventEvidence{}
+}
+
+func TestTransientDNSOutageScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "transient-dns-outage", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v timeline=%+v", rep.Result, rep.Error, rep.Tests, rep.Timeline)
+	}
+	drop := appliedEvent(t, rep, FaultScheduledDNS, DNSOutcomeDrop)
+	recover := appliedEvent(t, rep, FaultScheduledDNS, DNSOutcomeAnswer)
+	if !(drop.AppliedOffset < recover.AppliedOffset) {
+		t.Fatalf("outage did not precede recovery: %+v %+v", drop, recover)
+	}
+	// The resolver answered before the outage, went silent during it, and the
+	// silent query is the one that failed.
+	before, during, after := 0, 0, 0
+	for _, q := range rep.Evidence.DNSQueries {
+		if q.Service != "outage-resolver" {
+			continue
+		}
+		switch {
+		case q.Offset < drop.AppliedOffset && q.ActualOutcome != "DROPPED":
+			before++
+		case q.Offset >= drop.AppliedOffset && q.Offset < recover.AppliedOffset && q.ActualOutcome == "DROPPED":
+			during++
+		case q.Offset >= recover.AppliedOffset && q.ActualOutcome == "ANSWER":
+			after++
+		}
+	}
+	if before == 0 || during == 0 || after == 0 {
+		t.Fatalf("queries before/during/after the outage = %d/%d/%d: %+v", before, during, after, rep.Evidence.DNSQueries)
+	}
+	if got := diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeDNS)); got.Status != "FAIL" || got.Cause != diagnostic.DNSCauseTimeout {
+		t.Errorf("the outage run's DNS row = %+v", got)
+	}
+	if got := diagnosisCheck(rep.Tests[2], string(diagnostic.ProbeDNS)); got.Status != "PASS" {
+		t.Errorf("the recovery run's DNS row = %+v", got)
+	}
+	// Recovery happened while the failing run was still waiting, and netdoc
+	// asked the resolver nothing more before concluding.
+	if !(rep.Tests[1].StartOffset < recover.AppliedOffset && recover.AppliedOffset < rep.Tests[1].EndOffset) {
+		t.Errorf("recovery at %s is outside the failing run %s..%s",
+			recover.AppliedOffset, rep.Tests[1].StartOffset, rep.Tests[1].EndOffset)
+	}
+	if !hasSuggestion(rep.Suggestions, SuggestTransientNotResampled) {
+		t.Errorf("no resampling-gap suggestion: %+v", rep.Suggestions)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestLatencySpikeScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "latency-spike", "-timeout", "4s")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v timeline=%+v", rep.Result, rep.Error, rep.Tests, rep.Timeline)
+	}
+	// The kernel's own view of the qdisc at each state, not just what we asked.
+	var netem []FaultEventEvidence
+	for _, item := range rep.Timeline {
+		if item.Event.Type == FaultScheduledNetem && item.Result == EventApplied {
+			netem = append(netem, item)
+		}
+	}
+	if len(netem) != 3 {
+		t.Fatalf("scheduled netem events applied = %+v", netem)
+	}
+	for i, want := range []string{"delay 10ms", "delay 700ms", "delay 10ms"} {
+		if !strings.Contains(netem[i].Observed, want) {
+			t.Errorf("qdisc after event %d = %q, want %q", i, netem[i].Observed, want)
+		}
+	}
+	// The spike opened and closed inside the single run that spans it.
+	run := rep.Tests[0]
+	if !(run.StartOffset < netem[1].AppliedOffset && netem[2].AppliedOffset < run.EndOffset) {
+		t.Errorf("the spike did not open and close inside the run %s..%s: %+v",
+			run.StartOffset, run.EndOffset, netem)
+	}
+	// Baseline before, spike during: the same path measured at two speeds. The
+	// egress attempt that completed before the spike is the baseline sample; the
+	// target handshake happened after it and cost two orders of magnitude more.
+	if len(rep.Evidence.PacketConditions) != 1 || !rep.Evidence.PacketConditions[0].Active ||
+		rep.Evidence.PacketConditions[0].Latency != 10*time.Millisecond {
+		t.Fatalf("the qdisc did not return to baseline: %+v", rep.Evidence.PacketConditions)
+	}
+	baseline := rep.Evidence.PacketConditions[0].ObservedMinRTT
+	spiked := time.Duration(diagnosisCheck(run, string(diagnostic.ProbeTargetTCP)).Ms) * time.Millisecond
+	if baseline <= 0 || baseline > 200*time.Millisecond || spiked < 500*time.Millisecond {
+		t.Errorf("observed RTTs did not reflect the spike: baseline %s, during the spike %s", baseline, spiked)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestTransientConnectivityLossScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "transient-connectivity-loss", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v timeline=%+v", rep.Result, rep.Error, rep.Tests, rep.Timeline)
+	}
+	down := appliedEvent(t, rep, FaultScheduledLink, LinkStateDown)
+	up := appliedEvent(t, rep, FaultScheduledLink, LinkStateUp)
+	if down.Observed != "kernel link up=false" || up.Observed != "kernel link up=true" {
+		t.Errorf("kernel link evidence = %q / %q", down.Observed, up.Observed)
+	}
+	// Reachable before the outage, unreachable during it, reachable after.
+	if got := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeTargetTCP)); got.Status != "PASS" {
+		t.Errorf("target before the outage = %+v", got)
+	}
+	if got := diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeTargetTCP)); got.Status != "FAIL" {
+		t.Errorf("target during the outage = %+v", got)
+	}
+	if got := diagnosisCheck(rep.Tests[2], string(diagnostic.ProbeTargetTCP)); got.Status != "PASS" {
+		t.Errorf("target after recovery = %+v", got)
+	}
+	// The first run's handshake happened milliseconds into it, well before the
+	// link dropped; the second run's target probe is gated behind a delayed DNS
+	// answer and so always starts after it.
+	if !(rep.Tests[0].StartOffset < down.AppliedOffset && down.AppliedOffset < rep.Tests[1].EndOffset) {
+		t.Errorf("the outage did not fall between the first and second runs: down at %s, runs %s..%s and %s..%s",
+			down.AppliedOffset, rep.Tests[0].StartOffset, rep.Tests[0].EndOffset,
+			rep.Tests[1].StartOffset, rep.Tests[1].EndOffset)
+	}
+	// The scenario breaks transport, never routing: the client's routes and its
+	// own link are exactly as configured, and the target's link is back up.
+	for _, link := range rep.Evidence.Links {
+		if !link.Up {
+			t.Errorf("link left down: %+v", link)
+		}
+	}
+	routes := 0
+	for _, route := range rep.Evidence.Routes {
+		if route.Node == "client" && route.Destination == "default" && route.Via == "10.77.0.1" {
+			routes++
+		}
+	}
+	if routes != 1 {
+		t.Errorf("the client's default route did not survive the outage: %+v", rep.Evidence.Routes)
+	}
+	if !hasSuggestion(rep.Suggestions, SuggestTransientReportedPermanent) {
+		t.Errorf("no transient-versus-permanent suggestion: %+v", rep.Suggestions)
+	}
+	assertCleanedUp(t, rep)
+}
+
+func TestFaultDuringProbeScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "fault-during-probe", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v timeline=%+v", rep.Result, rep.Error, rep.Tests, rep.Timeline)
+	}
+	drop := appliedEvent(t, rep, FaultScheduledDNS, DNSOutcomeDrop)
+	// The point of the scenario: the transition provably happened while an
+	// answer was still being held, and that answer was still delivered. The
+	// service's own record of when the query arrived and how long it was held
+	// is the synchronisation — nothing here waits and hopes.
+	held := 0
+	for _, q := range rep.Evidence.DNSQueries {
+		if q.Service != "inflight-resolver" || q.ScheduledOutcome != DNSOutcomeDelay {
+			continue
+		}
+		due := q.Offset + time.Duration(q.DelayMs)*time.Millisecond
+		if q.Offset < drop.AppliedOffset && drop.AppliedOffset < due && q.ActualOutcome != "DROPPED" {
+			held++
+		}
+	}
+	if held == 0 {
+		t.Fatalf("no answer was in flight across the transition at %s: %+v", drop.AppliedOffset, rep.Evidence.DNSQueries)
+	}
+	if got := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeDNS)); got.Status != "PASS" {
+		t.Errorf("the held answer did not reach netdoc: %+v", got)
+	}
+	if got := diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeDNS)); got.Status != "FAIL" || got.Cause != diagnostic.DNSCauseTimeout {
+		t.Errorf("a query after the transition = %+v", got)
 	}
 	assertCleanedUp(t, rep)
 }

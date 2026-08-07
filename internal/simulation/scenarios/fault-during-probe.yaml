@@ -1,0 +1,79 @@
+name: fault-during-probe
+description: The resolver changes state while one of its answers is still in flight.
+
+# A probe-lifecycle regression scenario, not a user-facing diagnosis. The
+# resolver holds the first run's answers for 500 ms; the drop transition is
+# scheduled for +120 ms, which is provably inside that window — the query's own
+# evidence records when it arrived and how long its answer was held, so the
+# overlap is read from the service, not assumed from a sleep.
+#
+#   +0ms      resolver answers, 500 ms late
+#   +120ms    resolver responses dropped   (while the first answers are held)
+#   +900ms    resolver answers normally
+#
+# What must hold: the held answer is still delivered, netdoc neither hangs nor
+# double-counts it, queries issued after the transition get nothing, and the
+# environment tears down with no delayed-response goroutine left behind.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+    - name: resolver
+      address: 10.77.0.53
+      services:
+        - name: inflight-resolver
+          type: dns
+          zone:
+            inflight-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            inflight-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {type: tcp, port: 443}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
+faults:
+  - type: scheduled_dns
+    service: inflight-resolver
+    events:
+      - {at: 0ms, outcome: delay, delay: 500ms}
+      - {at: 120ms, outcome: drop}
+      - {at: 900ms, outcome: answer}
+
+tests:
+  - name: an answer held across the transition still arrives
+    node: client
+    target: inflight-target.test:80
+    expect:
+      verdict: ok
+      checks:
+        - {id: dns, status: PASS}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+  - name: a query issued after the transition gets nothing
+    node: client
+    target: inflight-target.test:80
+    expect:
+      checks:
+        - {id: dns, status: FAIL, cause: dns_timeout}
+        - {id: target_tcp, status: SKIP}
+
+expect:
+  verdict: ok
+  checks:
+    - {id: dns, status: PASS}
+    - {id: target_tcp, status: PASS}

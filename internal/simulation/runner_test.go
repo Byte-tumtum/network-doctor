@@ -62,7 +62,7 @@ func (e *fakeEnv) Nodes() []NodeInfo { return []NodeInfo{{Name: "client", Addres
 
 func (e *fakeEnv) ApplyFaults(context.Context, []Fault) ([]FaultInfo, error) { return nil, nil }
 
-func (e *fakeEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) error {
+func (e *fakeEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) (string, error) {
 	if e.applyHold != nil {
 		<-e.applyHold
 	}
@@ -72,7 +72,7 @@ func (e *fakeEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) error {
 		e.lateEvents++
 	}
 	e.applied = append(e.applied, event)
-	return e.applyErr
+	return "fake", e.applyErr
 }
 
 func (e *fakeEnv) appliedEvents() []TimedEvent {

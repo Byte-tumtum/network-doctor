@@ -623,17 +623,17 @@ func (e *netnsEnv) ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo
 // ApplyTimedEvent moves the live topology into one scheduled state. The argv it
 // builds is generated here from the logical node and segment; nothing in a
 // scenario file reaches a command line.
-func (e *netnsEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) error {
+func (e *netnsEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) (string, error) {
 	np, ok := e.byName[event.Node]
 	if !ok {
-		return fmt.Errorf("scheduled event targets unknown node %q", event.Node)
+		return "", fmt.Errorf("scheduled event targets unknown node %q", event.Node)
 	}
 	if event.Type == FaultScheduledDNS {
-		return np.setDNSOutcome(ctx, event.Service, event.Outcome, event.Delay)
+		return holderDNSApplied, np.setDNSOutcome(ctx, event.Service, event.Outcome, event.Delay)
 	}
 	iface := np.interfaceForSegment(event.Segment)
 	if iface == nil {
-		return fmt.Errorf("node %q has no interface on segment %q", event.Node, event.Segment)
+		return "", fmt.Errorf("node %q has no interface on segment %q", event.Node, event.Segment)
 	}
 	in := func(argv ...string) []string {
 		return append([]string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "--"}, argv...)
@@ -655,11 +655,52 @@ func (e *netnsEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) error 
 		if event.NetemSeed != 0 {
 			argv = append(argv, "seed", strconv.FormatUint(uint64(event.NetemSeed), 10))
 		}
-		return e.run(ctx, argv...)
+		if err := e.run(ctx, argv...); err != nil {
+			return "", err
+		}
+		return e.observeNetem(ctx, event.Node, iface), nil
 	case FaultScheduledLink:
-		return e.run(ctx, in("ip", "link", "set", iface.iface, event.State)...)
+		if err := e.run(ctx, in("ip", "link", "set", iface.iface, event.State)...); err != nil {
+			return "", err
+		}
+		res := e.Exec(ctx, event.Node, []string{"ip", "-o", "link", "show", "dev", iface.iface}, nil)
+		if res.Err != nil || res.ExitCode != 0 {
+			return "", execResultError(res)
+		}
+		return "kernel link up=" + strconv.FormatBool(parseLinkUp(string(res.Stdout))), nil
 	}
-	return fmt.Errorf("unknown scheduled event type %q", event.Type)
+	return "", fmt.Errorf("unknown scheduled event type %q", event.Type)
+}
+
+// observeNetem reads the qdisc back so the report proves what the kernel holds,
+// not merely what the simulator asked for. Best effort: an unreadable qdisc is
+// worth saying so about, not worth failing an applied event over.
+func (e *netnsEnv) observeNetem(ctx context.Context, node string, iface *interfaceProc) string {
+	res := e.Exec(ctx, node, []string{"tc", "qdisc", "show", "dev", iface.iface}, nil)
+	if res.Err != nil || res.ExitCode != 0 {
+		return "kernel netem: unreadable"
+	}
+	return "kernel netem: " + netemParameters(res.Stdout)
+}
+
+// netemParameters extracts the shaping parameters tc reports, dropping the
+// qdisc handle, refcnt and queue limit — implementation detail on one side, and
+// on the other a generated name this package never exposes.
+func netemParameters(raw []byte) string {
+	line, _, _ := strings.Cut(string(raw), "\n")
+	if !strings.Contains(line, "qdisc netem ") {
+		return "absent"
+	}
+	fields := strings.Fields(line)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "limit" {
+			if rest := strings.Join(fields[i+2:], " "); rest != "" {
+				return rest
+			}
+			return "unimpaired"
+		}
+	}
+	return "unimpaired"
 }
 
 // setDNSOutcome asks the node holder to move one of its DNS services into a new
