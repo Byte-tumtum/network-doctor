@@ -83,7 +83,11 @@ type TestOutcome struct {
 	SourceSegment string        `json:"source_segment,omitempty"`
 	Command       []string      `json:"command"`
 	Duration      time.Duration `json:"duration_ms"`
-	ExitCode      int           `json:"exit_code"`
+	// StartOffset and EndOffset place this netdoc process on the fault
+	// timeline, relative to T0.
+	StartOffset time.Duration `json:"start_offset_ms"`
+	EndOffset   time.Duration `json:"end_offset_ms"`
+	ExitCode    int           `json:"exit_code"`
 	// Error is set when netdoc could not be run or produced no report at all.
 	Error     string     `json:"error,omitempty"`
 	Stderr    string     `json:"stderr,omitempty"`

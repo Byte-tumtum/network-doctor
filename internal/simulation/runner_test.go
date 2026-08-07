@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -44,11 +45,41 @@ type fakeEnv struct {
 	execCtxErr    error
 	sawCancelled  bool
 	cleanupErrors []string
+
+	mu      sync.Mutex
+	applied []TimedEvent
+	// applyErr, when set, fails every scheduled event.
+	applyErr error
+	// applyHold blocks inside a scheduled apply, so a test can cancel while one
+	// is in flight.
+	applyHold chan struct{}
+	// cleanedAt records when Cleanup ran, so a late event can be caught.
+	cleanedAt  time.Time
+	lateEvents int
 }
 
 func (e *fakeEnv) Nodes() []NodeInfo { return []NodeInfo{{Name: "client", Address: "10.77.0.10"}} }
 
 func (e *fakeEnv) ApplyFaults(context.Context, []Fault) ([]FaultInfo, error) { return nil, nil }
+
+func (e *fakeEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) error {
+	if e.applyHold != nil {
+		<-e.applyHold
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.cleanedAt.IsZero() {
+		e.lateEvents++
+	}
+	e.applied = append(e.applied, event)
+	return e.applyErr
+}
+
+func (e *fakeEnv) appliedEvents() []TimedEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]TimedEvent(nil), e.applied...)
+}
 
 func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string, env []string) ExecResult {
 	e.execs++
@@ -103,6 +134,9 @@ func TestRunPassesOnlyGeneratedTLSRootEnvironment(t *testing.T) {
 func (e *fakeEnv) Evidence(context.Context) (Evidence, error) { return aggregateEvidence(nil), nil }
 
 func (e *fakeEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
+	e.mu.Lock()
+	e.cleanedAt = time.Now()
+	e.mu.Unlock()
 	e.cleanups++
 	if e.panicOnClean {
 		panic("teardown exploded")

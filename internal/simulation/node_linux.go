@@ -76,7 +76,7 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 		return err
 	}
 	defer func() { _ = recorder.Close() }()
-	closers, err := startServices(ctx, cfg.Services, cfg.Addresses, cfg.Resolver, cfg.TrustDir, recorder)
+	closers, dns, err := startServices(ctx, cfg.Services, cfg.Addresses, cfg.Resolver, cfg.TrustDir, recorder)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 	}()
 	fmt.Fprintln(stdout, holderServicesReady)
 
-	waitForShutdown(ctx, stdin)
+	serveHolderCommands(ctx, stdin, stdout, dns)
 	return nil
 }
 

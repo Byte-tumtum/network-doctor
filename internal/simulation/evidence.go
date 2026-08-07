@@ -104,6 +104,11 @@ type DNSQueryEvidence struct {
 	Sequence         int    `json:"sequence"`
 	ScheduledOutcome string `json:"scheduled_outcome"`
 	ActualOutcome    string `json:"actual_outcome"`
+	// Offset places the query on the fault timeline, relative to T0. It is
+	// filled in by the director once the run's epoch is known.
+	Offset  time.Duration `json:"offset_ms"`
+	DelayMs int64         `json:"delay_ms,omitempty"`
+	at      time.Time
 }
 
 type TCPResetEvidence struct {
@@ -158,6 +163,12 @@ type evidenceEvent struct {
 	Sequence         int    `json:"sequence,omitempty"`
 	ScheduledOutcome string `json:"scheduled_outcome,omitempty"`
 	ActualOutcome    string `json:"actual_outcome,omitempty"`
+	DelayMs          int64  `json:"delay_ms,omitempty"`
+	// At is the wall clock the holder observed the event at. Holders and the
+	// director share one machine's clock, which is the only thing they can
+	// correlate across processes; it never orders the fault scheduler, which
+	// runs off a single monotonic epoch.
+	At time.Time `json:"at"`
 
 	CertificateMode      string    `json:"certificate_mode,omitempty"`
 	RequestedServer      string    `json:"requested_server,omitempty"`
@@ -192,6 +203,9 @@ func (r *evidenceRecorder) record(event evidenceEvent) {
 		return
 	}
 	event.Node = r.node
+	if event.At.IsZero() {
+		event.At = time.Now()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_ = json.NewEncoder(r.file).Encode(event)
@@ -290,7 +304,8 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		if event.Kind == ServiceDNS && event.Sequence > 0 {
 			out.DNSQueries = append(out.DNSQueries, DNSQueryEvidence{Node: event.Node, Service: event.Service,
 				Source: event.Source, Name: event.Name, QueryType: event.QueryType, Sequence: event.Sequence,
-				ScheduledOutcome: event.ScheduledOutcome, ActualOutcome: event.ActualOutcome})
+				ScheduledOutcome: event.ScheduledOutcome, ActualOutcome: event.ActualOutcome,
+				DelayMs: event.DelayMs, at: event.At})
 		}
 	}
 	for _, item := range resets {

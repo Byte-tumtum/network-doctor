@@ -218,6 +218,12 @@ type Fault struct {
 	// Seed makes tc netem's pseudo-random sequence reproducible. Zero asks tc
 	// for its default; campaign compilation always supplies a non-zero seed.
 	Seed uint32 `yaml:"seed,omitempty"`
+	// Service names the simulator DNS service a scheduled_dns fault drives. The
+	// node is derived from it; a scenario never names one for this fault type.
+	Service string `yaml:"service,omitempty"`
+	// Events is the timed transition list of a scheduled_* fault. It is fully
+	// resolved before the topology exists and immutable once T0 passes.
+	Events []ScheduledEvent `yaml:"events,omitempty"`
 }
 
 const (
@@ -451,6 +457,9 @@ func (s *Scenario) Validate() error {
 			return fmt.Errorf("faults[%d]: %w", i, err)
 		}
 	}
+	if n := len(timelineFrom(s.Faults)); n > maxTimelineEvents {
+		return fmt.Errorf("faults: %d scheduled events, maximum is %d", n, maxTimelineEvents)
+	}
 	if len(s.Tests) == 0 {
 		return errors.New("tests: at least one test is required")
 	}
@@ -623,10 +632,28 @@ func (n *Node) validateServices(names map[string]bool) error {
 }
 
 func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
+	// A scheduled_dns fault names a service; the node that serves it is derived,
+	// so a scenario cannot point one service's schedule at another node.
+	if f.Type == FaultScheduledDNS {
+		owner := topology.dnsServiceNode(f.Service)
+		if owner == "" {
+			return fmt.Errorf("unknown named dns service %q", f.Service)
+		}
+		if f.Node != "" && f.Node != owner {
+			return fmt.Errorf("dns service %q is served by node %q, not %q", f.Service, owner, f.Node)
+		}
+		f.Node = owner
+	}
 	if !nodes[f.Node] {
 		return fmt.Errorf("unknown node %q", f.Node)
 	}
 	node := topology.node(f.Node)
+	if f.Type != FaultScheduledDNS && f.Service != "" {
+		return fmt.Errorf("%s does not accept service", f.Type)
+	}
+	if len(f.Events) > 0 && f.Type != FaultScheduledNetem && f.Type != FaultScheduledDNS && f.Type != FaultScheduledLink {
+		return fmt.Errorf("%s does not accept events", f.Type)
+	}
 	if f.Family != "" && f.Family != "ipv4" && f.Family != "ipv6" {
 		return fmt.Errorf("unknown family %q (ipv4 or ipv6)", f.Family)
 	}
@@ -739,10 +766,47 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		if _, ok := node.interfaceOn(f.Segment); !ok {
 			return fmt.Errorf("node %q has no interface on segment %q", f.Node, f.Segment)
 		}
+	case FaultScheduledNetem, FaultScheduledLink:
+		if f.Via != "" || f.Metric != 0 || f.Family != "" || f.Delay != "" || f.Jitter != "" || f.Loss != "" {
+			return fmt.Errorf("%s takes node, segment and events only", f.Type)
+		}
+		if f.Segment == "" {
+			if len(node.Interfaces) != 1 {
+				return fmt.Errorf("%s on a multi-interface node requires segment", f.Type)
+			}
+			f.Segment = node.Interfaces[0].Segment
+		} else if _, ok := node.interfaceOn(f.Segment); !ok {
+			return fmt.Errorf("node %q has no interface on segment %q", f.Node, f.Segment)
+		}
+		check := validateNetemEvent
+		if f.Type == FaultScheduledLink {
+			check = validateLinkEvent
+		}
+		return f.validateEvents(check)
+	case FaultScheduledDNS:
+		if f.Segment != "" || f.Via != "" || f.Metric != 0 || f.Family != "" || f.Delay != "" || f.Jitter != "" || f.Loss != "" {
+			return errors.New("scheduled_dns takes service and events only")
+		}
+		return f.validateEvents(validateDNSEvent)
 	default:
 		return fmt.Errorf("unknown fault type %q", f.Type)
 	}
 	return nil
+}
+
+// dnsServiceNode names the node serving a named DNS service, or "".
+func (t *Topology) dnsServiceNode(service string) string {
+	if service == "" {
+		return ""
+	}
+	for i := range t.Nodes {
+		for _, svc := range t.Nodes[i].Services {
+			if svc.Type == ServiceDNS && svc.Name == service {
+				return t.Nodes[i].Name
+			}
+		}
+	}
+	return ""
 }
 
 func (t *Topology) node(name string) *Node {

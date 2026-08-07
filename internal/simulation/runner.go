@@ -122,9 +122,24 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 		return rep
 	}
 
+	// T0. Every scheduled offset is measured from this instant — the moment
+	// just before the first netdoc process starts. The timeline was resolved
+	// during validation and does not change from here on.
+	timeline := timelineFrom(s.Faults)
+	t0 := time.Now()
+	scheduleCtx, endSchedule := context.WithCancel(ctx)
+	sched := startScheduler(scheduleCtx, env, timeline, t0)
+
 	for _, t := range s.Tests {
-		rep.Tests = append(rep.Tests, runTest(ctx, env, t, s.Expect, opts))
+		rep.Tests = append(rep.Tests, runTest(ctx, env, t, s.Expect, opts, t0))
 	}
+	// Stop the scheduler and join it before anything else touches the
+	// environment: no scheduled event may reach a namespace that evidence
+	// collection or cleanup is already working on.
+	endSchedule()
+	rep.Timeline = sched.wait()
+	rep.TimelineID = timelineFingerprint(timeline)
+
 	evidenceCtx, evidenceCancel := context.WithTimeout(ctx, opts.SetupTimeout)
 	rep.Evidence, err = env.Evidence(evidenceCtx)
 	evidenceCancel()
@@ -133,8 +148,20 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	} else {
 		rep.addReachabilityEvidence()
 		rep.addPacketObservations()
+		rep.placeEvidenceOnTimeline(t0)
 	}
 	return rep
+}
+
+// placeEvidenceOnTimeline converts the wall clock the node holders recorded
+// into offsets from this run's epoch. Holders and director share one machine's
+// clock; nothing is ordered by it, it only locates an observation.
+func (r *Report) placeEvidenceOnTimeline(t0 time.Time) {
+	for i := range r.Evidence.DNSQueries {
+		if at := r.Evidence.DNSQueries[i].at; !at.IsZero() {
+			r.Evidence.DNSQueries[i].Offset = at.Sub(t0)
+		}
+	}
 }
 
 func (r *Report) addPacketObservations() {
@@ -242,11 +269,15 @@ func (r *Report) selectedPath(node, family string) []string {
 // runTest runs netdoc inside a node and compares the diagnosis. Repeats reuse
 // the first run for the comparison and contribute only their verdict, so a
 // flaky diagnosis shows up as instability rather than as a coin flip.
-func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options) TestOutcome {
+func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, t0 time.Time) (out TestOutcome) {
 	if t.Expect != nil {
 		expect = *t.Expect
 	}
-	out := TestOutcome{Name: t.Name, Node: t.Node, Target: t.Target, SourceSegment: t.SourceSegment}
+	out = TestOutcome{Name: t.Name, Node: t.Node, Target: t.Target, SourceSegment: t.SourceSegment,
+		StartOffset: time.Since(t0)}
+	// The window this netdoc process occupied on the fault timeline is what
+	// makes "the network changed while this probe ran" answerable at all.
+	defer func() { out.EndOffset = time.Since(t0) }()
 	argv := []string{opts.Netdoc, "-json", "-timeout", opts.ProbeTimeout.String()}
 	if t.SourceSegment != "" {
 		// Use the validated canonical address rather than exposing or accepting a

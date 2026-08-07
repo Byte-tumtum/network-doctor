@@ -257,13 +257,16 @@ type netnsEnv struct {
 // nodeProc is a holder process: it exists to own a network namespace and to run
 // that node's test services inside it.
 type nodeProc struct {
-	node    *Node
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  *bufio.Reader
-	logs    *safeLog
-	pid     int
-	ifaces  []*interfaceProc
+	node   *Node
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+	logs   *safeLog
+	pid    int
+	ifaces []*interfaceProc
+	// mu serializes the holder's request/response pipe. Setup uses it from the
+	// director's goroutine, the fault scheduler from its own, and stop closes it.
+	mu      sync.Mutex
 	stopped bool
 }
 
@@ -611,6 +614,66 @@ func (e *netnsEnv) ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo
 	return out, nil
 }
 
+// ApplyTimedEvent moves the live topology into one scheduled state. The argv it
+// builds is generated here from the logical node and segment; nothing in a
+// scenario file reaches a command line.
+func (e *netnsEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) error {
+	np, ok := e.byName[event.Node]
+	if !ok {
+		return fmt.Errorf("scheduled event targets unknown node %q", event.Node)
+	}
+	if event.Type == FaultScheduledDNS {
+		return np.setDNSOutcome(ctx, event.Service, event.Outcome, event.Delay)
+	}
+	iface := np.interfaceForSegment(event.Segment)
+	if iface == nil {
+		return fmt.Errorf("node %q has no interface on segment %q", event.Node, event.Segment)
+	}
+	in := func(argv ...string) []string {
+		return append([]string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "--"}, argv...)
+	}
+	switch event.Type {
+	case FaultScheduledNetem:
+		// replace, not add: a scheduled timeline moves between states on an
+		// interface that may already carry a netem qdisc from an earlier event.
+		argv := in("tc", "qdisc", "replace", "dev", iface.iface, "root", "netem")
+		if event.Latency > 0 {
+			argv = append(argv, "delay", tcDuration(event.Latency))
+			if event.Jitter > 0 {
+				argv = append(argv, tcDuration(event.Jitter))
+			}
+		}
+		if event.LossPercent > 0 {
+			argv = append(argv, "loss", strconv.FormatFloat(event.LossPercent, 'f', 2, 64)+"%")
+		}
+		if event.NetemSeed != 0 {
+			argv = append(argv, "seed", strconv.FormatUint(uint64(event.NetemSeed), 10))
+		}
+		return e.run(ctx, argv...)
+	case FaultScheduledLink:
+		return e.run(ctx, in("ip", "link", "set", iface.iface, event.State)...)
+	}
+	return fmt.Errorf("unknown scheduled event type %q", event.Type)
+}
+
+// setDNSOutcome asks the node holder to move one of its DNS services into a new
+// response state. The holder owns the service; the director owns the clock.
+func (np *nodeProc) setDNSOutcome(ctx context.Context, service, outcome string, delay time.Duration) error {
+	if np.stdin == nil || np.stdout == nil {
+		return errors.New("node holder is not running")
+	}
+	np.mu.Lock()
+	defer np.mu.Unlock()
+	if np.stopped {
+		return errors.New("node holder has already stopped")
+	}
+	request := strings.Join([]string{holderDNSCommand, service, outcome, strconv.FormatInt(delay.Milliseconds(), 10)}, " ")
+	if _, err := io.WriteString(np.stdin, request+"\n"); err != nil {
+		return err
+	}
+	return np.await(ctx, holderDNSApplied)
+}
+
 // faultSteps turns one fault into the commands that inject it, plus a one-line
 // description for the report.
 func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error) {
@@ -833,10 +896,13 @@ func (e *netnsEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
 // already have exited on its own, been killed with the process group, or been
 // stopped by an earlier Cleanup.
 func (np *nodeProc) stop(ctx context.Context) error {
+	np.mu.Lock()
 	if np.cmd == nil || np.cmd.Process == nil || np.stopped {
+		np.mu.Unlock()
 		return nil
 	}
 	np.stopped = true
+	np.mu.Unlock()
 	if np.stdin != nil {
 		np.stdin.Close()
 	}

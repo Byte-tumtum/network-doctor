@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,12 +33,17 @@ type Report struct {
 	// Error is set when setup, not diagnosis, is what failed.
 	Error string `json:"error,omitempty"`
 
-	Topology    []NodeInfo    `json:"topology"`
-	Faults      []FaultInfo   `json:"faults"`
-	Tests       []TestOutcome `json:"tests"`
-	Evidence    Evidence      `json:"evidence"`
-	Cleanup     CleanupInfo   `json:"cleanup"`
-	Suggestions []Suggestion  `json:"suggestions"`
+	Topology []NodeInfo  `json:"topology"`
+	Faults   []FaultInfo `json:"faults"`
+	// Timeline is what the fault scheduler did, relative to T0 — the instant
+	// just before the first netdoc process started. TimelineID identifies the
+	// requested timeline and ignores how long the OS took to apply it.
+	Timeline    []FaultEventEvidence `json:"fault_timeline"`
+	TimelineID  string               `json:"fault_timeline_id,omitempty"`
+	Tests       []TestOutcome        `json:"tests"`
+	Evidence    Evidence             `json:"evidence"`
+	Cleanup     CleanupInfo          `json:"cleanup"`
+	Suggestions []Suggestion         `json:"suggestions"`
 }
 
 // NodeInfo is a namespace the simulation created.
@@ -109,6 +115,9 @@ func (r *Report) finish() {
 	// scenario should get nothing to do, not a type error.
 	if r.Suggestions == nil {
 		r.Suggestions = []Suggestion{}
+	}
+	if r.Timeline == nil {
+		r.Timeline = []FaultEventEvidence{}
 	}
 	if r.Faults == nil {
 		r.Faults = []FaultInfo{}
@@ -219,6 +228,10 @@ func (r *Report) routeSuggestions() []Suggestion {
 	return nil
 }
 
+func offsetLabel(d time.Duration) string {
+	return "+" + strconv.FormatInt(d.Milliseconds(), 10) + "ms"
+}
+
 func diagnosisStatus(d *Diagnosis, id string) string {
 	for _, check := range d.Checks {
 		if check.ID == id {
@@ -287,6 +300,25 @@ func (r *Report) WriteText(w io.Writer) {
 		p("  %-18s %-4s %s", f.Type, f.Family, f.Summary)
 	}
 	p("")
+
+	if len(r.Timeline) > 0 {
+		p("Fault timeline   (offsets from T0, just before the first netdoc run)")
+		for _, e := range r.Timeline {
+			switch e.Result {
+			case EventApplied:
+				p("  %-9s %-52s applied at +%s", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State), e.AppliedOffset.Round(time.Millisecond))
+			case EventSkipped:
+				p("  %-9s %-52s skipped — the run ended first", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State))
+			default:
+				p("  %-9s %-52s FAILED: %s", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State), textsafe.Clean(e.Error))
+			}
+		}
+		for _, t := range r.Tests {
+			p("  netdoc %q ran +%s..+%s", textsafe.Clean(t.Name),
+				t.StartOffset.Round(time.Millisecond), t.EndOffset.Round(time.Millisecond))
+		}
+		p("")
+	}
 
 	for i := range r.Tests {
 		r.Tests[i].writeText(w)

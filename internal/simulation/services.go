@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -20,12 +21,19 @@ import (
 // director answers once the namespace is addressed and routed, and the holder
 // confirms its listeners are up. Nothing is reachable before that last line, so
 // a probe can never race the topology.
+// After services-ready the pipe stays open for one more exchange: the fault
+// scheduler sends "dns <service> <outcome> <delay-ms>" and the holder answers
+// dns-applied or dns-error. A scheduled DNS transition is therefore timed by
+// the director's single epoch and confirmed before it is recorded as applied.
 const (
 	// NodeCommand is the hidden argv[1] that makes the binary a node holder.
 	NodeCommand         = "__node"
 	holderNSReady       = "ns-ready"
 	holderStart         = "start"
 	holderServicesReady = "services-ready"
+	holderDNSCommand    = "dns"
+	holderDNSApplied    = "dns-applied"
+	holderDNSError      = "dns-error"
 )
 
 // nodeConfig is what the director hands a holder.
@@ -48,34 +56,43 @@ type nodeConfig struct {
 
 // startServices binds every listener the node declares. On any failure it
 // closes the ones already up, so a node is either fully serving or not at all.
-func startServices(ctx context.Context, services []Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, error) {
+// The returned map is the live response state of each named DNS service, which
+// is what a scheduled_dns transition moves.
+func startServices(ctx context.Context, services []Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, map[string]*dnsState, error) {
 	var open []io.Closer
+	states := make(map[string]*dnsState)
 	closeAll := func() {
 		for _, c := range open {
 			c.Close()
 		}
 	}
 	for _, svc := range services {
-		c, err := startService(ctx, svc, addresses, resolver, trustDir, recorder)
+		c, state, err := startService(ctx, svc, addresses, resolver, trustDir, recorder)
 		if err != nil {
 			closeAll()
-			return nil, fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err)
+			return nil, nil, fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err)
+		}
+		if state != nil && svc.Name != "" {
+			states[svc.Name] = state
 		}
 		open = append(open, c...)
 	}
-	return open, nil
+	return open, states, nil
 }
 
-func startService(ctx context.Context, svc Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, error) {
+func startService(ctx context.Context, svc Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, *dnsState, error) {
 	port := strconv.Itoa(svc.Port)
 	switch svc.Type {
 	case ServiceDNS:
 		zone, err := parseZone(svc.Zone, svc.Records)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		var open []io.Closer
-		schedule := newDNSSchedule(svc.DNSFault)
+		state := newDNSState(svc.DNSFault)
+		// Delayed answers run on goroutines of their own; this group bounds them
+		// and is joined after the sockets close, so none outlives the service.
+		delays := newDelayGroup(ctx)
 		// One socket per address rather than one wildcard socket, so every
 		// answer leaves from the address the question arrived at.
 		for _, a := range bindAddresses(addresses) {
@@ -84,53 +101,54 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 				for _, c := range open {
 					c.Close()
 				}
-				return nil, err
+				delays.Close()
+				return nil, nil, err
 			}
-			go serveDNS(pc, zone, svc.Name, schedule, recorder)
+			go serveDNS(pc, zone, svc.Name, state, delays, recorder)
 			open = append(open, pc)
 		}
-		return open, nil
+		return append(open, delays), state, nil
 	case ServiceHTTP:
 		listeners, err := listenTCPFamilies(addresses, port)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, ln := range listeners {
 			go serveHTTP(ln, svc)
 		}
-		return listenersAsClosers(listeners), nil
+		return listenersAsClosers(listeners), nil, nil
 	case ServiceTCP:
 		listeners, err := listenTCPFamilies(addresses, port)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, ln := range listeners {
 			go serveSink(ln)
 		}
-		return listenersAsClosers(listeners), nil
+		return listenersAsClosers(listeners), nil, nil
 	case ServiceTCPReset:
 		listeners, err := listenTCPFamilies(addresses, port)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, ln := range listeners {
 			go serveTCPReset(ln, svc.Name, recorder)
 		}
-		return listenersAsClosers(listeners), nil
+		return listenersAsClosers(listeners), nil, nil
 	case ServiceSOCKS5:
 		ln, err := net.Listen("tcp", ":"+port)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []io.Closer{startSOCKS5(ln, svc.Name, resolver, recorder)}, nil
+		return []io.Closer{startSOCKS5(ln, svc.Name, resolver, recorder)}, nil, nil
 	case ServiceTLS:
 		server, err := startTLSService(ctx, svc, trustDir, recorder)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []io.Closer{server}, nil
+		return []io.Closer{server}, nil, nil
 	}
-	return nil, fmt.Errorf("unknown service type %q", svc.Type)
+	return nil, nil, fmt.Errorf("unknown service type %q", svc.Type)
 }
 
 func listenTCPFamilies(addresses []string, port string) ([]net.Listener, error) {
@@ -320,7 +338,7 @@ func dnsErrorReply(msg []byte, rcode uint16) []byte {
 // scenario's zone, NODATA for a name it knows in a family it does not have, and
 // NXDOMAIN for everything else. That is the whole resolver — a scenario proves
 // things about netdoc, not about DNS, and this is small enough to audit.
-func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, schedule *dnsSchedule, recorder *evidenceRecorder) {
+func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, state *dnsState, delays *delayGroup, recorder *evidenceRecorder) {
 	buf := make([]byte, dnsMaxMsg)
 	for {
 		n, from, err := pc.ReadFrom(buf)
@@ -328,42 +346,112 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, s
 			return
 		}
 		msg := buf[:n]
+		scheduled, delay := DNSOutcomeAnswer, time.Duration(0)
 		if name, qtype, result, ok := dnsObservation(msg, zone); ok {
 			source, _, splitErr := net.SplitHostPort(from.String())
 			if splitErr != nil {
 				source = from.String()
 			}
-			sequence, scheduled := schedule.next(qtype)
+			var sequence int
+			sequence, scheduled, delay = state.next(qtype)
 			actual := result
-			if scheduled == DNSOutcomeSERVFAIL {
+			switch scheduled {
+			case DNSOutcomeSERVFAIL:
 				actual = "SERVFAIL"
+			case DNSOutcomeDrop:
+				actual = "DROPPED"
 			}
 			recorder.record(evidenceEvent{Kind: ServiceDNS, Service: service, Name: dnsKey(name),
 				Source: source, QueryType: dnsTypeName(qtype), Result: actual, Sequence: sequence,
-				ScheduledOutcome: scheduled, ActualOutcome: actual})
-			if scheduled == DNSOutcomeSERVFAIL {
-				if reply := dnsErrorReply(msg, dnsRcodeServFail); reply != nil {
-					_, _ = pc.WriteTo(reply, from)
-				}
-				continue
+				ScheduledOutcome: scheduled, ActualOutcome: actual, DelayMs: delay.Milliseconds()})
+		}
+		switch scheduled {
+		case DNSOutcomeDrop:
+			// A dropped response is silence, not an error reply: the client has
+			// to wait out its own timeout, which is the point of the state.
+			continue
+		case DNSOutcomeSERVFAIL:
+			if reply := dnsErrorReply(msg, dnsRcodeServFail); reply != nil {
+				_, _ = pc.WriteTo(reply, from)
 			}
+			continue
 		}
-		if reply := dnsReply(msg, zone); reply != nil {
-			_, _ = pc.WriteTo(reply, from)
+		reply := dnsReply(msg, zone)
+		if reply == nil {
+			continue
 		}
+		if scheduled == DNSOutcomeDelay && delay > 0 {
+			delays.after(delay, func() { _, _ = pc.WriteTo(reply, from) })
+			continue
+		}
+		_, _ = pc.WriteTo(reply, from)
 	}
 }
 
-type dnsSchedule struct {
+// delayGroup runs bounded delayed answers. Close cancels every pending one and
+// joins them, so the holder never leaves a response goroutine behind.
+type delayGroup struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	// pending caps how many answers can be in flight, so a flood of queries
+	// during a delay state cannot spawn unbounded goroutines.
+	pending chan struct{}
+}
+
+const maxPendingDNSDelays = 128
+
+func newDelayGroup(ctx context.Context) *delayGroup {
+	g := &delayGroup{pending: make(chan struct{}, maxPendingDNSDelays)}
+	g.ctx, g.cancel = context.WithCancel(ctx)
+	return g
+}
+
+func (g *delayGroup) after(d time.Duration, send func()) {
+	select {
+	case g.pending <- struct{}{}:
+	default:
+		return // at capacity: this answer is dropped rather than queued
+	}
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		defer func() { <-g.pending }()
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-g.ctx.Done():
+		case <-timer.C:
+			send()
+		}
+	}()
+}
+
+func (g *delayGroup) Close() error {
+	g.cancel()
+	g.wg.Wait()
+	return nil
+}
+
+// dnsState is one DNS service's response behaviour. It carries both forms of
+// schedule: the precomputed per-query outcome list a scenario or campaign
+// compiles up front, and the live outcome the fault scheduler sets while netdoc
+// runs. A live outcome, once set, wins — the timeline is the newer instruction.
+//
+// Nothing here draws a random value. Trusted simulator code decides; the
+// service only reads.
+type dnsState struct {
 	mu        sync.Mutex
 	a         []string
 	aaaa      []string
 	aIndex    int
 	aaaaIndex int
+	live      string
+	delay     time.Duration
 }
 
-func newDNSSchedule(fault *DNSFault) *dnsSchedule {
-	s := &dnsSchedule{}
+func newDNSState(fault *DNSFault) *dnsState {
+	s := &dnsState{}
 	if fault != nil {
 		s.a = append([]string(nil), fault.A...)
 		s.aaaa = append([]string(nil), fault.AAAA...)
@@ -371,26 +459,49 @@ func newDNSSchedule(fault *DNSFault) *dnsSchedule {
 	return s
 }
 
-func (s *dnsSchedule) next(qtype uint16) (int, string) {
+// set moves the service into a scheduled outcome. Called only from the holder's
+// command loop, which the director drives one request at a time.
+func (s *dnsState) set(outcome string, delay time.Duration) error {
+	switch outcome {
+	case DNSOutcomeAnswer, DNSOutcomeSERVFAIL, DNSOutcomeDrop:
+		delay = 0
+	case DNSOutcomeDelay:
+		if delay <= 0 || delay > maxDNSResponseDelay {
+			return fmt.Errorf("delay %s is out of range", delay)
+		}
+	default:
+		return fmt.Errorf("unknown outcome %q", outcome)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.live, s.delay = outcome, delay
+	return nil
+}
+
+// next reports the sequence number, outcome and delay for one query.
+func (s *dnsState) next(qtype uint16) (int, string, time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	outcome := DNSOutcomeAnswer
+	sequence := 1
 	switch qtype {
 	case dnsTypeA:
 		s.aIndex++
+		sequence = s.aIndex
 		if s.aIndex <= len(s.a) {
 			outcome = s.a[s.aIndex-1]
 		}
-		return s.aIndex, outcome
 	case dnsTypeAAAA:
 		s.aaaaIndex++
+		sequence = s.aaaaIndex
 		if s.aaaaIndex <= len(s.aaaa) {
 			outcome = s.aaaa[s.aaaaIndex-1]
 		}
-		return s.aaaaIndex, outcome
-	default:
-		return 1, outcome
 	}
+	if s.live != "" {
+		return sequence, s.live, s.delay
+	}
+	return sequence, outcome, 0
 }
 
 func dnsObservation(msg []byte, zone map[string][]netip.Addr) (string, uint16, string, bool) {
@@ -531,18 +642,57 @@ func dnsAnswer(name []byte, qtype uint16, addr netip.Addr) []byte {
 	return append(rr, rdata...)
 }
 
-// waitForShutdown blocks until the director closes the holder's stdin or the
-// context is cancelled. Either one means the simulation is over.
-func waitForShutdown(ctx context.Context, r io.Reader) {
-	done := make(chan struct{})
+// serveHolderCommands answers scheduled-fault requests until the director
+// closes the holder's stdin or the context is cancelled. Either one means the
+// simulation is over.
+func serveHolderCommands(ctx context.Context, r io.Reader, w io.Writer, dns map[string]*dnsState) {
+	lines := make(chan string, 1)
 	go func() {
-		defer close(done)
-		_, _ = io.Copy(io.Discard, r)
+		defer close(lines)
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
 	}()
-	select {
-	case <-ctx.Done():
-	case <-done:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, ok := <-lines:
+			if !ok {
+				return
+			}
+			if reply := holderCommandReply(line, dns); reply != "" {
+				fmt.Fprintln(w, reply)
+			}
+		}
 	}
+}
+
+// holderCommandReply handles one director request. An unknown line is ignored
+// rather than answered, so a future director talking to an old holder blocks on
+// its own read deadline instead of acting on a misread reply.
+func holderCommandReply(line string, dns map[string]*dnsState) string {
+	fields := strings.Fields(line)
+	if len(fields) != 4 || fields[0] != holderDNSCommand {
+		return ""
+	}
+	state, ok := dns[fields[1]]
+	if !ok {
+		return holderDNSError + " unknown dns service"
+	}
+	ms, err := strconv.ParseInt(fields[3], 10, 32)
+	if err != nil || ms < 0 {
+		return holderDNSError + " bad delay"
+	}
+	if err := state.set(fields[2], time.Duration(ms)*time.Millisecond); err != nil {
+		return holderDNSError + " " + err.Error()
+	}
+	return holderDNSApplied
 }
 
 var errNoStart = errors.New("director closed the connection before the network was configured")

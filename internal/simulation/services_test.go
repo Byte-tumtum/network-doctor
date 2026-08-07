@@ -148,7 +148,7 @@ func TestBindAddressesFallsBackToWildcard(t *testing.T) {
 }
 
 func TestDNSScheduleIsPerFamilyAndBounded(t *testing.T) {
-	s := newDNSSchedule(&DNSFault{
+	s := newDNSState(&DNSFault{
 		A:    []string{DNSOutcomeAnswer, DNSOutcomeSERVFAIL},
 		AAAA: []string{DNSOutcomeSERVFAIL},
 	})
@@ -163,7 +163,7 @@ func TestDNSScheduleIsPerFamilyAndBounded(t *testing.T) {
 		{dnsTypeAAAA, 2, DNSOutcomeAnswer}, // exhausted schedules fail open
 		{dnsTypeA, 3, DNSOutcomeAnswer},
 	} {
-		seq, outcome := s.next(tc.qtype)
+		seq, outcome, _ := s.next(tc.qtype)
 		if seq != tc.seq || outcome != tc.outcome {
 			t.Errorf("next(%d) = %d/%s, want %d/%s", tc.qtype, seq, outcome, tc.seq, tc.outcome)
 		}
