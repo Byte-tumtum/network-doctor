@@ -99,8 +99,8 @@ Builds a virtual network from a scenario, runs netdoc inside it, and reports
 whether netdoc's diagnosis matched what the scenario broke.
 
 Commands:
-	  run <scenario> [flags]   build the network, run the tests, print the report
-	  campaign <scenario>      run a seeded scenario campaign sequentially
+  run <scenario> [flags]   build the network, run the tests, print the report
+  campaign <scenario>      run a seeded scenario campaign sequentially
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
   capabilities             report whether this host can simulate, and what a run does
@@ -117,17 +117,17 @@ Flags for run:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -repeat <n>              run each test n times to catch an unstable diagnosis
   -dry-run                 print every privileged command the run would make, and stop
-	  -v                       log each privileged command as it runs
+  -v                       log each privileged command as it runs
 
 Flags for campaign:
-	  -runs <n>                override the campaign's bounded default run count
-	  -seed <int64>            root seed (generated and printed when omitted)
-	  -iteration <n>           run exactly one independently derived iteration
-	  -fail-fast               stop after the first mismatch or simulator error
-	  -json                    print the machine-readable aggregate report
-	  -netdoc <path>           the netdoc binary to run
-	  -timeout <duration>      netdoc's per-probe timeout (default 4s)
-	  -v                       log each privileged command as it runs
+  -runs <n>                override the campaign's bounded default run count
+  -seed <int64>            root seed (generated and printed when omitted)
+  -iteration <n>           run exactly one independently derived iteration
+  -fail-fast               stop after the first mismatch or simulator error
+  -json                    print the machine-readable aggregate report
+  -netdoc <path>           the netdoc binary to run
+  -timeout <duration>      netdoc's per-probe timeout (default 4s)
+  -v                       log each privileged command as it runs
 
 Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 3 the simulation could not run.
