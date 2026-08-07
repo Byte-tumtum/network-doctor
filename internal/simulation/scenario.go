@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1134,7 +1135,7 @@ func (p *TestProxy) validate(nodes map[string]*Node) error {
 }
 
 func (e *Expect) validate() error {
-	if e.Verdict != "" && !contains(verdicts, e.Verdict) {
+	if e.Verdict != "" && !slices.Contains(verdicts, e.Verdict) {
 		return fmt.Errorf("expect.verdict: unknown verdict %q (one of %s)", e.Verdict, strings.Join(verdicts, ", "))
 	}
 	seen := make(map[string]bool, len(e.Checks))
@@ -1156,14 +1157,14 @@ func (e *Expect) validate() error {
 			return fmt.Errorf("expect.checks: duplicate probe id %q", c.ID)
 		}
 		seen[c.ID] = true
-		if !contains(statuses, c.Status) {
+		if !slices.Contains(statuses, c.Status) {
 			return fmt.Errorf("expect.checks[%d]: unknown status %q (one of %s)", i, c.Status, strings.Join(statuses, ", "))
 		}
 		if c.Cause != "" {
 			if c.Status != "FAIL" && c.Status != "WARN" {
 				return fmt.Errorf("expect.checks[%d]: cause requires FAIL or WARN status", i)
 			}
-			if !contains(knownCauses, c.Cause) {
+			if !slices.Contains(knownCauses, c.Cause) {
 				return fmt.Errorf("expect.checks[%d]: unknown cause %q", i, c.Cause)
 			}
 		}
@@ -1187,15 +1188,6 @@ func (s *Scenario) Client() *Node {
 		}
 	}
 	return nil
-}
-
-func contains(set []string, v string) bool {
-	for _, s := range set {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }
 
 // isSafeName gates every string that reaches an argv as a namespace or

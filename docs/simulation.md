@@ -901,18 +901,8 @@ knob alone is not treated as proof that child namespaces can use it.
 
 ## Roadmap
 
-The scenario library ships twenty-seven: `healthy`, `broken-dns`,
-`no-default-route`, `high-latency`, `socks5-local-dns-fails`,
-`socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
-`tls-hostname-mismatch`, plus `healthy-routed-network`,
-`gateway-unreachable`, `wrong-default-route`, and
-`multiple-interfaces-wrong-preferred-route`, plus `dual-stack-healthy`,
-`ipv4-works-ipv6-broken`, and `ipv6-works-ipv4-broken`, plus `packet-loss`,
-`high-jitter`, `intermittent-dns`, and `tcp-reset`, plus the timed
-`transient-dns-outage`, `latency-spike`, `transient-connectivity-loss`, and
-`fault-during-probe`, plus the `unstable-connectivity`,
-`flapping-connectivity`, and `dns-timeout-boundary` campaigns. In rough order of what each
-additional scenario costs:
+`netdoc-sim scenarios` lists what the library ships today. In rough order of
+what each additional scenario costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
    zone), TCP port blocked, connection refused, packet loss, DNS is slow,

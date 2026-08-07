@@ -336,27 +336,12 @@ func TestSchedulerGoroutinesDoNotAccumulate(t *testing.T) {
 	}
 }
 
-func TestActiveStateAndTransitionsDuringAWindow(t *testing.T) {
+func TestTransitionsDuringAWindow(t *testing.T) {
 	timeline := []FaultEventEvidence{
 		{Event: TimedEvent{Type: FaultScheduledDNS, Outcome: DNSOutcomeAnswer}, AppliedOffset: 0, Result: EventApplied},
 		{Event: TimedEvent{Type: FaultScheduledDNS, Outcome: DNSOutcomeDrop}, AppliedOffset: 500 * time.Millisecond, Result: EventApplied},
 		{Event: TimedEvent{Type: FaultScheduledDNS, Outcome: DNSOutcomeAnswer}, AppliedOffset: 1500 * time.Millisecond, Result: EventApplied},
 		{Event: TimedEvent{Type: FaultScheduledDNS, Outcome: DNSOutcomeDrop}, ScheduledOffset: 9 * time.Second, Result: EventSkipped},
-	}
-	for _, tc := range []struct {
-		at   time.Duration
-		want string
-	}{
-		{100 * time.Millisecond, DNSOutcomeAnswer},
-		{700 * time.Millisecond, DNSOutcomeDrop},
-		{2 * time.Second, DNSOutcomeAnswer},
-		// A skipped event is not a state: it never reached the network.
-		{30 * time.Second, DNSOutcomeAnswer},
-	} {
-		state, ok := activeState(timeline, FaultScheduledDNS, tc.at)
-		if !ok || state.Event.Outcome != tc.want {
-			t.Errorf("state at %s = %+v, want %s", tc.at, state.Event, tc.want)
-		}
 	}
 	if got := transitionsDuring(timeline, 400*time.Millisecond, 1600*time.Millisecond); len(got) != 2 {
 		t.Errorf("transitions = %+v", got)

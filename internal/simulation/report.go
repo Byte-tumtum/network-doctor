@@ -242,12 +242,16 @@ func diagnosisStatus(d *Diagnosis, id string) string {
 	return ""
 }
 
-// WriteJSON prints the machine-readable report.
-func (r *Report) WriteJSON(w io.Writer) error {
+// writeJSON prints one indented machine-readable artifact. Every WriteJSON in
+// this package is this call.
+func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(r)
+	return enc.Encode(v)
 }
+
+// WriteJSON prints the machine-readable report.
+func (r *Report) WriteJSON(w io.Writer) error { return writeJSON(w, r) }
 
 // WriteText prints the human-readable report. Every string that came from a
 // subprocess goes through textsafe first: netdoc's detail lines carry remote

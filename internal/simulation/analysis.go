@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -275,11 +276,9 @@ func checkByID(d *Diagnosis, id string) *DiagnosisCheck {
 	return nil
 }
 
-// sortSuggestions keeps a map-driven rule's output in a stable order.
+// sortSuggestions keeps a map-driven rule's output in a stable order. Stable
+// matters: suggestion order feeds the hunt's diagnosis fingerprint, so equal
+// probes reordering between runs would read as nondeterminism.
 func sortSuggestions(in []Suggestion) {
-	for i := 1; i < len(in); i++ {
-		for j := i; j > 0 && in[j].Probe < in[j-1].Probe; j-- {
-			in[j], in[j-1] = in[j-1], in[j]
-		}
-	}
+	slices.SortStableFunc(in, func(a, b Suggestion) int { return strings.Compare(a.Probe, b.Probe) })
 }

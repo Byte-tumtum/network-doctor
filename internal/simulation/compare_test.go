@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestCompareFalseNegative(t *testing.T) {
 		t.Errorf("outcome = %q", o.Checks[0].Outcome)
 	}
 	codes := suggestionCodes(&o)
-	if !contains(codes, SuggestMissedFinding) || !contains(codes, SuggestWrongVerdict) {
+	if !slices.Contains(codes, SuggestMissedFinding) || !slices.Contains(codes, SuggestWrongVerdict) {
 		t.Errorf("codes = %v", codes)
 	}
 }
@@ -60,7 +61,7 @@ func TestCompareFalsePositive(t *testing.T) {
 	if o.FalsePositives != 1 {
 		t.Errorf("fp = %d, want 1", o.FalsePositives)
 	}
-	if !contains(suggestionCodes(&o), SuggestFalsePositive) {
+	if !slices.Contains(suggestionCodes(&o), SuggestFalsePositive) {
 		t.Errorf("codes = %v", suggestionCodes(&o))
 	}
 	// Naming the row must not downgrade the finding: a scenario that says this
@@ -72,7 +73,7 @@ func TestCompareFalsePositive(t *testing.T) {
 	if o3.FalsePositives != 1 || o3.FalseNegatives != 0 {
 		t.Errorf("expected PASS, got FAIL: fp=%d fn=%d, want 1/0", o3.FalsePositives, o3.FalseNegatives)
 	}
-	if codes := suggestionCodes(&o3); !contains(codes, SuggestFalsePositive) || contains(codes, SuggestWrongSeverity) {
+	if codes := suggestionCodes(&o3); !slices.Contains(codes, SuggestFalsePositive) || slices.Contains(codes, SuggestWrongSeverity) {
 		t.Errorf("codes = %v: a flag on a working probe is a false positive, not a severity mistake", codes)
 	}
 
@@ -112,7 +113,7 @@ func TestCompareExpectedCause(t *testing.T) {
 	if wrong.ok() || wrong.Checks[0].Outcome != OutcomeWrongCause || wrong.FalseNegatives != 0 || wrong.FalsePositives != 0 {
 		t.Fatalf("wrong cause comparison = %+v", wrong)
 	}
-	if !contains(suggestionCodes(&wrong), SuggestWrongCause) {
+	if !slices.Contains(suggestionCodes(&wrong), SuggestWrongCause) {
 		t.Errorf("suggestions = %+v", wrong.suggest())
 	}
 }
@@ -133,7 +134,7 @@ func TestCompareWrongSeverity(t *testing.T) {
 	if o.FalseNegatives != 0 {
 		t.Errorf("fn = %d, want 0: the finding was made, at the wrong level", o.FalseNegatives)
 	}
-	if !contains(suggestionCodes(&o), SuggestWrongSeverity) {
+	if !slices.Contains(suggestionCodes(&o), SuggestWrongSeverity) {
 		t.Errorf("codes = %v", suggestionCodes(&o))
 	}
 }
@@ -144,7 +145,7 @@ func TestCompareTimeout(t *testing.T) {
 	if len(o.TimedOut) != 1 {
 		t.Fatalf("timed out = %v", o.TimedOut)
 	}
-	if !contains(suggestionCodes(&o), SuggestProbeTimedOut) {
+	if !slices.Contains(suggestionCodes(&o), SuggestProbeTimedOut) {
 		t.Errorf("codes = %v", suggestionCodes(&o))
 	}
 	// A timeout is evidence, not a mismatch: the expectation still held.
@@ -156,7 +157,7 @@ func TestCompareTimeout(t *testing.T) {
 func TestCompareMissingFixHint(t *testing.T) {
 	o := TestOutcome{Name: "t", Diagnosis: diag("dns", DiagnosisCheck{ID: "dns", Status: "FAIL", Detail: "d"})}
 	o.compare(Expect{Verdict: "dns", Checks: []ExpectedCheck{{ID: "dns", Status: "FAIL"}}}, 4*time.Second)
-	if !contains(suggestionCodes(&o), SuggestNoFixHint) {
+	if !slices.Contains(suggestionCodes(&o), SuggestNoFixHint) {
 		t.Errorf("codes = %v", suggestionCodes(&o))
 	}
 }
@@ -168,7 +169,7 @@ func TestCompareUnstableVerdicts(t *testing.T) {
 	if o.ok() {
 		t.Error("a diagnosis that changed between identical runs is not a pass")
 	}
-	if !contains(suggestionCodes(&o), SuggestNondeterministic) {
+	if !slices.Contains(suggestionCodes(&o), SuggestNondeterministic) {
 		t.Errorf("codes = %v", suggestionCodes(&o))
 	}
 }

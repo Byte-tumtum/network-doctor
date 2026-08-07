@@ -766,12 +766,12 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// The exception: a machine that took a global IPv6 address and still can't
 	// reach IPv6 is broken, not v4-only. Happy Eyeballs hides that from netdoc
 	// and from browsers, but not from software that dials AAAA and waits.
-	if sec.conn == nil && secName == "IPv6" && o.hasGlobalV6() {
+	if sec.conn == nil && secName == "IPv6" && o.hasGlobalUnicast(false) {
 		extra = append(extra, "IPv6 address configured but no IPv6 egress (black-holed)")
 		r.Cause = FamilyCauseIPv6Unreachable
 		r.Fix = "check the IPv6 default route, gateway, and forwarding path"
 	}
-	if sec.conn == nil && secName == "IPv4" && o.hasGlobalV4() {
+	if sec.conn == nil && secName == "IPv4" && o.hasGlobalUnicast(true) {
 		extra = append(extra, "IPv4 address configured but no IPv4 egress (black-holed)")
 		r.Cause = FamilyCauseIPv4Unreachable
 		r.Fix = "check the IPv4 default route, gateway, and forwarding path"
@@ -1830,15 +1830,17 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 	return src, o.ifaceForIP(src)
 }
 
-// hasGlobalV6 reports whether any live non-loopback interface holds a global
-// unicast IPv6 address — the machine accepted a router advertisement (or was
-// configured statically), so the network claimed to carry IPv6.
+// hasGlobalUnicast reports whether any live non-loopback interface holds a
+// global unicast address of the given family — the machine was configured for
+// it (statically, by DHCP, or by a router advertisement), so the network
+// claimed to carry that family.
 //
-// fc00::/7 doesn't count: unique-local addresses are routable inside the LAN
-// and never to the internet, so no IPv6 egress is their design rather than a
-// black hole. Docker hands them out, which would otherwise warn on every
-// v4-only machine running a v6-enabled bridge.
-func (o *netops) hasGlobalV6() bool {
+// Each family excludes the range that is routable on the LAN but never to the
+// internet, where no egress is the design rather than a black hole: fc00::/7
+// for IPv6, which Docker hands out and which would otherwise warn on every
+// v4-only machine running a v6-enabled bridge, and 169.254.0.0/16 for IPv4,
+// which is what a host self-assigns when DHCP never answered.
+func (o *netops) hasGlobalUnicast(v4 bool) bool {
 	ifaces, err := o.interfaces()
 	if err != nil {
 		return false
@@ -1852,29 +1854,14 @@ func (o *netops) hasGlobalV6() bool {
 			continue
 		}
 		for _, a := range addrs {
-			if n, ok := a.(*net.IPNet); ok && n.IP.To4() == nil && n.IP.IsGlobalUnicast() && n.IP[0]&0xfe != 0xfc {
+			n, ok := a.(*net.IPNet)
+			if !ok || !n.IP.IsGlobalUnicast() {
+				continue
+			}
+			if v4 && n.IP.To4() != nil && !n.IP.IsLinkLocalUnicast() {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func (o *netops) hasGlobalV4() bool {
-	ifaces, err := o.interfaces()
-	if err != nil {
-		return false
-	}
-	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagLoopback != 0 || ifi.Flags&net.FlagUp == 0 {
-			continue
-		}
-		addrs, err := o.interfaceAddrs(&ifi)
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && n.IP.IsGlobalUnicast() && !n.IP.IsLinkLocalUnicast() {
+			if !v4 && n.IP.To4() == nil && n.IP[0]&0xfe != 0xfc {
 				return true
 			}
 		}

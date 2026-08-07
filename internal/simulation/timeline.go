@@ -397,22 +397,6 @@ func (s *scheduler) wait() []FaultEventEvidence {
 	return s.evidence
 }
 
-// activeState reports the last event of the same kind and target applied at or
-// before offset, which is the fault state a probe running then would have seen.
-func activeState(timeline []FaultEventEvidence, kind string, offset time.Duration) (FaultEventEvidence, bool) {
-	var found FaultEventEvidence
-	ok := false
-	for _, item := range timeline {
-		if item.Result != EventApplied || item.Event.Type != kind || item.AppliedOffset > offset {
-			continue
-		}
-		if !ok || item.AppliedOffset >= found.AppliedOffset {
-			found, ok = item, true
-		}
-	}
-	return found, ok
-}
-
 // transitionsDuring returns the events applied inside a half-open window, which
 // is how the report answers "did the network change while this probe ran".
 func transitionsDuring(timeline []FaultEventEvidence, from, to time.Duration) []FaultEventEvidence {

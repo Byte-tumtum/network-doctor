@@ -2,7 +2,7 @@ package simulation
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -319,14 +319,7 @@ func (o *TestOutcome) suggest() []Suggestion {
 }
 
 func uniqueSorted(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	var out []string
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	sort.Strings(out)
-	return out
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return slices.Compact(out)
 }

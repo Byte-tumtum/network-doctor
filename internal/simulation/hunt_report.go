@@ -1,7 +1,6 @@
 package simulation
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -9,11 +8,7 @@ import (
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
-func (r *HuntResult) WriteJSON(w io.Writer) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(r)
-}
+func (r *HuntResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) }
 
 func (r *HuntResult) WriteText(w io.Writer) {
 	fmt.Fprintln(w, "Network Doctor bug hunt")

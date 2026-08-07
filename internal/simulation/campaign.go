@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	mathrand "math/rand"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -528,7 +529,7 @@ func (r *CampaignResult) finish() {
 		}
 	}
 	if len(durations) > 0 {
-		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+		slices.Sort(durations)
 		r.MinDuration, r.MaxDuration = durations[0], durations[len(durations)-1]
 		r.MedianDuration = durations[len(durations)/2]
 	}
@@ -555,11 +556,7 @@ func (r *CampaignResult) finish() {
 	}
 }
 
-func (r *CampaignResult) WriteJSON(w io.Writer) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(r)
-}
+func (r *CampaignResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) }
 
 func (r *CampaignResult) WriteText(w io.Writer) {
 	fmt.Fprintf(w, "Campaign: %s\nSeed:     %d\nResult:   %s\n", r.Scenario, r.Seed, r.Result)

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -159,6 +160,27 @@ nothing on the host. Run 'netdoc-sim capabilities' for the details.
 `)
 }
 
+// parseRef parses the flags around a single positional argument, so flags may
+// come before or after it — the same grammar netdoc itself accepts. It returns
+// "" when no positional argument was given; each caller decides whether that is
+// a default or an error.
+func parseRef(fs *flag.FlagSet, args []string) (string, error) {
+	ref := ""
+	for {
+		if err := fs.Parse(args); err != nil {
+			return "", err
+		}
+		if fs.NArg() == 0 {
+			return ref, nil
+		}
+		if ref != "" {
+			return "", fmt.Errorf("unexpected argument %q", textsafe.Clean(fs.Arg(0)))
+		}
+		ref = fs.Arg(0)
+		args = fs.Args()[1:]
+	}
+}
+
 type huntFlags struct {
 	fs        *flag.FlagSet
 	json      *bool
@@ -190,19 +212,9 @@ func newHuntFlags(out io.Writer) *huntFlags {
 }
 
 func (f *huntFlags) parse(args []string) (string, error) {
-	ref := ""
-	for {
-		if err := f.fs.Parse(args); err != nil {
-			return "", err
-		}
-		if f.fs.NArg() == 0 {
-			break
-		}
-		if ref != "" {
-			return "", fmt.Errorf("unexpected argument %q", textsafe.Clean(f.fs.Arg(0)))
-		}
-		ref = f.fs.Arg(0)
-		args = f.fs.Args()[1:]
+	ref, err := parseRef(f.fs, args)
+	if err != nil {
+		return "", err
 	}
 	if ref == "" {
 		ref = "healthy-routed-network"
@@ -219,19 +231,10 @@ func (f *huntFlags) parse(args []string) (string, error) {
 	if *f.timeout <= 0 {
 		return "", errors.New("-timeout must be positive")
 	}
-	if !slicesContains(simulation.HuntBaseNames(), ref) {
+	if !slices.Contains(simulation.HuntBaseNames(), ref) {
 		return "", fmt.Errorf("unsupported hunt base %q (have: %s)", textsafe.Clean(ref), strings.Join(simulation.HuntBaseNames(), ", "))
 	}
 	return ref, nil
-}
-
-func slicesContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 type optionalSeed struct {
@@ -282,19 +285,9 @@ func newCampaignFlags(out io.Writer) *campaignFlags {
 }
 
 func (f *campaignFlags) parse(args []string) (string, error) {
-	var ref string
-	for {
-		if err := f.fs.Parse(args); err != nil {
-			return "", err
-		}
-		if f.fs.NArg() == 0 {
-			break
-		}
-		if ref != "" {
-			return "", fmt.Errorf("unexpected argument %q", textsafe.Clean(f.fs.Arg(0)))
-		}
-		ref = f.fs.Arg(0)
-		args = f.fs.Args()[1:]
+	ref, err := parseRef(f.fs, args)
+	if err != nil {
+		return "", err
 	}
 	if ref == "" {
 		return "", errors.New("a campaign scenario is required")
@@ -339,23 +332,11 @@ func newRunFlags(out io.Writer) *runFlags {
 	}
 }
 
-// parse pulls the scenario reference out of argv and parses the flags around
-// it, so flags may come before or after the scenario — the same grammar netdoc
-// itself accepts.
+// parse pulls the scenario reference out of argv and bounds the flags.
 func (f *runFlags) parse(args []string) (string, error) {
-	var ref string
-	for {
-		if err := f.fs.Parse(args); err != nil {
-			return "", err
-		}
-		if f.fs.NArg() == 0 {
-			break
-		}
-		if ref != "" {
-			return "", fmt.Errorf("unexpected argument %q", textsafe.Clean(f.fs.Arg(0)))
-		}
-		ref = f.fs.Arg(0)
-		args = f.fs.Args()[1:]
+	ref, err := parseRef(f.fs, args)
+	if err != nil {
+		return "", err
 	}
 	if ref == "" {
 		return "", errors.New("a scenario is required")
@@ -803,6 +784,8 @@ func list(stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+var aliveWord = map[bool]string{true: "alive", false: "gone"}
+
 func inspect(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "netdoc-sim: inspect takes one simulation id")
@@ -814,19 +797,12 @@ func inspect(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	fmt.Fprintf(stdout, "Simulation %s (%s)\n  started   %s\n  director  pid %d (%s)\n  workspace %s\n\n",
-		s.ID, textsafe.Clean(s.Scenario), s.Started.Format(time.RFC3339), s.PID, aliveWord(s.Alive()), s.Workspace)
+		s.ID, textsafe.Clean(s.Scenario), s.Started.Format(time.RFC3339), s.PID, aliveWord[s.Alive()], s.Workspace)
 	for _, n := range s.Nodes {
 		fmt.Fprintf(stdout, "  %-10s %-14s %s\n", n.Name, n.Address, strings.Join(n.Services, " "))
 		fmt.Fprintf(stdout, "             nsenter -t %d -n -m -- sh\n", n.PID)
 	}
 	return exitOK
-}
-
-func aliveWord(alive bool) string {
-	if alive {
-		return "alive"
-	}
-	return "gone"
 }
 
 func cleanup(args []string, stdout, stderr io.Writer) int {

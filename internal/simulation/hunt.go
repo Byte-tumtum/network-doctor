@@ -3,6 +3,7 @@ package simulation
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -226,7 +227,7 @@ func aggregateHuntSuggestions(findings []HuntFinding) []HuntSuggestion {
 			item.HighestSeverity = finding.Severity
 		}
 		for _, caseNumber := range finding.ExampleCases {
-			if len(item.ExampleCases) >= 3 || containsInt(item.ExampleCases, caseNumber) {
+			if len(item.ExampleCases) >= 3 || slices.Contains(item.ExampleCases, caseNumber) {
 				continue
 			}
 			item.ExampleCases = append(item.ExampleCases, caseNumber)
@@ -247,13 +248,4 @@ func aggregateHuntSuggestions(findings []HuntFinding) []HuntSuggestion {
 		return strings.Compare(out[i].Code, out[j].Code) < 0
 	})
 	return out
-}
-
-func containsInt(values []int, want int) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
