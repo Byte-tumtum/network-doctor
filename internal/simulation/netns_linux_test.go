@@ -56,3 +56,28 @@ func TestNetemFaultArgvIsGeneratedAndSeeded(t *testing.T) {
 		}
 	}
 }
+
+// The version gate decides whether seeded loss and jitter scenarios can run at
+// all, and it reads a string from another project, so pin the shapes it sees.
+func TestParseNetemSeedSupport(t *testing.T) {
+	for _, c := range []struct {
+		out     string
+		want    bool
+		version string
+	}{
+		{"tc utility, iproute2-6.17.0\n", true, "6.17.0"},
+		{"tc utility, iproute2-6.6.0", true, "6.6.0"},
+		{"tc utility, iproute2-6.5.0", false, "6.5.0"},
+		{"tc utility, iproute2-6.1.0", false, "6.1.0"},
+		{"tc utility, iproute2-7.0.0", true, "7.0.0"},
+		{"tc utility, iproute2-5.15.0", false, "5.15.0"},
+		// Pre-6.x releases named a snapshot, not a version.
+		{"tc utility, iproute2-ss200127", false, "ss200127"},
+		{"something else entirely", false, "something else entirely"},
+	} {
+		got, version := parseNetemSeedSupport(c.out)
+		if got != c.want || version != c.version {
+			t.Errorf("parseNetemSeedSupport(%q) = %t %q, want %t %q", c.out, got, version, c.want, c.version)
+		}
+	}
+}

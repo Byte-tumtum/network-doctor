@@ -720,6 +720,9 @@ not a claim of statistical significance.
   diagnosis changes.
 
 Netem supports fixed latency, jitter, loss from 0–100%, and an optional seed.
+The seed needs iproute2 6.6 or newer, so a scenario that pins loss or jitter to
+one does not run on Ubuntu 24.04 or Debian bookworm, which ship 6.1. Everything
+else works there.
 Durations are capped at 10 seconds. It does not accept qdisc handles, raw tc
 expressions, corruption, duplication, or reordering. Campaigns are fault
 injection and repeated diagnostic testing, not network-performance benchmarks.

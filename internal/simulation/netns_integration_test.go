@@ -74,6 +74,18 @@ func requireBackend(t *testing.T) {
 	t.Skip("simulation backend unavailable: " + caps.Reason)
 }
 
+// requireNetemSeed skips a scenario that pins netem randomness to a seed when
+// tc is too old to take one. RequireNetnsEnv deliberately does not force this
+// the way it forces an unavailable backend: that flag guards the backend, and
+// what is missing here is one tc keyword the runner image supplies, not
+// anything the checkout controls.
+func requireNetemSeed(t *testing.T) {
+	t.Helper()
+	if ok, version := tcSupportsNetemSeed(context.Background()); !ok {
+		t.Skipf("seeded netem needs iproute2 %s or newer, this host has %s", netemSeedIproute2, version)
+	}
+}
+
 // runScenario runs one scenario end to end and returns the parsed report.
 func runScenario(t *testing.T, name string, extra ...string) Report {
 	t.Helper()
@@ -175,6 +187,7 @@ func TestHighLatencyScenario(t *testing.T) {
 
 func TestPacketLossScenario(t *testing.T) {
 	requireBackend(t)
+	requireNetemSeed(t)
 	rep := runScenario(t, "packet-loss")
 	if rep.Result != ResultPass {
 		t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
@@ -190,6 +203,7 @@ func TestPacketLossScenario(t *testing.T) {
 
 func TestHighJitterScenario(t *testing.T) {
 	requireBackend(t)
+	requireNetemSeed(t)
 	rep := runScenario(t, "high-jitter")
 	if rep.Result != ResultPass {
 		t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
@@ -321,6 +335,7 @@ func TestTransientDNSOutageScenario(t *testing.T) {
 
 func TestLatencySpikeScenario(t *testing.T) {
 	requireBackend(t)
+	requireNetemSeed(t)
 	rep := runScenario(t, "latency-spike", "-timeout", "4s")
 	if rep.Result != ResultPass {
 		t.Fatalf("result = %s (error %q); tests=%+v timeline=%+v", rep.Result, rep.Error, rep.Tests, rep.Timeline)
@@ -452,6 +467,7 @@ func TestFaultDuringProbeScenario(t *testing.T) {
 // is only compared where the campaign itself claims stability.
 func TestFlappingCampaignTimelinesAreReproducible(t *testing.T) {
 	requireBackend(t)
+	requireNetemSeed(t)
 	netdoc, sim := buildBinaries(t)
 	run := func(args ...string) CampaignResult {
 		base := []string{"campaign", "flapping-connectivity", "--json", "--seed", "4242",
