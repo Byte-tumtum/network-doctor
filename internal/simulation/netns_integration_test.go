@@ -244,6 +244,7 @@ func TestTCPResetScenario(t *testing.T) {
 
 func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 	requireBackend(t)
+	hostBefore := captureHostNetworkState(t)
 	netdoc, sim := buildBinaries(t)
 	run := func(iteration string) CampaignResult {
 		args := []string{"campaign", "unstable-connectivity", "--json", "--runs", "5", "--seed", "12345", "--netdoc", netdoc}
@@ -282,6 +283,10 @@ func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 		t.Fatalf("direct reproduction differs: direct=%+v original=%+v", direct.Outcomes, first.Outcomes[3])
 	}
 	assertCleanedUp(t, *direct.Outcomes[0].Report)
+	hostAfter := captureHostNetworkState(t)
+	if hostBefore != hostAfter {
+		t.Errorf("host routes, interfaces, or forwarding changed across campaign\nbefore:\n%s\nafter:\n%s", hostBefore, hostAfter)
+	}
 }
 
 func TestSOCKS5LocalDNSScenario(t *testing.T) {
