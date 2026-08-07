@@ -291,6 +291,10 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 
 `status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`; it is not inferred from a hostname dial that may fall back. A configured family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed proxy and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. On Linux, failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable — safe to script against. Exit codes follow the table below (`ok: false` ⇒ exit `1`).
 
+Resolver failures can add `dns_timeout` or `dns_temporary_failure`; a banner
+peer that accepted TCP before resetting adds `connection_reset`. These are
+optional additions to the existing check objects.
+
 `failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`, …) and is omitted when none did — enough to route a bug report without reading any prose.
 
 `--json --watch` prints the same document once per pass, compacted onto a single line (NDJSON), five seconds apart, until the process is interrupted — for the intermittent failure you can't sit and watch:
@@ -400,6 +404,12 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run dual-stack-healthy
 ./netdoc-sim run ipv4-works-ipv6-broken
 ./netdoc-sim run ipv6-works-ipv4-broken
+./netdoc-sim run packet-loss
+./netdoc-sim run high-jitter
+./netdoc-sim run intermittent-dns
+./netdoc-sim run tcp-reset
+./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
+./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
 ```
 
 ```text
@@ -414,6 +424,31 @@ no privileges over the host's interfaces, routes, resolver or firewall, so it
 cannot touch them even by mistake. Grading is deterministic — probe ids and
 statuses, never the prose — and a mismatch comes with a suggested improvement
 to netdoc.
+
+Campaigns rebuild and clean a complete namespace environment for every
+iteration, run sequentially, and execute the real netdoc binary. A SHA-256
+derivation over the campaign seed, scenario name, and iteration produces an
+independent signed 64-bit iteration seed, so iteration 37 never depends on
+having run 0–36. Before netdoc starts, that seed resolves every bounded YAML
+range into an explicit schedule: canonical netem latency/jitter/loss plus its
+kernel PRNG seed, and per-A/per-AAAA DNS `answer`/`servfail` outcomes. Reports
+retain the schedule, derived seed, stable diagnosis fingerprint, normal
+simulation report, aggregate FP/FN/timeout counts, and a direct reproduction
+command. `--fail-fast` stops after the first mismatch but still cleans and
+reports it; default execution completes every run. Campaign exits use the
+existing simulator contract: 0 matched, 1 comparison mismatch, 2 usage, and 3
+configuration/runtime failure.
+
+The fixed `packet-loss`, `high-jitter`, `intermittent-dns`, and `tcp-reset`
+scenarios isolate each mechanism. `tc -s` readback proves an active netem qdisc
+and records actual drops; successful attempt timings provide min/max RTT spread.
+DNS scheduling is synchronized by query family and records sequence, scheduled
+outcome, and actual outcome. The reset service accepts the TCP handshake and
+uses `SO_LINGER=0`; `target_tcp` therefore passes while the SSH banner row fails
+with `connection_reset`, rather than being confused with refusal. DNS timeout
+and retryable resolver failures may similarly expose `dns_timeout` and
+`dns_temporary_failure` causes. This is deterministic fault injection and
+diagnostic testing, not a statistical performance benchmark.
 
 The SOCKS pair uses the same private hostname and topology. With `socks5`, the
 client resolver returns NXDOMAIN after the proxy greeting succeeds, so no

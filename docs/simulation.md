@@ -27,6 +27,12 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run gateway-unreachable
 ./netdoc-sim run wrong-default-route
 ./netdoc-sim run multiple-interfaces-wrong-preferred-route
+./netdoc-sim run packet-loss
+./netdoc-sim run high-jitter
+./netdoc-sim run intermittent-dns
+./netdoc-sim run tcp-reset
+./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
+./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
 ./netdoc-sim run broken-dns -json    # the same report, machine-readable
 ./netdoc-sim run broken-dns -dry-run # every privileged command, run none of them
 ./netdoc-sim run broken-dns -keep    # leave it up so you can walk around inside
@@ -513,9 +519,11 @@ something that does not exist.
 ## The report
 
 Both renderings carry the same data; `-json` is the one to consume from CI.
-The JSON report also includes `evidence.dns`, `evidence.socks_requests`,
-`evidence.tls`, `evidence.links`, `evidence.routes`, `evidence.routers`, and
-`evidence.reachability`; empty collections are rendered as `[]`. Link and route
+The JSON report also includes `evidence.dns`, `evidence.dns_queries`,
+`evidence.socks_requests`, `evidence.tls`, `evidence.tcp_resets`,
+`evidence.packet_conditions`, `evidence.links`, `evidence.routes`,
+`evidence.routers`, and `evidence.reachability`; empty collections are rendered
+as `[]`. Link and route
 entries use logical segment names, not generated Linux device names. Netdoc's existing
 `proxy_connect` row carries an optional stable `cause` when it fails:
 `proxy_unreachable`, `client_dns_failure`, `proxy_side_dns_failure`,
@@ -550,6 +558,79 @@ Suggested improvements
 
 Cleanup:  ok — every namespace and process released
 ```
+
+## Deterministic fault campaigns
+
+A campaign is a validated scenario with bounded variable ranges. It runs each
+iteration sequentially through the ordinary `Run` lifecycle: new namespace
+topology, real netdoc process, comparison, evidence, and complete cleanup.
+There is no simulator-side diagnosis engine and no parallel campaign mode.
+
+```sh
+./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
+./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
+./netdoc-sim campaign unstable-connectivity --runs 100 --seed 12345 --fail-fast
+./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345 --json
+```
+
+If `--seed` is omitted, trusted CLI code chooses a signed 64-bit seed with
+`crypto/rand` and prints it. Iteration seeds are the first 64 bits of SHA-256
+over a versioned domain, the campaign seed's two's-complement bits, scenario
+name, and iteration number. Consequently iteration N does not depend on PRNG
+state from any earlier iteration. The same scenario, root seed, iteration, and
+simulator version compile to the same schedule.
+
+Compilation happens before the environment starts. One owned `math/rand.Rand`
+resolves duration and percentage ranges, a nonzero netem seed, and the complete
+per-family DNS response sequence. No service goroutine draws randomness, and
+map iteration order is never an input. The schedule and its digest are stored
+with the derived seed in every iteration result. A failure prints a direct
+`--seed … --iteration …` command; JSON exposes the same fields structurally.
+
+The aggregate counts every comparison failure, FP, FN, timeout, and structured
+diagnosis fingerprint. A fingerprint contains only test name, verdict,
+ProbeID, status, cause, and address-family state, in canonical order. It omits
+timings, timestamps, run IDs, temporary paths, kernel device names, and raw
+errors. Fingerprints are compared as instability only when their complete fault
+schedule digest is identical; different injected conditions are not called a
+nondeterministic diagnosis. Duration min/median/max values are descriptive,
+not a claim of statistical significance.
+
+### Fault mechanisms and fixed controls
+
+- `packet-loss` applies 10% seeded netem loss. `tc -s qdisc` readback proves
+  the qdisc is active and records the kernel's dropped-packet counter; the real
+  netdoc report proves useful traffic still completed.
+- `high-jitter` applies 120 ms latency with 100 ms seeded jitter and repeats the
+  real probe five times. Successful attempt records supply min/max RTT and
+  sample count. Netdoc currently evaluates one RTT per probe, so the report
+  emits the deterministic `jitter_sampling_gap` suggestion instead of inventing
+  a jitter diagnosis.
+- `intermittent-dns` uses synchronized A and AAAA sequences. Each query records
+  node, source, name, type, family-local sequence number, scheduled outcome, and
+  actual `ANSWER`/`NODATA`/`NXDOMAIN`/`SERVFAIL` result. Exhausted schedules
+  answer normally; indexing cannot run past a slice.
+- `tcp-reset` accepts a TCP connection, performs one bounded read, sets
+  `SO_LINGER=0`, and closes. Evidence distinguishes accepted and reset events;
+  the SSH banner probe uses the stable `connection_reset` cause. The service is
+  not a general TCP fault proxy.
+- `unstable-connectivity` varies bounded latency, jitter, and explicit DNS
+  SERVFAIL patterns. The fixed packet-loss scenario separately tests nonzero
+  kernel loss because packet arrival/order can itself expose timing-sensitive
+  diagnosis changes.
+
+Netem supports fixed latency, jitter, loss from 0–100%, and an optional seed.
+Durations are capped at 10 seconds. It does not accept qdisc handles, raw tc
+expressions, corruption, duplication, or reordering. Scheduled DNS currently
+uses explicit SERVFAIL rather than drops/delays. Campaigns are fault injection
+and repeated diagnostic testing, not network-performance benchmarks.
+
+Campaign exit codes extend the existing simulator contract: `0` every
+iteration matched, `1` at least one comparison mismatch, `2` invalid CLI or
+scenario input, and `3` simulator/runtime/cancellation error. `--fail-fast`
+stops after the first mismatch or error but retains that full report and runs
+normal cleanup. Without it all requested iterations run. CI should use a small
+5–10 iteration campaign; larger local campaigns remain capped at 1000 runs.
 
 ### Suggestion rules
 
@@ -603,25 +684,30 @@ knob alone is not treated as proof that child namespaces can use it.
   NAT/NAT66, SLAAC, router advertisements, DHCPv6, IPv6 policy routing, ECMP,
   link-local routing, routing loops, dynamic routing protocols, VPN/tunnel
   devices, and bridge VLAN filtering are not.
-- **Five service types.** `dns`, `http`, `tcp`, and the deliberately limited
-  `socks5` and `tls` services described above. Neither is a general-purpose
+- **Six service types.** `dns`, `http`, `tcp`, `tcp_reset`, and the deliberately
+  limited `socks5` and `tls` services described above. None is a general-purpose
   daemon or protocol conformance suite.
 - **The DNS server is deliberately tiny.** Static A/AAAA from a compatibility
   zone map or records list, `NODATA` for a family it does not have, `NXDOMAIN` for
   everything else. No PTR, no CNAME, no delegation, no TCP.
-- **Faults are static.** Injected once, after setup. Intermittent failures need
-  a fault schedule.
-- **`-repeat` is the only nondeterminism check**, and it compares verdicts only.
+- **Network qdiscs are per-iteration conditions.** Campaign compilation can
+  vary netem conditions between iterations and DNS outcomes between queries;
+  timed qdisc changes during one netdoc process and outage windows are not yet
+  supported.
+- **Campaigns are sequential.** Parallel execution, cross-host coordination,
+  and statistical significance analysis are intentionally absent.
 
 ## Roadmap
 
-The scenario library ships sixteen: `healthy`, `broken-dns`,
+The scenario library ships twenty-one: `healthy`, `broken-dns`,
 `no-default-route`, `high-latency`, `socks5-local-dns-fails`,
 `socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
 `tls-hostname-mismatch`, plus `healthy-routed-network`,
 `gateway-unreachable`, `wrong-default-route`, and
 `multiple-interfaces-wrong-preferred-route`, plus `dual-stack-healthy`,
-`ipv4-works-ipv6-broken`, and `ipv6-works-ipv4-broken`. In rough order of what each
+`ipv4-works-ipv6-broken`, and `ipv6-works-ipv4-broken`, plus `packet-loss`,
+`high-jitter`, `intermittent-dns`, `tcp-reset`, and the
+`unstable-connectivity` campaign. In rough order of what each
 additional scenario costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
