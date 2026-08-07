@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"testing"
@@ -22,16 +23,22 @@ import (
 
 // fakeNetdoc drops an executable named netdoc in a fresh directory and makes it
 // the working directory, so a relative -netdoc has something real to resolve.
+// Windows recognizes an executable only by its PATHEXT suffix, and LookPath
+// appends one to an extensionless argument, so the file on disk needs .exe for
+// the callers' plain "./netdoc" to resolve there.
 func fakeNetdoc(t *testing.T) string {
 	t.Helper()
+	name := "netdoc"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
 	dir := t.TempDir()
-	path := filepath.Join(dir, "netdoc")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
 	// t.TempDir can sit behind a symlink; compare against what Abs will produce.
-	abs, err := filepath.Abs("netdoc")
+	abs, err := filepath.Abs(name)
 	if err != nil {
 		t.Fatal(err)
 	}
