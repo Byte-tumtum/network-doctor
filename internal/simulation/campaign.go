@@ -505,7 +505,7 @@ func (r *CampaignResult) finish() {
 	}
 	if r.DivergentRuns > 0 {
 		r.Suggestions = append(r.Suggestions, Suggestion{Code: SuggestNondeterministic,
-			Message: "Identical fault schedules produced different structured diagnosis fingerprints; inspect timeout boundaries and probe ordering.",
+			Message:  "Identical fault schedules produced different structured diagnosis fingerprints; inspect timeout boundaries and probe ordering.",
 			Evidence: fmt.Sprintf("%d of %d runs shared a schedule with a run that reached a different diagnosis", r.DivergentRuns, r.Runs)})
 	}
 	if r.Error != "" || r.Cancelled || r.Errors > 0 {
