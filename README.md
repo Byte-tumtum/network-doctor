@@ -408,8 +408,14 @@ go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim run high-jitter
 ./netdoc-sim run intermittent-dns
 ./netdoc-sim run tcp-reset
+./netdoc-sim run transient-dns-outage
+./netdoc-sim run latency-spike
+./netdoc-sim run transient-connectivity-loss
+./netdoc-sim run fault-during-probe
 ./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
 ./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
+./netdoc-sim campaign flapping-connectivity --runs 6 --seed 12345
+./netdoc-sim campaign flapping-connectivity --seed 12345 --iteration 3
 ```
 
 ```text
@@ -438,6 +444,29 @@ command. `--fail-fast` stops after the first mismatch but still cleans and
 reports it; default execution completes every run. Campaign exits use the
 existing simulator contract: 0 matched, 1 comparison mismatch, 2 usage, and 3
 configuration/runtime failure.
+
+Faults can also change while netdoc is running. A scenario declares a bounded
+list of offsets and states — `scheduled_netem`, `scheduled_dns`
+(`answer`/`servfail`/`drop`/`delay`) and `scheduled_link` — and the whole
+timeline is resolved and validated before a namespace exists. One scheduler
+goroutine drives it from a single epoch, **T0: the instant just before the
+first netdoc process starts**, and the runner joins that goroutine before
+teardown, so no scheduled change can reach an environment that is being
+dismantled. The report records the requested offset, the offset it was actually
+applied at, and what the kernel says the qdisc or link became. The simulator
+controls the requested fault timeline; ordinary OS scheduler timing may shift
+actual application by a small amount, and nothing here claims otherwise.
+
+That makes transient failures testable. `transient-dns-outage` loses the
+resolver mid-run and gets it back, `latency-spike` opens and closes a large
+spike inside one run, `transient-connectivity-loss` takes the path away for
+750 ms, and `fault-during-probe` changes the resolver's state while one of its
+answers is still in flight. Because the simulator knows an outage was
+temporary even when netdoc cannot, the report can say so: it flags a resolver
+that recovered mid-run and was never resampled, a failure that had already
+healed being described as a lasting state, an impairment that opened and closed
+inside one run with nothing flagged, and a probe that succeeded while a probe it
+depends on failed — the last only when no transition during the run explains it.
 
 The fixed `packet-loss`, `high-jitter`, `intermittent-dns`, and `tcp-reset`
 scenarios isolate each mechanism. `tc -s` readback proves an active netem qdisc

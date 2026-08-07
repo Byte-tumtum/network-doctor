@@ -489,6 +489,9 @@ stays hostname-based and is not changed by dual-stack topology support.
 | `no_default_route` | `family` | deletes that family's default (IPv4 when omitted for compatibility) |
 | `replace_default_route` | `family`, `via`, `metric` | replaces that family's defaults with one validated on-link gateway |
 | `link_down` | `segment` | administratively lowers one logical interface |
+| `scheduled_netem` | `segment`, `seed`, `events[]` | moves one link between netem states at timed offsets |
+| `scheduled_dns` | `service`, `events[]` | moves one DNS service between response states at timed offsets |
+| `scheduled_link` | `segment`, `events[]` | raises and lowers one logical interface at timed offsets |
 
 `drop` has two directions and they are **not** interchangeable:
 
@@ -501,6 +504,103 @@ stays hostname-based and is not changed by dual-stack topology support.
 Simulating "my resolver is unreachable" needs `inbound` on the resolver's node.
 Getting this wrong turns a four-second timeout into an instant error and quietly
 changes what the scenario tests.
+
+### Timed faults
+
+The first five fault types are applied once, before the tests run, and stay put.
+The `scheduled_*` types change the network **while netdoc is running**:
+
+```yaml
+faults:
+  - type: scheduled_netem
+    node: client
+    segment: lan
+    seed: 1414213562
+    events:
+      - {at: 0ms,    latency: 10ms, jitter: 2ms}
+      - {at: 200ms,  latency: 700ms, jitter: 150ms}
+      - {at: 1500ms, latency: 10ms, jitter: 2ms}
+
+  - type: scheduled_dns
+    service: spike-resolver      # the node is derived from the service
+    events:
+      - {at: 0ms,    outcome: delay, delay: 300ms}
+      - {at: 700ms,  outcome: drop}
+      - {at: 1500ms, outcome: answer}
+
+  - type: scheduled_link
+    node: target
+    segment: lan
+    events:
+      - {at: 150ms, state: down}
+      - {at: 900ms, state: up}
+```
+
+**T0 is the instant just before the first netdoc process starts.** Every offset
+is measured from it, and one timeline spans the whole test phase, so a scenario
+with three tests has three netdoc runs on one clock.
+
+The simulator controls the *requested* timeline. Normal OS scheduler timing may
+shift actual application by a small amount, and the report says so explicitly by
+recording both numbers. Nothing here is hard real time, and no test asserts
+nanosecond-perfect execution.
+
+`scheduled_dns` outcomes:
+
+| outcome | behaviour |
+| --- | --- |
+| `answer` | the ordinary static zone answer |
+| `servfail` | an authoritative SERVFAIL, echoing the question |
+| `drop` | no reply at all, so the client waits out its own timeout |
+| `delay` | the correct answer, sent after a bounded delay |
+
+A `delay` answer already accepted before a transition is still delivered:
+changing the state changes what happens to the *next* query. Delayed answers run
+on goroutines the DNS service owns and joins on shutdown, bounded by both the
+5 s maximum delay and a cap on how many can be in flight.
+
+The whole timeline is resolved and validated before any namespace exists. Events
+must be non-negative, strictly increasing within a fault, at most 16 per fault
+and 64 per scenario, and no later than 30 s; latency and jitter are capped at
+10 s, loss is 0–100 and rejects NaN and infinity, and a delayed response is
+capped at 5 s. As everywhere else in the simulator, a scenario file names
+logical nodes, segments and services — never a device name, qdisc handle,
+`tc` expression, or `ip` argument. The argv is generated here.
+
+#### Scheduler lifecycle
+
+One goroutine, one timer, sorted events, `select` on `ctx.Done()`. No
+`time.After` in a loop, no goroutine per event, and no ordering derived from
+wall-clock timestamps.
+
+The runner cancels the scheduler and **joins it** after the last test and before
+evidence collection or cleanup, so no scheduled change can reach an environment
+that is being dismantled. Cancellation before the first event, during a sleep,
+or during an application all stop the timeline; every event the run did not
+reach is recorded as `skipped` rather than silently dropped. A failed
+application is recorded with its error and the rest of the timeline still runs.
+
+#### What the report shows
+
+```text
+Fault timeline   (offsets from T0, just before the first netdoc run)
+  +0ms      spike-resolver answers after 300ms        applied at +0s      dns-applied
+  +0ms      client/lan latency 10ms, jitter 2ms       applied at +11ms    kernel netem: delay 10ms 2ms
+  +200ms    client/lan latency 700ms, jitter 150ms    applied at +215ms   kernel netem: delay 700ms 150ms
+  +1500ms   client/lan latency 10ms, jitter 2ms       applied at +1.514s  kernel netem: delay 10ms 2ms
+  netdoc "one run spanning the spike" ran +0s..+1.924s
+```
+
+JSON keeps the structured form under `fault_timeline`, with `fault_timeline_id`
+identifying the requested timeline. Each test carries `start_offset_ms` and
+`end_offset_ms`, and each DNS query carries the offset it arrived at, so the
+report can answer which fault state was active when a probe ran and whether a
+transition happened during it.
+
+The timeline fingerprint is computed from requested values only — offset, fault
+type, node, segment, service, and normalized parameters. Actual application
+timestamps, the simulation id, kernel interface names, error text and wall-clock
+time are all excluded, so two equivalent generated timelines hash identically.
 
 ### Expectations
 
@@ -621,9 +721,90 @@ not a claim of statistical significance.
 
 Netem supports fixed latency, jitter, loss from 0–100%, and an optional seed.
 Durations are capped at 10 seconds. It does not accept qdisc handles, raw tc
-expressions, corruption, duplication, or reordering. Scheduled DNS currently
-uses explicit SERVFAIL rather than drops/delays. Campaigns are fault injection
-and repeated diagnostic testing, not network-performance benchmarks.
+expressions, corruption, duplication, or reordering. Campaigns are fault
+injection and repeated diagnostic testing, not network-performance benchmarks.
+
+### Timed campaigns
+
+`flapping-connectivity` generates one bounded timeline per iteration. The shape
+is fixed and three dimensions vary, so a failing iteration still reads as one
+sentence:
+
+```text
++0                             healthy
++degrade_at                    degraded (loss = degrade_loss_percent)
++degrade_at+400ms              healthy
++degrade_at+800ms              outage — 100% loss, resolver silent
++degrade_at+800ms+outage_for   healthy again
+```
+
+```yaml
+campaign:
+  runs: 6
+  timeline:
+    node: client
+    segment: lan
+    service: flapping-dns
+    resolver_hold: 600ms
+    latency: 10ms
+    degrade_at: {min: 150ms, max: 350ms}
+    degrade_loss_percent: {min: 10, max: 60}
+    outage_for: {min: 300ms, max: 700ms}
+```
+
+`resolver_hold` is a metronome, not a fault: netdoc issues every resolver query
+in the first few milliseconds of a run, so without something holding the run
+there, a timeline measured in hundreds of milliseconds would be changing a
+network nobody was looking at.
+
+One run spans the whole flap, so its verdict legitimately depends on which phase
+each probe landed in. **This campaign is expected to report mismatches** — its
+value is the reproducibility of the timelines and the timeline-aware
+suggestions, not a green exit code. What reproduces exactly from `--seed S
+--iteration N` is the iteration seed, the schedule, and the timeline
+fingerprint; netdoc's answer to a transition that lands on a probe boundary is
+genuinely a coin flip, which is the finding.
+
+`dns-timeout-boundary` sweeps one variable — the delay the resolver holds every
+answer for — across a probe deadline, which is where off-by-one deadline
+behaviour, changed error classification and cleanup races live:
+
+```sh
+./netdoc-sim campaign dns-timeout-boundary --seed 12345 --runs 6 -timeout 1s
+./netdoc-sim campaign dns-timeout-boundary --seed 12345 --iteration 3 --runs 5
+```
+
+`--iteration N --runs K` repeats one iteration K times. That is the only way the
+divergence check has anything to compare: every iteration otherwise draws
+parameters of its own, so each schedule fingerprint is a group of one and two
+runs that disagree about the same network look like two different networks.
+
+### Timed fault scenarios
+
+- `transient-dns-outage` — the resolver answers, goes silent, and recovers, all
+  inside one diagnostic session. Recovery lands while the failing run is still
+  waiting out its deadline; netdoc does not resample, so the report says so
+  rather than pretending it noticed.
+- `latency-spike` — a 700 ms spike opens and closes inside one run. The kernel
+  qdisc is read back at each state and the run measures the same path at two
+  speeds.
+- `transient-connectivity-loss` — the target's link drops for 750 ms. It is the
+  target's link, not the client's, so the client's addresses, routes and default
+  gateway are provably untouched and only the transport went away.
+- `fault-during-probe` — the resolver's state changes while one of its answers
+  is still held. The query evidence records when it arrived and how long it was
+  held, so the overlap is read from the service rather than assumed from a
+  sleep. A probe-lifecycle regression test, not a user-facing diagnosis.
+
+CI runs the timed scenarios with a short probe timeout; their timelines are
+designed so the transitions land the same way at any timeout above a few
+hundred milliseconds. Longer local runs are worth it for the campaigns:
+
+```sh
+./netdoc-sim campaign flapping-connectivity --runs 50 --seed 12345
+./netdoc-sim campaign dns-timeout-boundary --runs 20 --seed 12345 -timeout 1s
+./netdoc-sim campaign dns-timeout-boundary --iteration 3 --runs 20 -seed 12345 -timeout 1s
+```
 
 Campaign exit codes extend the existing simulator contract: `0` every
 iteration matched, `1` at least one comparison mismatch, `2` invalid CLI or
@@ -651,6 +832,20 @@ the ones a scenario is known to trip.
 | `gateway_unreachable` | kernel route selection succeeded but neighbor resolution for its next hop failed |
 | `wrong_default_route_evidence` | selected default failed while a controlled specific route reached the target |
 | `alternate_route_available` | preferred path failed while another live interface and controlled route reached the target |
+| `transient_fault_not_resampled` | the resolver recovered while the run was still going and netdoc never asked it again |
+| `transient_fault_reported_permanent` | a failure that had already healed is described without any hint that it was a moment rather than a state |
+| `transient_fault_missed` | an impairment opened and closed entirely inside one run and nothing was flagged |
+| `timeline_inconsistent` | a probe succeeded while a probe it depends on failed, and no fault transition during that run explains it |
+
+`transient_fault_reported_permanent` inspects the wording on purpose. A
+diagnosis that says it is describing a moment — "at the time of this check",
+"transient", "retry" — is making a point-in-time claim and is not wrong merely
+because the network recovered afterwards, so it does not fire.
+
+`timeline_inconsistent` is where timing earns its keep. The same impossible pair
+of rows is *temporally explainable* when a fault transition happened during that
+run, and *internally inconsistent* when the network did not change at all. Only
+the second is reported.
 
 Exit codes: `0` the diagnosis matched, `1` it did not, `2` bad arguments, `3` the
 simulation could not run.
@@ -690,24 +885,33 @@ knob alone is not treated as proof that child namespaces can use it.
 - **The DNS server is deliberately tiny.** Static A/AAAA from a compatibility
   zone map or records list, `NODATA` for a family it does not have, `NXDOMAIN` for
   everything else. No PTR, no CNAME, no delegation, no TCP.
-- **Network qdiscs are per-iteration conditions.** Campaign compilation can
-  vary netem conditions between iterations and DNS outcomes between queries;
-  timed qdisc changes during one netdoc process and outage windows are not yet
-  supported.
+- **Timed faults are best-effort in time, exact in content.** The requested
+  timeline is deterministic and reproducible from a seed; when each event
+  actually lands is subject to ordinary OS scheduling, and the report records
+  both numbers rather than claiming they are equal. There is no hard real-time
+  guarantee and none is asserted.
+- **Probe-level timing is inferred, not read.** netdoc's JSON exposes per-probe
+  durations but not start times, so the simulator correlates its own
+  observations — the netdoc process window and the arrival offset of each DNS
+  query — rather than parsing human-readable output or changing the public JSON
+  contract. Where exact probe timing is unavailable, the report says only what
+  the simulator can prove.
 - **Campaigns are sequential.** Parallel execution, cross-host coordination,
   and statistical significance analysis are intentionally absent.
 
 ## Roadmap
 
-The scenario library ships twenty-one: `healthy`, `broken-dns`,
+The scenario library ships twenty-six: `healthy`, `broken-dns`,
 `no-default-route`, `high-latency`, `socks5-local-dns-fails`,
 `socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
 `tls-hostname-mismatch`, plus `healthy-routed-network`,
 `gateway-unreachable`, `wrong-default-route`, and
 `multiple-interfaces-wrong-preferred-route`, plus `dual-stack-healthy`,
 `ipv4-works-ipv6-broken`, and `ipv6-works-ipv4-broken`, plus `packet-loss`,
-`high-jitter`, `intermittent-dns`, `tcp-reset`, and the
-`unstable-connectivity` campaign. In rough order of what each
+`high-jitter`, `intermittent-dns`, and `tcp-reset`, plus the timed
+`transient-dns-outage`, `latency-spike`, `transient-connectivity-loss`, and
+`fault-during-probe`, plus the `unstable-connectivity`,
+`flapping-connectivity`, and `dns-timeout-boundary` campaigns. In rough order of what each
 additional scenario costs:
 
 1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
