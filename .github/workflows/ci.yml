@@ -45,6 +45,13 @@ jobs:
       # into a failure. Without it a runner that loses unprivileged user
       # namespaces would go green while testing nothing, and a backend
       # regression would sit unnoticed until someone ran it locally.
+      #
+      # Ubuntu 24.04 and later ship AppArmor's unprivileged-userns restriction
+      # on, which denies the backend the namespace it needs. Clearing it on the
+      # throwaway runner keeps the tests rootless; netdoc-sim itself still
+      # refuses to escalate.
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - if: runner.os == 'Linux'
         run: go test -tags netns_integration -count=1 ./internal/simulation
         env:
