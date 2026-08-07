@@ -17,9 +17,13 @@ topology:
           zone:
             flaky-target.test: 10.77.0.20
             connectivitycheck.gstatic.com: 10.77.0.1
+          # Four per family, because one netdoc run asks this resolver for two
+          # names — the target and the captive-portal probe host — and the stub
+          # resolver retries each once after a SERVFAIL. The whole first run
+          # therefore fails, and the second finds the schedule exhausted.
           dns_fault:
-            a: [servfail, servfail, answer, answer, answer, answer]
-            aaaa: [servfail, servfail, answer, answer, answer, answer]
+            a: [servfail, servfail, servfail, servfail]
+            aaaa: [servfail, servfail, servfail, servfail]
     - name: internet
       address: 10.77.0.1
       aliases: [1.1.1.1, 8.8.8.8]

@@ -588,6 +588,12 @@ func (e *netnsEnv) Nodes() []NodeInfo {
 func (e *netnsEnv) ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo, error) {
 	var out []FaultInfo
 	for _, f := range faults {
+		switch f.Type {
+		case FaultScheduledNetem, FaultScheduledDNS, FaultScheduledLink:
+			// Scheduled faults are the fault scheduler's business; the topology
+			// starts in whatever state their first event asks for.
+			continue
+		}
 		np, ok := e.byName[f.Node]
 		if !ok {
 			return out, fmt.Errorf("fault targets unknown node %q", f.Node)

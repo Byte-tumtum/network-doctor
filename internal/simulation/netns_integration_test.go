@@ -26,6 +26,13 @@ const proxyProbeName = "connectivitycheck.gstatic.com"
 
 // buildBinaries produces the two binaries an end-to-end run needs, from the
 // tree under test rather than whatever is installed.
+//
+// CGO_ENABLED=0, which is how releases are built, and the only setting that
+// simulates anything. A cgo build resolves through glibc's getaddrinfo, which
+// inside a node namespace does not use the node's resolver: on a systemd-resolved
+// host it reaches the host's resolver over a Unix socket in the shared /run, and
+// where that is absent it blocks — ignoring the probe's context — until the probe
+// deadline expires. Either way the run measures the host, not the simulation.
 func buildBinaries(t *testing.T) (netdoc, sim string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,6 +43,7 @@ func buildBinaries(t *testing.T) (netdoc, sim string) {
 		sim:    "github.com/heymaikol/network-doctor/cmd/netdoc-sim",
 	} {
 		cmd := exec.Command("go", "build", "-o", out, pkg)
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if msg, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("build %s: %v\n%s", pkg, err, msg)
 		}
@@ -334,8 +342,15 @@ func TestSOCKS5hRemoteDNSScenario(t *testing.T) {
 	if !hasSOCKSEvidence(rep, "connect", "domain", "connected") {
 		t.Errorf("no successful domain CONNECT evidence: %+v", rep.Evidence.SOCKSRequests)
 	}
-	if hasDNSQuery(rep, "10.77.0.10", proxyProbeName) {
-		t.Errorf("SOCKS5h caused a client-side lookup: %+v", rep.Evidence.DNS)
+	// The direct-egress row's captive-portal check asks the client's own
+	// resolver for this name, and should: it is not the proxied path. What
+	// socks5h promises is that the client never *learns* the address — the
+	// client's view answers NXDOMAIN and only the proxy resolves it.
+	if hasDNSEvidence(rep, "client-dns", "10.77.0.10", proxyProbeName, "ANSWER") {
+		t.Errorf("the client's own resolver answered the proxied name: %+v", rep.Evidence.DNS)
+	}
+	if !hasDNSEvidence(rep, "client-dns", "10.77.0.10", proxyProbeName, "NXDOMAIN") {
+		t.Errorf("the client's view of the proxied name is not absent: %+v", rep.Evidence.DNS)
 	}
 	if !hasDNSEvidence(rep, "proxy", "10.77.0.30", proxyProbeName, "ANSWER") {
 		t.Errorf("no proxy-side answer evidence: %+v", rep.Evidence.DNS)
