@@ -901,7 +901,7 @@ knob alone is not treated as proof that child namespaces can use it.
 
 ## Roadmap
 
-The scenario library ships twenty-six: `healthy`, `broken-dns`,
+The scenario library ships twenty-seven: `healthy`, `broken-dns`,
 `no-default-route`, `high-latency`, `socks5-local-dns-fails`,
 `socks5h-remote-dns-succeeds`, `tls-valid`, `tls-expired-certificate`, and
 `tls-hostname-mismatch`, plus `healthy-routed-network`,
