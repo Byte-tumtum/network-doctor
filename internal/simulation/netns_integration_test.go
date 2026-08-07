@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -556,6 +558,79 @@ func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 	if hostBefore != hostAfter {
 		t.Errorf("host routes, interfaces, or forwarding changed across campaign\nbefore:\n%s\nafter:\n%s", hostBefore, hostAfter)
 	}
+}
+
+func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
+	requireBackend(t)
+	hostBefore := captureHostNetworkState(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(args ...string) HuntResult {
+		base := []string{"hunt", "healthy-routed-network", "--json", "--seed", "12345",
+			"--netdoc", netdoc, "--timeout", timedTimeout}
+		cmd := exec.Command(sim, append(base, args...)...)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("hunt: %v", err)
+		}
+		var result HuntResult
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatalf("hunt JSON: %v: %s", err, out)
+		}
+		return result
+	}
+	first, second := run("--cases", "6"), run("--cases", "6")
+	if first.ExecutedCases != 6 || second.ExecutedCases != 6 || len(first.Cases) != 6 || len(second.Cases) != 6 {
+		t.Fatalf("hunt lengths = %d/%d, cases %d/%d", first.ExecutedCases, second.ExecutedCases, len(first.Cases), len(second.Cases))
+	}
+	operators := make(map[string]bool)
+	for i := range first.Cases {
+		a, b := first.Cases[i], second.Cases[i]
+		if a.Manifest.CaseFingerprint == "" || a.Manifest.CaseSeed != b.Manifest.CaseSeed ||
+			a.Manifest.CaseFingerprint != b.Manifest.CaseFingerprint || !reflect.DeepEqual(a.Manifest.Mutations, b.Manifest.Mutations) {
+			t.Fatalf("case %d is not reproducible: %+v != %+v", i, a.Manifest, b.Manifest)
+		}
+		for _, mutation := range a.Manifest.Mutations {
+			operators[mutation.ID] = true
+		}
+		if a.Report == nil || b.Report == nil {
+			t.Fatalf("case %d has no normal simulation report", i)
+		}
+		assertCleanedUp(t, *a.Report)
+		assertCleanedUp(t, *b.Report)
+	}
+	if len(operators) < 2 {
+		t.Fatalf("six cases exercised only %d operator(s): %v", len(operators), operators)
+	}
+	caseNumber := first.Cases[2].Manifest.Case
+	direct := run("--case", strconv.Itoa(caseNumber))
+	if len(direct.Cases) != 1 || direct.Cases[0].Manifest.CaseSeed != first.Cases[2].Manifest.CaseSeed ||
+		direct.Cases[0].Manifest.CaseFingerprint != first.Cases[2].Manifest.CaseFingerprint ||
+		!reflect.DeepEqual(direct.Cases[0].Manifest.Mutations, first.Cases[2].Manifest.Mutations) {
+		t.Fatalf("direct reproduction differs: direct=%+v original=%+v", direct.Cases, first.Cases[2])
+	}
+	assertCleanedUp(t, *direct.Cases[0].Report)
+
+	// A generated timed resolver case must rediscover the existing structured
+	// resampling opportunity; assert the code, never the human wording.
+	known := run("--case", "14")
+	if len(known.Cases) != 1 || !hasHuntSuggestion(known.Suggestions, SuggestTransientNotResampled) {
+		t.Fatalf("known hunt gap not rediscovered: %+v", known.Suggestions)
+	}
+	assertCleanedUp(t, *known.Cases[0].Report)
+	hostAfter := captureHostNetworkState(t)
+	if hostBefore != hostAfter {
+		t.Errorf("host routes, interfaces, or forwarding changed across hunt\nbefore:\n%s\nafter:\n%s", hostBefore, hostAfter)
+	}
+}
+
+func hasHuntSuggestion(suggestions []HuntSuggestion, code string) bool {
+	for _, suggestion := range suggestions {
+		if suggestion.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSOCKS5LocalDNSScenario(t *testing.T) {
