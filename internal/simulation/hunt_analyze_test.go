@@ -56,6 +56,17 @@ func TestObservedTruthProxyIgnoresGreetingResult(t *testing.T) {
 	}
 }
 
+func TestObservedTruthTLSUsesHandshakeResultVocabulary(t *testing.T) {
+	passed := []TLSEvidence{{Result: tlsHandshakeResult(nil, true)}}
+	if truth := collectObservedTruth(huntManifest(), &Report{Evidence: Evidence{TLS: passed}}); truth.TLS != "observed" {
+		t.Fatalf("successful handshake = %q, want observed", truth.TLS)
+	}
+	broken := []TLSEvidence{{Result: "handshake_failure"}}
+	if truth := collectObservedTruth(huntManifest(), &Report{Evidence: Evidence{TLS: broken}}); truth.TLS != "failed" {
+		t.Fatalf("failed handshake = %q, want failed", truth.TLS)
+	}
+}
+
 func TestHuntAnalysisRequiresObservedFailureForFalseNegative(t *testing.T) {
 	manifest := huntManifest(GeneratedMutation{ID: "netem.loss", Node: "gateway", Segment: "upstream", LossPercent: 20})
 	diagnosis := &Diagnosis{Verdict: "ok", Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "PASS"}}}

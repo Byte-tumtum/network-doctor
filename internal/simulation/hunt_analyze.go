@@ -164,7 +164,7 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 	if len(report.Evidence.TLS) > 0 {
 		truth.TLS = "observed"
 		for _, item := range report.Evidence.TLS {
-			if item.Result != "success" {
+			if item.Result != "passed" {
 				truth.TLS = "failed"
 			}
 		}
