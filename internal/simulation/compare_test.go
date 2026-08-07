@@ -247,6 +247,25 @@ func TestWriteTextSanitizesSubprocessText(t *testing.T) {
 	}
 }
 
+// Every evidence family prints on its own, not only when some unrelated family
+// happens to be non-empty: the scenarios that produce netem, per-query DNS and
+// reset evidence have no routes, SOCKS requests or TLS handshakes at all.
+func TestWriteTextPrintsEachEvidenceFamilyExactlyOnce(t *testing.T) {
+	rep := Report{Scenario: "s", Evidence: Evidence{
+		PacketConditions: []PacketConditionEvidence{{Node: "client", Segment: "lan", Active: true}},
+		DNSQueries:       []DNSQueryEvidence{{Node: "resolver", QueryType: "A", Sequence: 1, Name: "a.test"}},
+		TCPResets:        []TCPResetEvidence{{Node: "target", Event: "reset", Result: "connection_reset", Count: 1}},
+	}}
+	rep.finish()
+	var sb strings.Builder
+	rep.WriteText(&sb)
+	for _, want := range []string{"NETEM", "DNSQ", "RESET"} {
+		if n := strings.Count(sb.String(), "  "+want+" "); n != 1 {
+			t.Errorf("%s printed %d times, want 1:\n%s", want, n, sb.String())
+		}
+	}
+}
+
 func TestWriteJSONIsValid(t *testing.T) {
 	rep := Report{Scenario: "s", ID: "abc123", Backend: "linux-netns"}
 	rep.finish()

@@ -301,14 +301,14 @@ func (r *Report) WriteText(w io.Writer) {
 		for _, e := range r.Evidence.Routers {
 			p("  ROUTER %-10s IPv4 forwarding=%t IPv6 forwarding=%t", e.Node, e.IPv4Forwarding, e.IPv6Forwarding)
 		}
+		for _, e := range r.Evidence.PacketConditions {
+			p("  NETEM %-10s %-16s delay=%s jitter=%s loss=%.2f%% seed=%d active=%t dropped=%d RTT=%s..%s (%d samples)", e.Node, e.Segment,
+				e.Latency, e.Jitter, e.LossPercent, e.Seed, e.Active, e.DroppedPackets, e.ObservedMinRTT, e.ObservedMaxRTT, e.RTTSamples)
+		}
 		for _, e := range r.Evidence.Routes {
 			selected := "configured"
 			if e.Selected {
 				selected = "selected"
-			}
-			for _, e := range r.Evidence.PacketConditions {
-				p("  NETEM %-10s %-16s delay=%s jitter=%s loss=%.2f%% seed=%d active=%t dropped=%d RTT=%s..%s (%d samples)", e.Node, e.Segment,
-					e.Latency, e.Jitter, e.LossPercent, e.Seed, e.Active, e.DroppedPackets, e.ObservedMinRTT, e.ObservedMaxRTT, e.RTTSamples)
 			}
 			gateway := "unknown"
 			if e.GatewayReachable != nil {
@@ -328,10 +328,6 @@ func (r *Report) WriteText(w io.Writer) {
 			if e.Port != 0 {
 				destination = net.JoinHostPort(destination, fmt.Sprint(e.Port))
 			}
-			for _, e := range r.Evidence.DNSQueries {
-				p("  DNSQ  %-10s %-6s #%03d %-28s scheduled=%-8s actual=%s", e.Node, e.QueryType,
-					e.Sequence, e.Name, e.ScheduledOutcome, e.ActualOutcome)
-			}
 			p("  SOCKS %-10s %-8s %-7s %-28s %-22s ×%d", e.Node, e.Event, e.AddressType,
 				textsafe.Clean(destination), e.Result, e.Count)
 		}
@@ -340,11 +336,15 @@ func (r *Report) WriteText(w io.Writer) {
 			if e.CertificatePresented {
 				presented = "presented"
 			}
-			for _, e := range r.Evidence.TCPResets {
-				p("  RESET %-10s %-10s %-24s ×%d", e.Node, e.Event, e.Result, e.Count)
-			}
 			p("  TLS   %-10s %-20s SNI %-24s %-13s %-27s %s ×%d", e.Node, e.CertificateMode,
 				textsafe.Clean(e.RequestedServer), presented, strings.Join(e.CertificateDNS, ","), e.Result, e.Count)
+		}
+		for _, e := range r.Evidence.DNSQueries {
+			p("  DNSQ  %-10s %-6s #%03d %-28s scheduled=%-8s actual=%s", e.Node, e.QueryType,
+				e.Sequence, e.Name, e.ScheduledOutcome, e.ActualOutcome)
+		}
+		for _, e := range r.Evidence.TCPResets {
+			p("  RESET %-10s %-10s %-24s ×%d", e.Node, e.Event, e.Result, e.Count)
 		}
 		p("")
 	}
