@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/simulation"
 )
 
 // The launcher resolves the netdoc binary in the user's own working directory
@@ -31,6 +36,77 @@ func fakeNetdoc(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return abs
+}
+
+func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {
+	abs := fakeNetdoc(t)
+	f := newHuntFlags(io.Discard)
+	base, err := f.parse([]string{"dual-stack-healthy", "--seed", "-44", "--cases", "6", "--case", "17",
+		"--max-faults", "3", "--fail-fast", "--json", "--netdoc", "./netdoc", "--timeout", "7s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := findNetdoc(*f.netdoc, filepath.Join(t.TempDir(), "netdoc-sim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := huntDirectorArgv(f, base, path)
+	got := newHuntFlags(io.Discard)
+	gotBase, err := got.parse(argv[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != huntDirectorCommand || gotBase != base || !got.seed.set || got.seed.v != -44 ||
+		*got.cases != 6 || *got.caseNum != 17 || *got.maxFaults != 3 || !*got.failFast || !*got.json ||
+		*got.netdoc != abs || *got.timeout != 7*time.Second {
+		t.Fatalf("forwarded hunt = argv %v base %q seed %+v", argv, gotBase, got.seed)
+	}
+}
+
+func TestHuntDryRunNeedsNoNetdocOrNamespaces(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"hunt", "healthy-routed-network", "--dry-run", "--json", "--seed", "12345", "--cases", "6"}, &stdout, &stderr)
+	if code != exitOK || stderr.Len() != 0 {
+		t.Fatalf("code = %d stderr = %q", code, stderr.String())
+	}
+	var result simulation.HuntResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.GeneratedCases != 6 || result.ExecutedCases != 0 || len(result.Cases) != 6 {
+		t.Fatalf("result = %+v", result)
+	}
+	selected := result.Cases[3].Manifest
+	stdout.Reset()
+	code = run([]string{"hunt", "healthy-routed-network", "--dry-run", "--json", "--seed", "12345",
+		"--case", stringInt(selected.Case)}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("direct code = %d stderr = %q", code, stderr.String())
+	}
+	var direct simulation.HuntResult
+	if err := json.Unmarshal(stdout.Bytes(), &direct); err != nil {
+		t.Fatal(err)
+	}
+	if len(direct.Cases) != 1 || direct.Cases[0].Manifest.CaseFingerprint != selected.CaseFingerprint ||
+		direct.Cases[0].Manifest.CaseSeed != selected.CaseSeed {
+		t.Fatalf("direct = %+v, selected = %+v", direct.Cases, selected)
+	}
+}
+
+func stringInt(value int) string { return strconv.Itoa(value) }
+
+func TestHuntUsageBoundsAndBases(t *testing.T) {
+	for _, args := range [][]string{
+		{"hunt", "broken-dns", "--dry-run", "--seed", "1"},
+		{"hunt", "--dry-run", "--seed", "1", "--cases", "501"},
+		{"hunt", "--dry-run", "--seed", "1", "--case", "-2"},
+		{"hunt", "--dry-run", "--seed", "1", "--max-faults", "4"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != exitUsage {
+			t.Errorf("run(%v) = %d, stderr %q", args, code, stderr.String())
+		}
+	}
 }
 
 // forward runs the launcher's half: parse the user's argv, resolve the binary,

@@ -332,6 +332,19 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 		diag, err := decodeDiagnosis(res)
 		if i == 0 {
 			out.Duration, out.ExitCode = res.Duration, res.ExitCode
+			out.Signal = res.Signal
+			switch {
+			case res.TimedOut:
+				out.ProcessOutcome = ProcessTimedOut
+			case res.Cancelled:
+				out.ProcessOutcome = ProcessCancelled
+			case res.Signal != "":
+				out.ProcessOutcome = ProcessSignaled
+			case res.Err != nil:
+				out.ProcessOutcome = ProcessExecError
+			default:
+				out.ProcessOutcome = ProcessExited
+			}
 			out.Stderr = strings.TrimSpace(textsafe.Clean(string(res.Stderr)))
 			out.Diagnosis = diag
 			if err != nil {

@@ -88,6 +88,10 @@ type TestOutcome struct {
 	StartOffset time.Duration `json:"start_offset_ms"`
 	EndOffset   time.Duration `json:"end_offset_ms"`
 	ExitCode    int           `json:"exit_code"`
+	// ProcessOutcome distinguishes a whole-netdoc deadline or signal from a
+	// probe row that used its own timeout budget.
+	ProcessOutcome string `json:"process_outcome"`
+	Signal         string `json:"signal,omitempty"`
 	// Error is set when netdoc could not be run or produced no report at all.
 	Error     string     `json:"error,omitempty"`
 	Stderr    string     `json:"stderr,omitempty"`
@@ -107,6 +111,14 @@ type TestOutcome struct {
 	FalsePositives int `json:"false_positives"`
 	Matched        int `json:"matched"`
 }
+
+const (
+	ProcessExited    = "exited"
+	ProcessTimedOut  = "timed_out"
+	ProcessCancelled = "cancelled"
+	ProcessSignaled  = "signaled"
+	ProcessExecError = "exec_error"
+)
 
 // Suggestion is one deterministic, evidence-backed improvement for netdoc.
 type Suggestion struct {

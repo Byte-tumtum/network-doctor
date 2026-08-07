@@ -865,9 +865,14 @@ func (e *netnsEnv) Exec(ctx context.Context, node string, argv, env []string) Ex
 	switch {
 	case errors.As(err, &exit):
 		res.ExitCode = exit.ExitCode()
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			res.Signal = status.Signal().String()
+		}
 	case err != nil:
 		res.Err = err
 	}
+	res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
+	res.Cancelled = ctx.Err() != nil && !res.TimedOut
 	return res
 }
 

@@ -54,11 +54,14 @@ type Env interface {
 
 // ExecResult is the outcome of one command run inside a node.
 type ExecResult struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
-	Duration time.Duration
-	Err      error
+	Stdout    []byte
+	Stderr    []byte
+	ExitCode  int
+	Duration  time.Duration
+	TimedOut  bool
+	Cancelled bool
+	Signal    string
+	Err       error
 }
 
 // Capabilities answers "can this host simulate, and what will it cost me".

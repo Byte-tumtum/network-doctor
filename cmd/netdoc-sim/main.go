@@ -28,6 +28,7 @@ import (
 // once it is inside the simulation's namespaces.
 const directorCommand = "__director"
 const campaignDirectorCommand = "__campaign_director"
+const huntDirectorCommand = "__hunt_director"
 
 // Exit codes. Separated so a CI job can tell "netdoc diagnosed this wrong"
 // from "the simulator could not run".
@@ -67,10 +68,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return launch(ctx, args, stdout, stderr)
 	case "campaign":
 		return launchCampaign(ctx, args[1:], stdout, stderr)
+	case "hunt":
+		return launchHunt(ctx, args[1:], stdout, stderr)
 	case directorCommand:
 		return direct(ctx, args[1:], stdout, stderr)
 	case campaignDirectorCommand:
 		return directCampaign(ctx, args[1:], stdout, stderr)
+	case huntDirectorCommand:
+		return directHunt(ctx, args[1:], stdout, stderr)
 	case "validate":
 		return validate(args[1:], stdout, stderr)
 	case "scenarios":
@@ -101,6 +106,7 @@ whether netdoc's diagnosis matched what the scenario broke.
 Commands:
   run <scenario> [flags]   build the network, run the tests, print the report
   campaign <scenario>      run a seeded scenario campaign sequentially
+  hunt [base] [flags]      generate deterministic faults and rank likely bugs
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
   capabilities             report whether this host can simulate, and what a run does
@@ -130,12 +136,102 @@ Flags for campaign:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
 
+Flags for hunt:
+  -cases <n>               unique generated cases to run (default 50, maximum 500)
+  -seed <int64>            hunt seed (generated and printed when omitted)
+  -case <n>                generate and run exactly one independently derived case
+  -max-faults <n>          maximum mutations per case (default 2, maximum 3)
+  -fail-fast               stop after the first case with a reportable finding
+  -dry-run                 print generated manifests without creating namespaces
+  -json                    print the machine-readable hunt report
+  -netdoc <path>           the netdoc binary to run
+  -timeout <duration>      netdoc's per-probe timeout (default 4s)
+  -v                       log each privileged command as it runs
+
 Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 3 the simulation could not run.
+
+For hunt: 0 no reportable finding, 1 findings, 2 usage or generation
+failure, 3 simulator runtime failure or cancellation.
 
 Simulations are unprivileged: everything lives in a user namespace that owns
 nothing on the host. Run 'netdoc-sim capabilities' for the details.
 `)
+}
+
+type huntFlags struct {
+	fs        *flag.FlagSet
+	json      *bool
+	cases     *int
+	seed      optionalSeed
+	caseNum   *int
+	maxFaults *int
+	failFast  *bool
+	dry       *bool
+	netdoc    *string
+	timeout   *time.Duration
+	verbose   *bool
+}
+
+func newHuntFlags(out io.Writer) *huntFlags {
+	f := &huntFlags{fs: flag.NewFlagSet("netdoc-sim hunt", flag.ContinueOnError)}
+	f.fs.SetOutput(out)
+	f.json = f.fs.Bool("json", false, "print the machine-readable hunt report")
+	f.cases = f.fs.Int("cases", 50, "unique generated cases to run")
+	f.fs.Var(&f.seed, "seed", "hunt seed")
+	f.caseNum = f.fs.Int("case", -1, "run exactly one independently derived case")
+	f.maxFaults = f.fs.Int("max-faults", 2, "maximum mutations per case")
+	f.failFast = f.fs.Bool("fail-fast", false, "stop after the first reportable finding")
+	f.dry = f.fs.Bool("dry-run", false, "print generated manifests without running them")
+	f.netdoc = f.fs.String("netdoc", "", "path to the netdoc binary")
+	f.timeout = f.fs.Duration("timeout", 4*time.Second, "netdoc per-probe timeout")
+	f.verbose = f.fs.Bool("v", false, "log each privileged command as it runs")
+	return f
+}
+
+func (f *huntFlags) parse(args []string) (string, error) {
+	ref := ""
+	for {
+		if err := f.fs.Parse(args); err != nil {
+			return "", err
+		}
+		if f.fs.NArg() == 0 {
+			break
+		}
+		if ref != "" {
+			return "", fmt.Errorf("unexpected argument %q", textsafe.Clean(f.fs.Arg(0)))
+		}
+		ref = f.fs.Arg(0)
+		args = f.fs.Args()[1:]
+	}
+	if ref == "" {
+		ref = "healthy-routed-network"
+	}
+	if *f.cases < 1 || *f.cases > simulation.HuntMaxCases {
+		return "", fmt.Errorf("-cases must be between 1 and %d", simulation.HuntMaxCases)
+	}
+	if *f.caseNum < -1 || *f.caseNum > simulation.HuntMaxCaseNumber {
+		return "", fmt.Errorf("-case must be between 0 and %d", simulation.HuntMaxCaseNumber)
+	}
+	if *f.maxFaults < 1 || *f.maxFaults > simulation.HuntMaxFaults {
+		return "", fmt.Errorf("-max-faults must be between 1 and %d", simulation.HuntMaxFaults)
+	}
+	if *f.timeout <= 0 {
+		return "", errors.New("-timeout must be positive")
+	}
+	if !slicesContains(simulation.HuntBaseNames(), ref) {
+		return "", fmt.Errorf("unsupported hunt base %q (have: %s)", textsafe.Clean(ref), strings.Join(simulation.HuntBaseNames(), ", "))
+	}
+	return ref, nil
+}
+
+func slicesContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 type optionalSeed struct {
@@ -425,6 +521,129 @@ func directCampaign(ctx context.Context, args []string, stdout, stderr io.Writer
 		return exitError
 	default:
 		return exitMismatch
+	}
+}
+
+func launchHunt(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	f := newHuntFlags(stderr)
+	baseID, err := f.parse(args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			usage(stdout)
+			return exitOK
+		}
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitUsage
+	}
+	base, err := simulation.LibraryScenario(baseID)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
+		return exitUsage
+	}
+	if !f.seed.set {
+		f.seed.v, err = simulation.RandomSeed()
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc-sim: choose hunt seed:", err)
+			return exitError
+		}
+		f.seed.set = true
+	}
+	if *f.dry {
+		result := simulation.RunHunt(ctx, baseID, base, nil, huntOptions(f, nil, true))
+		return writeHuntResult(result, *f.json, stdout, stderr)
+	}
+	if caps := simulation.DefaultBackend(false, nil).Capabilities(ctx); !caps.Supported {
+		fmt.Fprintln(stderr, "netdoc-sim:", caps.Reason)
+		return exitError
+	}
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitError
+	}
+	path, err := findNetdoc(*f.netdoc, self)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitUsage
+	}
+	code, err := simulation.LaunchDirector(ctx, self, huntDirectorArgv(f, baseID, path), stdout, stderr)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitError
+	}
+	return code
+}
+
+func huntDirectorArgv(f *huntFlags, baseID, netdoc string) []string {
+	return []string{huntDirectorCommand,
+		"-netdoc", netdoc,
+		"-timeout", f.timeout.String(),
+		"-cases", strconv.Itoa(*f.cases),
+		"-seed", strconv.FormatInt(f.seed.v, 10),
+		"-case", strconv.Itoa(*f.caseNum),
+		"-max-faults", strconv.Itoa(*f.maxFaults),
+		fmt.Sprintf("-json=%t", *f.json),
+		fmt.Sprintf("-fail-fast=%t", *f.failFast),
+		fmt.Sprintf("-v=%t", *f.verbose),
+		"--", baseID,
+	}
+}
+
+func directHunt(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	f := newHuntFlags(stderr)
+	baseID, err := f.parse(args)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		return exitUsage
+	}
+	if !f.seed.set {
+		fmt.Fprintln(stderr, "netdoc-sim: internal hunt director did not receive a seed")
+		return exitError
+	}
+	base, err := simulation.LibraryScenario(baseID)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
+		return exitUsage
+	}
+	var log io.Writer
+	if *f.verbose {
+		log = stderr
+	}
+	result := simulation.RunHunt(ctx, baseID, base, func() simulation.Backend {
+		return simulation.DefaultBackend(false, log)
+	}, huntOptions(f, log, false))
+	return writeHuntResult(result, *f.json, stdout, stderr)
+}
+
+func huntOptions(f *huntFlags, log io.Writer, dry bool) simulation.HuntOptions {
+	var caseNumber *int
+	if *f.caseNum >= 0 {
+		value := *f.caseNum
+		caseNumber = &value
+	}
+	return simulation.HuntOptions{Cases: *f.cases, Seed: f.seed.v, Case: caseNumber,
+		MaxFaults: *f.maxFaults, FailFast: *f.failFast, DryRun: dry,
+		Run: simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log}}
+}
+
+func writeHuntResult(result *simulation.HuntResult, jsonOutput bool, stdout, stderr io.Writer) int {
+	if jsonOutput {
+		if err := result.WriteJSON(stdout); err != nil {
+			fmt.Fprintln(stderr, "netdoc-sim:", err)
+			return exitError
+		}
+	} else {
+		result.WriteText(stdout)
+	}
+	switch {
+	case result.Result == simulation.HuntResultClean:
+		return exitOK
+	case result.Result == simulation.HuntResultFindings:
+		return exitMismatch
+	case result.ErrorKind == "configuration" || result.ErrorKind == simulation.FindingGeneratorDefect:
+		return exitUsage
+	default:
+		return exitError
 	}
 }
 

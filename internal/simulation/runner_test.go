@@ -43,6 +43,9 @@ type fakeEnv struct {
 	stdout        string
 	lastEnv       []string
 	execCtxErr    error
+	timedOut      bool
+	cancelled     bool
+	signal        string
 	sawCancelled  bool
 	cleanupErrors []string
 
@@ -97,9 +100,11 @@ func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string, env []string) 
 	}
 	if ctx.Err() != nil {
 		e.sawCancelled = true
-		return ExecResult{Err: ctx.Err()}
+		return ExecResult{Err: ctx.Err(), TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
+			Cancelled: !errors.Is(ctx.Err(), context.DeadlineExceeded)}
 	}
-	return ExecResult{Stdout: []byte(e.stdout), Err: e.execCtxErr}
+	return ExecResult{Stdout: []byte(e.stdout), Err: e.execCtxErr, TimedOut: e.timedOut,
+		Cancelled: e.cancelled, Signal: e.signal}
 }
 
 func (e *fakeEnv) TrustAnchor(service string) (string, error) {

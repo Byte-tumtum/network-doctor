@@ -95,7 +95,7 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "service.tcp_reset", description: "target accepts then resets TCP", conflictTags: []string{"target-service"}, applicable: hasHTTPTestTarget, generate: generateTCPReset},
 	{id: "family.ipv4_drop", description: "IPv4 path fails while IPv6 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv4Drop},
 	{id: "family.ipv6_drop", description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
-	{id: "link.transient_down", description: "temporary non-client link loss", conflictTags: []string{"path-outage", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
+	{id: "link.transient_down", description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
 	{id: "routing.preferred_path_failure", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWorkingAlternatePath, generate: generatePreferredPathFailure},
 }
 
