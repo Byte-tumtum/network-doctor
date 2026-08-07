@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -978,6 +979,48 @@ func (np *nodeProc) stop(ctx context.Context) error {
 	return nil
 }
 
+// netem learned the seed keyword in iproute2 6.6. Older tc reads it as a stray
+// argument and answers with its whole usage text, which says nothing about the
+// version being the problem.
+const netemSeedIproute2 = "6.6"
+
+// tcSupportsNetemSeed reports whether tc accepts `netem seed`, along with the
+// version it named, for messages. An unparseable version counts as too old:
+// every release that predates the modern scheme also predates the keyword.
+func tcSupportsNetemSeed(ctx context.Context) (bool, string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tc", "-V").Output()
+	if err != nil {
+		return false, "no tc"
+	}
+	return parseNetemSeedSupport(string(out))
+}
+
+// parseNetemSeedSupport reads tc -V output, e.g. "tc utility, iproute2-6.17.0".
+func parseNetemSeedSupport(out string) (bool, string) {
+	out = strings.TrimSpace(out)
+	_, version, ok := strings.Cut(out, "iproute2-")
+	if !ok {
+		return false, out
+	}
+	major, rest, ok := strings.Cut(version, ".")
+	if !ok {
+		return false, version
+	}
+	haveMajor, err := strconv.Atoi(major)
+	if err != nil {
+		return false, version
+	}
+	minor, _, _ := strings.Cut(rest, ".")
+	haveMinor, err := strconv.Atoi(minor)
+	if err != nil {
+		return false, version
+	}
+	const wantMajor, wantMinor = 6, 6
+	return haveMajor > wantMajor || (haveMajor == wantMajor && haveMinor >= wantMinor), version
+}
+
 // run executes one setup command and records it. In dry mode it only records.
 func (e *netnsEnv) run(ctx context.Context, argv ...string) error {
 	e.record("%s", strings.Join(argv, " "))
@@ -991,6 +1034,11 @@ func (e *netnsEnv) run(ctx context.Context, argv ...string) error {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
+		}
+		if strings.Contains(msg, `What is "seed"?`) && slices.Contains(argv, "seed") {
+			_, version := tcSupportsNetemSeed(ctx)
+			msg = "this tc (" + version + ") has no `netem seed`, which needs iproute2 " +
+				netemSeedIproute2 + " or newer; upgrade iproute2 to run seeded loss or jitter"
 		}
 		return fmt.Errorf("%s: %s", strings.Join(argv, " "), msg)
 	}
