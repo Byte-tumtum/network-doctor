@@ -321,15 +321,23 @@ func TestLoadPrefersFilesForPathLikeRefs(t *testing.T) {
 	}
 }
 
-func TestIsPercent(t *testing.T) {
-	for _, ok := range []string{"0%", "10%", "0.5%", "100%"} {
-		if !isPercent(ok) {
-			t.Errorf("isPercent(%q) = false", ok)
+func TestNormalizePercent(t *testing.T) {
+	for raw, want := range map[string]string{
+		"0%": "0%", "10%": "10%", "0.5%": "0.5%", "100%": "100%", "10.00%": "10%", "07%": "7%",
+	} {
+		got, ok := normalizePercent(raw)
+		if !ok || got != want {
+			t.Errorf("normalizePercent(%q) = %q, %t, want %q, true", raw, got, ok, want)
 		}
 	}
-	for _, bad := range []string{"", "%", ".%", "10", "1.2.3%", "ten%", "10%%", "100.01%", "NaN%", "Inf%"} {
-		if isPercent(bad) {
-			t.Errorf("isPercent(%q) = true", bad)
+	// Everything tc cannot parse, including the Go float spellings that are
+	// numerically in range but syntactically not a tc percentage.
+	for _, bad := range []string{
+		"", "%", ".%", "10", "1.2.3%", "ten%", "10%%", "100.01%", "NaN%", "Inf%",
+		"1e2%", "+5%", "-5%", "0x1p6%", " 5%", "5 %",
+	} {
+		if got, ok := normalizePercent(bad); ok {
+			t.Errorf("normalizePercent(%q) = %q, true", bad, got)
 		}
 	}
 }

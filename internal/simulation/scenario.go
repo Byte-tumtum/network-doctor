@@ -772,8 +772,12 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		if f.Jitter != "" && f.Delay == "" {
 			return errors.New("jitter needs a delay to vary")
 		}
-		if f.Loss != "" && !isPercent(f.Loss) {
-			return fmt.Errorf("loss: %q is not a percentage such as \"10%%\"", f.Loss)
+		if f.Loss != "" {
+			normalized, ok := normalizePercent(f.Loss)
+			if !ok {
+				return fmt.Errorf("loss: %q is not a percentage such as \"10%%\"", f.Loss)
+			}
+			f.Loss = normalized
 		}
 	case FaultNoDefaultRoute:
 		if f.Segment != "" || f.Via != "" || f.Metric != 0 {
@@ -1232,11 +1236,27 @@ func isASCIIAlnum(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
-func isPercent(s string) bool {
+// normalizePercent accepts the percentage spelling tc accepts — decimal digits
+// with an optional fraction — and returns the canonical rendering of it.
+//
+// strconv.ParseFloat on its own is too generous here. "1e2%", "+5%" and
+// "0x1p6%" are all valid Go floats inside the range, and all three are rejected
+// by tc after the whole topology has been built. Validation runs before any
+// namespace exists precisely so that an accepted scenario is one the simulator
+// can execute, so the syntax it accepts has to be the syntax tc parses.
+func normalizePercent(s string) (string, bool) {
 	num, ok := strings.CutSuffix(s, "%")
 	if !ok || num == "" {
-		return false
+		return "", false
+	}
+	for i := 0; i < len(num); i++ {
+		if c := num[i]; (c < '0' || c > '9') && c != '.' {
+			return "", false
+		}
 	}
 	v, err := strconv.ParseFloat(num, 64)
-	return err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 100
+	if err != nil || v < 0 || v > 100 {
+		return "", false
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64) + "%", true
 }
