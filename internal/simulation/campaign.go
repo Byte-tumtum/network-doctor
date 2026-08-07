@@ -384,6 +384,11 @@ func cloneScenario(base *Scenario) *Scenario {
 		for j, svc := range node.Services {
 			out.Topology.Nodes[i].Services[j] = svc
 			out.Topology.Nodes[i].Services[j].Records = append([]DNSRecord(nil), svc.Records...)
+			if svc.Certificate != nil {
+				certificate := *svc.Certificate
+				certificate.DNSNames = append([]string(nil), svc.Certificate.DNSNames...)
+				out.Topology.Nodes[i].Services[j].Certificate = &certificate
+			}
 			if svc.Zone != nil {
 				out.Topology.Nodes[i].Services[j].Zone = make(map[string]string, len(svc.Zone))
 				for name, addr := range svc.Zone {
@@ -396,9 +401,36 @@ func cloneScenario(base *Scenario) *Scenario {
 			}
 		}
 	}
-	out.Faults = append([]Fault(nil), base.Faults...)
-	out.Tests = append([]Test(nil), base.Tests...)
+	out.Faults = make([]Fault, len(base.Faults))
+	for i := range base.Faults {
+		out.Faults[i] = base.Faults[i]
+		out.Faults[i].Events = append([]ScheduledEvent(nil), base.Faults[i].Events...)
+	}
+	out.Tests = make([]Test, len(base.Tests))
+	for i := range base.Tests {
+		out.Tests[i] = cloneTest(base.Tests[i])
+	}
 	out.Expect.Checks = append([]ExpectedCheck(nil), base.Expect.Checks...)
+	if base.Campaign != nil {
+		campaign := *base.Campaign
+		if base.Campaign.Netem != nil {
+			copy := *base.Campaign.Netem
+			campaign.Netem = &copy
+		}
+		if base.Campaign.DNS != nil {
+			copy := *base.Campaign.DNS
+			campaign.DNS = &copy
+		}
+		if base.Campaign.Timeline != nil {
+			copy := *base.Campaign.Timeline
+			campaign.Timeline = &copy
+		}
+		if base.Campaign.DNSDelay != nil {
+			copy := *base.Campaign.DNSDelay
+			campaign.DNSDelay = &copy
+		}
+		out.Campaign = &campaign
+	}
 	return &out
 }
 
