@@ -156,7 +156,7 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 	if len(report.Evidence.SOCKSRequests) > 0 {
 		truth.Proxy = "reached"
 		for _, item := range report.Evidence.SOCKSRequests {
-			if item.Result != "connected" && item.Result != "request" {
+			if item.Event == "connect" && item.Result != "connected" {
 				truth.Proxy = "failed"
 			}
 		}

@@ -42,6 +42,20 @@ func TestObservedTruthUsesServiceAndKernelEvidence(t *testing.T) {
 
 func boolPointer(value bool) *bool { return &value }
 
+func TestObservedTruthProxyIgnoresGreetingResult(t *testing.T) {
+	healthy := []SOCKSEvidence{
+		{Event: "greeting", Result: "accepted"},
+		{Event: "connect", Result: "connected"},
+	}
+	if truth := collectObservedTruth(huntManifest(), &Report{Evidence: Evidence{SOCKSRequests: healthy}}); truth.Proxy != "reached" {
+		t.Fatalf("healthy proxy session = %q, want reached", truth.Proxy)
+	}
+	broken := append(healthy[:1:1], SOCKSEvidence{Event: "connect", Result: "dns_failure"})
+	if truth := collectObservedTruth(huntManifest(), &Report{Evidence: Evidence{SOCKSRequests: broken}}); truth.Proxy != "failed" {
+		t.Fatalf("failed proxy session = %q, want failed", truth.Proxy)
+	}
+}
+
 func TestHuntAnalysisRequiresObservedFailureForFalseNegative(t *testing.T) {
 	manifest := huntManifest(GeneratedMutation{ID: "netem.loss", Node: "gateway", Segment: "upstream", LossPercent: 20})
 	diagnosis := &Diagnosis{Verdict: "ok", Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "PASS"}}}
@@ -84,8 +98,8 @@ func TestHuntSuggestionTaxonomyAndRanking(t *testing.T) {
 			t.Errorf("%s = %s/%s/%t", code, category, severity, ok)
 		}
 	}
-	if !(severityRank(SeverityCritical) > severityRank(SeverityHigh) && severityRank(SeverityHigh) > severityRank(SeverityMedium) &&
-		severityRank(SeverityMedium) > severityRank(SeverityLow) && severityRank(SeverityLow) > severityRank(SeverityInfo)) {
+	if severityRank(SeverityCritical) <= severityRank(SeverityHigh) || severityRank(SeverityHigh) <= severityRank(SeverityMedium) ||
+		severityRank(SeverityMedium) <= severityRank(SeverityLow) || severityRank(SeverityLow) <= severityRank(SeverityInfo) {
 		t.Error("severity ranking is not strict")
 	}
 }
