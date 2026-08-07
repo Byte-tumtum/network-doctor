@@ -129,6 +129,19 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	t0 := time.Now()
 	scheduleCtx, endSchedule := context.WithCancel(ctx)
 	sched := startScheduler(scheduleCtx, env, timeline, t0)
+	// This defer is registered after environment cleanup, so it always runs
+	// first. In particular, a panic in a probe must not take the normal-path
+	// cancellation and join with it and leave a scheduler touching teardown.
+	stopSchedule := func() {
+		if sched == nil {
+			return
+		}
+		endSchedule()
+		rep.Timeline = sched.wait()
+		rep.TimelineID = timelineFingerprint(timeline)
+		sched = nil
+	}
+	defer stopSchedule()
 
 	for _, t := range s.Tests {
 		rep.Tests = append(rep.Tests, runTest(ctx, env, t, s.Expect, opts, t0))
@@ -136,9 +149,7 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	// Stop the scheduler and join it before anything else touches the
 	// environment: no scheduled event may reach a namespace that evidence
 	// collection or cleanup is already working on.
-	endSchedule()
-	rep.Timeline = sched.wait()
-	rep.TimelineID = timelineFingerprint(timeline)
+	stopSchedule()
 
 	evidenceCtx, evidenceCancel := context.WithTimeout(ctx, opts.SetupTimeout)
 	rep.Evidence, err = env.Evidence(evidenceCtx)

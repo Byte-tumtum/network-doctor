@@ -223,11 +223,12 @@ func TestSchedulerCancelledDuringApplyStillJoins(t *testing.T) {
 	hold := make(chan struct{})
 	env := &fakeEnv{applyHold: hold}
 	events := []TimedEvent{
-		{Offset: 0, Type: FaultScheduledNetem, Node: "client", Segment: "lan"},
 		{Offset: 10 * time.Millisecond, Type: FaultScheduledNetem, Node: "client", Segment: "lan"},
+		{Offset: 20 * time.Millisecond, Type: FaultScheduledNetem, Node: "client", Segment: "lan"},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := startScheduler(ctx, env, events, time.Now())
+	time.Sleep(20 * time.Millisecond)
 	cancel()
 	close(hold)
 	done := make(chan []FaultEventEvidence, 1)
@@ -242,6 +243,43 @@ func TestSchedulerCancelledDuringApplyStillJoins(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("scheduler did not join after cancellation during an apply")
+	}
+}
+
+func TestRunAppliesOffsetZeroBeforeStartingNetdoc(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "tests:",
+		"faults:\n  - {type: scheduled_netem, node: client, events: [{at: 0s, latency: 5ms}, {at: 20s, latency: 5ms}]}\ntests:", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &fakeEnv{stdout: okReport}
+	rep := Run(context.Background(), s, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if env.execBeforeInitial {
+		t.Error("netdoc started before the offset-zero scheduled state was applied")
+	}
+	if len(rep.Timeline) != 2 || rep.Timeline[0].AppliedOffset > rep.Tests[0].StartOffset {
+		t.Errorf("timeline = %+v, test window = %s..%s", rep.Timeline, rep.Tests[0].StartOffset, rep.Tests[0].EndOffset)
+	}
+}
+
+func TestRunJoinsSchedulerAfterProbePanic(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "tests:",
+		"faults:\n  - {type: scheduled_netem, node: client, events: [{at: 0s, latency: 5ms}, {at: 20s, latency: 5ms}]}\ntests:", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &fakeEnv{stdout: okReport, panicOnExec: true}
+	rep := Run(context.Background(), s, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if env.lateEvents != 0 || env.cleanups != 1 {
+		t.Fatalf("late events = %d, cleanups = %d", env.lateEvents, env.cleanups)
+	}
+	if len(rep.Timeline) != 2 || rep.Timeline[1].Result != EventSkipped {
+		t.Errorf("timeline after panic = %+v", rep.Timeline)
+	}
+	if rep.Result != ResultError || !strings.Contains(rep.Error, "probe exploded") {
+		t.Errorf("result = %s, error = %q", rep.Result, rep.Error)
 	}
 }
 

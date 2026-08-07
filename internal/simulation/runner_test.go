@@ -56,6 +56,9 @@ type fakeEnv struct {
 	// cleanedAt records when Cleanup ran, so a late event can be caught.
 	cleanedAt  time.Time
 	lateEvents int
+	// execBeforeInitial catches a run that starts netdoc before an offset-zero
+	// scheduled state has reached the environment.
+	execBeforeInitial bool
 }
 
 func (e *fakeEnv) Nodes() []NodeInfo { return []NodeInfo{{Name: "client", Address: "10.77.0.10"}} }
@@ -84,6 +87,11 @@ func (e *fakeEnv) appliedEvents() []TimedEvent {
 func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string, env []string) ExecResult {
 	e.execs++
 	e.lastEnv = append([]string(nil), env...)
+	e.mu.Lock()
+	if len(e.applied) == 0 {
+		e.execBeforeInitial = true
+	}
+	e.mu.Unlock()
 	if e.panicOnExec {
 		panic("probe exploded")
 	}

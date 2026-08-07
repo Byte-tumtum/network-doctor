@@ -311,6 +311,7 @@ func timelineFingerprint(events []TimedEvent) string {
 // while the simulation runs, and none survives cancellation.
 type scheduler struct {
 	done     chan struct{}
+	ready    chan struct{}
 	evidence []FaultEventEvidence
 }
 
@@ -318,13 +319,24 @@ type scheduler struct {
 // offset is measured from — the instant just before the first netdoc process
 // starts. Cancelling ctx stops the scheduler; wait joins it.
 func startScheduler(ctx context.Context, env Env, events []TimedEvent, t0 time.Time) *scheduler {
-	s := &scheduler{done: make(chan struct{})}
+	s := &scheduler{done: make(chan struct{}), ready: make(chan struct{})}
 	go s.run(ctx, env, events, t0)
+	// Offset-zero events describe the topology's initial scheduled state. Do
+	// not let the first netdoc process race those baseline transitions.
+	<-s.ready
 	return s
 }
 
 func (s *scheduler) run(ctx context.Context, env Env, events []TimedEvent, t0 time.Time) {
 	defer close(s.done)
+	ready := false
+	markReady := func() {
+		if !ready {
+			close(s.ready)
+			ready = true
+		}
+	}
+	defer markReady()
 	// One timer for the whole timeline, reset per event, rather than a
 	// time.After per iteration.
 	timer := time.NewTimer(time.Hour)
@@ -340,6 +352,9 @@ func (s *scheduler) run(ctx context.Context, env Env, events []TimedEvent, t0 ti
 	defer timer.Stop()
 
 	for i, event := range events {
+		if event.Offset > 0 {
+			markReady()
+		}
 		if wait := event.Offset - time.Since(t0); wait > 0 {
 			timer.Reset(wait)
 			select {
