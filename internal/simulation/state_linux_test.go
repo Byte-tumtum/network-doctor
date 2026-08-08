@@ -7,9 +7,12 @@
 package simulation
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -416,4 +419,142 @@ func TestLoadStateRejectsUnsafeID(t *testing.T) {
 			t.Fatalf("LoadState(%q) should have refused", id)
 		}
 	}
+}
+
+// The workspace root is storage every user on the host can write into, so
+// anything already sitting at a run's workspace path was put there by somebody
+// else. Creation has to fail on all three shapes, and — the part that matters —
+// it has to leave what it found exactly as it was: the caller is about to own
+// a directory it will later remove recursively.
+func TestCreateWorkspaceRefusesAPreExistingPath(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, path string)
+	}{
+		{"directory", func(t *testing.T, path string) {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatalf("plant directory: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "precious"), []byte("keep"), 0o600); err != nil {
+				t.Fatalf("plant file: %v", err)
+			}
+		}},
+		{"file", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+				t.Fatalf("plant file: %v", err)
+			}
+		}},
+		{"symlink", func(t *testing.T, path string) {
+			if err := os.Symlink(makeSentinel(t), path); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stateSandbox(t)
+			id := NewID()
+			path := workspaceFor(id)
+			tc.plant(t, path)
+			before, err := os.Lstat(path)
+			if err != nil {
+				t.Fatalf("lstat: %v", err)
+			}
+			if work, err := createWorkspace(id); err == nil {
+				t.Fatalf("createWorkspace adopted a pre-existing %s at %s", tc.name, work)
+			}
+			after, err := os.Lstat(path)
+			if err != nil {
+				t.Fatalf("createWorkspace removed the %s it refused: %v", tc.name, err)
+			}
+			if !os.SameFile(before, after) {
+				t.Fatalf("the %s at %s was replaced", tc.name, path)
+			}
+		})
+	}
+}
+
+// The successful case, and the ownership rule that follows from it: the
+// workspace is private, and the run that created it is the run that removes it.
+func TestCreateWorkspaceOwnsWhatItCreated(t *testing.T) {
+	stateSandbox(t)
+	id := NewID()
+	work, err := createWorkspace(id)
+	if err != nil {
+		t.Fatalf("createWorkspace: %v", err)
+	}
+	if work != workspaceFor(id) {
+		t.Fatalf("workspace = %s, want %s", work, workspaceFor(id))
+	}
+	fi, err := os.Lstat(work)
+	if err != nil {
+		t.Fatalf("lstat: %v", err)
+	}
+	if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("workspace mode = %v, want a private directory", fi.Mode())
+	}
+	// The second run to ask for the same id is told no, rather than handed the
+	// first one's directory.
+	if _, err := createWorkspace(id); err == nil {
+		t.Fatal("createWorkspace handed the same workspace out twice")
+	}
+	mustExist(t, work)
+}
+
+// An id that could climb out of the workspace root never reaches the
+// filesystem, the same rule LoadState applies to records.
+func TestCreateWorkspaceRejectsUnsafeID(t *testing.T) {
+	stateSandbox(t)
+	for _, id := range []string{"", "../escape", "a/b", ".", "..", "a b"} {
+		if work, err := createWorkspace(id); err == nil {
+			t.Fatalf("createWorkspace(%q) created %s", id, work)
+		}
+	}
+}
+
+// Prepare is where the exclusive create actually earns its keep. A workspace
+// path that is already occupied stops the run before there is an Env, which is
+// what keeps Cleanup away from a directory this process never created: an Env
+// handed back would have swept it.
+func TestPrepareRefusesAnOccupiedWorkspaceAndSweepsNothing(t *testing.T) {
+	stateSandbox(t)
+	s, err := ParseScenario(strings.NewReader(routedScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	keep := plant(t, workspaceFor(id))
+
+	var log bytes.Buffer
+	env, err := (&netnsBackend{dry: true, log: &log}).Prepare(context.Background(), s, id)
+	if err == nil {
+		t.Fatal("Prepare accepted an occupied workspace path")
+	}
+	if env != nil {
+		t.Fatal("Prepare returned an Env for a workspace it did not create; Cleanup would remove it")
+	}
+	mustSurvive(t, keep)
+}
+
+// The other half of the same rule: a workspace this run did create is its own
+// to sweep, and the sweep stops at its own directory.
+func TestPrepareCleanupRemovesOnlyItsOwnWorkspace(t *testing.T) {
+	stateSandbox(t)
+	s, err := ParseScenario(strings.NewReader(routedScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	neighbour := plant(t, workspaceFor(NewID()))
+
+	var log bytes.Buffer
+	env, err := (&netnsBackend{dry: true, log: &log}).Prepare(context.Background(), s, id)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	mustExist(t, workspaceFor(id))
+	if info := env.Cleanup(context.Background(), false); !info.Done {
+		t.Fatalf("cleanup = %+v", info)
+	}
+	mustBeGone(t, workspaceFor(id))
+	mustSurvive(t, neighbour)
 }

@@ -291,20 +291,22 @@ func (b *netnsBackend) Prepare(ctx context.Context, s *Scenario, id string) (Env
 	if !isRunID(id) {
 		return nil, fmt.Errorf("invalid simulation run id %q", id)
 	}
+	// Deterministic, not MkdirTemp: derived from the run id so `netdoc-sim
+	// cleanup <id>` can rebuild the workspace path of a run whose process is
+	// gone, rather than trusting the one written into its record. Exclusive, and
+	// done before there is an Env to hand back, so e.work only ever names a
+	// directory this call created — and Cleanup can only ever remove that one.
+	work, err := createWorkspace(id)
+	if err != nil {
+		return nil, err
+	}
 	e := &netnsEnv{
-		backend: b, id: id, scenario: s,
+		backend: b, id: id, scenario: s, work: work,
 		bySegment: make(map[string]*segmentProc, len(s.Topology.Segments)),
 		byName:    make(map[string]*nodeProc, len(s.Topology.Nodes)),
 		tables:    map[string]bool{},
 	}
 	e.holderCtx, e.endHolders = context.WithCancel(context.WithoutCancel(ctx))
-	// Deterministic, not MkdirTemp: derived from the run id so `netdoc-sim
-	// cleanup <id>` can rebuild the workspace path of a run whose process is
-	// gone, rather than trusting the one written into its record.
-	e.work = workspaceFor(id)
-	if err := os.MkdirAll(e.work, 0o700); err != nil {
-		return nil, err
-	}
 	// Every failure past this point still returns e: partially built namespaces
 	// and half-started holders are exactly what has to be cleaned up.
 	if err := e.build(ctx); err != nil {

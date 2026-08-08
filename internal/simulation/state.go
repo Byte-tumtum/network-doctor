@@ -56,6 +56,27 @@ func workspaceFor(id string) string {
 	return filepath.Join(os.TempDir(), "netdoc-sim-"+id)
 }
 
+// createWorkspace makes this run's scratch directory, and says so only when it
+// was this call that made it. That is the whole point of the plain Mkdir: the
+// workspace sits in storage every user on the host can write to, so a
+// directory, file or symlink already occupying the path means someone else got
+// there first, and adopting it would hand this run — and later the recursive
+// removal in Cleanup — an object it never created. The collision is reported
+// and nothing is deleted; only the shared parent is created if it is missing.
+func createWorkspace(id string) (string, error) {
+	if !isSafeName(id) {
+		return "", fmt.Errorf("%q is not a simulation id", id)
+	}
+	work := workspaceFor(id)
+	if err := os.MkdirAll(filepath.Dir(work), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(work, 0o700); err != nil {
+		return "", fmt.Errorf("simulation %s: workspace: %w", id, err)
+	}
+	return work, nil
+}
+
 // Save writes the record for a kept simulation.
 func (s *State) Save() error {
 	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
