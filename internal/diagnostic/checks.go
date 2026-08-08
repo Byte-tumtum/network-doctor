@@ -1191,6 +1191,27 @@ func socks5Error(code byte) string {
 	return "reply code " + strconv.Itoa(int(code))
 }
 
+// lookupIPRetrying resolves host and, when the resolver times out or answers
+// with a temporary failure, asks once more with the rest of the probe budget.
+// The first attempt is capped at half of what is left so the second one has
+// room: a resolver that is only flapping answers the retry, one that is really
+// down fails both. Anything conclusive — an answer, or NXDOMAIN — is returned
+// as it stands, so a bad hostname still costs a single query.
+func (o *netops) lookupIPRetrying(ctx context.Context, host string) ([]net.IP, string, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return o.lookupIP(ctx, host)
+	}
+	first, cancel := context.WithTimeout(ctx, time.Until(deadline)/2)
+	ips, server, err := o.lookupIP(first, host)
+	cancel()
+	switch dnsFailureCause(err) {
+	case DNSCauseTimeout, DNSCauseTemporaryFailure:
+		return o.lookupIP(ctx, host)
+	}
+	return ips, server, err
+}
+
 func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 		var r ProbeResult
@@ -1199,7 +1220,7 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 			r.Detail = "literal IP " + litIP.String() + " — no DNS needed"
 			return r
 		}
-		ips, server, err := o.lookupIP(ctx, host)
+		ips, server, err := o.lookupIPRetrying(ctx, host)
 		// "which server told me this" is the first question on a split-DNS or
 		// router-vs-Pi-hole setup, and often the whole answer.
 		via, paren := "", ""

@@ -168,6 +168,41 @@ func TestDNSProbeErrors(t *testing.T) {
 	}
 }
 
+// A resolver that goes quiet and comes back inside one run is resampled: the
+// probe retries a timeout once and reports what the second query saw. NXDOMAIN
+// is conclusive, so it costs exactly one query.
+func TestDNSProbeRetriesTransientFailure(t *testing.T) {
+	timeout := &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
+	notFound := &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}
+	for _, tc := range []struct {
+		name     string
+		first    error
+		want     Status
+		attempts int
+	}{
+		{"recovered resolver passes on the retry", timeout, StatusPass, 2},
+		{"down resolver still fails", timeout, StatusFail, 2},
+		{"nxdomain is not retried", notFound, StatusFail, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+				attempts++
+				if attempts == 1 || tc.want == StatusFail {
+					return nil, "", tc.first
+				}
+				return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+			defer cancel()
+			r := ops.dnsProbe("example.com", nil)(ctx, nil)
+			if r.Status != tc.want || attempts != tc.attempts {
+				t.Errorf("status = %v after %d lookups, want %v after %d", r.Status, attempts, tc.want, tc.attempts)
+			}
+		})
+	}
+}
+
 // The DNS row names the resolver that answered when the platform reveals it, and
 // says nothing rather than "unknown" when it doesn't (Windows).
 func TestDNSProbeNamesResolver(t *testing.T) {
