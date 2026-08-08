@@ -9,11 +9,16 @@ description: The resolver changes state while one of its answers is still in fli
 #
 #   +0ms      resolver answers, 500 ms late
 #   +120ms    resolver responses dropped   (while the first answers are held)
-#   +900ms    resolver answers normally
+#   +1800ms   resolver answers normally
+#
+# Recovery sits past the end of the second run on purpose. netdoc resamples the
+# resolver halfway through each run, so a recovery inside the second one would
+# be answered and the run would no longer be asking what it exists to ask; the
+# third run is where the resample meets a resolver that is back.
 #
 # What must hold: the held answer is still delivered, netdoc neither hangs nor
-# double-counts it, queries issued after the transition get nothing, and the
-# environment tears down with no delayed-response goroutine left behind.
+# double-counts it, queries issued while responses are dropped get nothing, and
+# the environment tears down with no delayed-response goroutine left behind.
 
 topology:
   subnet: 10.77.0.0/24
@@ -52,7 +57,7 @@ faults:
     events:
       - {at: 0ms, outcome: delay, delay: 500ms}
       - {at: 120ms, outcome: drop}
-      - {at: 900ms, outcome: answer}
+      - {at: 1800ms, outcome: answer}
 
 tests:
   - name: an answer held across the transition still arrives
@@ -71,6 +76,11 @@ tests:
       checks:
         - {id: dns, status: FAIL, cause: dns_timeout}
         - {id: target_tcp, status: SKIP}
+  # Both of this run's queries are sent while responses are still dropped; the
+  # resample is the one the recovery reaches.
+  - name: the resample hears the resolver come back
+    node: client
+    target: inflight-target.test:80
 
 expect:
   verdict: ok

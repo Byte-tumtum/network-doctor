@@ -315,20 +315,29 @@ func TestTransientDNSOutageScenario(t *testing.T) {
 	if before == 0 || during == 0 || after == 0 {
 		t.Fatalf("queries before/during/after the outage = %d/%d/%d: %+v", before, during, after, rep.Evidence.DNSQueries)
 	}
-	if got := diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeDNS)); got.Status != "FAIL" || got.Cause != diagnostic.DNSCauseTimeout {
+	if got := diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeDNS)); got.Status != "PASS" {
 		t.Errorf("the outage run's DNS row = %+v", got)
 	}
 	if got := diagnosisCheck(rep.Tests[2], string(diagnostic.ProbeDNS)); got.Status != "PASS" {
 		t.Errorf("the recovery run's DNS row = %+v", got)
 	}
-	// Recovery happened while the failing run was still waiting, and netdoc
-	// asked the resolver nothing more before concluding.
+	// Recovery happened while that run was still waiting, and the query that
+	// answered it is one netdoc sent afterwards: the resample, in the resolver's
+	// own record, not inferred from the row above.
 	if !(rep.Tests[1].StartOffset < recover.AppliedOffset && recover.AppliedOffset < rep.Tests[1].EndOffset) {
-		t.Errorf("recovery at %s is outside the failing run %s..%s",
+		t.Errorf("recovery at %s is outside the outage run %s..%s",
 			recover.AppliedOffset, rep.Tests[1].StartOffset, rep.Tests[1].EndOffset)
 	}
-	if !hasSuggestion(rep.Suggestions, SuggestTransientNotResampled) {
-		t.Errorf("no resampling-gap suggestion: %+v", rep.Suggestions)
+	resampled := false
+	for _, q := range rep.Evidence.DNSQueries {
+		resampled = resampled || q.Service == "outage-resolver" && q.Offset >= recover.AppliedOffset &&
+			q.Offset < rep.Tests[1].EndOffset && q.ActualOutcome == "ANSWER"
+	}
+	if !resampled {
+		t.Errorf("no query reached the recovered resolver before the run ended: %+v", rep.Evidence.DNSQueries)
+	}
+	if hasSuggestion(rep.Suggestions, SuggestTransientNotResampled) {
+		t.Errorf("resampling gap reported for a run that resampled: %+v", rep.Suggestions)
 	}
 	assertCleanedUp(t, rep)
 }
@@ -456,6 +465,9 @@ func TestFaultDuringProbeScenario(t *testing.T) {
 	}
 	if got := diagnosisCheck(rep.Tests[1], string(diagnostic.ProbeDNS)); got.Status != "FAIL" || got.Cause != diagnostic.DNSCauseTimeout {
 		t.Errorf("a query after the transition = %+v", got)
+	}
+	if got := diagnosisCheck(rep.Tests[2], string(diagnostic.ProbeDNS)); got.Status != "PASS" {
+		t.Errorf("the run whose resample outlived the drop = %+v", got)
 	}
 	assertCleanedUp(t, rep)
 }

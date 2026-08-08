@@ -1,5 +1,5 @@
 name: transient-dns-outage
-description: The resolver answers, goes silent while netdoc is running, and recovers before the run ends.
+description: The resolver answers, goes silent while netdoc is running, and is resampled once it recovers.
 
 # The timeline is measured from T0, the instant just before the first netdoc
 # process starts. The opening delay state is what makes the transitions land
@@ -12,9 +12,11 @@ description: The resolver answers, goes silent while netdoc is running, and reco
 #   +150ms    resolver responses dropped
 #   +600ms    resolver answers normally again
 #
-# Recovery lands inside the second run, which is still waiting out its probe
-# deadline on a query nobody answered. Whether netdoc notices is the question
-# this scenario exists to ask.
+# Recovery lands inside the second run, whose first query nobody answered. The
+# resample netdoc sends halfway through its budget is what finds the resolver
+# again, and proving that is why this scenario exists: without it the run would
+# sit out its deadline and report a timeout the network had already stopped
+# having.
 
 topology:
   subnet: 10.77.0.0/24
@@ -66,16 +68,19 @@ tests:
         - {id: dns, status: PASS}
         - {id: target_tcp, status: PASS}
         - {id: http, status: PASS}
-  - name: resolver silent during the outage
+  # The first query of this run is dropped; the resample finds the resolver
+  # back, so the run reports the network it ended in rather than the one it
+  # started in.
+  - name: resolver silent until the resample
     node: client
     target: transient-target.test:80
     expect:
-      verdict: dns
+      verdict: ok
       checks:
         - {id: internet_tcp, status: PASS}
-        - {id: dns, status: FAIL, cause: dns_timeout}
-        - {id: target_tcp, status: SKIP}
-        - {id: http, status: SKIP}
+        - {id: dns, status: PASS}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
   - name: resolver reachable after recovery
     node: client
     target: transient-target.test:80
