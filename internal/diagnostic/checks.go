@@ -179,6 +179,9 @@ const (
 	// warnRTT is the connect latency above which a successful dial is reported
 	// as degraded rather than a clean pass.
 	warnRTT = 500 * time.Millisecond
+	// dnsRetryFloor is the budget a second DNS query needs to be worth asking.
+	// Below it the retry could only report the deadline that already expired.
+	dnsRetryFloor = 100 * time.Millisecond
 )
 
 // Proxy failure causes. Detail and Fix remain the user-facing explanation;
@@ -1192,22 +1195,21 @@ func socks5Error(code byte) string {
 }
 
 // lookupIPRetrying resolves host and, when the resolver times out or answers
-// with a temporary failure, asks once more with the rest of the probe budget.
-// The first attempt is capped at half of what is left so the second one has
-// room: a resolver that is only flapping answers the retry, one that is really
-// down fails both. Anything conclusive — an answer, or NXDOMAIN — is returned
-// as it stands, so a bad hostname still costs a single query.
+// with a temporary failure, asks once more with whatever budget is left. The
+// first attempt keeps the whole budget: a slow resolver that is about to answer
+// must not be cut off for a retry it does not need. A resolver that fails fast
+// — SERVFAIL, or a stub that gives up before the probe does — leaves room for a
+// second sample, so one that is only flapping answers it; one that spends the
+// budget in silence leaves none, and its timeout stands. Anything conclusive —
+// an answer, or NXDOMAIN — is returned as it is, so a bad hostname still costs
+// a single query.
 func (o *netops) lookupIPRetrying(ctx context.Context, host string) ([]net.IP, string, error) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return o.lookupIP(ctx, host)
-	}
-	first, cancel := context.WithTimeout(ctx, time.Until(deadline)/2)
-	ips, server, err := o.lookupIP(first, host)
-	cancel()
+	ips, server, err := o.lookupIP(ctx, host)
 	switch dnsFailureCause(err) {
 	case DNSCauseTimeout, DNSCauseTemporaryFailure:
-		return o.lookupIP(ctx, host)
+		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > dnsRetryFloor {
+			return o.lookupIP(ctx, host)
+		}
 	}
 	return ips, server, err
 }

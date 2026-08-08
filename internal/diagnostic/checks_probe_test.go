@@ -203,6 +203,41 @@ func TestDNSProbeRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+// The retry never costs the first query its patience: a resolver that answers
+// late, but inside the probe budget, is waited out rather than cut short to
+// leave room for a second sample. A budget already spent buys no second sample
+// either, so a silent resolver is asked once and reported as the timeout it is.
+func TestDNSProbeRetryKeepsFirstQueryBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		answerIn time.Duration
+		want     Status
+		attempts int
+	}{
+		{"a late answer inside the budget is waited out", 300 * time.Millisecond, StatusPass, 1},
+		{"a silent resolver spends the budget and is not re-asked", time.Second, StatusFail, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			ops := &netops{lookupIP: func(ctx context.Context, _ string) ([]net.IP, string, error) {
+				attempts++
+				select {
+				case <-time.After(tc.answerIn):
+					return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+				case <-ctx.Done():
+					return nil, "", &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
+				}
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			r := ops.dnsProbe("example.com", nil)(ctx, nil)
+			if r.Status != tc.want || attempts != tc.attempts {
+				t.Errorf("status = %v after %d lookups, want %v after %d", r.Status, attempts, tc.want, tc.attempts)
+			}
+		})
+	}
+}
+
 // The DNS row names the resolver that answered when the platform reveals it, and
 // says nothing rather than "unknown" when it doesn't (Windows).
 func TestDNSProbeNamesResolver(t *testing.T) {
