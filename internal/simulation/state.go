@@ -77,8 +77,15 @@ func createWorkspace(id string) (string, error) {
 	return work, nil
 }
 
-// Save writes the record for a kept simulation.
+// Save writes the record for a kept simulation. The record is this process's
+// claim on the id, so it is created exclusively: an id that already has a
+// record is a collision to report, never a file to truncate, and O_EXCL also
+// refuses the symlink somebody may have left where the record belongs — the
+// kernel does not follow the final component when it is set.
 func (s *State) Save() error {
+	if !isSafeName(s.ID) {
+		return fmt.Errorf("%q is not a simulation id", s.ID)
+	}
 	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
 		return err
 	}
@@ -86,7 +93,15 @@ func (s *State) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(statePath(s.ID), blob, 0o600)
+	f, err := os.OpenFile(statePath(s.ID), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(blob); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // LoadState reads one simulation's record. The id the caller asked for is the

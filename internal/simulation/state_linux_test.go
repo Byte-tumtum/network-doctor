@@ -558,3 +558,104 @@ func TestPrepareCleanupRemovesOnlyItsOwnWorkspace(t *testing.T) {
 	mustBeGone(t, workspaceFor(id))
 	mustSurvive(t, neighbour)
 }
+
+// A record is a claim on an id, and a claim already staked is not one this run
+// may overwrite. The sentinel proves the refusal happened before any write: a
+// truncating create would have emptied the file whatever it did next.
+func TestSaveWillNotOverwriteAnExistingRecord(t *testing.T) {
+	stateSandbox(t)
+	id := NewID()
+	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	const sentinel = `{"id":"somebody-else"}`
+	if err := os.WriteFile(statePath(id), []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("plant record: %v", err)
+	}
+	s := &State{ID: id, Scenario: "x", PID: os.Getpid(), Started: time.Now(),
+		Stamp: "1234", Workspace: workspaceFor(id)}
+	if err := s.Save(); err == nil {
+		t.Fatal("Save overwrote an existing record")
+	}
+	got, err := os.ReadFile(statePath(id))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != sentinel {
+		t.Fatalf("existing record was modified: %q", got)
+	}
+}
+
+// O_EXCL does not follow the last component, so a symlink planted where a
+// record belongs is refused rather than written through.
+func TestSaveWillNotFollowASymlinkAtTheRecordPath(t *testing.T) {
+	stateSandbox(t)
+	id := NewID()
+	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	const sentinel = "not a record"
+	target := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("plant target: %v", err)
+	}
+	if err := os.Symlink(target, statePath(id)); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	s := &State{ID: id, Scenario: "x", PID: os.Getpid(), Started: time.Now(),
+		Stamp: "1234", Workspace: workspaceFor(id)}
+	if err := s.Save(); err == nil {
+		t.Fatal("Save wrote through a symlink")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != sentinel {
+		t.Fatalf("symlink target was written through: %q", got)
+	}
+	fi, err := os.Lstat(statePath(id))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was replaced instead of refused (%v, %v)", fi, err)
+	}
+}
+
+// The failure this run has to survive is the ordered one: the workspace was
+// created here, then recording it failed. Only the directory this invocation
+// made goes; the record that caused the collision, and anything else in the
+// workspace root, stays exactly where it was.
+func TestWorkspaceCleanupAfterStateCreationFails(t *testing.T) {
+	stateSandbox(t)
+	id := NewID()
+	neighbour := plant(t, workspaceFor(NewID()))
+	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	const sentinel = `{"id":"somebody-else"}`
+	if err := os.WriteFile(statePath(id), []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("plant record: %v", err)
+	}
+
+	work, err := createWorkspace(id)
+	if err != nil {
+		t.Fatalf("createWorkspace: %v", err)
+	}
+	s := &State{ID: id, Scenario: "x", PID: os.Getpid(), Started: time.Now(),
+		Stamp: "1234", Workspace: work}
+	if err := s.Save(); err == nil {
+		t.Fatal("Save overwrote an existing record")
+	}
+	// The workspace is this invocation's to undo, and nothing else is.
+	if err := os.RemoveAll(work); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	mustBeGone(t, work)
+	mustSurvive(t, neighbour)
+	got, err := os.ReadFile(statePath(id))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != sentinel {
+		t.Fatalf("the record that caused the failure was touched: %q", got)
+	}
+}
