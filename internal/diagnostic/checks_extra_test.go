@@ -105,7 +105,7 @@ func TestDialIPsSuccess(t *testing.T) {
 }
 
 func TestDialIPsEmpty(t *testing.T) {
-	conn, sel, attempts, rtt := defaultOps.dialIPs(context.Background(), nil, 80)
+	conn, sel, attempts, rtt := (&netops{}).dialIPs(context.Background(), nil, 80)
 	if conn != nil || sel != nil || attempts != nil || rtt != 0 {
 		t.Errorf("dialIPs(empty) = (%v,%v,%v,%v), want all zero", conn, sel, attempts, rtt)
 	}
@@ -184,10 +184,27 @@ func TestPathIdentityFromConn(t *testing.T) {
 }
 
 // ifaceForIP for an address assigned to no interface is an explicit unknown,
-// never a guess. 203.0.113.0/24 is TEST-NET-3 (RFC 5737) — never local.
+// never a guess. The interface list is stubbed, so the verdict comes from the
+// fixture rather than from whatever addresses the test machine happens to hold.
 func TestIfaceForIPUnknown(t *testing.T) {
-	if got := defaultOps.ifaceForIP(net.ParseIP("203.0.113.213")); got != "(unknown iface)" {
+	ops := &netops{
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{{Name: "fake0"}, {Name: "fake1"}}, nil
+		},
+		interfaceAddrs: func(ifi *net.Interface) ([]net.Addr, error) {
+			if ifi.Name == "fake1" {
+				return []net.Addr{&net.IPNet{IP: net.ParseIP("192.0.2.7"), Mask: net.CIDRMask(24, 32)}}, nil
+			}
+			return nil, nil
+		},
+	}
+	if got := ops.ifaceForIP(net.ParseIP("203.0.113.213")); got != "(unknown iface)" {
 		t.Errorf("ifaceForIP(unassigned) = %q, want '(unknown iface)'", got)
+	}
+	// The same stub still resolves an address it does hold, so the unknown
+	// above is a real miss and not an empty interface list.
+	if got := ops.ifaceForIP(net.ParseIP("192.0.2.7")); got != "fake1" {
+		t.Errorf("ifaceForIP(assigned) = %q, want fake1", got)
 	}
 }
 

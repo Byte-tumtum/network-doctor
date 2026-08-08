@@ -7,17 +7,20 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -914,37 +917,53 @@ func TestHTTPProbeDialOutlivesRequest(t *testing.T) {
 	}
 }
 
+// A real HTTP/2 round trip — ALPN, TLS, and the h2 framing all genuinely
+// negotiated — over in-memory pipes, so nothing binds a port. The server hangs
+// up on anything that arrives as HTTP/1.1, which is what makes the PASS
+// evidence that the probe's transport actually reached agreement on h2.
 func TestHTTPSProbeSupportsHTTP2OnlyServer(t *testing.T) {
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.ProtoMajor != 2 {
-			conn, _, _ := w.(http.Hijacker).Hijack()
-			_ = conn.Close()
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	server.EnableHTTP2 = true
-	server.StartTLS()
-	t.Cleanup(server.Close)
+	const host = "http2.example"
+	cert, roots := selfSignedCert(t, host)
+	var overHTTP2 atomic.Bool
+	p := newPipeNet(t)
+	srv := &http.Server{
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.ProtoMajor != 2 {
+				conn, _, _ := w.(http.Hijacker).Hijack()
+				_ = conn.Close()
+				return
+			}
+			overHTTP2.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}
+	p.serve(t, srv, func() error { return srv.ServeTLS(p, "", "") })
 
-	roots := x509.NewCertPool()
-	roots.AddCert(server.Certificate())
-
-	host, portText, _ := net.SplitHostPort(server.Listener.Addr().String())
-	port, _ := strconv.Atoi(portText)
-	ops := &netops{dialContext: new(net.Dialer).DialContext, tlsRootCAs: roots}
-	deps := map[ProbeID]ProbeResult{ProbeTLS: {SelectedIP: net.ParseIP(host)}}
-	r := ops.httpProbe(host, port, "https", ProbeTLS)(context.Background(), deps)
+	ops := &netops{dialContext: p.dial, tlsRootCAs: roots}
+	deps := map[ProbeID]ProbeResult{ProbeTLS: {SelectedIP: net.ParseIP("192.0.2.10")}}
+	r := ops.httpProbe(host, 443, "https", ProbeTLS)(context.Background(), deps)
 	if r.Status != StatusPass {
 		t.Fatalf("HTTP/2-only HTTPS probe = %+v, want PASS", r)
 	}
+	if !overHTTP2.Load() {
+		t.Error("the request never arrived over HTTP/2; the probe's h2 negotiation is untested")
+	}
 }
 
-// The real portalCheck round trip: the status comes back verbatim, a redirect
-// is reported rather than chased, and the proxy env never enters the path.
+// The real portalCheck round trip over in-memory pipes: the status comes back
+// verbatim, a redirect is reported rather than chased, and the proxy env never
+// enters the path.
 func TestPortalCheck(t *testing.T) {
+	// internetProbe only runs the round trip below when the field is wired, so
+	// a nil here disables captive-portal detection with nothing else failing.
+	if defaultOps.portalCheck == nil {
+		t.Fatal("defaultOps.portalCheck is nil; captive-portal detection is silently off")
+	}
+
 	var chased bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p := newPipeNet(t)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/generate_204":
 			w.WriteHeader(http.StatusNoContent)
@@ -957,36 +976,159 @@ func TestPortalCheck(t *testing.T) {
 			chased = true
 			w.WriteHeader(http.StatusOK)
 		}
-	}))
-	t.Cleanup(server.Close)
+	})}
+	p.serve(t, srv, func() error { return srv.Serve(p) })
 
 	defer func(orig string) { portalProbeURL = orig }(portalProbeURL)
+	const base = "http://portal.example"
 
-	// A proxy that would break the request if the transport honored it.
-	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	t.Setenv("http_proxy", "http://127.0.0.1:1")
+	// A proxy that would divert the request if the transport honored it.
+	t.Setenv("HTTP_PROXY", "http://192.0.2.9:1")
+	t.Setenv("http_proxy", "http://192.0.2.9:1")
 
-	portalProbeURL = server.URL + "/generate_204"
-	if code, redirect, err := defaultOps.portalCheck(context.Background()); err != nil || code != http.StatusNoContent || redirect != "" {
+	portalProbeURL = base + "/generate_204"
+	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusNoContent || redirect != "" {
 		t.Errorf("clean path = (%d, %q, %v), want (204, empty, nil) with the proxy env ignored", code, redirect, err)
 	}
 
-	portalProbeURL = server.URL + "/redirect"
-	if code, redirect, err := defaultOps.portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != server.URL+"/signin" {
+	portalProbeURL = base + "/redirect"
+	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != base+"/signin" {
 		t.Errorf("intercepted path = (%d, %q, %v), want the 302 and resolved HTTP URL", code, redirect, err)
 	}
 	if chased {
 		t.Error("followed the redirect to the sign-in page; the 302 is the answer")
 	}
 
-	portalProbeURL = server.URL + "/unsafe"
-	if code, redirect, err := defaultOps.portalCheck(context.Background()); err != nil || code != http.StatusFound || redirect != "" {
+	portalProbeURL = base + "/unsafe"
+	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != "" {
 		t.Errorf("unsafe redirect = (%d, %q, %v), want the 302 without a non-HTTP URL", code, redirect, err)
 	}
 
+	// Every dial went to the probe URL's own host: the proxy env was ignored,
+	// which the pipe dialer can assert directly instead of inferring it from a
+	// request that would have failed.
+	p.mu.Lock()
+	for _, addr := range p.dialed {
+		if addr != "portal.example:80" {
+			t.Errorf("dialed %q, want portal.example:80 — the proxy env leaked into the transport", addr)
+		}
+	}
+	p.mu.Unlock()
+
 	// A dead endpoint is an error, not a zero-status verdict callers can read.
-	server.Close()
-	if code, redirect, err := defaultOps.portalCheck(context.Background()); err == nil || code != 0 || redirect != "" {
+	_ = p.Close()
+	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err == nil || code != 0 || redirect != "" {
 		t.Errorf("dead endpoint = (%d, %q, %v), want (0, empty, error)", code, redirect, err)
 	}
+}
+
+// pipeNet is a net.Listener whose connections come from net.Pipe: dial hands
+// the caller the client end and queues the server end for Accept. Real HTTP —
+// TLS, ALPN and h2 framing included — runs over it without binding a port, so
+// the round trips stay deterministic and independent of host network state.
+// A closed pipeNet refuses dials, which is this fake's "connection refused".
+type pipeNet struct {
+	conns  chan net.Conn
+	closed chan struct{}
+	once   sync.Once
+
+	mu     sync.Mutex
+	dialed []string
+}
+
+func newPipeNet(t *testing.T) *pipeNet {
+	p := &pipeNet{conns: make(chan net.Conn), closed: make(chan struct{})}
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
+func (p *pipeNet) Accept() (net.Conn, error) {
+	select {
+	case c := <-p.conns:
+		return c, nil
+	case <-p.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (p *pipeNet) Close() error { p.once.Do(func() { close(p.closed) }); return nil }
+
+// Addr is never read for routing; net.Pipe supplies the conns' own addresses.
+func (p *pipeNet) Addr() net.Addr { return &net.UnixAddr{Name: "pipe", Net: "pipe"} }
+
+// dial is the netops.dialContext stand-in. It records the address it was asked
+// for — the only way to tell a proxied request from a direct one when the
+// transport's destination no longer decides where the bytes go.
+func (p *pipeNet) dial(ctx context.Context, _, addr string) (net.Conn, error) {
+	p.mu.Lock()
+	p.dialed = append(p.dialed, addr)
+	p.mu.Unlock()
+
+	client, server := net.Pipe()
+	select {
+	case p.conns <- server:
+		return client, nil
+	case <-p.closed:
+		client.Close()
+		server.Close()
+		return nil, net.ErrClosed
+	case <-ctx.Done():
+		client.Close()
+		server.Close()
+		return nil, ctx.Err()
+	}
+}
+
+// serve runs srv on this listener until the test ends. Callers pass run so a
+// TLS server can go through http.Server.ServeTLS, which is what installs the
+// h2 next-proto handler that a hand-rolled tls.Server would miss.
+func (p *pipeNet) serve(t *testing.T, srv *http.Server, run func() error) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// A serve loop that has stopped must stop accepting too, or the next
+		// dial parks on an unbuffered channel until the whole package times out
+		// and buries the error that stopped it.
+		defer func() { _ = p.Close() }()
+		if err := run(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("serve: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		<-done
+	})
+}
+
+// selfSignedCert mints a throwaway leaf for host plus the pool that trusts it,
+// so a TLS round trip needs neither fixture files nor the host's trust store.
+func selfSignedCert(t *testing.T, host string) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: host},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		DNSNames:              []string{host},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, roots
 }
