@@ -429,8 +429,8 @@ func TestHolderReturnsActualEvidenceWriteFailure(t *testing.T) {
 	recorder := &evidenceRecorder{node: "proxy", file: writer, failed: make(chan error, 1)}
 	want := recorder.record(evidenceEvent{Kind: ServiceDNS, Name: "private.test"})
 	inputReader, inputWriter := io.Pipe()
-	defer inputReader.Close()
-	defer inputWriter.Close()
+	defer func() { _ = inputReader.Close() }()
+	defer func() { _ = inputWriter.Close() }()
 
 	if got := serveHolderCommands(context.Background(), inputReader, io.Discard, nil, recorder); !errors.Is(got, want) {
 		t.Fatalf("holder error = %v, want %v", got, want)
