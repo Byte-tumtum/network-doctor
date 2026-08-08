@@ -925,6 +925,36 @@ Exit codes: `0` nothing reproduced, or every reproducible finding is now tracked
 by an issue; `1` reproducible findings nobody recorded (the default without
 `--create`); `2` usage; `3` a hunt, a reproduction, or a `gh` call failed.
 
+`.github/workflows/hunt.yml` runs this nightly with `issues: write` and
+`contents: read` and nothing else. The token reaches `gh` through the
+environment, never an argument, so it cannot land in a log line.
+
+Merging the workflow starts the hunting, not the issue writing. Creation is
+opt-in on both paths:
+
+| run | files issues when |
+| --- | --- |
+| `schedule` | the repository variable `NETDOC_HUNT_CREATE` is `true` |
+| `workflow_dispatch` | the `create` input is checked (it defaults to false) |
+
+Anything else is observation-only: the full hunt, every reproduction, and the
+same report and step summary, with no `gh` call at all. Job permissions cannot
+be decided per run, so an observation-only run still carries `issues: write`
+and simply never receives `GH_TOKEN` — without a token `gh` cannot use the
+permission the job happens to hold. The step summary names which of the three
+modes ran.
+
+An observation-only run that finds a reproducible medium-or-higher finding
+exits `1` and shows up red, because a real bug is going unrecorded. That is the
+point of the observation window: look at what it found before turning creation
+on.
+
+The rollout is therefore: merge, let a scheduled run go by in observation-only
+mode, dispatch manually with `create: false` to check runtime, inspect any
+findings by hand, dispatch once with `create: true` to see real titles, bodies
+and duplicate suppression, then set `NETDOC_HUNT_CREATE=true` for unattended
+nights.
+
 ## Tests
 
 ```sh

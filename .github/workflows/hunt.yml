@@ -1,0 +1,109 @@
+name: hunt
+
+# Nightly deterministic bug hunt: mutate the known-good baseline scenarios at
+# fixed seeds, reproduce every candidate finding from its own case, and report
+# the survivors. Filing them as issues is opt-in, twice over: a manual run has
+# to ask for it, and a scheduled run files nothing until the repository
+# variable NETDOC_HUNT_CREATE is set to true. Merging this workflow therefore
+# starts the hunting, not the issue writing.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: unique generated cases per baseline
+        default: "15"
+      create:
+        description: file reproducible findings as GitHub issues
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hunt
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Job permissions cannot be decided per run, so an observation-only run
+      # holds this and never uses it: the step below withholds GH_TOKEN unless
+      # this run is deliberately creating issues, and without a token `gh`
+      # cannot act on the permission the job happens to carry.
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
+        env:
+          CGO_ENABLED: "0"
+      # Ubuntu 24.04 and later deny unprivileged user namespaces through
+      # AppArmor, which is the one thing the rootless backend needs. Clearing it
+      # on the throwaway runner keeps the hunt rootless; netdoc-sim still
+      # refuses to escalate.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # One place decides whether this run may file issues, and says so in
+      # words the summary can print verbatim.
+      - id: mode
+        env:
+          DISPATCH_CREATE: ${{ inputs.create }}
+          REPOSITORY_OPT_IN: ${{ vars.NETDOC_HUNT_CREATE }}
+        run: |
+          opt_in=$(printf '%s' "${REPOSITORY_OPT_IN:-}" | tr '[:upper:]' '[:lower:]')
+          case "$GITHUB_EVENT_NAME:${DISPATCH_CREATE:-false}:$opt_in" in
+            workflow_dispatch:true:*)
+              create=1
+              mode='explicitly creating issues (manual dispatch, create: true)' ;;
+            schedule:*:true)
+              create=1
+              mode='scheduled creation enabled by repository variable NETDOC_HUNT_CREATE' ;;
+            *)
+              create=0
+              mode='observation-only: hunting and reproducing, creating no issues' ;;
+          esac
+          echo "create=$create" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "$mode"
+      - id: triage
+        env:
+          CREATE: ${{ steps.mode.outputs.create }}
+          CASES: ${{ inputs.cases || '15' }}
+          # gh reads the token from the environment; it is never an argument,
+          # so it cannot reach a log line. An observation-only run gets no
+          # token at all.
+          GH_TOKEN: ${{ steps.mode.outputs.create == '1' && secrets.GITHUB_TOKEN || '' }}
+        run: |
+          args=()
+          if [ "$CREATE" = "1" ]; then
+            args+=(--create)
+          fi
+          ./netdoc-sim triage \
+            --cases "$CASES" \
+            "${args[@]}" \
+            --revision "$GITHUB_SHA" \
+            --context "GitHub Actions run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            | tee triage.txt
+      - if: always()
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          {
+            echo '### netdoc-sim hunt triage'
+            echo ''
+            echo "Mode: ${MODE:-mode was never decided; the run failed before triage}"
+            echo ''
+            echo '```'
+            cat triage.txt 2>/dev/null || echo 'the triage step produced no report'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

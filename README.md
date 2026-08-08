@@ -576,7 +576,11 @@ case and finding:
 
 A finding that does not reproduce is never filed, and anything that stops
 triage from checking — a hunt that could not run, unparseable output, a failing
-`gh` call — fails the run instead of filing a guess.
+`gh` call — fails the run instead of filing a guess. The nightly workflow is
+`.github/workflows/hunt.yml`; it hunts and reproduces on every run but files
+nothing until issue creation is explicitly opted into, per run through the
+`create` dispatch input or per repository through the `NETDOC_HUNT_CREATE`
+variable.
 
 **Changing a probe endpoint in `internal/diagnostic/checks.go` will break the
 `healthy` scenario on purpose.** Scenarios claim netdoc's hardcoded addresses
