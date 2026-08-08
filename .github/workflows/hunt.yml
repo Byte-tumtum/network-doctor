@@ -37,7 +37,12 @@ concurrency:
 
 jobs:
   hunt:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest. The hunt pins netem randomness with `netem seed`, which
+    # iproute2 learned in 6.6; 24.04 ships 6.1 and rejects the keyword, so every
+    # generated case that injects loss, latency or jitter fails to set up there.
+    # Unseeded netem is not an option: a case that cannot repeat cannot be
+    # reproduced, and reproduction is what earns a finding an issue.
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -61,6 +66,8 @@ jobs:
       # on the throwaway runner keeps the hunt rootless; netdoc-sim still
       # refuses to escalate.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # One line in the log answering the first question a setup failure raises.
+      - run: tc -V
       # One place decides whether this run may file issues, and says so in
       # words the summary can print verbatim.
       - id: mode

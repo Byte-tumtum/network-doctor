@@ -929,6 +929,15 @@ by an issue; `1` reproducible findings nobody recorded (the default without
 `contents: read` and nothing else. The token reaches `gh` through the
 environment, never an argument, so it cannot land in a log line.
 
+Two things about that workflow are load-bearing. It runs on `ubuntu-26.04`
+rather than `ubuntu-latest`, because generated cases pin netem randomness with
+`netem seed` and Ubuntu 24.04's iproute2 6.1 rejects the keyword, failing every
+loss, latency or jitter case at setup; a case that cannot repeat cannot be
+reproduced, and reproduction is what earns a finding an issue. And it names
+`bash` as its shell, which is how GitHub enables `pipefail`: the report is piped
+through `tee`, and under the default `bash -e` the step would take tee's exit
+status and stay green through a hunt that never ran.
+
 Merging the workflow starts the hunting, not the issue writing. Creation is
 opt-in on both paths:
 
