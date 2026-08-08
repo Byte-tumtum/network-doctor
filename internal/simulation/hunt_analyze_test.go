@@ -3,6 +3,7 @@ package simulation
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -192,6 +193,29 @@ func TestRunHuntFailFastStopsAfterFirstFinding(t *testing.T) {
 	}, HuntOptions{Cases: 10, Seed: seed, MaxFaults: 1, FailFast: true, Run: Options{Netdoc: "netdoc"}})
 	if !result.FailFastStopped || result.ExecutedCases != 1 || len(result.Findings) == 0 || !result.RuntimeFailure {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+// A hunt that could not run says so in one sentence, and the sentence names
+// the reason. The per-case report is where the runner records it, and a caller
+// that prints only the summary — the nightly triage — used to get "runtime" and
+// nothing else, which is a failure nobody can act on from a CI log.
+func TestRunHuntReportsWhyACaseFailed(t *testing.T) {
+	base := loadHuntBase(t, "healthy-routed-network")
+	result := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
+		return &fakeBackend{caps: supported(), env: &fakeEnv{stdout: okReport,
+			faultErr: errors.New("this tc has no `netem seed`")}}
+	}, HuntOptions{Cases: 1, Seed: 7, MaxFaults: 1, Run: Options{Netdoc: "netdoc"}})
+	if result.Result != HuntResultError || result.ErrorKind != "runtime" {
+		t.Fatalf("result = %s, kind = %s", result.Result, result.ErrorKind)
+	}
+	if !strings.Contains(result.Error, "netem seed") || !strings.Contains(result.Error, "case 0") {
+		t.Errorf("error = %q, want the failing case and its reason", result.Error)
+	}
+	var text bytes.Buffer
+	result.WriteText(&text)
+	if !strings.Contains(text.String(), "netem seed") {
+		t.Errorf("report = %s", text.String())
 	}
 }
 

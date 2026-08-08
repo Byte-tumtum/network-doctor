@@ -203,11 +203,43 @@ func (r *HuntResult) finish() {
 		if r.ErrorKind == "" {
 			r.ErrorKind = "runtime"
 		}
+		if r.Error == "" {
+			r.Error = firstCaseFailure(r.Cases)
+		}
 	case len(r.Findings) > 0:
 		r.Result = HuntResultFindings
 	default:
 		r.Result = HuntResultClean
 	}
+}
+
+// firstCaseFailure names what actually went wrong in a run that failed. Without
+// it a runtime failure reports its kind and nothing else, leaving the one useful
+// sentence — the command the simulator could not run — buried in a per-case
+// report that callers reporting only the summary never print. Bounded, because
+// the text can carry a subprocess's whole complaint.
+func firstCaseFailure(cases []HuntCaseResult) string {
+	for _, item := range cases {
+		if item.Report == nil {
+			continue
+		}
+		switch {
+		case item.Report.Error != "":
+			return fmt.Sprintf("case %d: %s", item.Manifest.Case, clip(item.Report.Error))
+		case !item.Report.Cleanup.Done:
+			return fmt.Sprintf("case %d: cleanup did not finish: %s", item.Manifest.Case,
+				clip(strings.Join(item.Report.Cleanup.Errors, "; ")))
+		}
+	}
+	return ""
+}
+
+func clip(s string) string {
+	const max = 400
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func aggregateHuntSuggestions(findings []HuntFinding) []HuntSuggestion {

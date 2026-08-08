@@ -335,12 +335,20 @@ func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, ver
 		if err != nil {
 			return nil, err
 		}
-		if code == exitUsage || code == exitError {
-			return nil, fmt.Errorf("hunt exited %d", code)
-		}
+		// A failed hunt still writes its report, and that report is the only
+		// place the reason lives — the director puts it on stdout, not stderr.
+		// Reporting the exit code alone would throw away the sentence CI needs.
 		var result simulation.HuntResult
 		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			if code == exitUsage || code == exitError {
+				return nil, fmt.Errorf("hunt exited %d without a readable report: %w", code, err)
+			}
 			return nil, fmt.Errorf("cannot parse the hunt report: %w", err)
+		}
+		// A report that disagrees with the exit code is not a report to hunt on.
+		if (code == exitUsage || code == exitError) &&
+			result.Result != simulation.HuntResultError && result.Result != simulation.HuntResultCancelled {
+			return nil, fmt.Errorf("hunt exited %d but reported %q", code, textsafe.Clean(result.Result))
 		}
 		return &result, nil
 	}

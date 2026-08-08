@@ -48,6 +48,8 @@ type fakeEnv struct {
 	signal        string
 	sawCancelled  bool
 	cleanupErrors []string
+	// faultErr fails fault injection, the way a host missing a tc feature does.
+	faultErr error
 
 	mu      sync.Mutex
 	applied []TimedEvent
@@ -66,7 +68,9 @@ type fakeEnv struct {
 
 func (e *fakeEnv) Nodes() []NodeInfo { return []NodeInfo{{Name: "client", Address: "10.77.0.10"}} }
 
-func (e *fakeEnv) ApplyFaults(context.Context, []Fault) ([]FaultInfo, error) { return nil, nil }
+func (e *fakeEnv) ApplyFaults(context.Context, []Fault) ([]FaultInfo, error) {
+	return nil, e.faultErr
+}
 
 func (e *fakeEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) (string, error) {
 	if e.applyHold != nil {
