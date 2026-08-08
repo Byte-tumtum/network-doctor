@@ -77,15 +77,20 @@ type Capabilities struct {
 	Privileged []string `json:"privileged,omitempty"`
 }
 
-// NewID returns a short unique id for one simulation. Every namespace,
-// interface and state file derives from it, so two concurrent runs — or a run
-// started while an abandoned one is still around — cannot collide.
+// runIDBytes is how much randomness a simulation id carries. An id names a
+// directory and a record in shared temporary storage, where colliding with
+// another run — or with something a stranger pre-created under a guessed name
+// — is the whole hazard, so it is wide enough that neither is a case anyone
+// has to reason about. Hex keeps the result inside isSafeName.
+const runIDBytes = 12
+
+// NewID returns a unique id for one simulation. Every namespace, interface and
+// state file derives from it, so two concurrent runs — or a run started while
+// an abandoned one is still around — cannot collide.
 func NewID() string {
-	var b [3]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand does not fail on any supported platform; if it somehow
-		// does, a time-derived id is still better than refusing to run.
-		return hex.EncodeToString([]byte{byte(time.Now().UnixNano()), byte(time.Now().UnixNano() >> 8), byte(time.Now().Unix())})
-	}
+	var b [runIDBytes]byte
+	// crypto/rand.Read fills b or the process dies trying: it has not returned
+	// an error since Go 1.24, so there is no degraded id worth falling back to.
+	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }

@@ -333,3 +333,33 @@ func TestDecodeDiagnosisRejectsNonReports(t *testing.T) {
 		t.Errorf("d = %+v, err = %v", d, err)
 	}
 }
+
+// Ids name directories and records in shared temporary storage, so the
+// exclusive creates that guard them are only as good as the odds two runs
+// never draw the same id. A hundred thousand draws of runIDBytes*8 bits
+// collide with a probability far below anything a flaky test would notice,
+// which is what lets this assert uniqueness outright. The shape is checked in
+// the same pass: an id has to survive the name rules every path derived from
+// it is gated by.
+func TestNewIDIsWideAndSafeEnoughToNeverCollide(t *testing.T) {
+	const draws = 100_000
+	seen := make(map[string]bool, draws)
+	for i := 0; i < draws; i++ {
+		id := NewID()
+		if len(id) != 2*runIDBytes {
+			t.Fatalf("id %q is %d bytes, want %d", id, len(id), 2*runIDBytes)
+		}
+		for _, c := range id {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				t.Fatalf("id %q is not lower-case hex", id)
+			}
+		}
+		if !isSafeName(id) {
+			t.Fatalf("id %q does not survive the rules that gate every path built from it", id)
+		}
+		if seen[id] {
+			t.Fatalf("NewID repeated %q within %d draws", id, draws)
+		}
+		seen[id] = true
+	}
+}

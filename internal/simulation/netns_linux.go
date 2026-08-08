@@ -119,8 +119,11 @@ func sortedKeys(m map[string]string) []string {
 	return out
 }
 
+// linkTagLen is how much of a run id fits in a kernel link name.
+const linkTagLen = 6
+
 func isRunID(id string) bool {
-	if len(id) != 6 {
+	if len(id) != 2*runIDBytes {
 		return false
 	}
 	for _, c := range id {
@@ -133,11 +136,13 @@ func isRunID(id string) bool {
 	return true
 }
 
-// kernelLinkName is the only generator for bridges and veth ends. The prefix,
-// six-byte validated run id, and base-36 index remain below Linux's 15-byte
-// IFNAMSIZ payload while staying collision-free within a run.
+// kernelLinkName is the only generator for bridges and veth ends. A whole run
+// id would blow past Linux's 15-byte IFNAMSIZ payload, so only its first
+// linkTagLen bytes go in: these links live in the director's own network
+// namespace, where the base-36 index is what keeps them apart, and the id
+// fragment is there so `ip link` output can be traced back to a run.
 func kernelLinkName(prefix, id string, index int) string {
-	return prefix + id + strconv.FormatInt(int64(index), 36)
+	return prefix + id[:min(len(id), linkTagLen)] + strconv.FormatInt(int64(index), 36)
 }
 
 // userNamespaceReason explains why this host will not hand out an unprivileged

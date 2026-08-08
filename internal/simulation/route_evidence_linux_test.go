@@ -10,10 +10,14 @@ import (
 )
 
 func TestKernelInterfaceNamesAreBoundedAndCollisionFree(t *testing.T) {
+	id := NewID()
+	if !isRunID(id) {
+		t.Fatalf("generated id %q is not accepted as a run id", id)
+	}
 	seen := map[string]bool{}
 	for i := 0; i < 500; i++ {
 		for _, prefix := range []string{"nb", "ne", "np"} {
-			name := kernelLinkName(prefix, "abc123", i)
+			name := kernelLinkName(prefix, id, i)
 			if len(name) > 15 {
 				t.Fatalf("name %q has %d bytes", name, len(name))
 			}
@@ -23,9 +27,9 @@ func TestKernelInterfaceNamesAreBoundedAndCollisionFree(t *testing.T) {
 			seen[name] = true
 		}
 	}
-	for _, id := range []string{"", "ABC123", "abc12g", "abc1234", "abc12"} {
-		if isRunID(id) {
-			t.Errorf("unsafe run id %q accepted", id)
+	for _, bad := range []string{"", "abc123", strings.ToUpper(id), id[:len(id)-1], id + "0", id[:len(id)-1] + "g"} {
+		if isRunID(bad) {
+			t.Errorf("unsafe run id %q accepted", bad)
 		}
 	}
 }
@@ -109,9 +113,10 @@ func TestMultiSegmentDryPlanUsesOneBridgePerSegmentAndInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stateSandbox(t)
 	var log bytes.Buffer
 	backend := &netnsBackend{dry: true, log: &log}
-	env, err := backend.Prepare(context.Background(), s, "abc123")
+	env, err := backend.Prepare(context.Background(), s, NewID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,8 +140,9 @@ func TestDualStackDryPlanUsesOneInterfaceAndFamilyRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stateSandbox(t)
 	var log bytes.Buffer
-	env, err := (&netnsBackend{dry: true, log: &log}).Prepare(context.Background(), s, "abc123")
+	env, err := (&netnsBackend{dry: true, log: &log}).Prepare(context.Background(), s, NewID())
 	if err != nil {
 		t.Fatal(err)
 	}
