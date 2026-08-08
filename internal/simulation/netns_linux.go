@@ -294,8 +294,9 @@ func (b *netnsBackend) Prepare(ctx context.Context, s *Scenario, id string) (Env
 	}
 	e.holderCtx, e.endHolders = context.WithCancel(context.WithoutCancel(ctx))
 	// Deterministic, not MkdirTemp: derived from the run id so `netdoc-sim
-	// cleanup <id>` can find the workspace of a run whose process is gone.
-	e.work = filepath.Join(os.TempDir(), "netdoc-sim-"+id)
+	// cleanup <id>` can rebuild the workspace path of a run whose process is
+	// gone, rather than trusting the one written into its record.
+	e.work = workspaceFor(id)
 	if err := os.MkdirAll(e.work, 0o700); err != nil {
 		return nil, err
 	}

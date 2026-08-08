@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,13 @@ func StateDir() string {
 
 func statePath(id string) string { return filepath.Join(StateDir(), id+".json") }
 
+// workspaceFor is where the run with this id keeps its scratch directory.
+// Deriving it from the id alone is what lets cleanup reconstruct the path
+// instead of trusting the one a record happens to carry.
+func workspaceFor(id string) string {
+	return filepath.Join(os.TempDir(), "netdoc-sim-"+id)
+}
+
 // Save writes the record for a kept simulation.
 func (s *State) Save() error {
 	if err := os.MkdirAll(StateDir(), 0o700); err != nil {
@@ -60,20 +68,59 @@ func (s *State) Save() error {
 	return os.WriteFile(statePath(s.ID), blob, 0o600)
 }
 
-// LoadState reads one simulation's record.
+// LoadState reads one simulation's record. The id the caller asked for is the
+// only one that ever reaches the filesystem, and the decoded record has to
+// agree with it: releasing acts destructively on paths derived from the id, so
+// a record is not allowed to name a different simulation than the file it was
+// found in.
 func LoadState(id string) (*State, error) {
-	if !isSafeName(strings.TrimSuffix(id, ".json")) {
+	id = strings.TrimSuffix(id, ".json")
+	if !isSafeName(id) {
 		return nil, fmt.Errorf("%q is not a simulation id", id)
 	}
-	blob, err := os.ReadFile(statePath(id))
+	path := statePath(id)
+	blob, err := readStateFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var s State
 	if err := json.Unmarshal(blob, &s); err != nil {
-		return nil, fmt.Errorf("%s: %w", statePath(id), err)
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if s.ID != id {
+		return nil, fmt.Errorf("%s: record claims to be simulation %q", path, s.ID)
 	}
 	return &s, nil
+}
+
+// readStateFile reads a record without following anything into it. The path is
+// inspected before it is opened and the open file is confirmed to be that same
+// object, so a symlink swapped in between the two calls cannot hand cleanup a
+// file it never looked at.
+func readStateFile(path string) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s: is a symlink, not a simulation record", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(before, fi) {
+		return nil, fmt.Errorf("%s: was replaced while it was being read", path)
+	}
+	if err := checkStateFile(path, fi); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(f)
 }
 
 // ListStates returns every recorded simulation, newest first. Records whose
@@ -104,20 +151,62 @@ func ListStates() ([]*State, error) {
 }
 
 // Alive reports whether the process holding this simulation's namespaces is
-// still running. The cmdline check guards against a recycled pid: killing an
-// unrelated process because its number was reused would be the worst bug this
-// package could have.
+// still running. Two things have to hold, because killing an unrelated process
+// would be the worst bug this package could have. The stamp catches a recycled
+// pid, and the executable check catches the case the stamp cannot: a stamp is
+// readable out of /proc by anything that can also doctor the record, so on its
+// own it proves nothing about which program is behind the number.
 func (s *State) Alive() bool {
 	if s.PID <= 0 || s.Stamp == "" {
 		return false
 	}
-	return processStamp(s.PID) == s.Stamp
+	return processStamp(s.PID) == s.Stamp && sameExecutable(s.PID)
+}
+
+// validate proves from the record alone that releasing it can only touch this
+// simulation, and returns the workspace it may remove ("" for a record that
+// never had one). Everything destructive depends on this, so it runs to
+// completion before the first signal or removal: a record that fails it is
+// left exactly as it was found.
+func (s *State) validate() (string, error) {
+	if !isSafeName(s.ID) {
+		return "", fmt.Errorf("%q is not a simulation id", s.ID)
+	}
+	if s.PID <= 0 {
+		return "", fmt.Errorf("simulation %s: record names pid %d, which is no process", s.ID, s.PID)
+	}
+	if s.Stamp == "" {
+		return "", fmt.Errorf("simulation %s: record has no process stamp, so pid %d cannot be identified", s.ID, s.PID)
+	}
+	if s.Workspace == "" {
+		return "", nil
+	}
+	want := workspaceFor(s.ID)
+	if filepath.Clean(s.Workspace) != want {
+		return "", fmt.Errorf("simulation %s: record points at workspace %q, but this run's workspace is %s", s.ID, s.Workspace, want)
+	}
+	// Reconstructing the path is not enough on its own: a symlink or a plain
+	// file sitting where the workspace belongs means somebody has been here,
+	// and cleanup is about to recurse through whatever it finds.
+	if fi, err := os.Lstat(want); err == nil && !fi.IsDir() {
+		return "", fmt.Errorf("simulation %s: %s is not a directory", s.ID, want)
+	}
+	return want, nil
 }
 
 // Release ends a kept simulation: the director is asked to stop, which takes
 // its namespaces and every holder with it, then the leftovers on disk go.
 // Idempotent — releasing an already-dead simulation just sweeps its files.
+//
+// A record that does not survive validation is not swept at all. Nothing is
+// signalled unless the pid is provably still this simulation's director; a pid
+// that is gone, or recycled by some other program, is simply left alone while
+// the reconstructed leftovers go.
 func (s *State) Release() error {
+	workspace, err := s.validate()
+	if err != nil {
+		return err
+	}
 	var errs []string
 	if s.Alive() {
 		if err := stopProcess(s.PID, false); err != nil {
@@ -133,8 +222,8 @@ func (s *State) Release() error {
 			}
 		}
 	}
-	if s.Workspace != "" && strings.HasPrefix(filepath.Base(s.Workspace), "netdoc-sim-") {
-		if err := os.RemoveAll(s.Workspace); err != nil {
+	if workspace != "" {
+		if err := os.RemoveAll(workspace); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
