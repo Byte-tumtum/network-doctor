@@ -350,11 +350,22 @@ func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth Obser
 	return findings
 }
 
+// dnsFailureDuring reports whether a resolver was still refusing netdoc's
+// queries by the end of this run. Judging it on the last query per service, not
+// on any query, is what separates a missed failure from a resolver that dropped
+// one query, recovered, and answered the resample: reporting PASS after that is
+// the truth about the run, not a false negative.
 func dnsFailureDuring(test TestOutcome, queries []DNSQueryEvidence) bool {
+	last := map[string]DNSQueryEvidence{}
 	for _, query := range queries {
 		if query.Offset < test.StartOffset || query.Offset >= test.EndOffset {
 			continue
 		}
+		if prev, seen := last[query.Service]; !seen || query.Offset > prev.Offset {
+			last[query.Service] = query
+		}
+	}
+	for _, query := range last {
 		if query.ActualOutcome == "DROPPED" || query.ActualOutcome == "SERVFAIL" {
 			return true
 		}

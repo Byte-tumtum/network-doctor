@@ -79,6 +79,23 @@ func TestPermanentWordingRespectsAPointInTimeClaim(t *testing.T) {
 	}
 }
 
+// A dropped query followed by an answered one is a resolver that recovered and
+// a netdoc that resampled it, so PASS is the truth, not a missed failure.
+func TestDNSFailureDuringJudgesTheLastQueryPerService(t *testing.T) {
+	test := TestOutcome{EndOffset: time.Second}
+	recovered := []DNSQueryEvidence{
+		{Service: "r", Offset: 200 * time.Millisecond, ActualOutcome: "DROPPED"},
+		{Service: "r", Offset: 700 * time.Millisecond, ActualOutcome: "ANSWER"},
+	}
+	if dnsFailureDuring(test, recovered) {
+		t.Error("a resolver that answered the resample was reported as still failing")
+	}
+	if !dnsFailureDuring(test, append(recovered,
+		DNSQueryEvidence{Service: "public", Offset: 800 * time.Millisecond, ActualOutcome: "SERVFAIL"})) {
+		t.Error("a second resolver still failing at the end of the run was not reported")
+	}
+}
+
 func TestMissedWindowFiresOnlyWhenNothingWasFlagged(t *testing.T) {
 	timeline := []FaultEventEvidence{
 		applied(0, TimedEvent{Type: FaultScheduledNetem, Node: "client", Segment: "lan", Latency: 10 * time.Millisecond}),
