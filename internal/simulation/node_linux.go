@@ -82,8 +82,8 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 		return err
 	}
 	defer func() {
-		for _, c := range closers {
-			c.Close()
+		if closeErr := closeServices(closers); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("stop services for node %q: %w", cfg.Name, closeErr))
 		}
 	}()
 	fmt.Fprintln(stdout, holderServicesReady)

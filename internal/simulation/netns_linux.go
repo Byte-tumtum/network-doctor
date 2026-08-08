@@ -496,10 +496,9 @@ func (np *nodeProc) interfaceForSegment(segment string) *interfaceProc {
 }
 
 func (e *netnsEnv) startServices(ctx context.Context, np *nodeProc) error {
-	if len(np.node.Services) == 0 {
-		return nil
+	if len(np.node.Services) > 0 {
+		e.record("start %d service(s) in node %q", len(np.node.Services), np.node.Name)
 	}
-	e.record("start %d service(s) in node %q", len(np.node.Services), np.node.Name)
 	if e.backend.dry {
 		return nil
 	}
@@ -1001,7 +1000,9 @@ func (np *nodeProc) stop(ctx context.Context) error {
 	if err := np.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
-	<-done
+	if err := <-done; err != nil {
+		return fmt.Errorf("holder exited: %w: %s", err, strings.TrimSpace(np.logs.String()))
+	}
 	return nil
 }
 

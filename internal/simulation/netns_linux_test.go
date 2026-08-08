@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -73,6 +74,20 @@ func TestFinishEvidenceRecordingJoinsExecutionAndCloseFailures(t *testing.T) {
 	}
 }
 
+func TestCloseServicesReturnsCloseFailure(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "service-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := closeServices([]io.Closer{f}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("close services error = %v", err)
+	}
+}
+
 func TestNodeStopReturnsHolderFailure(t *testing.T) {
 	cmd := exec.Command("sh", "-c", `echo 'record evidence for node client: broken pipe' >&2; exit 7`)
 	np := &nodeProc{node: &Node{Name: "client"}, logs: new(safeLog)}
@@ -85,6 +100,46 @@ func TestNodeStopReturnsHolderFailure(t *testing.T) {
 	err := np.stop(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "exit status 7") || !strings.Contains(err.Error(), "record evidence") {
 		t.Fatalf("stop error = %v", err)
+	}
+}
+
+func TestNodeStopReturnsForcedKillFailure(t *testing.T) {
+	cmd := exec.Command("sleep", "10")
+	np := &nodeProc{node: &Node{Name: "client"}, logs: new(safeLog)}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	np.cmd, np.pid = cmd, cmd.Process.Pid
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := np.stop(ctx); err == nil {
+		t.Fatal("forced holder termination was reported as successful cleanup")
+	}
+}
+
+func TestStartServicesStartsHolderWithoutServices(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	np := &nodeProc{node: &Node{Name: "client"}, stdin: writer,
+		stdout: bufio.NewReader(strings.NewReader(holderServicesReady + "\n")), logs: new(safeLog)}
+
+	err = (&netnsEnv{backend: &netnsBackend{}}).startServices(context.Background(), np)
+	if closeErr := writer.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != holderStart+"\n" {
+		t.Fatalf("holder command = %q, want %q", got, holderStart+"\n")
 	}
 }
 

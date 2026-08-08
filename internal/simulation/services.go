@@ -63,16 +63,10 @@ type nodeConfig struct {
 func startServices(ctx context.Context, services []Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, map[string]*dnsState, error) {
 	var open []io.Closer
 	states := make(map[string]*dnsState)
-	closeAll := func() {
-		for _, c := range open {
-			c.Close()
-		}
-	}
 	for _, svc := range services {
 		c, state, err := startService(ctx, svc, addresses, resolver, trustDir, recorder)
 		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err)
+			return nil, nil, errors.Join(fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err), closeServices(open))
 		}
 		if state != nil && svc.Name != "" {
 			states[svc.Name] = state
@@ -80,6 +74,14 @@ func startServices(ctx context.Context, services []Service, addresses []string, 
 		open = append(open, c...)
 	}
 	return open, states, nil
+}
+
+func closeServices(closers []io.Closer) error {
+	var err error
+	for _, closer := range closers {
+		err = errors.Join(err, closer.Close())
+	}
+	return err
 }
 
 func startService(ctx context.Context, svc Service, addresses []string, resolver, trustDir string, recorder *evidenceRecorder) ([]io.Closer, *dnsState, error) {
