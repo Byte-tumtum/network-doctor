@@ -444,8 +444,12 @@ func ParseScenario(r io.Reader) (*Scenario, error) {
 	// A second document would be silently dropped, and a scenario file is one
 	// scenario.
 	var extra Scenario
-	if err := dec.Decode(&extra); err == nil {
+	if err := dec.Decode(&extra); errors.Is(err, io.EOF) {
+		// Whitespace and comments after the document are allowed.
+	} else if err == nil {
 		return nil, errors.New("scenario file must contain exactly one document")
+	} else {
+		return nil, err
 	}
 	if err := s.Validate(); err != nil {
 		return nil, err

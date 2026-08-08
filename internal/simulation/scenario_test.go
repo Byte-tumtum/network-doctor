@@ -40,6 +40,31 @@ func TestParseScenarioDefaults(t *testing.T) {
 	}
 }
 
+func TestParseScenarioDocumentBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+	}{
+		{name: "single document", yaml: minimalScenario},
+		{name: "trailing whitespace and comments", yaml: minimalScenario + "\n  \n# trailing comment\n"},
+		{name: "second document", yaml: minimalScenario + "\n---\n" + minimalScenario, wantErr: true},
+		{name: "malformed trailing document", yaml: minimalScenario + "\n---\nname: [\n", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseScenario(strings.NewReader(tc.yaml))
+			if tc.wantErr && err == nil {
+				t.Fatal("want an error, got none")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseScenarioRejects(t *testing.T) {
 	tests := []struct {
 		name string
