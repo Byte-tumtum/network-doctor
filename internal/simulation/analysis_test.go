@@ -79,6 +79,32 @@ func TestPermanentWordingRespectsAPointInTimeClaim(t *testing.T) {
 	}
 }
 
+// A resolver outage that healed mid-run explains a DNS failure, not whatever
+// unrelated check happens to fail first in the same diagnosis.
+func TestPermanentWordingPairsTheRecoveryWithTheFailureItExplains(t *testing.T) {
+	timeline := []FaultEventEvidence{
+		applied(100*time.Millisecond, dnsEvent(DNSOutcomeDrop)),
+		applied(500*time.Millisecond, dnsEvent(DNSOutcomeAnswer)),
+	}
+	unrelated := TestOutcome{Name: "t", EndOffset: time.Second,
+		Diagnosis: diag("no HTTP response from the target — application-layer or proxy block",
+			DiagnosisCheck{ID: "dns", Status: "PASS"},
+			DiagnosisCheck{ID: "http", Status: "FAIL", Detail: "connection reset"})}
+	if codes(timedReport(timeline, unrelated).timelineSuggestions())[SuggestTransientReportedPermanent] {
+		t.Errorf("a healed DNS outage was pinned to an unrelated HTTP failure: %+v",
+			timedReport(timeline, unrelated).timelineSuggestions())
+	}
+
+	dnsFailed := unrelated
+	dnsFailed.Diagnosis = diag("DNS is not resolving", DiagnosisCheck{ID: "dns", Status: "FAIL"})
+	// The resample happened, so only the wording is at issue here.
+	rep := timedReport(timeline, dnsFailed)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER"}}
+	if !codes(rep.timelineSuggestions())[SuggestTransientReportedPermanent] {
+		t.Error("a healed DNS outage was not paired with the DNS failure it explains")
+	}
+}
+
 // A dropped query followed by an answered one is a resolver that recovered and
 // a netdoc that resampled it, so PASS is the truth, not a missed failure.
 func TestDNSFailureDuringJudgesTheLastQueryPerService(t *testing.T) {

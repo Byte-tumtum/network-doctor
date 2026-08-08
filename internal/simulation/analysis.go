@@ -63,6 +63,19 @@ func (e TimedEvent) healthy(baseline time.Duration) bool {
 	return false
 }
 
+// explains reports whether a recovery of this fault could be the reason the
+// named probe failed earlier in the run. A resolver outage explains a DNS
+// failure and nothing else; netem and link faults sit under every probe, so
+// they explain any of them. Without this, a healed DNS outage gets pinned to
+// whatever unrelated check happens to fail first and invents a transient that
+// never touched it.
+func (e TimedEvent) explains(probe string) bool {
+	if e.Type == FaultScheduledDNS {
+		return probe == string(diagnostic.ProbeDNS)
+	}
+	return true
+}
+
 // netemBaselines is the smallest latency each netem target is ever asked for.
 func netemBaselines(timeline []FaultEventEvidence) map[string]time.Duration {
 	out := make(map[string]time.Duration)
@@ -175,10 +188,13 @@ func (r *Report) permanentWording(test *TestOutcome, recoveries []FaultEventEvid
 	if len(healed) == 0 {
 		return nil
 	}
-	failed := ""
+	failed, restored := "", FaultEventEvidence{}
 	for _, check := range test.Diagnosis.Checks {
-		if check.Status == "FAIL" {
-			failed = check.ID
+		if check.Status != "FAIL" {
+			continue
+		}
+		if i := slices.IndexFunc(healed, func(h FaultEventEvidence) bool { return h.Event.explains(check.ID) }); i >= 0 {
+			failed, restored = check.ID, healed[i]
 			break
 		}
 	}
@@ -198,7 +214,7 @@ func (r *Report) permanentWording(test *TestOutcome, recoveries []FaultEventEvid
 		Message: "The simulator restored this path during the same diagnostic run, but the diagnosis describes the failure " +
 			"without indicating that what it observed was a moment rather than a lasting state.",
 		Evidence: fmt.Sprintf("%s recovered at +%s, inside the run +%s..+%s that reported %s as FAIL; summary: %s",
-			healed[0].State, offsetLabel(healed[0].AppliedOffset)[1:],
+			restored.State, offsetLabel(restored.AppliedOffset)[1:],
 			offsetLabel(test.StartOffset)[1:], offsetLabel(test.EndOffset)[1:], failed, test.Diagnosis.Summary)}}
 }
 
