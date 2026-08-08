@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -203,36 +204,41 @@ func TestDNSProbeRetriesTransientFailure(t *testing.T) {
 	}
 }
 
-// The retry never costs the first query its patience: a resolver that answers
-// late, but inside the probe budget, is waited out rather than cut short to
-// leave room for a second sample. A budget already spent buys no second sample
-// either, so a silent resolver is asked once and reported as the timeout it is.
-func TestDNSProbeRetryKeepsFirstQueryBudget(t *testing.T) {
+// The second sample runs alongside the first query rather than in place of it,
+// which is what lets both of these hold at once: a resolver that answers late
+// but inside the budget keeps its answer, and one that is silent until it
+// recovers mid-probe is still asked again in time to hear it.
+func TestDNSProbeResamplesWithoutCuttingTheFirstQuery(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		answerIn time.Duration
-		want     Status
-		attempts int
+		name string
+		// answers is how long after the probe starts the resolver begins
+		// answering; a query sent before then is never answered at all.
+		answers time.Duration
+		budget  time.Duration
 	}{
-		{"a late answer inside the budget is waited out", 300 * time.Millisecond, StatusPass, 1},
-		{"a silent resolver spends the budget and is not re-asked", time.Second, StatusFail, 1},
+		{"a late answer is waited out", 0, 500 * time.Millisecond},
+		{"a resolver that recovers mid-probe is re-asked", 400 * time.Millisecond, time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			attempts := 0
+			var attempts atomic.Int32
+			start := time.Now()
 			ops := &netops{lookupIP: func(ctx context.Context, _ string) ([]net.IP, string, error) {
-				attempts++
+				attempts.Add(1)
+				if time.Since(start) < tc.answers {
+					<-ctx.Done() // sent too early to ever be answered
+					return nil, "", &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
+				}
 				select {
-				case <-time.After(tc.answerIn):
+				case <-time.After(300 * time.Millisecond):
 					return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
 				case <-ctx.Done():
 					return nil, "", &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
 				}
 			}}
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), tc.budget)
 			defer cancel()
-			r := ops.dnsProbe("example.com", nil)(ctx, nil)
-			if r.Status != tc.want || attempts != tc.attempts {
-				t.Errorf("status = %v after %d lookups, want %v after %d", r.Status, attempts, tc.want, tc.attempts)
+			if r := ops.dnsProbe("example.com", nil)(ctx, nil); r.Status != StatusPass {
+				t.Errorf("status = %v (%s) after %d lookups, want PASS", r.Status, r.Detail, attempts.Load())
 			}
 		})
 	}

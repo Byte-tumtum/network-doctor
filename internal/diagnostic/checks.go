@@ -179,9 +179,6 @@ const (
 	// warnRTT is the connect latency above which a successful dial is reported
 	// as degraded rather than a clean pass.
 	warnRTT = 500 * time.Millisecond
-	// dnsRetryFloor is the budget a second DNS query needs to be worth asking.
-	// Below it the retry could only report the deadline that already expired.
-	dnsRetryFloor = 100 * time.Millisecond
 )
 
 // Proxy failure causes. Detail and Fix remain the user-facing explanation;
@@ -1194,24 +1191,73 @@ func socks5Error(code byte) string {
 	return "reply code " + strconv.Itoa(int(code))
 }
 
-// lookupIPRetrying resolves host and, when the resolver times out or answers
-// with a temporary failure, asks once more with whatever budget is left. The
-// first attempt keeps the whole budget: a slow resolver that is about to answer
-// must not be cut off for a retry it does not need. A resolver that fails fast
-// — SERVFAIL, or a stub that gives up before the probe does — leaves room for a
-// second sample, so one that is only flapping answers it; one that spends the
-// budget in silence leaves none, and its timeout stands. Anything conclusive —
-// an answer, or NXDOMAIN — is returned as it is, so a bad hostname still costs
-// a single query.
-func (o *netops) lookupIPRetrying(ctx context.Context, host string) ([]net.IP, string, error) {
-	ips, server, err := o.lookupIP(ctx, host)
+// dnsAnswer is one query's outcome, carried back from the goroutine that asked.
+type dnsAnswer struct {
+	ips    []net.IP
+	server string
+	err    error
+}
+
+// retryableDNS reports whether a failure is worth a second query. A timeout or
+// a temporary server failure says something about the resolver's health at that
+// instant; NXDOMAIN — and an answer — say something about the name, and asking
+// twice cannot change either.
+func retryableDNS(err error) bool {
 	switch dnsFailureCause(err) {
 	case DNSCauseTimeout, DNSCauseTemporaryFailure:
-		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > dnsRetryFloor {
-			return o.lookupIP(ctx, host)
+		return true
+	}
+	return false
+}
+
+// lookupIPRetrying resolves host and samples the resolver a second time when
+// the first query neither answers nor fails conclusively. The second query goes
+// out as soon as the first fails — SERVFAIL, or a stub that gives up early —
+// and otherwise halfway through the probe budget, alongside a first query that
+// is still waiting.
+//
+// Alongside, not instead of: cutting the first query short to make room would
+// halve the patience of every DNS probe, and a resolver that answers late but
+// within the budget would be reported as a timeout it never had. Two queries in
+// flight cost one extra packet and settle both cases — the resolver that
+// recovers mid-probe is heard, and the slow one keeps its own answer.
+func (o *netops) lookupIPRetrying(ctx context.Context, host string) ([]net.IP, string, error) {
+	// Buffered for both queries: the loser of the race writes after the winner
+	// has been returned, and must not block until the context releases it.
+	answers := make(chan dnsAnswer, 2)
+	ask := func() {
+		ips, server, err := o.lookupIP(ctx, host)
+		answers <- dnsAnswer{ips, server, err}
+	}
+	go ask()
+	budget := ProbeTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = time.Until(deadline)
+	}
+	resample := time.NewTimer(budget / 2)
+	defer resample.Stop()
+	outstanding, spare := 1, true
+	send := func() {
+		if spare {
+			spare, outstanding = false, outstanding+1
+			go ask()
 		}
 	}
-	return ips, server, err
+	var last dnsAnswer
+	for outstanding > 0 {
+		select {
+		case <-resample.C:
+			send()
+		case answer := <-answers:
+			outstanding--
+			if !retryableDNS(answer.err) {
+				return answer.ips, answer.server, answer.err
+			}
+			last = answer
+			send()
+		}
+	}
+	return last.ips, last.server, last.err
 }
 
 func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
