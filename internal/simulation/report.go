@@ -207,26 +207,47 @@ func (r *Report) routeSuggestions() []Suggestion {
 	if len(r.Tests) < 2 || r.Tests[0].Diagnosis == nil || r.Tests[1].Diagnosis == nil {
 		return nil
 	}
-	firstInternet := diagnosisStatus(r.Tests[0].Diagnosis, "internet_tcp")
-	secondTarget := diagnosisStatus(r.Tests[1].Diagnosis, "target_tcp")
-	if (firstInternet == "FAIL" || firstInternet == "WARN") && secondTarget == "PASS" {
-		selectedSegment := ""
-		for _, route := range r.Evidence.Routes {
-			if route.Node == r.Tests[0].Node && route.Selected && (route.Destination == "1.1.1.1" || route.Destination == "8.8.8.8") {
-				selectedSegment = route.Segment
-				break
-			}
-		}
-		code := "wrong_default_route_evidence"
-		message := "The selected default path failed while a controlled specific path reached the target; consider exposing selected-route evidence in the diagnostic result."
-		if r.Tests[1].SourceSegment != "" && r.Tests[1].SourceSegment != selectedSegment {
-			code = "alternate_route_available"
-			message = "The preferred path failed while a controlled test through another live interface reached the target; consider reporting the alternate working path and route metrics."
-		}
-		return []Suggestion{{Code: code, Message: message,
-			Evidence: fmt.Sprintf("selected segment %s failed; %s reached %s", selectedSegment, r.Tests[1].SourceSegment, r.Tests[1].Target)}}
+	// The second test says something about routing only when it takes a path the
+	// first one did not: another interface, or a target that a specific route
+	// covers. A scenario author writes that control deliberately; the hunt
+	// generator repeats the first test verbatim to watch a timeline, and the same
+	// probe over the same path reaching the target is not an alternate route — it
+	// only repeats what the first diagnosis already reported.
+	control := r.Tests[1]
+	if control.SourceSegment == "" && control.Target == r.Tests[0].Target {
+		return nil
 	}
-	return nil
+	firstInternet := diagnosisStatus(r.Tests[0].Diagnosis, "internet_tcp")
+	if firstInternet != "FAIL" && firstInternet != "WARN" {
+		return nil
+	}
+	if diagnosisStatus(control.Diagnosis, "target_tcp") != "PASS" {
+		return nil
+	}
+	selectedSegment := ""
+	for _, route := range r.Evidence.Routes {
+		if route.Node == r.Tests[0].Node && route.Selected && (route.Destination == "1.1.1.1" || route.Destination == "8.8.8.8") {
+			selectedSegment = route.Segment
+			break
+		}
+	}
+	code := "wrong_default_route_evidence"
+	message := "The selected default path failed while a controlled specific path reached the target; consider exposing selected-route evidence in the diagnostic result."
+	// Named rather than interpolated raw: a control that binds no interface of its
+	// own leaves an empty segment, and an empty segment in a sentence about
+	// segments reads as text that went missing.
+	reached := "a specific route"
+	if control.SourceSegment != "" && control.SourceSegment != selectedSegment {
+		code = "alternate_route_available"
+		message = "The preferred path failed while a controlled test through another live interface reached the target; consider reporting the alternate working path and route metrics."
+		reached = "segment " + control.SourceSegment
+	}
+	selected := "the selected default path"
+	if selectedSegment != "" {
+		selected = "selected segment " + selectedSegment
+	}
+	return []Suggestion{{Code: code, Message: message,
+		Evidence: fmt.Sprintf("%s failed; %s reached %s", selected, reached, control.Target)}}
 }
 
 func offsetLabel(d time.Duration) string {
