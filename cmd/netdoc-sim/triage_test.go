@@ -7,8 +7,11 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/heymaikol/network-doctor/internal/simulation"
 )
@@ -405,4 +408,55 @@ func findArg(args []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// The workflow pipes triage through tee. Under bash's default -e that hides a
+// nonzero exit behind tee's zero, which once turned a hunt that never ran into
+// a green nightly. GitHub only enables pipefail when a workflow names its
+// shell, so the naming is load-bearing and worth a test.
+func TestHuntWorkflowKeepsTheTriageExitStatus(t *testing.T) {
+	blob, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "hunt.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Defaults workflowDefaults `yaml:"defaults"`
+		Jobs     map[string]struct {
+			Defaults workflowDefaults `yaml:"defaults"`
+			Steps    []struct {
+				Run   string `yaml:"run"`
+				Shell string `yaml:"shell"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(blob, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.Defaults.Run.Shell != "bash" {
+		t.Errorf("workflow default shell = %q, want bash: only a named shell gets pipefail",
+			workflow.Defaults.Run.Shell)
+	}
+	piped := false
+	for name, job := range workflow.Jobs {
+		if job.Defaults.Run.Shell != "" && job.Defaults.Run.Shell != "bash" {
+			t.Errorf("job %s overrides the default shell with %q", name, job.Defaults.Run.Shell)
+		}
+		for _, step := range job.Steps {
+			if step.Shell != "" && step.Shell != "bash" {
+				t.Errorf("job %s has a step running under %q", name, step.Shell)
+			}
+			if strings.Contains(step.Run, "netdoc-sim triage") && strings.Contains(step.Run, "|") {
+				piped = true
+			}
+		}
+	}
+	if !piped {
+		t.Skip("triage is no longer piped, so pipefail no longer decides the step's exit status")
+	}
+}
+
+type workflowDefaults struct {
+	Run struct {
+		Shell string `yaml:"shell"`
+	} `yaml:"run"`
 }

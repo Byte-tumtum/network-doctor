@@ -23,6 +23,14 @@ on:
 permissions:
   contents: read
 
+# The triage report is piped through tee, and the default shell (`bash -e`)
+# reports a pipeline's last command, not its first: without pipefail a hunt that
+# exits 3 would leave the step green with the failure printed in it. Naming bash
+# explicitly is what turns pipefail on, per GitHub's documented shell defaults.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: hunt
   cancel-in-progress: false
