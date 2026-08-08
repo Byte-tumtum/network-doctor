@@ -71,6 +71,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return launchCampaign(ctx, args[1:], stdout, stderr)
 	case "hunt":
 		return launchHunt(ctx, args[1:], stdout, stderr)
+	case "triage":
+		return launchTriage(ctx, args[1:], stdout, stderr)
 	case directorCommand:
 		return direct(ctx, args[1:], stdout, stderr)
 	case campaignDirectorCommand:
@@ -108,6 +110,7 @@ Commands:
   run <scenario> [flags]   build the network, run the tests, print the report
   campaign <scenario>      run a seeded scenario campaign sequentially
   hunt [base] [flags]      generate deterministic faults and rank likely bugs
+  triage [flags]           hunt the fixed baselines, reproduce findings, file issues
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
   capabilities             report whether this host can simulate, and what a run does
@@ -149,11 +152,29 @@ Flags for hunt:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
 
+Flags for triage:
+  -scenarios <list>        comma-separated baselines (default: all three)
+  -cases <n>               unique generated cases per baseline (default 20)
+  -seed <int64>            override the fixed seed of every selected baseline
+  -max-faults <n>          maximum mutations per case (default 2, maximum 3)
+  -min-severity <level>    lowest severity worth filing (default medium)
+  -create                  file reproducible findings as GitHub issues with gh
+  -context <text>          debugging context recorded in the issue body
+  -revision <sha>          commit to record (default: the build's VCS revision)
+  -json                    print the machine-readable triage report
+  -netdoc <path>           the netdoc binary to run
+  -timeout <duration>      netdoc's per-probe timeout (default 4s)
+  -v                       log each privileged command as it runs
+
 Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 3 the simulation could not run.
 
 For hunt: 0 no reportable finding, 1 findings, 2 usage or generation
 failure, 3 simulator runtime failure or cancellation.
+
+For triage: 0 nothing reproducible, or every reproducible finding is now
+tracked by an issue; 1 reproducible findings nobody recorded; 2 usage;
+3 a hunt, a reproduction, or a gh call failed.
 
 Simulations are unprivileged: everything lives in a user namespace that owns
 nothing on the host. Run 'netdoc-sim capabilities' for the details.

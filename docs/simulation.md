@@ -853,6 +853,78 @@ the second is reported.
 Exit codes: `0` the diagnosis matched, `1` it did not, `2` bad arguments, `3` the
 simulation could not run.
 
+## Deterministic bug hunts
+
+`netdoc-sim hunt` mutates a known-good scenario instead of running a written
+one. Case *N* is a SHA-256 derivation over the hunt seed, base scenario name and
+case number, so it never depends on having run cases 0..*N*-1, and
+`--case N --seed S` regenerates exactly that network from those two numbers.
+Only the three controls are mutable bases: `healthy`,
+`healthy-routed-network`, and `dual-stack-healthy`.
+
+```sh
+./netdoc-sim hunt healthy --seed 20260101 --cases 20
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --json   # one case, exactly
+./netdoc-sim hunt healthy --seed 20260101 --dry-run         # manifests, no namespaces
+```
+
+Every case carries a manifest — generator version, base, hunt seed, case, case
+seed, materialized mutations, case fingerprint — and every finding carries the
+reproduction that produced it plus a semantic fingerprint over its category,
+code, probe, expected, actual, cause and family. The prose is not part of that
+fingerprint, so rewording a message does not mint a new finding.
+
+## Nightly triage: from a finding to a GitHub issue
+
+`netdoc-sim triage` is the unattended half. It hunts each baseline at a fixed,
+documented seed, then treats every finding as a *candidate* until it has proved
+it:
+
+| baseline | seed |
+| --- | --- |
+| `healthy` | `20260101` |
+| `healthy-routed-network` | `20260102` |
+| `dual-stack-healthy` | `20260103` |
+
+```sh
+./netdoc-sim triage                                    # hunt, reproduce, report; file nothing
+./netdoc-sim triage --scenarios healthy --cases 5      # one baseline, quick
+./netdoc-sim triage --create                           # file the survivors with gh
+./netdoc-sim triage --json                             # machine-readable triage report
+```
+
+For each candidate, triage re-runs that one case (`hunt --case N --seed S`),
+requires the regenerated case fingerprint to match, and requires the same
+finding fingerprint to appear again. A candidate that does not come back is
+recorded as not reproducible and never becomes an issue. What did come back is
+filed with the scenario, seed, case and case seed, the simulator's observed
+truth, netdoc's diagnosis fingerprint and probe rows, why they disagree, the
+generated mutations, the revision, the workflow context, and a copy/pasteable
+single-case reproduction command.
+
+Duplicates are suppressed by a fingerprint over scenario, seed, case and the
+hunt finding fingerprint. It appears as a bare hex word in the issue title,
+which is what the `gh issue list --state open --search "<fingerprint> in:title"`
+lookup matches, and matched titles are checked again before anything is skipped.
+Same bug, same case, one issue — however many nights it survives.
+
+`--min-severity` defaults to `medium`. The hunt's `low` and `info` findings are
+mostly known limits of what a single probe sample can see (variance across time,
+a reset it does not distinguish), not defects, and filing one per case number
+would bury the real ones.
+
+Two things it deliberately does not do. It never files a finding it could not
+reproduce, and it never treats "I could not check" as "nothing to report": a
+hunt that could not run, output it cannot parse, a case that regenerates
+differently, or a failing `gh` call ends the run as an error with nothing filed.
+Cross-case findings such as `truth_equivalent_diagnosis_divergence` need more
+than one case by construction, so a single-case re-run cannot confirm them and
+they are reported but never filed.
+
+Exit codes: `0` nothing reproduced, or every reproducible finding is now tracked
+by an issue; `1` reproducible findings nobody recorded (the default without
+`--create`); `2` usage; `3` a hunt, a reproduction, or a `gh` call failed.
+
 ## Tests
 
 ```sh

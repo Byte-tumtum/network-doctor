@@ -557,6 +557,27 @@ specific routes, and metrics. NAT/NAT66, SLAAC, router advertisements, DHCPv6,
 ECMP, policy routing, link-local routing, routing loops, dynamic routing, and
 VPN/tunnel interfaces are not implemented.
 
+Scenarios can also be generated rather than written. `netdoc-sim hunt` mutates
+one of the three known-good controls (`healthy`, `healthy-routed-network`,
+`dual-stack-healthy`) with bounded, materialized faults, where case *N* is
+derived from the hunt seed and case number alone — so `--seed S --case N`
+rebuilds exactly that network without having run any other case.
+`netdoc-sim triage` runs those hunts at fixed documented seeds, re-runs each
+candidate finding's own case to prove it reproduces, and files only the
+survivors as GitHub issues, deduplicated by a fingerprint over scenario, seed,
+case and finding:
+
+```sh
+./netdoc-sim hunt healthy --seed 20260101 --cases 20
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --json
+./netdoc-sim triage --scenarios healthy --cases 5
+./netdoc-sim triage --create
+```
+
+A finding that does not reproduce is never filed, and anything that stops
+triage from checking — a hunt that could not run, unparseable output, a failing
+`gh` call — fails the run instead of filing a guess.
+
 **Changing a probe endpoint in `internal/diagnostic/checks.go` will break the
 `healthy` scenario on purpose.** Scenarios claim netdoc's hardcoded addresses
 (`internetEndpoints4`, `publicDNSIP`, `probeHost`) for a node inside the
