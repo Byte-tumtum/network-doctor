@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,7 +28,7 @@ const resolvConf = "/etc/resolv.conf"
 //
 // It never touches the network itself — the director does the wiring from
 // outside via nsenter — which keeps the holder small enough to read in one go.
-func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stderr io.Writer) error {
+func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	blob, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return err
@@ -73,9 +74,9 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 	}
 	recorder, err := openEvidenceRecorder(cfg.Evidence, cfg.Name)
 	if err != nil {
-		return err
+		return fmt.Errorf("open evidence recording for node %q: %w", cfg.Name, err)
 	}
-	defer func() { _ = recorder.Close() }()
+	defer func() { err = finishEvidenceRecording(err, recorder) }()
 	closers, dns, err := startServices(ctx, cfg.Services, cfg.Addresses, cfg.Resolver, cfg.TrustDir, recorder)
 	if err != nil {
 		return err
@@ -87,8 +88,18 @@ func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stder
 	}()
 	fmt.Fprintln(stdout, holderServicesReady)
 
-	serveHolderCommands(ctx, stdin, stdout, dns)
-	return nil
+	return serveHolderCommands(ctx, stdin, stdout, dns, recorder)
+}
+
+func finishEvidenceRecording(err error, recorder *evidenceRecorder) error {
+	closeErr := recorder.Close()
+	if closeErr == nil {
+		return err
+	}
+	if err == nil || errors.Is(closeErr, err) {
+		return closeErr
+	}
+	return errors.Join(err, closeErr)
 }
 
 const ipv4ForwardPath = "/proc/sys/net/ipv4/ip_forward"

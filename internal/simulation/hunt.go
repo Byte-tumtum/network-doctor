@@ -138,18 +138,20 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 		if !opts.DryRun {
 			report := Run(ctx, generated.Scenario, backend(), opts.Run)
 			item.Report = report
-			item.Truth = collectObservedTruth(generated.Manifest, report)
-			item.TruthFingerprint = truthFingerprint(item.Truth)
-			item.DiagnosisFingerprint = diagnosisFingerprint(report)
-			item.Findings = analyzeHuntCase(generated.Manifest, report, item.Truth)
-			item.Status = "clean"
-			if len(item.Findings) > 0 {
-				item.Status = "findings"
-			}
 			result.ExecutedCases++
 			if report.Error != "" || !report.Cleanup.Done {
 				result.RuntimeFailure = true
 				item.Status = "runtime_error"
+				item.Findings = analyzeHuntCase(generated.Manifest, report, item.Truth)
+			} else {
+				item.Truth = collectObservedTruth(generated.Manifest, report)
+				item.TruthFingerprint = truthFingerprint(item.Truth)
+				item.DiagnosisFingerprint = diagnosisFingerprint(report)
+				item.Findings = analyzeHuntCase(generated.Manifest, report, item.Truth)
+				item.Status = "clean"
+				if len(item.Findings) > 0 {
+					item.Status = "findings"
+				}
 			}
 		}
 		result.Cases = append(result.Cases, item)

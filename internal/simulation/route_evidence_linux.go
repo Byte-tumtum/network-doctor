@@ -24,6 +24,11 @@ const maxTCOutput = 4096
 func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 	paths := make([]string, 0, len(e.nodes))
 	for _, np := range e.nodes {
+		if len(np.node.Services) > 0 {
+			if err := np.checkEvidence(ctx); err != nil {
+				return Evidence{}, fmt.Errorf("verify evidence from node %s: %w", np.node.Name, err)
+			}
+		}
 		paths = append(paths, filepath.Join(e.work, np.node.Name+"-evidence.jsonl"))
 	}
 	out, err := readEvidence(paths)

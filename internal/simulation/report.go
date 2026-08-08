@@ -159,7 +159,7 @@ func (r *Report) finish() {
 	if r.Evidence.Reachability == nil {
 		r.Evidence.Reachability = []ReachabilityEvidence{}
 	}
-	if r.Error != "" {
+	if r.Error != "" || len(r.Cleanup.Errors) > 0 {
 		r.Result = ResultError
 		return
 	}

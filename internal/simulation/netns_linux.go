@@ -735,6 +735,21 @@ func (np *nodeProc) setDNSOutcome(ctx context.Context, service, outcome string, 
 	return np.await(ctx, holderDNSApplied)
 }
 
+func (np *nodeProc) checkEvidence(ctx context.Context) error {
+	if np.stdin == nil || np.stdout == nil {
+		return errors.New("node holder is not running")
+	}
+	np.mu.Lock()
+	defer np.mu.Unlock()
+	if np.stopped {
+		return errors.New("node holder has already stopped")
+	}
+	if _, err := io.WriteString(np.stdin, holderEvidenceCheck+"\n"); err != nil {
+		return fmt.Errorf("ask holder to confirm evidence: %w: %s", err, strings.TrimSpace(np.logs.String()))
+	}
+	return np.await(ctx, holderEvidenceReady)
+}
+
 // faultSteps turns one fault into the commands that inject it, plus a one-line
 // description for the report.
 func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error) {
@@ -975,7 +990,10 @@ func (np *nodeProc) stop(ctx context.Context) error {
 	done := make(chan error, 1)
 	go func() { done <- np.cmd.Wait() }()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("holder exited: %w: %s", err, strings.TrimSpace(np.logs.String()))
+		}
 		return nil
 	case <-time.After(2 * time.Second):
 	case <-ctx.Done():

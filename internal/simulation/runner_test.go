@@ -280,6 +280,9 @@ func TestRunSurvivesPanickingCleanup(t *testing.T) {
 	if len(rep.Tests) != 1 || rep.Tests[0].ActualVerdict != "ok" {
 		t.Errorf("tests = %+v", rep.Tests)
 	}
+	if rep.Result != ResultError {
+		t.Errorf("result = %s, want %s", rep.Result, ResultError)
+	}
 }
 
 func TestRunRefusesUnsupportedHostWithoutFallback(t *testing.T) {

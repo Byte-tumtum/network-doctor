@@ -294,6 +294,9 @@ func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth Obser
 		add(HuntCaseFinding{Category: FindingCleanupFailure, Severity: SeverityCritical, Code: "simulation_cleanup_failed",
 			Summary: "Simulation resources did not clean up completely.", Evidence: strings.Join(report.Cleanup.Errors, "; ")})
 	}
+	if report.Error != "" || !report.Cleanup.Done {
+		return findings
+	}
 	for _, event := range report.Timeline {
 		if event.Result == EventFailed {
 			add(HuntCaseFinding{Category: FindingSimulatorFailure, Severity: SeverityHigh, Code: "scheduled_fault_failed",

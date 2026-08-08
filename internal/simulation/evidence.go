@@ -182,9 +182,11 @@ type evidenceEvent struct {
 // one JSONL file owned by the node holder. The director only reads it after a
 // netdoc process has exited.
 type evidenceRecorder struct {
-	mu   sync.Mutex
-	node string
-	file *os.File
+	mu     sync.Mutex
+	node   string
+	file   *os.File
+	err    error
+	failed chan error
 }
 
 func openEvidenceRecorder(path, node string) (*evidenceRecorder, error) {
@@ -195,12 +197,12 @@ func openEvidenceRecorder(path, node string) (*evidenceRecorder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &evidenceRecorder{node: node, file: f}, nil
+	return &evidenceRecorder{node: node, file: f, failed: make(chan error, 1)}, nil
 }
 
-func (r *evidenceRecorder) record(event evidenceEvent) {
+func (r *evidenceRecorder) record(event evidenceEvent) error {
 	if r == nil || r.file == nil {
-		return
+		return nil
 	}
 	event.Node = r.node
 	if event.At.IsZero() {
@@ -208,7 +210,26 @@ func (r *evidenceRecorder) record(event evidenceEvent) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_ = json.NewEncoder(r.file).Encode(event)
+	if r.err != nil {
+		return r.err
+	}
+	if err := json.NewEncoder(r.file).Encode(event); err != nil {
+		r.err = fmt.Errorf("record evidence for node %q: %w", r.node, err)
+		select {
+		case r.failed <- r.err:
+		default:
+		}
+	}
+	return r.err
+}
+
+func (r *evidenceRecorder) Err() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
 }
 
 func (r *evidenceRecorder) Close() error {
@@ -217,7 +238,11 @@ func (r *evidenceRecorder) Close() error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.file.Close()
+	err := r.err
+	if closeErr := r.file.Close(); closeErr != nil {
+		err = errors.Join(err, fmt.Errorf("finalize evidence recording for node %q: %w", r.node, closeErr))
+	}
+	return err
 }
 
 func readEvidence(paths []string) (Evidence, error) {

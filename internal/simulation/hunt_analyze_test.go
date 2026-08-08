@@ -194,6 +194,21 @@ func TestRunHuntFailFastStopsAfterFirstFinding(t *testing.T) {
 	if !result.FailFastStopped || result.ExecutedCases != 1 || len(result.Findings) == 0 || !result.RuntimeFailure {
 		t.Fatalf("result = %+v", result)
 	}
+	if item := result.Cases[0]; item.TruthFingerprint != "" || item.DiagnosisFingerprint.ID != "" {
+		t.Errorf("runtime failure analyzed incomplete evidence: %+v", item)
+	}
+}
+
+func TestHuntAnalysisStopsAfterRuntimeFailure(t *testing.T) {
+	manifest := huntManifest(GeneratedMutation{ID: "dns.drop", Service: "r"})
+	report := &Report{Cleanup: CleanupInfo{Errors: []string{"evidence recorder failed"}},
+		Tests: []TestOutcome{{StartOffset: 0, EndOffset: time.Second,
+			Diagnosis: &Diagnosis{Checks: []DiagnosisCheck{{ID: "dns", Status: "PASS"}}}}},
+		Evidence: Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED", Offset: time.Millisecond}}}}
+	findings := analyzeHuntCase(manifest, report, collectObservedTruth(manifest, report))
+	if len(findings) != 1 || findings[0].Code != "simulation_cleanup_failed" {
+		t.Fatalf("findings from incomplete evidence = %+v", findings)
+	}
 }
 
 // A hunt that could not run says so in one sentence, and the sentence names

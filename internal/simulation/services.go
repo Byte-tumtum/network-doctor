@@ -34,6 +34,8 @@ const (
 	holderDNSCommand    = "dns"
 	holderDNSApplied    = "dns-applied"
 	holderDNSError      = "dns-error"
+	holderEvidenceCheck = "evidence-check"
+	holderEvidenceReady = "evidence-ready"
 )
 
 // nodeConfig is what the director hands a holder.
@@ -104,7 +106,11 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 				_ = delays.Close()
 				return nil, nil, err
 			}
-			go serveDNS(pc, zone, svc.Name, state, delays, recorder)
+			delays.wg.Add(1)
+			go func() {
+				defer delays.wg.Done()
+				serveDNS(pc, zone, svc.Name, state, delays, recorder)
+			}()
 			open = append(open, pc)
 		}
 		return append(open, delays), state, nil
@@ -131,10 +137,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, ln := range listeners {
-			go serveTCPReset(ln, svc.Name, recorder)
-		}
-		return listenersAsClosers(listeners), nil, nil
+		return []io.Closer{startTCPResetServer(listeners, svc.Name, recorder)}, nil, nil
 	case ServiceSOCKS5:
 		ln, err := net.Listen("tcp", ":"+port)
 		if err != nil {
@@ -271,18 +274,44 @@ func serveSink(ln net.Listener) {
 	}
 }
 
-func serveTCPReset(ln net.Listener, service string, recorder *evidenceRecorder) {
+type tcpResetServer struct {
+	listeners []net.Listener
+	service   string
+	recorder  *evidenceRecorder
+	wg        sync.WaitGroup
+}
+
+func startTCPResetServer(listeners []net.Listener, service string, recorder *evidenceRecorder) *tcpResetServer {
+	s := &tcpResetServer{listeners: listeners, service: service, recorder: recorder}
+	for _, listener := range listeners {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.serve(listener)
+		}()
+	}
+	return s
+}
+
+func (s *tcpResetServer) serve(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: service, Event: "accepted", Result: "connected"})
+		if err := s.recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: s.service, Event: "accepted", Result: "connected"}); err != nil {
+			_ = conn.Close()
+			return
+		}
+		s.wg.Add(1)
 		go func(conn net.Conn) {
+			defer s.wg.Done()
 			tcp, ok := conn.(*net.TCPConn)
 			if !ok {
 				_ = conn.Close()
-				recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: service, Event: "reset", Result: "unsupported_connection"})
+				if err := s.recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: s.service, Event: "reset", Result: "unsupported_connection"}); err != nil {
+					return
+				}
 				return
 			}
 			// Give a protocol client a short opportunity to send its greeting, but
@@ -292,9 +321,22 @@ func serveTCPReset(ln net.Listener, service string, recorder *evidenceRecorder) 
 			_, _ = tcp.Read(one[:])
 			_ = tcp.SetLinger(0)
 			_ = tcp.Close()
-			recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: service, Event: "reset", Result: "connection_reset"})
+			if err := s.recorder.record(evidenceEvent{Kind: ServiceTCPReset, Service: s.service, Event: "reset", Result: "connection_reset"}); err != nil {
+				return
+			}
 		}(conn)
 	}
+}
+
+func (s *tcpResetServer) Close() error {
+	var errs []error
+	for _, listener := range s.listeners {
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, err)
+		}
+	}
+	s.wg.Wait()
+	return errors.Join(errs...)
 }
 
 // DNS wire constants. Only what a static A/AAAA zone needs.
@@ -361,9 +403,11 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, s
 			case DNSOutcomeDrop:
 				actual = "DROPPED"
 			}
-			recorder.record(evidenceEvent{Kind: ServiceDNS, Service: service, Name: dnsKey(name),
+			if err := recorder.record(evidenceEvent{Kind: ServiceDNS, Service: service, Name: dnsKey(name),
 				Source: source, QueryType: dnsTypeName(qtype), Result: actual, Sequence: sequence,
-				ScheduledOutcome: scheduled, ActualOutcome: actual, DelayMs: delay.Milliseconds()})
+				ScheduledOutcome: scheduled, ActualOutcome: actual, DelayMs: delay.Milliseconds()}); err != nil {
+				return
+			}
 		}
 		switch scheduled {
 		case DNSOutcomeDrop:
@@ -388,8 +432,8 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, s
 	}
 }
 
-// delayGroup runs bounded delayed answers. Close cancels every pending one and
-// joins them, so the holder never leaves a response goroutine behind.
+// delayGroup runs bounded delayed answers and tracks their DNS serve loops.
+// Close cancels and joins them after the packet sockets close.
 type delayGroup struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -645,7 +689,7 @@ func dnsAnswer(name []byte, qtype uint16, addr netip.Addr) []byte {
 // serveHolderCommands answers scheduled-fault requests until the director
 // closes the holder's stdin or the context is cancelled. Either one means the
 // simulation is over.
-func serveHolderCommands(ctx context.Context, r io.Reader, w io.Writer, dns map[string]*dnsState) {
+func serveHolderCommands(ctx context.Context, r io.Reader, w io.Writer, dns map[string]*dnsState, recorder *evidenceRecorder) error {
 	lines := make(chan string, 1)
 	go func() {
 		defer close(lines)
@@ -661,10 +705,17 @@ func serveHolderCommands(ctx context.Context, r io.Reader, w io.Writer, dns map[
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
+		case err := <-recorder.failed:
+			return err
 		case line, ok := <-lines:
 			if !ok {
-				return
+				return nil
+			}
+			if line == holderEvidenceCheck {
+				if err := recorder.Err(); err != nil {
+					return err
+				}
 			}
 			if reply := holderCommandReply(line, dns); reply != "" {
 				fmt.Fprintln(w, reply)
@@ -677,6 +728,9 @@ func serveHolderCommands(ctx context.Context, r io.Reader, w io.Writer, dns map[
 // rather than answered, so a future director talking to an old holder blocks on
 // its own read deadline instead of acting on a misread reply.
 func holderCommandReply(line string, dns map[string]*dnsState) string {
+	if line == holderEvidenceCheck {
+		return holderEvidenceReady
+	}
 	fields := strings.Fields(line)
 	if len(fields) != 4 || fields[0] != holderDNSCommand {
 		return ""

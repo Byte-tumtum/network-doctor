@@ -5,6 +5,8 @@ package simulation
 import (
 	"bufio"
 	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -37,6 +39,52 @@ func TestAwaitReadsHolderLogsSafely(t *testing.T) {
 	}
 	if err := np.stop(context.Background()); err != nil {
 		t.Errorf("stop is called from every exit path, so it has to be idempotent: %v", err)
+	}
+}
+
+func TestFinishEvidenceRecordingReturnsCloseFailure(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "evidence-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = finishEvidenceRecording(nil, &evidenceRecorder{node: "client", file: f})
+	if !errors.Is(err, os.ErrClosed) || !strings.Contains(err.Error(), `finalize evidence recording for node "client"`) {
+		t.Fatalf("close error = %v", err)
+	}
+}
+
+func TestFinishEvidenceRecordingJoinsExecutionAndCloseFailures(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "evidence-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	primary := errors.New("service execution failed")
+
+	err = finishEvidenceRecording(primary, &evidenceRecorder{node: "client", file: f})
+	if !errors.Is(err, primary) || !errors.Is(err, os.ErrClosed) || !strings.Contains(err.Error(), "finalize evidence recording") {
+		t.Fatalf("joined error = %v", err)
+	}
+}
+
+func TestNodeStopReturnsHolderFailure(t *testing.T) {
+	cmd := exec.Command("sh", "-c", `echo 'record evidence for node client: broken pipe' >&2; exit 7`)
+	np := &nodeProc{node: &Node{Name: "client"}, logs: new(safeLog)}
+	cmd.Stderr = np.logs
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	np.cmd, np.pid = cmd, cmd.Process.Pid
+
+	err := np.stop(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") || !strings.Contains(err.Error(), "record evidence") {
+		t.Fatalf("stop error = %v", err)
 	}
 }
 

@@ -15,11 +15,7 @@ func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() {
-		serveTCPReset(ln, "reset", nil)
-		close(done)
-	}()
+	server := startTCPResetServer([]net.Listener{ln}, "reset", nil)
 	for i := 0; i < 3; i++ {
 		conn, err := net.DialTimeout("tcp4", ln.Addr().String(), time.Second)
 		if err != nil {
@@ -33,13 +29,8 @@ func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
 			t.Fatalf("read error = %v, want ECONNRESET", err)
 		}
 	}
-	if err := ln.Close(); err != nil {
+	if err := server.Close(); err != nil {
 		t.Fatal(err)
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("reset listener did not shut down")
 	}
 	if conn, err := net.DialTimeout("tcp4", ln.Addr().String(), 100*time.Millisecond); err == nil {
 		conn.Close()

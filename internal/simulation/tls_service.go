@@ -206,13 +206,15 @@ func (s *tlsServer) handle(raw net.Conn) {
 	err := conn.HandshakeContext(handshakeCtx)
 	cancel()
 	result := tlsHandshakeResult(err, presented)
-	s.recorder.record(evidenceEvent{
+	if err := s.recorder.record(evidenceEvent{
 		Kind: ServiceTLS, Service: s.service, Result: result,
 		CertificateMode: s.mode, RequestedServer: requestedServer,
 		CertificateDNS: append([]string(nil), s.material.dnsNames...),
 		NotBefore:      s.material.notBefore, NotAfter: s.material.notAfter,
 		CertificatePresented: presented,
-	})
+	}); err != nil {
+		return
+	}
 	if err != nil {
 		return
 	}

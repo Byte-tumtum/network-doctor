@@ -101,7 +101,9 @@ func (s *socksServer) handle(client net.Conn) {
 	if err := s.greet(client); err != nil {
 		return
 	}
-	s.recorder.record(evidenceEvent{Kind: ServiceSOCKS5, Service: s.service, Event: "greeting", Result: "accepted"})
+	if err := s.recorder.record(evidenceEvent{Kind: ServiceSOCKS5, Service: s.service, Event: "greeting", Result: "accepted"}); err != nil {
+		return
+	}
 
 	request, reply, err := readSOCKSRequest(client)
 	if err != nil {
@@ -111,7 +113,9 @@ func (s *socksServer) handle(client net.Conn) {
 		return
 	}
 	if request.command != socksConnect {
-		s.recordRequest(request, "command_not_supported")
+		if err := s.recordRequest(request, "command_not_supported"); err != nil {
+			return
+		}
 		_ = writeSOCKSReply(client, socksReplyCommand, netip.AddrPort{})
 		return
 	}
@@ -122,7 +126,9 @@ func (s *socksServer) handle(client net.Conn) {
 		addresses, err = s.lookup(lookupCtx, request.destination)
 		cancel()
 		if err != nil || len(addresses) == 0 {
-			s.recordRequest(request, "dns_failure")
+			if err := s.recordRequest(request, "dns_failure"); err != nil {
+				return
+			}
 			_ = writeSOCKSReply(client, socksReplyHost, netip.AddrPort{})
 			return
 		}
@@ -142,7 +148,9 @@ func (s *socksServer) handle(client net.Conn) {
 	}
 	cancel()
 	if upstream == nil {
-		s.recordRequest(request, dialResult(dialErr))
+		if err := s.recordRequest(request, dialResult(dialErr)); err != nil {
+			return
+		}
 		_ = writeSOCKSReply(client, socksReplyForError(dialErr), netip.AddrPort{})
 		return
 	}
@@ -152,10 +160,14 @@ func (s *socksServer) handle(client net.Conn) {
 
 	bound := addrPort(upstream.LocalAddr())
 	if err := writeSOCKSReply(client, socksReplyOK, bound); err != nil {
-		s.recordRequest(request, "reply_failure")
+		if err := s.recordRequest(request, "reply_failure"); err != nil {
+			return
+		}
 		return
 	}
-	s.recordRequest(request, "connected")
+	if err := s.recordRequest(request, "connected"); err != nil {
+		return
+	}
 	deadline := accepted.Add(socksConnectionLifetime)
 	_ = client.SetDeadline(deadline)
 	_ = upstream.SetDeadline(deadline)
@@ -251,8 +263,8 @@ func readSOCKSRequest(conn net.Conn) (socksRequest, int, error) {
 	return request, 0, nil
 }
 
-func (s *socksServer) recordRequest(request socksRequest, result string) {
-	s.recorder.record(evidenceEvent{Kind: ServiceSOCKS5, Service: s.service, Event: "connect",
+func (s *socksServer) recordRequest(request socksRequest, result string) error {
+	return s.recorder.record(evidenceEvent{Kind: ServiceSOCKS5, Service: s.service, Event: "connect",
 		AddressType: request.addressType, Destination: request.destination, Port: request.port, Result: result})
 }
 

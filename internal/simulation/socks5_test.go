@@ -354,14 +354,21 @@ func TestEvidenceRecorderWritesWholeConcurrentEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
+	errs := make(chan error, 20)
 	for range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			recorder.record(evidenceEvent{Kind: ServiceDNS, Name: "private.test", QueryType: "A", Result: "ANSWER"})
+			errs <- recorder.record(evidenceEvent{Kind: ServiceDNS, Name: "private.test", QueryType: "A", Result: "ANSWER"})
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -379,6 +386,56 @@ func TestEvidenceRecorderWritesWholeConcurrentEvents(t *testing.T) {
 	if len(got.DNS) != 1 || got.DNS[0].Count != 20 {
 		t.Errorf("evidence = %+v", got.DNS)
 	}
+}
+
+func TestEvidenceRecorderReturnsWriteFailure(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &evidenceRecorder{node: "proxy", file: writer, failed: make(chan error, 1)}
+
+	err = recorder.record(evidenceEvent{Kind: ServiceDNS, Name: "private.test"})
+	if err == nil || !strings.Contains(err.Error(), `record evidence for node "proxy"`) {
+		t.Fatalf("record error = %v", err)
+	}
+	if next := recorder.record(evidenceEvent{Kind: ServiceDNS, Name: "other.test"}); !errors.Is(next, err) {
+		t.Errorf("second record error = %v, want first error %v", next, err)
+	}
+	select {
+	case failure := <-recorder.failed:
+		if !errors.Is(failure, err) {
+			t.Errorf("failure = %v, want %v", failure, err)
+		}
+	default:
+		t.Fatal("write failure was not sent to the node holder")
+	}
+	if closeErr := recorder.Close(); !errors.Is(closeErr, err) {
+		t.Errorf("close error = %v, want retained write error %v", closeErr, err)
+	}
+}
+
+func TestHolderReturnsActualEvidenceWriteFailure(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &evidenceRecorder{node: "proxy", file: writer, failed: make(chan error, 1)}
+	want := recorder.record(evidenceEvent{Kind: ServiceDNS, Name: "private.test"})
+	inputReader, inputWriter := io.Pipe()
+	defer inputReader.Close()
+	defer inputWriter.Close()
+
+	if got := serveHolderCommands(context.Background(), inputReader, io.Discard, nil, recorder); !errors.Is(got, want) {
+		t.Fatalf("holder error = %v, want %v", got, want)
+	}
+	_ = recorder.Close()
 }
 
 func TestReadSOCKSRequestPortUsesNetworkByteOrder(t *testing.T) {
