@@ -128,6 +128,7 @@ func resolveTargets(ctx context.Context, entries []zoneEntry) map[string][]strin
 
 func browseZone(ctx context.Context, svc string) []byte {
 	cmd := exec.CommandContext(ctx, dnssdPath, "-t", "3", "-Z", svc, "local.")
+	cmd.WaitDelay = time.Second // don't hang on Wait if a child holds the pipe
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil

@@ -24,6 +24,7 @@ func AdvertisedNames(ctx context.Context, ips []string) map[string]string {
 
 	cmd := exec.CommandContext(ctx, "avahi-browse",
 		"--all", "--terminate", "--resolve", "--parsable", "--no-db-lookup")
+	cmd.WaitDelay = time.Second // don't hang on Wait if a child holds the pipe
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil
