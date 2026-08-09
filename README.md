@@ -173,6 +173,8 @@ It deliberately never Fails: a peer that accepts the connection and then stops a
 
 The 24 KiB payload is inert, self-labelling filler; TLS targets get a record header in front so the TLS server reads the payload instead of resetting on the first byte. This is the only probe that sends bulk data — under `--watch` that is 24 KiB per pass, once every 5 seconds.
 
+The captive-portal check in the **Internet (TCP egress)** row reaches a fixed third-party endpoint: one small plain-HTTP `GET` with no request body to Google-operated `connectivitycheck.gstatic.com/generate_204`, on each diagnostic pass. It does not follow redirects — a redirect response is itself the evidence of interception — ignores any configured proxy, and is bounded by the normal per-probe timeout. Under `--watch` the request repeats with every pass, once every 5 seconds. The 24 KiB path-MTU write remains the only probe that sends bulk data.
+
 No verdict depends on ICMP. Plenty of healthy hosts drop ping, so a failed `ping` proves nothing and a successful one proves less than a TCP connect — RTT is measured from the TCP-connect handshake instead (no ICMP, no root). `ping` is available as a drill-down tool, where it is evidence for a human rather than input to the diagnosis. The source IP and interface are read from the winning connection's `LocalAddr`, with a UDP-connect fallback (which sends no packets) for path identity on failure. Every probe is bounded by a 4-second timeout.
 
 ## Usage
