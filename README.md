@@ -381,6 +381,14 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
 ```
 
+If the change touched a build-tagged or `_linux`/`_darwin`/`_windows` suffixed
+file, also compile for macOS and Windows:
+
+```sh
+GOOS=darwin go build ./...
+GOOS=windows go build ./...
+```
+
 Race, fuzz, and network-namespace checks run only on Linux in CI. The
 `netns_integration` tests skip themselves on a host without unprivileged user
 namespaces; they never need root.
