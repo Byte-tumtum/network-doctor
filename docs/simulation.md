@@ -4,9 +4,10 @@
 on purpose, runs netdoc inside it, and reports whether netdoc's diagnosis
 matched the fault that was actually injected.
 
-It is a test harness for netdoc, not a part of it. Nothing in this document
-ships in the `netdoc` binary: the release builds only the root package, and
-`internal/simulation` is imported by `cmd/netdoc-sim` alone.
+It is a permanent internal development and testing capability for netdoc, not
+an end-user product surface. Nothing in this document ships in the `netdoc`
+binary: the release builds only the root package, and `internal/simulation` is
+imported by `cmd/netdoc-sim` alone.
 
 ```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
@@ -48,6 +49,23 @@ netdoc's answer can be graded rather than eyeballed.
 
 The grading is deterministic and evidence-based. No model is involved in
 deciding whether netdoc was right.
+
+## Maintenance status
+
+The simulator, including `hunt`, `triage`, and `campaign`, is retained and
+maintained as quality and regression-testing infrastructure. Its existing fault
+models and scenarios are feature-complete by default.
+
+Maintenance includes bug, safety, and correctness fixes; deterministic and
+reliability improvements; compatibility work; regression coverage; and changes
+required when netdoc's diagnostic behavior changes. Add a fault model or
+scenario only when justified by a real bug, diagnostic blind spot, reproducible
+field condition, regression, or clearly identified missing network behavior
+relevant to Network Doctor.
+
+General simulator expansion is not a project goal. Prefer determinism, safety,
+fidelity, reproducibility, and finding Network Doctor defects over simulator
+breadth.
 
 ## It is unprivileged, and that is a structural property
 
@@ -986,8 +1004,7 @@ knob alone is not treated as proof that child namespaces can use it.
 
 - **Linux only.** `Backend` is an interface and `DefaultBackend` returns a
   clear capability message elsewhere, but the only implementation is
-  `linux-netns`. Podman, libvirt/QEMU, Hyper-V network compartments and macOS
-  VMs would slot in behind the same two interfaces.
+  `linux-netns`; no other backend is maintained.
 - **Static IPv4/IPv6 unicast routing only.** Multiple L2 segments, dual-stack
   interfaces, router nodes, default/specific routes, and metrics are supported.
   NAT/NAT66, SLAAC, router advertisements, DHCPv6, IPv6 policy routing, ECMP,
@@ -1012,18 +1029,3 @@ knob alone is not treated as proof that child namespaces can use it.
   the simulator can prove.
 - **Campaigns are sequential.** Parallel execution, cross-host coordination,
   and statistical significance analysis are intentionally absent.
-
-## Roadmap
-
-`netdoc-sim scenarios` lists what the library ships today. In rough order of
-what each additional scenario costs:
-
-1. Free with what exists — `dns` returns NXDOMAIN (leave the name out of the
-   zone), TCP port blocked, connection refused, packet loss, DNS is slow,
-   HTTP returns an error, or a missing route to a specific subnet.
-2. Extends the TLS service — an untrusted-issuer scenario, client certificates,
-   revocation, or version/cipher policy.
-3. Extends the SOCKS service/scenarios — authentication policy, proxy reachable
-   but destination unreachable, and deliberately broken proxy-side DNS.
-4. Extends multi-segment topology — routing loops, policy routing, tunnels,
-   NAT/NAT66, and split DNS across routed segments.
