@@ -22,7 +22,7 @@ After changing platform-tagged file, compile-check other targets: `GOOS=darwin g
 
 One behavior per commit. PRs explain user-visible effect, list validation commands, link issues, include screenshots or terminal captures for TUI layout changes. Call out platform-specific behavior + any untested OS explicitly.
 
-Commit direct to `main`. Keep commit subjects short, simple, and imperative. Do not use Conventional Commit type or scope prefixes (for example, `Add Star History chart`, never `docs: add Star History chart`, `feat: ...`, or `fix: ...`). Do not add a `Co-Authored-By` trailer. Keep `--help` on standard `fs.PrintDefaults` formatting. Preserve version injection through `-ldflags "-X main.version=..."` (local builds use `dev`). Release = tag commit already on `main`, push `vX.Y.Z`. GoReleaser publishes GitHub release, Homebrew cask, AUR package.
+Commit direct to `main`. Keep commit subjects short, simple, and imperative. Do not use Conventional Commit type or scope prefixes (for example, `Add Star History chart`, never `docs: add Star History chart`, `feat: ...`, or `fix: ...`). Do not add a `Co-Authored-By` trailer. Keep `--help` on standard `fs.PrintDefaults` formatting. Preserve version injection through `-ldflags "-X main.version=..."` (local builds use `dev`). Release = tag commit already on `main`, push `vX.Y.Z`. GoReleaser publishes GitHub release, Homebrew cask.
 
 ## Security & Configuration Tips
 
