@@ -20,12 +20,19 @@ type Tool struct {
 	Confirm bool          // show the exact command and wait for a keypress before running
 	// Build returns the argv (never a shell string), the process env (nil =
 	// inherit), and a human-display command string (shell-quoted, display only).
-	Build func(t *diagnostic.Target) (args, env []string, display string)
+	// sel is the address the diagnostic chain actually reached the target on
+	// (ProbeTargetTCP's SelectedIP), or nil when unknown; family-sensitive
+	// tools use it so a hostname that resolved to AAAA isn't probed over IPv4.
+	Build func(t *diagnostic.Target, sel net.IP) (args, env []string, display string)
 
 	Available bool // whether the tool's binary is installed
 }
 
 var toolLookPath = exec.LookPath
+
+// selectedIP is the address the target TCP probe reached the host on, or nil
+// before that probe has a result (toolbox mode, a failed or unfinished run).
+func (m model) selectedIP() net.IP { return m.results[diagnostic.ProbeTargetTCP].SelectedIP }
 
 const lanDiscoveryName = "LAN scan"
 
@@ -82,7 +89,7 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 	} else if t.IP != nil {
 		tools = append(tools, staticTool(quote, "d", "reverse DNS lookup", "dig", "+time=2", "+tries=1", "-x", host))
 	} else {
-		tools = append(tools, staticTool(quote, "d", "DNS lookup", "dig", "+time=2", "+tries=1", host))
+		tools = append(tools, digTool(quote, host))
 	}
 
 	// The "c" slot is the application-layer check, matched to the target's
@@ -135,9 +142,9 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 func nmapTool(quote func([]string) string, host string) Tool {
 	return Tool{
 		Key: "n", Name: "port scan", Bin: "nmap", Confirm: true, Timeout: 120 * time.Second,
-		Build: func(t *diagnostic.Target) ([]string, []string, string) {
+		Build: func(t *diagnostic.Target, sel net.IP) ([]string, []string, string) {
 			args := []string{"-sT", "-Pn", "--host-timeout", "110s"}
-			if t.IP != nil && t.IP.To4() == nil {
+			if isIPv6(targetIP(t, sel)) {
 				args = append(args, "-6")
 			}
 			if t.PortExplicit {
@@ -149,10 +156,45 @@ func nmapTool(quote func([]string) string, host string) Tool {
 	}
 }
 
+// targetIP is the address a family-sensitive tool should assume: a literal
+// target pins the family outright, otherwise the address the chain actually
+// reached the host on. nil (no literal, no successful target probe) means
+// "unknown" — callers keep their resolver-default behaviour.
+func targetIP(t *diagnostic.Target, sel net.IP) net.IP {
+	if t != nil && t.IP != nil {
+		return t.IP
+	}
+	return sel
+}
+
+func isIPv6(ip net.IP) bool { return ip != nil && ip.To4() == nil }
+
+// digTool builds the forward DNS lookup for a hostname target. The query type
+// follows the family the chain reached the host on, so an AAAA-only name isn't
+// looked up as an A record that doesn't exist; with no selected IP the type is
+// left off and dig's default (A) applies.
+func digTool(quote func([]string) string, host string) Tool {
+	return Tool{
+		Key: "d", Name: "DNS lookup", Bin: "dig",
+		Build: func(t *diagnostic.Target, sel net.IP) ([]string, []string, string) {
+			args := []string{"+time=2", "+tries=1"}
+			if ip := targetIP(t, sel); ip != nil {
+				if isIPv6(ip) {
+					args = append(args, "-t", "AAAA")
+				} else {
+					args = append(args, "-t", "A")
+				}
+			}
+			args = append(args, host)
+			return args, nil, "dig " + quote(args)
+		},
+	}
+}
+
 func lanDiscoveryTool(quote func([]string) string, cidr string) Tool {
 	return Tool{
 		Key: "v", Name: lanDiscoveryName, Bin: "nmap", Confirm: true, Timeout: 60 * time.Second,
-		Build: func(*diagnostic.Target) ([]string, []string, string) {
+		Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
 			args := []string{"--unprivileged", "-sn", "-T3", "--host-timeout", "5s", "-oG", "-", cidr}
 			return args, nil, "nmap " + quote(args)
 		},
@@ -173,7 +215,7 @@ func curlTool(host, goos string) Tool {
 	}
 	return Tool{
 		Key: "c", Name: "web check", Bin: bin,
-		Build: func(t *diagnostic.Target) ([]string, []string, string) {
+		Build: func(t *diagnostic.Target, _ net.IP) ([]string, []string, string) {
 			scheme := "https"
 			if t.Proto == diagnostic.ProtoHTTP {
 				scheme = "http"
@@ -239,7 +281,7 @@ func smtpTool(quote func([]string) string, host string, port int) Tool {
 // (a host, if any, is already baked into args). Callers never mutate the argv —
 // exec.Command copies it — so Build hands out the captured slice as-is.
 func staticTool(quote func([]string) string, key, name, bin string, args ...string) Tool {
-	return Tool{Key: key, Name: name, Bin: bin, Build: func(*diagnostic.Target) ([]string, []string, string) {
+	return Tool{Key: key, Name: name, Bin: bin, Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
 		return args, nil, bin + " " + quote(args)
 	}}
 }

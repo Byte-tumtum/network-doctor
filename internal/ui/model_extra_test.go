@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -330,7 +331,7 @@ func TestConcurrentToolsCanSwitch(t *testing.T) {
 	m.cur.status, m.cur.name, m.cur.display = JobRunning, "first tool", "first"
 	m.tools = []Tool{{
 		Key: "z", Name: "second tool", Bin: os.Args[0], Available: true,
-		Build: func(*diagnostic.Target) ([]string, []string, string) {
+		Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
 			return []string{"-test.run=TestHelperProcess"},
 				append(os.Environ(), "GO_HELPER=1", "GO_HELPER_MODE=lines", "GO_HELPER_N=1"),
 				"second"
@@ -399,7 +400,7 @@ func TestJobLimits(t *testing.T) {
 		})
 	}
 	tool := Tool{Key: "z", Name: "second tool", Bin: os.Args[0], Available: true,
-		Build: func(*diagnostic.Target) ([]string, []string, string) {
+		Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
 			t.Fatal("launch must be refused at the active cap")
 			return nil, nil, ""
 		}}
@@ -513,7 +514,7 @@ func TestToolboxLaunchBeforeRun(t *testing.T) {
 		t.Fatal("precondition: toolbox model must start with a nil ctx")
 	}
 	tool := Tool{Key: "z", Name: "helper", Bin: os.Args[0], Available: true,
-		Build: func(*diagnostic.Target) ([]string, []string, string) {
+		Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
 			return []string{"-test.run=TestHelperProcess"},
 				append(os.Environ(), "GO_HELPER=1", "GO_HELPER_MODE=lines", "GO_HELPER_N=1"),
 				"helper"
@@ -539,7 +540,7 @@ func TestLaunchToolUnavailable(t *testing.T) {
 	m.cur.evicted = 9
 	tool := Tool{
 		Key: "z", Name: "nope", Bin: "network-doctor-no-such-binary-xyz",
-		Build: func(*diagnostic.Target) ([]string, []string, string) { return nil, nil, "nope" },
+		Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) { return nil, nil, "nope" },
 	}
 	cmd := (&m).launchTool(tool)
 	if cmd != nil {
@@ -570,7 +571,7 @@ func TestLaunchToolStartErrorClearsPreviousJobState(t *testing.T) {
 	}
 	tool := Tool{
 		Key: "z", Name: "bad tool", Bin: bin, Available: true,
-		Build: func(*diagnostic.Target) ([]string, []string, string) { return nil, nil, "bad-tool --display" },
+		Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) { return nil, nil, "bad-tool --display" },
 	}
 	cmd := (&m).launchTool(tool)
 	if cmd != nil {

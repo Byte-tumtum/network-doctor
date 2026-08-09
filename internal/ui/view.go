@@ -464,7 +464,7 @@ func helpKeys(width int, kv ...string) string {
 // confirmView replaces the help bar with the pending advanced tool's exact
 // command and a run/cancel gate, so the scan is always shown before it runs.
 func (m model) confirmView() string {
-	_, _, display := m.confirmTool.Build(m.target)
+	_, _, display := m.confirmTool.Build(m.target, m.selectedIP())
 	body := panelTitleStyle.Render("Run "+m.confirmTool.Name+"?") + "\n" +
 		faintStyle.Render("Actively probes the shown scope — may trip intrusion detection.") + "\n" +
 		"$ " + display

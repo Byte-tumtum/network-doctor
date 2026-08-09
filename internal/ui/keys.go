@@ -411,7 +411,7 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 		return nil
 	}
 	wasTicking := m.spinnerActive()
-	args, env, display := tool.Build(m.target)
+	args, env, display := tool.Build(m.target, m.selectedIP())
 	id := fmt.Sprintf("%s-%d-%d", tool.Key, m.generation, time.Now().UnixNano())
 	// Toolbox mode: a tool can launch before the first 'r' creates the
 	// generation context — initialize it lazily, exactly as scheduleMsg does.
