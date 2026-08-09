@@ -2,7 +2,7 @@
 
 Thanks for helping make network troubleshooting less mysterious. Bug reports,
 small fixes, platform-specific testing, and focused feature proposals are all
-welcome.
+welcome. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Before opening an issue
 
