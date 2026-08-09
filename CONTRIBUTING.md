@@ -33,6 +33,7 @@ The code is split by responsibility:
 - `internal/diagnostic` owns targets, probes, and verdict logic.
 - `internal/ui` owns Bubble Tea interaction, rendering, and tool jobs.
 - `internal/textsafe` sanitizes remote and subprocess output.
+- `internal/simulation` + `cmd/netdoc-sim` build virtual networks to test the diagnosis engine against; nothing here ships in the `netdoc` binary.
 
 Keep network semantics independent of the UI. Put OS-specific behavior in
 build-tagged or platform-suffixed files, keep probes unprivileged and bounded,
