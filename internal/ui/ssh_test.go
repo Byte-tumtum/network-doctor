@@ -82,6 +82,21 @@ func TestSSHCommand(t *testing.T) {
 	}
 }
 
+func TestSSHDisplayUsesPlatformQuoter(t *testing.T) {
+	args := []string{"-i", `C:\Users\O'Brien\.ssh\id key`, "example.com"}
+	if shellArgs(args) == psArgs(args) {
+		t.Fatal("test argument does not distinguish POSIX and PowerShell quoting")
+	}
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			want := "ssh " + quoterFor(goos)(args)
+			if got := sshDisplay(args, goos); got != want {
+				t.Errorf("sshDisplay = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // Without a helper path there is nothing to feed the password to, so ssh must
 // be left to ask on the terminal rather than told the prompt count.
 func TestSSHCommandWithoutHelper(t *testing.T) {

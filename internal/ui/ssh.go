@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -351,10 +352,14 @@ func runSSH(args, env []string) tea.Cmd {
 	cmd.Env = env // nil inherits
 	tee := &capWriter{}
 	cmd.Stderr = io.MultiWriter(os.Stderr, tee)
-	display := "ssh " + shellArgs(args)
+	display := sshDisplay(args, runtime.GOOS)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return sshDoneMsg{err: err, display: display, output: tee.String()}
 	})
+}
+
+func sshDisplay(args []string, goos string) string {
+	return "ssh " + quoterFor(goos)(args)
 }
 
 // capWriter keeps the first capBytes it is given and counts the rest away. The
