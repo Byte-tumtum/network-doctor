@@ -37,7 +37,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
       - run: go test ./...
-      - run: go test -tags integration ./internal/diagnostic
+      - run: go test -tags integration ./internal/diagnostic ./internal/simulation
       # Builds real network namespaces to run netdoc inside deliberately broken
       # networks. Rootless: it uses an unprivileged user namespace.
       #
