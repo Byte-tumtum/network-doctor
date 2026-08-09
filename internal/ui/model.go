@@ -119,7 +119,7 @@ var WatchEvery = 5 * time.Second
 type model struct {
 	target  *diagnostic.Target
 	probes  []diagnostic.Probe
-	source  net.IP
+	sources *diagnostic.SourceAddresses
 	version string
 
 	// results + started are owned exclusively by Update; probe goroutines get an
@@ -231,14 +231,29 @@ var (
 // source; a nil source leaves them unpinned. histFile is where target history
 // persists across sessions; "" keeps it in-memory only.
 func NewWithSource(t *diagnostic.Target, source net.IP, toolbox, watch bool, histFile, version string) tea.Model {
-	probes := diagnostic.BuildProbesFrom(t, source)
+	var sources *diagnostic.SourceAddresses
+	if source != nil {
+		sources = &diagnostic.SourceAddresses{}
+		if source.To4() != nil {
+			sources.IPv4 = source
+		} else {
+			sources.IPv6 = source
+		}
+	}
+	return NewWithSources(t, sources, toolbox, watch, histFile, version)
+}
+
+// NewWithSources constructs the terminal application with separate selected
+// IPv4 and IPv6 source addresses; nil leaves dials unpinned.
+func NewWithSources(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version string) tea.Model {
+	probes := diagnostic.BuildProbesFromSources(t, sources)
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
 		target:     t,
 		probes:     probes,
-		source:     source,
+		sources:    sources,
 		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
 		started:    map[diagnostic.ProbeID]bool{},
 		tools:      toolsFor(t, runtime.GOOS),

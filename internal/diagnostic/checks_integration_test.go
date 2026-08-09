@@ -57,7 +57,7 @@ func TestDialFromSourceLoopback(t *testing.T) {
 	}
 	defer ln.Close()
 
-	conn, err := opsFromSource(net.ParseIP("127.0.0.1")).dialContext(
+	conn, err := opsFromSources(&SourceAddresses{IPv4: net.ParseIP("127.0.0.1")}).dialContext(
 		context.Background(), "tcp4", ln.Addr().String(),
 	)
 	if err != nil {

@@ -259,7 +259,7 @@ var (
 type netops struct {
 	interfaces     func() ([]net.Interface, error)
 	interfaceAddrs func(*net.Interface) ([]net.Addr, error)
-	source         net.IP
+	sources        *SourceAddresses
 	// lookupIP resolves host and reports the resolver that was dialed, as a
 	// host:port string. An empty server means "couldn't tell", not "none".
 	lookupIP       func(ctx context.Context, host string) ([]net.IP, string, error)
@@ -278,6 +278,13 @@ type netops struct {
 	// routeCause classifies a failed direct IPv4 path from OS route/neighbor
 	// state. Nil keeps deterministic probe unit tests independent of the host.
 	routeCause func(net.IP) string
+}
+
+// SourceAddresses are the usable IPv4 and IPv6 addresses selected by
+// --iface. An exact-IP selection sets only its own family.
+type SourceAddresses struct {
+	IPv4 net.IP
+	IPv6 net.IP
 }
 
 var defaultOps = &netops{
@@ -304,11 +311,9 @@ var defaultOps = &netops{
 	routeCause: routeFailureCause,
 }
 
-// SourceIP resolves an interface name (or exact local IP) to the source
-// address used by BuildProbesFrom. Interface names prefer IPv4 so the common
-// VPN/split-tunnel case does not silently disable IPv4; pass an IP to choose
-// another address explicitly.
-func SourceIP(iface string) (net.IP, error) {
+// ResolveSource resolves an interface name to one usable address per family,
+// or an exact local IP to only that address's family.
+func ResolveSource(iface string) (*SourceAddresses, error) {
 	if want := net.ParseIP(iface); want != nil {
 		ifaces, err := net.Interfaces()
 		if err != nil {
@@ -321,7 +326,7 @@ func SourceIP(iface string) (net.IP, error) {
 			}
 			for _, addr := range addrs {
 				if ipFromAddr(addr).Equal(want) {
-					return want, nil
+					return sourceAddresses([]net.Addr{&net.IPAddr{IP: want}}), nil
 				}
 			}
 		}
@@ -335,10 +340,20 @@ func SourceIP(iface string) (net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("addresses for interface %q: %w", iface, err)
 	}
-	if ip := preferredSourceIP(addrs); ip != nil {
-		return ip, nil
+	if sources := sourceAddresses(addrs); sources != nil {
+		return sources, nil
 	}
 	return nil, fmt.Errorf("interface %q has no usable IP address", iface)
+}
+
+// SourceIP retains the original single-address API for callers that explicitly
+// want its IPv4-first behavior. --iface uses ResolveSource so it keeps both.
+func SourceIP(iface string) (net.IP, error) {
+	sources, err := ResolveSource(iface)
+	if err != nil {
+		return nil, err
+	}
+	return sources.primary(), nil
 }
 
 func ipFromAddr(addr net.Addr) net.IP {
@@ -351,30 +366,69 @@ func ipFromAddr(addr net.Addr) net.IP {
 	return nil
 }
 
-func preferredSourceIP(addrs []net.Addr) net.IP {
-	var v6 net.IP
+func sourceAddresses(addrs []net.Addr) *SourceAddresses {
+	var sources SourceAddresses
 	for _, addr := range addrs {
 		ip := ipFromAddr(addr)
 		if ip == nil || ip.IsUnspecified() || ip.IsMulticast() {
 			continue
 		}
-		if ip4 := ip.To4(); ip4 != nil {
-			return ip4
+		if ip4 := ip.To4(); ip4 != nil && sources.IPv4 == nil {
+			sources.IPv4 = append(net.IP(nil), ip4...)
 		}
-		if v6 == nil {
-			v6 = ip
+		if ip.To4() == nil && sources.IPv6 == nil {
+			sources.IPv6 = append(net.IP(nil), ip...)
 		}
 	}
-	return v6
+	if sources.IPv4 == nil && sources.IPv6 == nil {
+		return nil
+	}
+	return &sources
 }
 
-func opsFromSource(source net.IP) *netops {
+func preferredSourceIP(addrs []net.Addr) net.IP {
+	if sources := sourceAddresses(addrs); sources != nil {
+		return sources.primary()
+	}
+	return nil
+}
+
+func (s SourceAddresses) primary() net.IP {
+	if s.IPv4 != nil {
+		return s.IPv4
+	}
+	return s.IPv6
+}
+
+func containsSources(addrs []net.Addr, want *SourceAddresses) bool {
+	found4, found6 := want.IPv4 == nil, want.IPv6 == nil
+	for _, addr := range addrs {
+		ip := ipFromAddr(addr)
+		found4 = found4 || ip.Equal(want.IPv4)
+		found6 = found6 || ip.Equal(want.IPv6)
+	}
+	return found4 && found6
+}
+
+func opsFromSources(sources *SourceAddresses) *netops {
 	o := *defaultOps
-	o.source = append(net.IP(nil), source...)
-	o.dialContext = dialContextFrom(source)
+	copySources := &SourceAddresses{
+		IPv4: append(net.IP(nil), sources.IPv4...),
+		IPv6: append(net.IP(nil), sources.IPv6...),
+	}
+	o.sources = copySources
+	o.dialContext = dialContextFromSources(copySources)
 	o.dialTLS = func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
-		d := tls.Dialer{NetDialer: dialerFrom(source, network), Config: cfg}
-		return d.DialContext(ctx, network, addr)
+		conn, err := o.dialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		tlsConn := tls.Client(conn, cfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
 	}
 	o.lookupIP = func(ctx context.Context, host string) ([]net.IP, string, error) {
 		return lookupIPWithDial(ctx, host, o.dialContext)
@@ -389,12 +443,14 @@ func opsFromSource(source net.IP) *netops {
 }
 
 func dialContextFrom(source net.IP) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return dialerFrom(source, network).DialContext(ctx, network, addr)
-	}
+	return dialContextFromSources(sourceAddresses([]net.Addr{&net.IPAddr{IP: source}}))
 }
 
 func dialerFrom(source net.IP, network string) *net.Dialer {
+	return dialerFromSource(source, network, dialContextFrom(source))
+}
+
+func dialerFromSource(source net.IP, network string, resolverDial func(context.Context, string, string) (net.Conn, error)) *net.Dialer {
 	var local net.Addr = &net.TCPAddr{IP: source}
 	if strings.HasPrefix(network, "udp") {
 		local = &net.UDPAddr{IP: source}
@@ -402,8 +458,77 @@ func dialerFrom(source net.IP, network string) *net.Dialer {
 	d := &net.Dialer{LocalAddr: local}
 	// Hostname resolution performed inside DialContext must use the same source
 	// path too. Resolver destinations are already numeric, so this cannot recurse.
-	d.Resolver = &net.Resolver{PreferGo: true, Dial: dialContextFrom(source)}
+	d.Resolver = &net.Resolver{PreferGo: true, Dial: resolverDial}
 	return d
+}
+
+func dialContextFromSources(sources *SourceAddresses) func(context.Context, string, string) (net.Conn, error) {
+	var dial func(context.Context, string, string) (net.Conn, error)
+	dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if source, family := sources.forDial(network, addr); family != 0 {
+			if source == nil {
+				return nil, fmt.Errorf("selected interface has no IPv%d source address", family)
+			}
+			return dialerFromSource(source, network, dial).DialContext(ctx, network, addr)
+		}
+
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		type result struct {
+			conn net.Conn
+			err  error
+		}
+		results := make(chan result, 2)
+		families := 0
+		for _, item := range []struct {
+			source  net.IP
+			network string
+		}{{sources.IPv4, network + "4"}, {sources.IPv6, network + "6"}} {
+			if item.source == nil {
+				continue
+			}
+			families++
+			go func(source net.IP, familyNetwork string) {
+				conn, err := dialerFromSource(source, familyNetwork, dial).DialContext(ctx, familyNetwork, addr)
+				if err == nil && ctx.Err() != nil {
+					conn.Close()
+					return
+				}
+				results <- result{conn, err}
+			}(item.source, item.network)
+		}
+		var errs []error
+		for range families {
+			result := <-results
+			if result.err == nil {
+				return result.conn, nil
+			}
+			errs = append(errs, result.err)
+		}
+		return nil, errors.Join(errs...)
+	}
+	return dial
+}
+
+// forDial returns the selected source and address family. Family zero means a
+// hostname on a generic network, which must try each selected family.
+func (s SourceAddresses) forDial(network, addr string) (net.IP, int) {
+	if strings.HasSuffix(network, "4") {
+		return s.IPv4, 4
+	}
+	if strings.HasSuffix(network, "6") {
+		return s.IPv6, 6
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			if ip.To4() != nil {
+				return s.IPv4, 4
+			}
+			return s.IPv6, 6
+		}
+	}
+	return nil, 0
 }
 
 // lookupIPWithDial resolves host and reports which resolver was on the other
@@ -508,9 +633,18 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 // injection by forgetting to Clean at the source. It is also the one place
 // both runners (RunAll and the ui scheduler) share, so timing lives here too.
 func BuildProbesFrom(t *Target, source net.IP) []Probe {
+	if source == nil {
+		return BuildProbesFromSources(t, nil)
+	}
+	return BuildProbesFromSources(t, sourceAddresses([]net.Addr{&net.IPAddr{IP: source}}))
+}
+
+// BuildProbesFromSources is BuildProbesFrom with separate selected-interface
+// addresses for IPv4 and IPv6.
+func BuildProbesFromSources(t *Target, sources *SourceAddresses) []Probe {
 	o := defaultOps
-	if source != nil {
-		o = opsFromSource(source)
+	if sources != nil {
+		o = opsFromSources(sources)
 	}
 	probes := o.buildProbes(t)
 	for i := range probes {
@@ -605,37 +739,38 @@ func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeR
 		r.Detail, r.Fix = "cannot list interfaces: "+err.Error(), "check permissions / network stack"
 		return r
 	}
-	if o.source != nil {
+	if o.sources != nil {
 		var matches []net.Interface
 		for i := range ifaces {
 			addrs, err := o.interfaceAddrs(&ifaces[i])
 			if err != nil {
 				continue
 			}
-			for _, addr := range addrs {
-				if ipFromAddr(addr).Equal(o.source) {
-					matches = append(matches, ifaces[i])
-					break
-				}
+			if containsSources(addrs, o.sources) {
+				matches = append(matches, ifaces[i])
 			}
 		}
+		primary := o.sources.primary()
 		if len(matches) == 0 {
-			r.Status, r.Detail = StatusFail, "source address "+o.source.String()+" is no longer assigned"
+			r.Status, r.Detail = StatusFail, "selected source address is no longer assigned"
 			r.Fix = "choose an active interface with --iface"
 			return r
 		}
 		if len(matches) > 1 {
-			r.Status, r.Source, r.Iface = StatusWarn, o.source, "(ambiguous)"
-			r.Detail = "source address " + o.source.String() + " is assigned to multiple interfaces"
+			r.Status, r.Source, r.Iface = StatusWarn, primary, "(ambiguous)"
+			r.Detail = "selected source address is assigned to multiple interfaces"
 			return r
 		}
 		if matches[0].Flags&net.FlagUp == 0 || matches[0].Flags&net.FlagRunning == 0 {
-			r.Status, r.Source, r.Iface = StatusFail, o.source, matches[0].Name
+			r.Status, r.Source, r.Iface = StatusFail, primary, matches[0].Name
 			r.Detail, r.Fix = "interface "+matches[0].Name+" is down", ifaceFix(runtime.GOOS)
 			return r
 		}
-		r.Status, r.Source, r.Iface = StatusPass, o.source, matches[0].Name
-		r.Detail = "using " + matches[0].Name + " source " + o.source.String()
+		r.Status, r.Source, r.Iface = StatusPass, primary, matches[0].Name
+		r.Detail = "using " + matches[0].Name + " source " + primary.String()
+		if o.sources.IPv4 != nil && o.sources.IPv6 != nil {
+			r.Detail = "using " + matches[0].Name + " sources " + o.sources.IPv4.String() + ", " + o.sources.IPv6.String()
+		}
 		return r
 	}
 	// First up-and-running non-loopback interface wins — that's kernel
@@ -1912,6 +2047,13 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 // v4-only machine running a v6-enabled bridge, and 169.254.0.0/16 for IPv4,
 // which is what a host self-assigns when DHCP never answered.
 func (o *netops) hasGlobalUnicast(v4 bool) bool {
+	if o.sources != nil {
+		ip := o.sources.IPv6
+		if v4 {
+			ip = o.sources.IPv4
+		}
+		return ip != nil && ip.IsGlobalUnicast() && !ip.IsLinkLocalUnicast() && (v4 || ip[0]&0xfe != 0xfc)
+	}
 	ifaces, err := o.interfaces()
 	if err != nil {
 		return false

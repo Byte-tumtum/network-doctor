@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -190,10 +189,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
 	}
-	var source net.IP
+	var sources *diagnostic.SourceAddresses
 	if *iface != "" {
 		var err error
-		source, err = diagnostic.SourceIP(*iface)
+		sources, err = diagnostic.ResolveSource(*iface)
 		if err != nil {
 			fmt.Fprintln(stderr, "netdoc: -iface:", err)
 			return 2
@@ -211,7 +210,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *jsonOut {
-		return runJSON(context.Background(), t, source, *watch, stdout, stderr)
+		return runJSON(context.Background(), t, sources, *watch, stdout, stderr)
 	}
 
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
@@ -221,7 +220,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if dir, err := os.UserConfigDir(); err == nil {
 		histFile = filepath.Join(dir, "netdoc", "history")
 	}
-	p := tea.NewProgram(ui.NewWithSource(t, source, *toolbox, *watch, histFile, version), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewWithSources(t, sources, *toolbox, *watch, histFile, version), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -314,7 +313,7 @@ var runAll = diagnostic.RunAll
 // With watch it never stops on its own: one compact report per line, forever,
 // until the terminal interrupts it. That's NDJSON, but not a new schema — the
 // line is the same report struct, plus the ts that makes a stream readable.
-func runJSON(ctx context.Context, t *diagnostic.Target, source net.IP, watch bool, stdout, stderr io.Writer) int {
+func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	if !watch {
 		enc.SetIndent("", "  ")
@@ -330,7 +329,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, source net.IP, watch boo
 	// success, so an interrupt before the first line lands has to fail closed.
 	code := 1
 	for {
-		probes := diagnostic.BuildProbesFrom(t, source)
+		probes := diagnostic.BuildProbesFromSources(t, sources)
 		results := runAll(ctx, probes)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,

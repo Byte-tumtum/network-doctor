@@ -68,6 +68,90 @@ func TestPreferredSourceIP(t *testing.T) {
 	}
 }
 
+func TestSourceAddressesSelectAndBindEachFamily(t *testing.T) {
+	v4 := net.ParseIP("192.0.2.2")
+	v6 := net.ParseIP("2001:db8::2")
+	cases := []struct {
+		name      string
+		addrs     []net.Addr
+		want4     net.IP
+		want6     net.IP
+		network   string
+		dest      string
+		wantLocal net.IP
+	}{
+		{"dual IPv4 probe", []net.Addr{&net.IPAddr{IP: v6}, &net.IPAddr{IP: v4}}, v4, v6, "tcp4", "192.0.2.1:443", v4},
+		{"dual IPv6 probe", []net.Addr{&net.IPAddr{IP: v4}, &net.IPAddr{IP: v6}}, v4, v6, "tcp6", "[2001:db8::1]:443", v6},
+		{"IPv4 only", []net.Addr{&net.IPAddr{IP: v4}}, v4, nil, "udp", "192.0.2.53:53", v4},
+		{"IPv6 only", []net.Addr{&net.IPAddr{IP: v6}}, nil, v6, "udp", "[2001:db8::53]:53", v6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sources := sourceAddresses(tc.addrs)
+			if sources == nil || !sources.IPv4.Equal(tc.want4) || !sources.IPv6.Equal(tc.want6) {
+				t.Fatalf("sourceAddresses() = %+v, want IPv4 %v IPv6 %v", sources, tc.want4, tc.want6)
+			}
+			source, family := sources.forDial(tc.network, tc.dest)
+			if source == nil || family == 0 {
+				t.Fatalf("forDial(%q, %q) = (%v, %d), want %v", tc.network, tc.dest, source, family, tc.wantLocal)
+			}
+			d := dialerFromSource(source, tc.network, nil)
+			var local net.IP
+			switch addr := d.LocalAddr.(type) {
+			case *net.TCPAddr:
+				local = addr.IP
+			case *net.UDPAddr:
+				local = addr.IP
+			}
+			if !local.Equal(tc.wantLocal) {
+				t.Errorf("local source = %v, want %v", local, tc.wantLocal)
+			}
+		})
+	}
+}
+
+func TestSelectedSourceDoesNotFallBackAcrossFamilies(t *testing.T) {
+	v4Only := &SourceAddresses{IPv4: net.ParseIP("192.0.2.2")}
+	if source, family := v4Only.forDial("tcp6", "[2001:db8::1]:443"); source != nil || family != 6 {
+		t.Fatalf("IPv6 selection from IPv4-only interface = (%v, %d), want (nil, 6)", source, family)
+	}
+	if _, err := dialContextFromSources(v4Only)(context.Background(), "tcp6", "[2001:db8::1]:443"); err == nil || !strings.Contains(err.Error(), "no IPv6 source address") {
+		t.Fatalf("IPv6 dial from IPv4-only interface error = %v", err)
+	}
+
+	v6Only := &SourceAddresses{IPv6: net.ParseIP("2001:db8::2")}
+	if source, family := v6Only.forDial("tcp4", "192.0.2.1:443"); source != nil || family != 4 {
+		t.Fatalf("IPv4 selection from IPv6-only interface = (%v, %d), want (nil, 4)", source, family)
+	}
+	if _, err := dialContextFromSources(v6Only)(context.Background(), "tcp4", "192.0.2.1:443"); err == nil || !strings.Contains(err.Error(), "no IPv4 source address") {
+		t.Fatalf("IPv4 dial from IPv6-only interface error = %v", err)
+	}
+}
+
+func TestIfaceProbeAcceptsDualSourcesAndExactSecondaryAddress(t *testing.T) {
+	v4 := net.ParseIP("192.0.2.2")
+	v6 := net.ParseIP("2001:db8::2")
+	addrs := []net.Addr{
+		&net.IPAddr{IP: net.ParseIP("192.0.2.1")},
+		&net.IPAddr{IP: v4},
+		&net.IPAddr{IP: v6},
+	}
+	base := netops{
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{{Name: "fake0", Flags: net.FlagUp | net.FlagRunning}}, nil
+		},
+		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) { return addrs, nil },
+	}
+	for _, sources := range []*SourceAddresses{{IPv4: v4, IPv6: v6}, {IPv4: v4}} {
+		ops := base
+		ops.sources = sources
+		r := ops.ifaceProbe(context.Background(), nil)
+		if r.Status != StatusPass || r.Iface != "fake0" {
+			t.Errorf("ifaceProbe(%+v) = %+v, want PASS on fake0", sources, r)
+		}
+	}
+}
+
 func TestDialerFromUsesNetworkAddressType(t *testing.T) {
 	source := net.ParseIP("192.0.2.2")
 	if _, ok := dialerFrom(source, "tcp").LocalAddr.(*net.TCPAddr); !ok {
