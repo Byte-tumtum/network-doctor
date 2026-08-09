@@ -9,29 +9,17 @@ an end-user product surface. Nothing in this document ships in the `netdoc`
 binary: the release builds only the root package, and `internal/simulation` is
 imported by `cmd/netdoc-sim` alone.
 
+Use `netdoc-sim scenarios` as the complete list of shipped built-in scenarios.
+The other commands below are representative examples, not a scenario catalog:
+
 ```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 
 ./netdoc-sim capabilities            # what this host can do, and what a run does
-./netdoc-sim scenarios               # the built-in scenario library
+./netdoc-sim scenarios               # every shipped built-in scenario
 ./netdoc-sim validate broken-dns     # parse and check, build nothing
 ./netdoc-sim run broken-dns          # the whole thing
-./netdoc-sim run socks5-local-dns-fails
-./netdoc-sim run socks5h-remote-dns-succeeds
-./netdoc-sim run tls-valid
-./netdoc-sim run tls-expired-certificate
-./netdoc-sim run tls-hostname-mismatch
 ./netdoc-sim run healthy-routed-network
-./netdoc-sim run dual-stack-healthy
-./netdoc-sim run ipv4-works-ipv6-broken
-./netdoc-sim run ipv6-works-ipv4-broken
-./netdoc-sim run gateway-unreachable
-./netdoc-sim run wrong-default-route
-./netdoc-sim run multiple-interfaces-wrong-preferred-route
-./netdoc-sim run packet-loss
-./netdoc-sim run high-jitter
-./netdoc-sim run intermittent-dns
-./netdoc-sim run tcp-reset
 ./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
 ./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
 ./netdoc-sim run broken-dns -json    # the same report, machine-readable

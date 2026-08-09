@@ -391,31 +391,17 @@ fault that was actually injected:
 
 ```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
+./netdoc-sim scenarios
+```
+
+`netdoc-sim scenarios` is the source of truth for the complete set of shipped
+built-in scenarios. Run any name it prints; for example:
+
+```sh
 ./netdoc-sim run broken-dns
-./netdoc-sim run socks5-local-dns-fails
-./netdoc-sim run socks5h-remote-dns-succeeds
-./netdoc-sim run tls-valid
-./netdoc-sim run tls-expired-certificate
-./netdoc-sim run tls-hostname-mismatch
 ./netdoc-sim run healthy-routed-network
-./netdoc-sim run gateway-unreachable
-./netdoc-sim run wrong-default-route
-./netdoc-sim run multiple-interfaces-wrong-preferred-route
-./netdoc-sim run dual-stack-healthy
-./netdoc-sim run ipv4-works-ipv6-broken
-./netdoc-sim run ipv6-works-ipv4-broken
-./netdoc-sim run packet-loss
-./netdoc-sim run high-jitter
-./netdoc-sim run intermittent-dns
-./netdoc-sim run tcp-reset
-./netdoc-sim run transient-dns-outage
-./netdoc-sim run latency-spike
-./netdoc-sim run transient-connectivity-loss
-./netdoc-sim run fault-during-probe
 ./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
 ./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
-./netdoc-sim campaign flapping-connectivity --runs 6 --seed 12345
-./netdoc-sim campaign flapping-connectivity --seed 12345 --iteration 3
 ```
 
 ```text
