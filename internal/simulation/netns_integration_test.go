@@ -185,20 +185,80 @@ func TestHighLatencyScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
-func TestPacketLossScenario(t *testing.T) {
+func TestTierOneScenarios(t *testing.T) {
 	requireBackend(t)
-	requireNetemSeed(t)
-	rep := runScenario(t, "packet-loss")
-	if rep.Result != ResultPass {
-		t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+	for _, tc := range []struct {
+		name      string
+		testCount int
+		extra     []string
+	}{
+		{name: "dns-nxdomain", testCount: 1},
+		{name: "tcp-port-blocked", testCount: 1, extra: []string{"-timeout", timedTimeout}},
+		{name: "connection-refused", testCount: 2},
+		{name: "packet-loss", testCount: 1},
+		{name: "http-error", testCount: 1},
+		{name: "missing-subnet-route", testCount: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "packet-loss" {
+				requireNetemSeed(t)
+			}
+			rep := runScenario(t, tc.name, tc.extra...)
+			if rep.Result != ResultPass || len(rep.Tests) != tc.testCount {
+				t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+			}
+			out := rep.Tests[0]
+			switch tc.name {
+			case "dns-nxdomain":
+				if !hasDNSEvidence(rep, "internet", "10.77.0.10", "missing.test", "NXDOMAIN") {
+					t.Errorf("configured resolver did not return NXDOMAIN: %+v", rep.Evidence.DNS)
+				}
+			case "tcp-port-blocked":
+				check := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP))
+				if len(rep.Faults) != 1 || rep.Faults[0].Type != FaultDrop || rep.Faults[0].Node != "target" ||
+					rep.Faults[0].Summary != "target swallows tcp traffic to 10.77.0.20 port 2222" ||
+					!strings.Contains(strings.Join(out.TimedOut, ","), string(diagnostic.ProbeTargetTCP)) ||
+					strings.Contains(strings.ToLower(check.Detail), "refused") {
+					t.Errorf("silent TCP drop evidence: faults=%+v target=%+v", rep.Faults, check)
+				}
+			case "connection-refused":
+				check := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP))
+				if len(check.Attempts) != 1 || !strings.Contains(strings.ToLower(check.Attempts[0].Error), "connection refused") {
+					t.Errorf("active refusal evidence: %+v", check)
+				}
+				if control := rep.Tests[1]; diagnosisCheck(control, string(diagnostic.ProbeTargetTCP)).Status != "PASS" ||
+					diagnosisCheck(control, string(diagnostic.ProbeHTTP)).Status != "PASS" {
+					t.Errorf("same-node reachability control: %+v", control)
+				}
+			case "packet-loss":
+				if len(rep.Faults) != 1 || rep.Faults[0].Type != FaultNetem || rep.Faults[0].LossPercent != 10 || rep.Faults[0].Seed == 0 {
+					t.Fatalf("packet-loss qdisc evidence = %+v", rep.Faults)
+				}
+				if len(rep.Evidence.PacketConditions) != 1 || !rep.Evidence.PacketConditions[0].Active || rep.Evidence.PacketConditions[0].DroppedPackets == 0 {
+					t.Fatalf("tc did not report an active netem qdisc: %+v", rep.Evidence.PacketConditions)
+				}
+			case "http-error":
+				check := diagnosisCheck(out, string(diagnostic.ProbeHTTP))
+				if check.Status != "PASS" || check.Detail != "HTTP 503 (responded)" {
+					t.Errorf("HTTP error response = %+v", check)
+				}
+			case "missing-subnet-route":
+				reachable := true
+				if diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" || !hasDefaultRoute(rep, "client") ||
+					!hasSelectedRoute(rep, "client", "10.77.3.20", "10.77.1.1", "client-lan", &reachable) {
+					t.Errorf("healthy default selected for unrouted subnet: %+v", rep.Evidence.Routes)
+				}
+				for _, node := range rep.Topology {
+					for _, route := range node.Routes {
+						if node.Name == "client" && route.Destination == "10.77.3.0/24" {
+							t.Errorf("client unexpectedly has target-subnet route: %+v", route)
+						}
+					}
+				}
+			}
+			assertCleanedUp(t, rep)
+		})
 	}
-	if len(rep.Faults) != 1 || rep.Faults[0].Type != FaultNetem || rep.Faults[0].LossPercent != 10 || rep.Faults[0].Seed == 0 {
-		t.Fatalf("packet-loss qdisc evidence = %+v", rep.Faults)
-	}
-	if len(rep.Evidence.PacketConditions) != 1 || !rep.Evidence.PacketConditions[0].Active || rep.Evidence.PacketConditions[0].DroppedPackets == 0 {
-		t.Fatalf("tc did not report an active netem qdisc: %+v", rep.Evidence.PacketConditions)
-	}
-	assertCleanedUp(t, rep)
 }
 
 func TestHighJitterScenario(t *testing.T) {
