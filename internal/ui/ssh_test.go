@@ -4,9 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -163,6 +165,54 @@ func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
 	if args != nil || env != nil {
 		t.Errorf("args = %v, env = %v, want both nil", args, env)
 	}
+}
+
+// A config read that never answers is the same refusal as one that answers
+// badly, and it has to arrive on time: sshCommand runs inside Update, so an
+// unbounded `ssh -G` freezes the TUI instead of failing it. This one runs the
+// real sshEffective — stub it and the deadline under test never executes.
+func TestSSHCommandBoundsAStalledConfigRead(t *testing.T) {
+	stallSSHOnPath(t)
+	old := sshConfigTimeout
+	sshConfigTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { sshConfigTimeout = old })
+
+	start := time.Now()
+	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc")
+	elapsed := time.Since(start)
+
+	// Unbounded, this waits out the fake's full sleep and then succeeds on its
+	// empty output, so either check catches a missing deadline.
+	if err == nil {
+		t.Fatalf("sshCommand succeeded against a stalled ssh -G after %v: args = %v", elapsed, args)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("sshCommand took %v, want the %v deadline to cut it short", elapsed, sshConfigTimeout)
+	}
+	// The stall gets no UI of its own: it leaves by the existing refusal path.
+	if !strings.Contains(err.Error(), "cannot read ssh config") || !strings.Contains(err.Error(), "password field blank") {
+		t.Errorf("err = %q, want the unreadable-config refusal", err)
+	}
+	if args != nil || env != nil {
+		t.Errorf("args = %v, env = %v, want both nil", args, env)
+	}
+}
+
+// stallSSHOnPath puts an `ssh` on PATH that never answers, standing in for the
+// Match exec or hung-mount Include that makes `ssh -G` stall. A script rather
+// than the GO_HELPER re-exec the job tests use: the argv is sshEffective's to
+// build, and the test binary would reject its -G and exit at once.
+func stallSSHOnPath(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell to stall with")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write fake ssh: %v", err)
+	}
+	// Prepended, not replacing: the script still needs to find sleep.
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // Without a password there is no secret to misroute, so the lookup is not

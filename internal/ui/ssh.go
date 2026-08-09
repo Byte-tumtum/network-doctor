@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -289,6 +291,15 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 	return append(args, t.Host), env, nil
 }
 
+// sshConfigTimeout bounds the `ssh -G` config read. That read is synchronous
+// inside Update, so a stall freezes the whole TUI — no repaint, no Ctrl-C —
+// and ssh_config can genuinely stall: Match exec runs arbitrary commands and
+// Include pulls in files that may sit on a hung mount. Seconds for work that
+// normally costs milliseconds; past that the caller's existing refusal is a
+// better answer than a frozen screen. A var so the timeout test needn't wait
+// it out.
+var sshConfigTimeout = 3 * time.Second
+
 // sshEffective asks ssh what the target really resolves to once ssh_config has
 // had its say: the HostName a password prompt will name, and whether anything
 // stands between here and there. The error is not cosmetic — without an answer
@@ -296,8 +307,14 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 // password must refuse rather than pick a default. A var so tests don't shell
 // out.
 var sshEffective = func(args []string) (host string, proxied bool, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
+	defer cancel()
 	// -G prints the resolved config and connects to nothing.
-	out, err := exec.Command("ssh", append([]string{"-G"}, args...)...).Output()
+	cmd := exec.CommandContext(ctx, "ssh", append([]string{"-G"}, args...)...)
+	setProcGroup(cmd) // Match exec spawns descendants; the deadline has to reach them too
+	cmd.Cancel = func() error { return killGroup(cmd) }
+	cmd.WaitDelay = time.Second // don't hang on Wait if one of them holds the pipe
+	out, err := cmd.Output()
 	if err != nil {
 		return "", false, err
 	}
