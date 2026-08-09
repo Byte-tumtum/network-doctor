@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -459,4 +460,211 @@ type workflowDefaults struct {
 	Run struct {
 		Shell string `yaml:"shell"`
 	} `yaml:"run"`
+}
+
+// --- the launcher and its real hunt --------------------------------------
+
+// cleanHunt is what a director writes back when a baseline turned up nothing.
+func cleanHunt(t *testing.T, cases int) string {
+	t.Helper()
+	blob, err := json.Marshal(&simulation.HuntResult{Result: simulation.HuntResultClean,
+		GeneratorVersion: simulation.HuntGeneratorVersion, ExecutedCases: cases})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(blob)
+}
+
+// triage's hunt is a real `netdoc-sim hunt -json` in its own namespaces. This
+// pins the command line it builds: the scenario, its seed, and the flags the
+// launcher was given all have to survive into the director's argv, or triage
+// reproduces something other than what it hunted.
+func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 5)})
+	hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", 9*time.Second, 3, true, io.Discard)
+
+	result, err := hunt(context.Background(), "healthy-routed-network", -7, 5, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Result != simulation.HuntResultClean || result.ExecutedCases != 5 {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(directors.calls) != 1 || directors.calls[0].self != "/opt/netdoc-sim" {
+		t.Fatalf("directors = %+v", directors.calls)
+	}
+	f, base := receivedHunt(t, directors.calls[0].argv)
+	if base != "healthy-routed-network" || !f.seed.set || f.seed.v != -7 || *f.cases != 5 ||
+		*f.caseNum != 2 || *f.maxFaults != 3 || *f.timeout != 9*time.Second || *f.netdoc != "/opt/netdoc" {
+		t.Errorf("hunt got base %q seed %+v cases %d case %d max-faults %d timeout %s netdoc %q",
+			base, f.seed, *f.cases, *f.caseNum, *f.maxFaults, *f.timeout, *f.netdoc)
+	}
+	// Without -json there is no report to parse, and -v has to reach the hunt
+	// or a verbose triage goes quiet exactly where it matters.
+	if !*f.json || !*f.verbose {
+		t.Errorf("json = %t, v = %t, want both true", *f.json, *f.verbose)
+	}
+}
+
+// A hunt whose arguments are out of bounds is caught before a namespace is
+// created, not after.
+func TestDirectorHuntRejectsImpossibleHuntsWithoutRunning(t *testing.T) {
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 1)})
+	hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
+	if _, err := hunt(context.Background(), "healthy-routed-network", 1, 0, -1); err == nil {
+		t.Fatal("a hunt with -cases 0 was accepted")
+	} else if !strings.Contains(err.Error(), "-cases must be between 1 and") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(directors.calls) != 0 {
+		t.Errorf("a rejected hunt still created namespaces: %+v", directors.calls)
+	}
+}
+
+// The report is the only place a hunt's reason lives, so a report triage
+// cannot read, or one that disagrees with the exit code it arrived with, is an
+// error — never a hunt result triage goes on to file issues from.
+func TestDirectorHuntRefusesAReportItCannotTrust(t *testing.T) {
+	clean := cleanHunt(t, 1)
+	broken, err := json.Marshal(&simulation.HuntResult{Result: simulation.HuntResultError,
+		ErrorKind: "runtime", Error: "cleanup failed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := map[string]struct {
+		director fakeDirectors
+		want     string
+	}{
+		"director cannot start": {
+			director: fakeDirectors{code: 1, err: errors.New("namespaces unavailable")},
+			want:     "namespaces unavailable"},
+		"no report after a failure": {
+			director: fakeDirectors{code: exitError, stdout: "kernel is on fire\n"},
+			want:     "hunt exited 3 without a readable report"},
+		"no report after a usage exit": {
+			director: fakeDirectors{code: exitUsage, stdout: "unsupported hunt base\n"},
+			want:     "hunt exited 2 without a readable report"},
+		"no report after a success": {
+			director: fakeDirectors{code: exitOK, stdout: "nothing to see\n"},
+			want:     "cannot parse the hunt report"},
+		"report disagrees with the exit": {
+			director: fakeDirectors{code: exitError, stdout: clean},
+			want:     `hunt exited 3 but reported "` + simulation.HuntResultClean + `"`},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			stubDirectors(t, &tt.director)
+			hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
+			result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1)
+			if err == nil {
+				t.Fatalf("accepted %+v", result)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+	// A failing exit with a report that admits the failure is the normal way a
+	// hunt reports trouble, and triage has to be able to read it.
+	t.Run("failure the report agrees with", func(t *testing.T) {
+		stubDirectors(t, &fakeDirectors{code: exitError, stdout: string(broken)})
+		hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
+		result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1)
+		if err != nil {
+			t.Fatalf("err = %v, want the report", err)
+		}
+		if result.Result != simulation.HuntResultError || result.Error != "cleanup failed" {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+}
+
+// The launcher hunts every selected baseline at its own fixed seed, through a
+// real director each time, and reports what came back.
+func TestTriageLaunchHuntsEveryBaselineAtItsSeed(t *testing.T) {
+	fakeNetdoc(t)
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 3)})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"triage", "-json", "-netdoc", "./netdoc", "-cases", "3",
+		"-revision", "abc123", "-context", "workflow run 42"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitOK, stderr.String())
+	}
+	baselines := simulation.TriageBaselines()
+	// Nothing was found, so nothing needed reproducing: one hunt per baseline.
+	if len(directors.calls) != len(baselines) {
+		t.Fatalf("%d hunts for %d baselines: %+v", len(directors.calls), len(baselines), directors.calls)
+	}
+	for i, baseline := range baselines {
+		f, base := receivedHunt(t, directors.calls[i].argv)
+		if base != baseline.Scenario || !f.seed.set || f.seed.v != baseline.Seed || *f.cases != 3 {
+			t.Errorf("hunt %d ran %q seed %+v cases %d, want %q seed %d cases 3",
+				i, base, f.seed, *f.cases, baseline.Scenario, baseline.Seed)
+		}
+	}
+	var report simulation.TriageReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("stdout is not a triage report: %v (%q)", err, stdout.String())
+	}
+	if report.Revision != "abc123" || report.Context != "workflow run 42" ||
+		report.Result != simulation.TriageResultClean || len(report.Baselines) != len(baselines) {
+		t.Fatalf("report = %+v", report)
+	}
+	if report.Baselines[0].Cases != 3 || report.Baselines[0].Scenario != baselines[0].Scenario {
+		t.Fatalf("baseline = %+v", report.Baselines[0])
+	}
+}
+
+// Without -json a human gets the text report, and -scenarios narrows the run.
+func TestTriageLaunchWritesTheTextReportForOneBaseline(t *testing.T) {
+	fakeNetdoc(t)
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 2)})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"triage", "-netdoc", "./netdoc", "-cases", "2", "-scenarios", "healthy"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if len(directors.calls) != 1 {
+		t.Fatalf("directors = %+v, want just the one selected baseline", directors.calls)
+	}
+	if json.Valid(bytes.TrimSpace(stdout.Bytes())) || stdout.Len() == 0 {
+		t.Errorf("stdout = %q, want the text report", stdout.String())
+	}
+}
+
+// A hunt that could not run is a failed triage, and the reason survives into
+// the report a workflow reads.
+func TestTriageLaunchFailsWhenAHuntCannotRun(t *testing.T) {
+	fakeNetdoc(t)
+	stubBackends(t, true)
+	stubDirectors(t, &fakeDirectors{code: 1, err: errors.New("namespaces unavailable")})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"triage", "-json", "-netdoc", "./netdoc", "-scenarios", "healthy"}, &stdout, &stderr)
+	if code != exitError {
+		t.Fatalf("code = %d, want %d", code, exitError)
+	}
+	var report simulation.TriageReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Result != simulation.TriageResultError || !strings.Contains(report.Error, "namespaces unavailable") {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+// Everything the launcher can check before hunting anything, it checks.
+func TestTriageLaunchStopsBeforeHunting(t *testing.T) {
+	runRejections(t, []dispatchCase{
+		{name: "help", supported: true, args: []string{"triage", "-h"}, code: exitOK,
+			stdoutHas: "Usage: netdoc-sim <command> [arguments]"},
+		{name: "unknown baseline", supported: true, args: []string{"triage", "-scenarios", "no-such-baseline"},
+			code: exitUsage, stderrHas: "unsupported triage baseline"},
+		{name: "host cannot simulate", supported: false, args: []string{"triage", "-netdoc", "./netdoc"},
+			code: exitError, stderrHas: "stub backend: this host cannot simulate"},
+		{name: "no netdoc anywhere", supported: true, args: []string{"triage"}, code: exitUsage,
+			stderrHas: "cannot find the netdoc binary"},
+	})
 }

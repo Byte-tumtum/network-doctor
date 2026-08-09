@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +17,153 @@ import (
 
 	"github.com/heymaikol/network-doctor/internal/simulation"
 )
+
+// The two process seams, faked. Between them they are every namespace this
+// tool would create, so a test that swaps both can drive any command to its
+// end on a host with no privileges — and can see exactly what each command
+// asked the host for.
+
+// stubBackend answers the capability question and builds nothing. A backend
+// that reports the host cannot simulate is enough to reach the far side of
+// every command: the runner still produces a report, and the caller still
+// picks its exit code from it.
+type stubBackend struct{ supported bool }
+
+func (b stubBackend) Name() string { return "stub" }
+
+func (b stubBackend) Capabilities(context.Context) simulation.Capabilities {
+	return simulation.Capabilities{Backend: "stub", Supported: b.supported,
+		Reason: "stub backend: this host cannot simulate"}
+}
+
+func (b stubBackend) Prepare(context.Context, *simulation.Scenario, string) (simulation.Env, error) {
+	return nil, errors.New("stub backend builds nothing")
+}
+
+type backendCall struct {
+	dry bool
+	log io.Writer
+}
+
+type fakeBackends struct {
+	supported bool
+	calls     []backendCall
+}
+
+// stubBackends replaces the backend constructor for the test and records how
+// each command asked for one — dry or live, logging or silent.
+func stubBackends(t *testing.T, supported bool) *fakeBackends {
+	t.Helper()
+	f := &fakeBackends{supported: supported}
+	old := newBackend
+	newBackend = func(dry bool, log io.Writer) simulation.Backend {
+		f.calls = append(f.calls, backendCall{dry: dry, log: log})
+		return stubBackend{supported: f.supported}
+	}
+	t.Cleanup(func() { newBackend = old })
+	return f
+}
+
+type directorCall struct {
+	self string
+	argv []string
+}
+
+// fakeDirectors stands in for re-executing this binary inside fresh
+// namespaces: it records the command line the launcher built, writes what the
+// real director would have written, and returns a scripted exit.
+type fakeDirectors struct {
+	calls  []directorCall
+	stdout string
+	code   int
+	err    error
+}
+
+func stubDirectors(t *testing.T, d *fakeDirectors) *fakeDirectors {
+	t.Helper()
+	old := launchDirector
+	launchDirector = func(_ context.Context, self string, argv []string, stdout, _ io.Writer) (int, error) {
+		d.calls = append(d.calls, directorCall{self: self, argv: slices.Clone(argv)})
+		if d.stdout != "" {
+			if _, err := io.WriteString(stdout, d.stdout); err != nil {
+				return 0, err
+			}
+		}
+		return d.code, d.err
+	}
+	t.Cleanup(func() { launchDirector = old })
+	return d
+}
+
+// dispatchCase is one command line a dispatch test expects to be turned away.
+type dispatchCase struct {
+	name      string
+	supported bool
+	args      []string
+	code      int
+	stderr    string // exact, when the whole message is the contract
+	stderrHas string
+	stdoutHas string
+}
+
+func (tt dispatchCase) check(t *testing.T, stdout, stderr *bytes.Buffer) {
+	t.Helper()
+	if tt.stderr != "" && stderr.String() != tt.stderr {
+		t.Errorf("stderr = %q, want %q", stderr.String(), tt.stderr)
+	}
+	if tt.stderrHas != "" && !strings.Contains(stderr.String(), tt.stderrHas) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.stderrHas)
+	}
+	if tt.stdoutHas != "" && !strings.Contains(stdout.String(), tt.stdoutHas) {
+		t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tt.stdoutHas)
+	}
+}
+
+// runRejections is the launcher half's contract: everything a launcher can
+// check cheaply, it checks before it asks for a namespace. PATH is emptied so
+// only the netdoc dropped in the working directory can ever be found.
+func runRejections(t *testing.T, tests []dispatchCase) {
+	t.Helper()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeNetdoc(t)
+			t.Setenv("PATH", "")
+			stubBackends(t, tt.supported)
+			directors := stubDirectors(t, &fakeDirectors{})
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != tt.code {
+				t.Errorf("code = %d, want %d (stderr %q)", code, tt.code, stderr.String())
+			}
+			tt.check(t, &stdout, &stderr)
+			if len(directors.calls) != 0 {
+				t.Errorf("a rejected command still created namespaces: %+v", directors.calls)
+			}
+		})
+	}
+}
+
+// runDirectorRejections is the far half's contract: the namespaces already
+// exist, so what a rejected director must not do is build a topology inside
+// them or write anything to stdout that a caller could mistake for a report.
+func runDirectorRejections(t *testing.T, tests []dispatchCase) {
+	t.Helper()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backends := stubBackends(t, tt.supported)
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != tt.code {
+				t.Errorf("code = %d, want %d (stderr %q)", code, tt.code, stderr.String())
+			}
+			tt.check(t, &stdout, &stderr)
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want nothing", stdout.String())
+			}
+			if len(backends.calls) != 0 {
+				t.Errorf("a rejected run still asked for a backend: %+v", backends.calls)
+			}
+		})
+	}
+}
 
 func TestRunDispatch(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -230,6 +379,34 @@ func received(t *testing.T, argv []string) (*runFlags, string) {
 	return f, ref
 }
 
+// The same for the other two directors: the command line a launcher built is
+// only correct if the flag set on the far side reads back what was meant.
+func receivedCampaign(t *testing.T, argv []string) (*campaignFlags, string) {
+	t.Helper()
+	if argv[0] != campaignDirectorCommand {
+		t.Fatalf("argv[0] = %q, want %q", argv[0], campaignDirectorCommand)
+	}
+	f := newCampaignFlags(io.Discard)
+	ref, err := f.parse(argv[1:])
+	if err != nil {
+		t.Fatalf("the campaign director could not parse %v: %v", argv, err)
+	}
+	return f, ref
+}
+
+func receivedHunt(t *testing.T, argv []string) (*huntFlags, string) {
+	t.Helper()
+	if argv[0] != huntDirectorCommand {
+		t.Fatalf("argv[0] = %q, want %q", argv[0], huntDirectorCommand)
+	}
+	f := newHuntFlags(io.Discard)
+	base, err := f.parse(argv[1:])
+	if err != nil {
+		t.Fatalf("the hunt director could not parse %v: %v", argv, err)
+	}
+	return f, base
+}
+
 func TestRelativeNetdocReachesDirectorResolved(t *testing.T) {
 	abs := fakeNetdoc(t)
 	f, ref := received(t, forward(t, "healthy", "-netdoc", "./netdoc"))
@@ -345,4 +522,691 @@ func TestCampaignDirectorReceivesExactSeedAndIteration(t *testing.T) {
 		*got.runs != 5 || *got.iteration != 37 || !*got.failFast || !*got.json || *got.netdoc != abs {
 		t.Fatalf("forwarded campaign = argv %v ref %q seed %+v runs %d iteration %d", argv, gotRef, got.seed, *got.runs, *got.iteration)
 	}
+}
+
+// --- run, from inside the namespaces -----------------------------------
+
+// The director is the half that runs inside the namespaces the launcher
+// created, so it must never create more of them, and the scenario it runs is
+// the one already on its command line.
+func TestDirectRunsInsideTheNamespacesItWasGiven(t *testing.T) {
+	backends := stubBackends(t, false)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{directorCommand, "-netdoc", "/bin/true", "-timeout", "9s", "-repeat", "2",
+		"-json=false", "-keep=false", "-dry-run=false", "-v=true", "--", "healthy"}, &stdout, &stderr)
+
+	if len(directors.calls) != 0 {
+		t.Fatalf("the director launched another director: %+v", directors.calls)
+	}
+	if len(backends.calls) != 1 {
+		t.Fatalf("backends = %+v, want exactly one", backends.calls)
+	}
+	// The backend refused, so the report is an error report and the exit code
+	// comes from it, not from the parse.
+	if code != exitError {
+		t.Errorf("code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stdout.String(), "healthy-network") {
+		t.Errorf("stdout = %q, want the report for the scenario it was handed", stdout.String())
+	}
+}
+
+// -json swaps the whole report for the machine-readable one, on stdout.
+func TestDirectWritesTheJSONReportWhenAsked(t *testing.T) {
+	stubBackends(t, false)
+	stubDirectors(t, &fakeDirectors{})
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{directorCommand, "-json", "--", "healthy"}, &stdout, &stderr); code != exitError {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	var report simulation.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("stdout is not a report: %v (%q)", err, stdout.String())
+	}
+	if report.Scenario != "healthy-network" || report.Result != simulation.ResultError ||
+		!strings.Contains(report.Error, "stub backend") {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+// Which backend a run asks for is decided entirely by two flags, and a run
+// that logs nothing must be given nowhere to log to.
+func TestDirectAsksForTheBackendItsFlagsDescribe(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		args    []string
+		dry     bool
+		logging bool
+	}{
+		{name: "plain", args: []string{directorCommand, "--", "healthy"}},
+		{name: "verbose", args: []string{directorCommand, "-v", "--", "healthy"}, logging: true},
+		{name: "dry run", args: []string{directorCommand, "-dry-run", "--", "healthy"}, dry: true, logging: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			backends := stubBackends(t, true)
+			var stdout, stderr bytes.Buffer
+			run(tt.args, &stdout, &stderr)
+			if len(backends.calls) != 1 {
+				t.Fatalf("backends = %+v, want exactly one", backends.calls)
+			}
+			if backends.calls[0].dry != tt.dry {
+				t.Errorf("dry = %t, want %t", backends.calls[0].dry, tt.dry)
+			}
+			want := io.Writer(nil)
+			if tt.logging {
+				want = &stderr
+			}
+			if backends.calls[0].log != want {
+				t.Errorf("command log = %#v, want %#v", backends.calls[0].log, want)
+			}
+		})
+	}
+}
+
+// -dry-run announces what a run would do and stops: no report on stdout, and
+// — even with -keep — nothing held open afterwards. Which commands the
+// announcement lists is the backend's business, and the backend's own tests.
+func TestDirectDryRunAnnouncesTheRunAndHoldsNothing(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	stubBackends(t, true)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{directorCommand, "-dry-run", "-keep", "--", "healthy"}, &stdout, &stderr)
+
+	if code != exitOK {
+		t.Fatalf("code = %d, want %d: a dry run cannot fail a diagnosis", code, exitOK)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("a dry run wrote a report: %q", stdout.String())
+	}
+	if !strings.HasPrefix(stderr.String(), "would run, inside a user namespace owning nothing on this host:\n") {
+		t.Errorf("stderr = %q, want the dry-run preamble first", stderr.String())
+	}
+	// -keep is neutralised by -dry-run: hold never ran, so there is no record.
+	if entries, err := os.ReadDir(simulation.StateDir()); err == nil && len(entries) != 0 {
+		t.Errorf("a dry run left %d kept-simulation record(s)", len(entries))
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "is still up") {
+		t.Error("a dry run held the simulation open")
+	}
+}
+
+// -keep is what turns a finished run into a simulation the user can walk
+// around inside, and the record it leaves has to describe the run that just
+// happened. direct is called here rather than run so the hold has a context
+// the test owns; nothing else about the path changes.
+func TestDirectHoldsTheRunItJustReportedWhenKeepIsSet(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	stubBackends(t, false)
+	ctx, cancel := holdContext(t)
+	defer cancel()
+
+	var held *simulation.State
+	var stderr bytes.Buffer
+	w := &holdWriter{marker: "Release it with", at: func() {
+		states, err := simulation.ListStates()
+		if err != nil {
+			t.Errorf("ListStates: %v", err)
+		}
+		if len(states) != 1 {
+			t.Errorf("%d simulations are being kept alive, want 1", len(states))
+		} else {
+			held = states[0]
+		}
+		cancel()
+	}}
+	if code := direct(ctx, []string{"--", "healthy"}, w, &stderr); code != exitError {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitError, stderr.String())
+	}
+	if strings.Contains(w.out.String(), "is still up") {
+		t.Fatal("a run without -keep held the simulation open")
+	}
+
+	w = &holdWriter{marker: "Release it with", at: w.at}
+	if code := direct(ctx, []string{"-keep", "--", "healthy"}, w, &stderr); code != exitError {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitError, stderr.String())
+	}
+	if held == nil {
+		t.Fatal("-keep recorded nothing")
+	}
+	if held.Scenario != "healthy-network" {
+		t.Errorf("record = %+v, want the scenario the report described", held)
+	}
+	// The report and the invitation to enter the simulation go to the same
+	// place, in that order.
+	if !strings.Contains(w.out.String(), "healthy-network") ||
+		!strings.Contains(w.out.String(), "Simulation "+held.ID+" is still up.") {
+		t.Errorf("output = %q", w.out.String())
+	}
+}
+
+// The dispatcher hands direct the arguments after the subcommand, and direct
+// parses all of them. A slice that shifted by one would turn the first flag
+// into the scenario, or the command name into one.
+func TestDirectDispatchRejects(t *testing.T) {
+	runDirectorRejections(t, []dispatchCase{
+		{name: "no scenario", args: []string{directorCommand}, code: exitUsage,
+			stderr: "netdoc-sim: a scenario is required\n"},
+		{name: "bad flag value", args: []string{directorCommand, "-repeat", "0", "--", "healthy"},
+			code: exitUsage, stderr: "netdoc-sim: -repeat must be at least 1\n"},
+		{name: "non-positive timeout", args: []string{directorCommand, "-timeout", "0s", "--", "healthy"},
+			code: exitUsage, stderr: "netdoc-sim: -timeout must be positive\n"},
+		{name: "two scenarios", args: []string{directorCommand, "healthy", "healthy"}, code: exitUsage,
+			stderr: "netdoc-sim: unexpected argument \"healthy\"\n"},
+		{name: "unknown scenario", args: []string{directorCommand, "--", "no-such-scenario"},
+			code: exitUsage, stderrHas: "no-such-scenario"},
+	})
+}
+
+// --- hold ---------------------------------------------------------------
+
+// holdWriter cancels the hold the instant hold has finished announcing the
+// simulation, and runs a check at exactly that point. Nothing here waits on a
+// clock: the write happens on hold's own goroutine, so the state the check
+// sees is the state hold is holding.
+type holdWriter struct {
+	out    bytes.Buffer
+	marker string
+	at     func()
+}
+
+func (w *holdWriter) Write(p []byte) (int, error) {
+	n, err := w.out.Write(p)
+	if w.at != nil && strings.Contains(string(p), w.marker) {
+		at := w.at
+		w.at = nil
+		at()
+	}
+	return n, err
+}
+
+// holdContext is what releases the hold, plus a deadline that exists only so
+// that a marker which stops matching fails the test instead of hanging it
+// until the whole package times out. A working hold never reaches it: the
+// cancel fires on hold's own goroutine, before the deadline can matter.
+func holdContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
+func heldReport(workspace string) *simulation.Report {
+	return &simulation.Report{
+		ID: "abcdef0123456789", Scenario: "healthy-network",
+		StartedAt: time.Date(2026, 8, 8, 19, 15, 45, 0, time.UTC),
+		Topology: []simulation.NodeInfo{
+			{Name: "client", Address: "10.77.0.10/24", PID: 4242},
+			{Name: "server", Address: "10.77.0.20/24", PID: 4343},
+		},
+		Cleanup: simulation.CleanupInfo{Workspace: workspace},
+	}
+}
+
+// The record hold leaves is the one `list`, `inspect` and `cleanup` read, and
+// it must not outlive the namespaces: it exists for exactly as long as the
+// hold does, and the workspace goes with it.
+func TestHoldPublishesTheRecordThenSweepsIt(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "topology.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := heldReport(work)
+	ctx, cancel := holdContext(t)
+	defer cancel()
+
+	var held *simulation.State
+	w := &holdWriter{marker: "Release it with", at: func() {
+		var err error
+		if held, err = simulation.LoadState(report.ID); err != nil {
+			t.Errorf("nothing to list or inspect while the simulation is held: %v", err)
+		}
+		if _, err := os.Stat(work); err != nil {
+			t.Errorf("the workspace went before the hold ended: %v", err)
+		}
+		cancel()
+	}}
+	hold(ctx, report, w)
+
+	want := "\nSimulation abcdef0123456789 is still up. Enter a node with:\n" +
+		"  nsenter -t 4242 -n -m -- sh   # client (10.77.0.10/24)\n" +
+		"  nsenter -t 4343 -n -m -- sh   # server (10.77.0.20/24)\n" +
+		"Release it with `netdoc-sim cleanup abcdef0123456789`, or press Ctrl-C here.\n"
+	if w.out.String() != want {
+		t.Errorf("output = %q, want %q", w.out.String(), want)
+	}
+	if held == nil {
+		t.Fatal("no record was published")
+	}
+	if held.Scenario != report.Scenario || held.Workspace != work || held.PID != os.Getpid() ||
+		!held.Started.Equal(report.StartedAt) {
+		t.Errorf("record = %+v", held)
+	}
+	if len(held.Nodes) != 2 || held.Nodes[0].PID != 4242 || held.Nodes[1].Name != "server" {
+		t.Errorf("record nodes = %+v, want the topology the report described", held.Nodes)
+	}
+	// The hold is over: the namespaces are gone, so the record and the
+	// workspace must be too.
+	if _, err := os.Stat(filepath.Join(simulation.StateDir(), report.ID+".json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the record outlived the hold: %v", err)
+	}
+	if _, err := os.Stat(work); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the workspace outlived the hold: %v", err)
+	}
+}
+
+// A record that cannot be written is said out loud rather than swallowed —
+// and the simulation is still held, because that is what the user asked for.
+func TestHoldSaysSoWhenItCannotRecordTheSimulation(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", blocked)
+	work := t.TempDir()
+	ctx, cancel := holdContext(t)
+	defer cancel()
+	w := &holdWriter{marker: "Release it with", at: cancel}
+	hold(ctx, heldReport(work), w)
+
+	if !strings.HasPrefix(w.out.String(), "netdoc-sim: cannot record this simulation:") {
+		t.Errorf("output = %q, want the failure reported first", w.out.String())
+	}
+	if !strings.Contains(w.out.String(), "nsenter -t 4242 -n -m -- sh   # client (10.77.0.10/24)") {
+		t.Errorf("output = %q, want the simulation held anyway", w.out.String())
+	}
+	// Whether the sweep of an unwritable state directory then reports a
+	// failure of its own is the OS's call, so it is not asserted here — but
+	// the workspace is this process's to remove either way.
+	if _, err := os.Stat(work); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the workspace outlived the hold: %v", err)
+	}
+}
+
+// --- run, the launcher --------------------------------------------------
+
+// self is what the launcher must re-execute: this very binary.
+func self(t *testing.T) string {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The launcher's whole job is to hand one director one command line and pass
+// its exit code straight back.
+func TestLaunchHandsTheDirectorTheCommandLineAndItsExitCode(t *testing.T) {
+	abs := fakeNetdoc(t)
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitMismatch})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"run", "healthy", "-netdoc", "./netdoc", "-json", "-repeat", "3", "-timeout", "9s"},
+		&stdout, &stderr)
+
+	if code != exitMismatch {
+		t.Fatalf("code = %d, want the director's %d, stderr %q", code, exitMismatch, stderr.String())
+	}
+	if len(directors.calls) != 1 {
+		t.Fatalf("directors = %+v, want exactly one", directors.calls)
+	}
+	if directors.calls[0].self != self(t) {
+		t.Errorf("re-executed %q, want this binary %q", directors.calls[0].self, self(t))
+	}
+	f, ref := received(t, directors.calls[0].argv)
+	if ref != "healthy" || *f.netdoc != abs || !*f.json || *f.repeat != 3 || *f.timeout != 9*time.Second {
+		t.Errorf("director got ref %q netdoc %q json %t repeat %d timeout %s",
+			ref, *f.netdoc, *f.json, *f.repeat, *f.timeout)
+	}
+}
+
+// A director that could not be started at all is a simulator failure, not a
+// diagnosis: whichever launcher asked for it, the exit code says so and the
+// reason reaches the user rather than being reported as a clean run.
+func TestLaunchersReportADirectorTheyCannotStart(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "healthy", "-netdoc", "./netdoc"},
+		{"campaign", "unstable-connectivity", "-netdoc", "./netdoc"},
+		{"hunt", "-netdoc", "./netdoc", "-seed", "1"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			fakeNetdoc(t)
+			stubBackends(t, true)
+			stubDirectors(t, &fakeDirectors{code: 1, err: errors.New("namespaces unavailable")})
+			var stdout, stderr bytes.Buffer
+			code := run(args, &stdout, &stderr)
+			if code != exitError || !strings.Contains(stderr.String(), "namespaces unavailable") {
+				t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+			}
+		})
+	}
+}
+
+// Everything the launcher can check cheaply, it checks before it creates a
+// namespace. None of these may reach a director.
+func TestLaunchStopsBeforeTheDirector(t *testing.T) {
+	runRejections(t, []dispatchCase{
+		{name: "no scenario", supported: true, args: []string{"run"}, code: exitUsage,
+			stderrHas: "netdoc-sim: a scenario is required"},
+		{name: "help", supported: true, args: []string{"run", "-h"}, code: exitOK,
+			stdoutHas: "Usage: netdoc-sim <command> [arguments]"},
+		{name: "unknown scenario", supported: true, args: []string{"run", "no-such-scenario"},
+			code: exitUsage, stderrHas: "no-such-scenario"},
+		{name: "host cannot simulate", supported: false, args: []string{"run", "healthy", "-netdoc", "./netdoc"},
+			code: exitError, stderrHas: "stub backend: this host cannot simulate"},
+		{name: "no netdoc anywhere", supported: true, args: []string{"run", "healthy"}, code: exitUsage,
+			stderrHas: "cannot find the netdoc binary"},
+		{name: "netdoc path is wrong", supported: true, args: []string{"run", "healthy", "-netdoc", "./absent"},
+			code: exitUsage, stderrHas: "-netdoc ./absent"},
+	})
+}
+
+// --- campaign -----------------------------------------------------------
+
+// The seed is chosen out here, once, so the report can print one number that
+// reproduces the whole campaign. The director is handed that number, never the
+// job of picking its own.
+func TestCampaignLaunchChoosesTheSeedTheDirectorRunsWith(t *testing.T) {
+	abs := fakeNetdoc(t)
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK})
+	var stdout, stderr bytes.Buffer
+	args := []string{"campaign", "unstable-connectivity", "-netdoc", "./netdoc", "-runs", "4", "-fail-fast"}
+	if code := run(args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if code := run(args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if len(directors.calls) != 2 {
+		t.Fatalf("directors = %+v, want two", directors.calls)
+	}
+	seeds := make([]int64, 2)
+	for i, call := range directors.calls {
+		if call.self != self(t) {
+			t.Errorf("re-executed %q, want %q", call.self, self(t))
+		}
+		f, ref := receivedCampaign(t, call.argv)
+		if ref != "unstable-connectivity" || *f.netdoc != abs || *f.runs != 4 || !*f.failFast {
+			t.Errorf("director got ref %q netdoc %q runs %d fail-fast %t", ref, *f.netdoc, *f.runs, *f.failFast)
+		}
+		if !f.seed.set {
+			t.Fatal("the director was left to choose its own seed")
+		}
+		seeds[i] = f.seed.v
+	}
+	// A dropped RandomSeed leaves the zero value behind on every run. Two
+	// drawn seeds collide with probability 2^-64.
+	if seeds[0] == seeds[1] {
+		t.Errorf("both campaigns were seeded %d; the seed is not being drawn", seeds[0])
+	}
+}
+
+// An explicit seed is forwarded untouched, and the director's exit is the
+// launcher's exit.
+func TestCampaignLaunchForwardsAnExplicitSeed(t *testing.T) {
+	fakeNetdoc(t)
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitMismatch})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"campaign", "unstable-connectivity", "-netdoc", "./netdoc", "-seed", "-99",
+		"-iteration", "12", "-json"}, &stdout, &stderr)
+	if code != exitMismatch {
+		t.Fatalf("code = %d, want the director's %d, stderr %q", code, exitMismatch, stderr.String())
+	}
+	f, _ := receivedCampaign(t, directors.calls[0].argv)
+	if !f.seed.set || f.seed.v != -99 || *f.iteration != 12 || !*f.json {
+		t.Fatalf("director got seed %+v iteration %d json %t", f.seed, *f.iteration, *f.json)
+	}
+}
+
+func TestCampaignLaunchStopsBeforeTheDirector(t *testing.T) {
+	runRejections(t, []dispatchCase{
+		{name: "no scenario", supported: true, args: []string{"campaign"}, code: exitUsage,
+			stderrHas: "netdoc-sim: a campaign scenario is required"},
+		{name: "help", supported: true, args: []string{"campaign", "-h"}, code: exitOK,
+			stdoutHas: "Usage: netdoc-sim <command> [arguments]"},
+		{name: "unknown scenario", supported: true, args: []string{"campaign", "no-such-scenario"},
+			code: exitUsage, stderrHas: "no-such-scenario"},
+		{name: "scenario has no campaign", supported: true, args: []string{"campaign", "healthy"},
+			code: exitUsage, stderrHas: "netdoc-sim: scenario has no campaign definition"},
+		{name: "bad run count", supported: true, args: []string{"campaign", "unstable-connectivity", "-runs", "1001"},
+			code: exitUsage, stderrHas: "-runs must be between 1 and 1000"},
+		{name: "host cannot simulate", supported: false,
+			args: []string{"campaign", "unstable-connectivity", "-netdoc", "./netdoc"},
+			code: exitError, stderrHas: "stub backend: this host cannot simulate"},
+		{name: "no netdoc anywhere", supported: true, args: []string{"campaign", "unstable-connectivity"},
+			code: exitUsage, stderrHas: "cannot find the netdoc binary"},
+	})
+}
+
+// The campaign director runs the iterations it was told to, at the seed it was
+// told to. -iteration is a pointer on the far side: dropping the conversion
+// would silently run iterations 0..n-1 instead of the one asked for.
+func TestCampaignDirectorRunsTheSeededIterationItWasGiven(t *testing.T) {
+	backends := stubBackends(t, false)
+	directors := stubDirectors(t, &fakeDirectors{})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{campaignDirectorCommand, "-json", "-v", "-seed", "1234", "-runs", "2", "-iteration", "7",
+		"--", "unstable-connectivity"}, &stdout, &stderr)
+
+	if len(directors.calls) != 0 {
+		t.Fatalf("the campaign director launched another director: %+v", directors.calls)
+	}
+	// Every iteration gets its own backend, and -v points all of them at
+	// stderr so the log cannot land in the middle of the report.
+	if len(backends.calls) != 2 {
+		t.Fatalf("backends = %+v, want one per run", backends.calls)
+	}
+	for _, call := range backends.calls {
+		if call.dry || call.log != io.Writer(&stderr) {
+			t.Errorf("backend = %+v, want a live one logging to stderr", call)
+		}
+	}
+	if code != exitError {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitError, stderr.String())
+	}
+	var result simulation.CampaignResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not a campaign result: %v (%q)", err, stdout.String())
+	}
+	if result.Seed != 1234 {
+		t.Errorf("seed = %d, want the 1234 it was handed", result.Seed)
+	}
+	if len(result.Outcomes) != 2 {
+		t.Fatalf("outcomes = %+v, want -runs 2 of them", result.Outcomes)
+	}
+	for _, outcome := range result.Outcomes {
+		if outcome.Iteration != 7 {
+			t.Errorf("ran iteration %d, want the 7 it was handed", outcome.Iteration)
+		}
+	}
+}
+
+// Without -iteration every run is its own iteration, and the text report is
+// what a human gets.
+func TestCampaignDirectorWritesTheTextReportByDefault(t *testing.T) {
+	stubBackends(t, false)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{campaignDirectorCommand, "-seed", "5", "-runs", "2", "--", "unstable-connectivity"},
+		&stdout, &stderr)
+	if code != exitError {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitError, stderr.String())
+	}
+	if json.Valid(bytes.TrimSpace(stdout.Bytes())) {
+		t.Errorf("stdout = %q, want the text report", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "unstable-connectivity") {
+		t.Errorf("stdout = %q, want the scenario named", stdout.String())
+	}
+}
+
+// The seed is the launcher's to choose. A director that reached the far side
+// without one cannot reproduce anything, and says so instead of guessing.
+func TestCampaignDirectorRefusesWithoutASeed(t *testing.T) {
+	backends := stubBackends(t, false)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{campaignDirectorCommand, "--", "unstable-connectivity"}, &stdout, &stderr)
+	if code != exitError {
+		t.Errorf("code = %d, want %d", code, exitError)
+	}
+	if stderr.String() != "netdoc-sim: internal campaign director did not receive a seed\n" {
+		t.Errorf("stderr = %q", stderr.String())
+	}
+	if stdout.Len() != 0 || len(backends.calls) != 0 {
+		t.Errorf("stdout = %q, backends = %+v", stdout.String(), backends.calls)
+	}
+}
+
+func TestCampaignDirectorRejects(t *testing.T) {
+	runDirectorRejections(t, []dispatchCase{
+		{name: "no scenario", args: []string{campaignDirectorCommand, "-seed", "1"}, code: exitUsage,
+			stderrHas: "netdoc-sim: a campaign scenario is required"},
+		{name: "unknown scenario", args: []string{campaignDirectorCommand, "-seed", "1", "--", "no-such-scenario"},
+			code: exitUsage, stderrHas: "no-such-scenario"},
+	})
+}
+
+// --- hunt, the launcher -------------------------------------------------
+
+// Like the campaign, a hunt's seed is drawn once out here so one number
+// reproduces the whole run, and the director is handed it.
+func TestHuntLaunchChoosesTheSeedTheDirectorRunsWith(t *testing.T) {
+	abs := fakeNetdoc(t)
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitMismatch})
+	var stdout, stderr bytes.Buffer
+	args := []string{"hunt", "dual-stack-healthy", "-netdoc", "./netdoc", "-cases", "6", "-max-faults", "3"}
+	for range 2 {
+		if code := run(args, &stdout, &stderr); code != exitMismatch {
+			t.Fatalf("code = %d, want the director's %d, stderr %q", code, exitMismatch, stderr.String())
+		}
+	}
+	if len(directors.calls) != 2 {
+		t.Fatalf("directors = %+v, want two", directors.calls)
+	}
+	seeds := make([]int64, 2)
+	for i, call := range directors.calls {
+		if call.self != self(t) {
+			t.Fatalf("re-executed %q, want %q", call.self, self(t))
+		}
+		f, base := receivedHunt(t, call.argv)
+		if base != "dual-stack-healthy" || *f.netdoc != abs || *f.cases != 6 || *f.maxFaults != 3 {
+			t.Errorf("hunt got base %q netdoc %q cases %d max-faults %d", base, *f.netdoc, *f.cases, *f.maxFaults)
+		}
+		if !f.seed.set {
+			t.Fatal("the director was left to choose its own seed")
+		}
+		seeds[i] = f.seed.v
+	}
+	if seeds[0] == seeds[1] {
+		t.Errorf("both hunts were seeded %d; the seed is not being drawn", seeds[0])
+	}
+}
+
+// A dry run needs neither a netdoc binary nor a director: it generates the
+// manifests here and prints them.
+func TestHuntLaunchDryRunNeedsNoDirector(t *testing.T) {
+	t.Setenv("PATH", "")
+	stubBackends(t, false)
+	directors := stubDirectors(t, &fakeDirectors{})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"hunt", "-dry-run", "-cases", "2"}, &stdout, &stderr)
+	if code != exitOK {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitOK, stderr.String())
+	}
+	if len(directors.calls) != 0 {
+		t.Errorf("a dry hunt created namespaces: %+v", directors.calls)
+	}
+	// No -json, so this is the text report, and it has to name the seed it
+	// drew or the run cannot be reproduced.
+	if json.Valid(bytes.TrimSpace(stdout.Bytes())) || !strings.Contains(stdout.String(), "Seed:") ||
+		!strings.Contains(stdout.String(), "Generated: 2 unique case(s)") {
+		t.Errorf("stdout = %q, want the text report naming its seed", stdout.String())
+	}
+}
+
+func TestHuntLaunchStopsBeforeTheDirector(t *testing.T) {
+	runRejections(t, []dispatchCase{
+		{name: "help", supported: true, args: []string{"hunt", "-h"}, code: exitOK,
+			stdoutHas: "Usage: netdoc-sim <command> [arguments]"},
+		{name: "unsupported base", supported: true, args: []string{"hunt", "broken-dns"}, code: exitUsage,
+			stderrHas: "unsupported hunt base"},
+		{name: "host cannot simulate", supported: false, args: []string{"hunt", "-netdoc", "./netdoc"},
+			code: exitError, stderrHas: "stub backend: this host cannot simulate"},
+		{name: "no netdoc anywhere", supported: true, args: []string{"hunt"}, code: exitUsage,
+			stderrHas: "cannot find the netdoc binary"},
+	})
+}
+
+// --- hunt, from inside the namespaces -----------------------------------
+
+func TestHuntDirectorRunsTheCasesItWasGiven(t *testing.T) {
+	backends := stubBackends(t, false)
+	directors := stubDirectors(t, &fakeDirectors{})
+	var stdout, stderr bytes.Buffer
+	code := run([]string{huntDirectorCommand, "-json", "-v", "-seed", "99", "-cases", "2", "-max-faults", "1",
+		"--", "healthy-routed-network"}, &stdout, &stderr)
+
+	if len(directors.calls) != 0 {
+		t.Fatalf("the hunt director launched another director: %+v", directors.calls)
+	}
+	if len(backends.calls) == 0 {
+		t.Fatal("the hunt asked for no backend at all")
+	}
+	for _, call := range backends.calls {
+		if call.dry || call.log != io.Writer(&stderr) {
+			t.Errorf("backend = %+v, want a live one logging to stderr under -v", call)
+		}
+	}
+	if code != exitError {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitError, stderr.String())
+	}
+	var result simulation.HuntResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not a hunt result: %v (%q)", err, stdout.String())
+	}
+	if result.HuntSeed != 99 || result.BaseScenario != "healthy-routed-network" || result.RequestedCases != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+	// The director is the executing half: unlike the launcher's -dry-run, it
+	// really tries to build every case.
+	if result.ExecutedCases == 0 {
+		t.Errorf("executed %d cases, want the hunt to have tried", result.ExecutedCases)
+	}
+}
+
+// Without -json the hunt writes the text report, and an unrunnable hunt is a
+// simulator failure rather than a finding.
+func TestHuntDirectorWritesTheTextReportByDefault(t *testing.T) {
+	stubBackends(t, false)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{huntDirectorCommand, "-seed", "1", "-cases", "1", "--", "healthy-routed-network"},
+		&stdout, &stderr)
+	if code != exitError {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitError, stderr.String())
+	}
+	if json.Valid(bytes.TrimSpace(stdout.Bytes())) || stdout.Len() == 0 {
+		t.Errorf("stdout = %q, want the text report", stdout.String())
+	}
+}
+
+func TestHuntDirectorRefusesWithoutASeed(t *testing.T) {
+	backends := stubBackends(t, false)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{huntDirectorCommand, "--", "healthy-routed-network"}, &stdout, &stderr)
+	if code != exitError || stderr.String() != "netdoc-sim: internal hunt director did not receive a seed\n" {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if stdout.Len() != 0 || len(backends.calls) != 0 {
+		t.Errorf("stdout = %q, backends = %+v", stdout.String(), backends.calls)
+	}
+}
+
+func TestHuntDirectorRejectsBadArguments(t *testing.T) {
+	runDirectorRejections(t, []dispatchCase{
+		{name: "cases out of range",
+			args: []string{huntDirectorCommand, "-seed", "1", "-cases", "0", "--", "healthy-routed-network"},
+			code: exitUsage, stderrHas: "-cases must be between 1 and"},
+	})
 }

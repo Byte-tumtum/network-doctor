@@ -40,6 +40,15 @@ const (
 	exitError    = 3 // the simulation could not run
 )
 
+// Every namespace this tool creates goes through one of these two calls: the
+// backend that builds a topology, and the re-execution of this binary inside
+// fresh namespaces. Keeping them as variables lets the dispatch tests drive
+// each command end to end on a host with no privileges at all.
+var (
+	newBackend     = simulation.DefaultBackend
+	launchDirector = simulation.LaunchDirector
+)
+
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -389,7 +398,7 @@ func launch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitUsage
 	}
-	if caps := simulation.DefaultBackend(false, nil).Capabilities(ctx); !caps.Supported {
+	if caps := newBackend(false, nil).Capabilities(ctx); !caps.Supported {
 		fmt.Fprintln(stderr, "netdoc-sim:", caps.Reason)
 		return exitError
 	}
@@ -405,7 +414,7 @@ func launch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	code, err := simulation.LaunchDirector(ctx, self, directorArgv(f, ref, path), stdout, stderr)
+	code, err := launchDirector(ctx, self, directorArgv(f, ref, path), stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -433,7 +442,7 @@ func launchCampaign(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "netdoc-sim: scenario has no campaign definition")
 		return exitUsage
 	}
-	if caps := simulation.DefaultBackend(false, nil).Capabilities(ctx); !caps.Supported {
+	if caps := newBackend(false, nil).Capabilities(ctx); !caps.Supported {
 		fmt.Fprintln(stderr, "netdoc-sim:", caps.Reason)
 		return exitError
 	}
@@ -455,7 +464,7 @@ func launchCampaign(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		f.seed.set = true
 	}
-	code, err := simulation.LaunchDirector(ctx, self, campaignDirectorArgv(f, ref, path), stdout, stderr)
+	code, err := launchDirector(ctx, self, campaignDirectorArgv(f, ref, path), stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -503,7 +512,7 @@ func directCampaign(ctx context.Context, args []string, stdout, stderr io.Writer
 		iteration = &value
 	}
 	result := simulation.RunCampaign(ctx, scenario, func() simulation.Backend {
-		return simulation.DefaultBackend(false, log)
+		return newBackend(false, log)
 	}, simulation.CampaignOptions{
 		Run:  simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log},
 		Runs: *f.runs, Seed: f.seed.v, Iteration: iteration, FailFast: *f.failFast,
@@ -554,7 +563,7 @@ func launchHunt(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		result := simulation.RunHunt(ctx, baseID, base, nil, huntOptions(f, nil, true))
 		return writeHuntResult(result, *f.json, stdout, stderr)
 	}
-	if caps := simulation.DefaultBackend(false, nil).Capabilities(ctx); !caps.Supported {
+	if caps := newBackend(false, nil).Capabilities(ctx); !caps.Supported {
 		fmt.Fprintln(stderr, "netdoc-sim:", caps.Reason)
 		return exitError
 	}
@@ -568,7 +577,7 @@ func launchHunt(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	code, err := simulation.LaunchDirector(ctx, self, huntDirectorArgv(f, baseID, path), stdout, stderr)
+	code, err := launchDirector(ctx, self, huntDirectorArgv(f, baseID, path), stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -612,7 +621,7 @@ func directHunt(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		log = stderr
 	}
 	result := simulation.RunHunt(ctx, baseID, base, func() simulation.Backend {
-		return simulation.DefaultBackend(false, log)
+		return newBackend(false, log)
 	}, huntOptions(f, log, false))
 	return writeHuntResult(result, *f.json, stdout, stderr)
 }
@@ -690,7 +699,7 @@ func direct(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if *f.verbose || *f.dry {
 		log = stderr
 	}
-	backend := simulation.DefaultBackend(*f.dry, log)
+	backend := newBackend(*f.dry, log)
 	if *f.dry {
 		fmt.Fprintf(stderr, "would run, inside a user namespace owning nothing on this host:\n")
 	}
@@ -764,7 +773,7 @@ func validate(args []string, stdout, stderr io.Writer) int {
 }
 
 func capabilities(ctx context.Context, w io.Writer) int {
-	caps := simulation.DefaultBackend(false, nil).Capabilities(ctx)
+	caps := newBackend(false, nil).Capabilities(ctx)
 	fmt.Fprintf(w, "Backend:   %s\nSupported: %t\n", caps.Backend, caps.Supported)
 	if caps.Reason != "" {
 		fmt.Fprintf(w, "Reason:    %s\n", caps.Reason)

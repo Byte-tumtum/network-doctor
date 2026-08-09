@@ -137,7 +137,7 @@ func launchTriage(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	if caps := simulation.DefaultBackend(false, nil).Capabilities(ctx); !caps.Supported {
+	if caps := newBackend(false, nil).Capabilities(ctx); !caps.Supported {
 		fmt.Fprintln(stderr, "netdoc-sim:", caps.Reason)
 		return exitError
 	}
@@ -331,7 +331,7 @@ func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, ver
 			return nil, err
 		}
 		var out bytes.Buffer
-		code, err := simulation.LaunchDirector(ctx, self, huntDirectorArgv(f, scenario, netdoc), &out, stderr)
+		code, err := launchDirector(ctx, self, huntDirectorArgv(f, scenario, netdoc), &out, stderr)
 		if err != nil {
 			return nil, err
 		}
