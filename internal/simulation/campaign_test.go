@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"reflect"
 	"testing"
 	"time"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func campaignScenario(t *testing.T) *Scenario {
 	t.Helper()
@@ -16,6 +22,43 @@ func campaignScenario(t *testing.T) *Scenario {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestRandomSeed(t *testing.T) {
+	if _, err := RandomSeed(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCampaignResultWriteJSON(t *testing.T) {
+	want := CampaignResult{
+		Scenario: "unstable-connectivity",
+		Seed:     -42,
+		Runs:     3,
+		Result:   ResultFail,
+		FirstFailure: &Reproduction{
+			Scenario:  "unstable-connectivity",
+			Seed:      -42,
+			Iteration: 2,
+		},
+	}
+	var buf bytes.Buffer
+	if err := want.WriteJSON(&buf); err != nil {
+		t.Fatal(err)
+	}
+	var got CampaignResult
+	if err := json.NewDecoder(&buf).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Scenario != want.Scenario || got.Seed != want.Seed || got.Runs != want.Runs || got.Result != want.Result || !reflect.DeepEqual(got.FirstFailure, want.FirstFailure) {
+		t.Fatalf("round trip = %+v", got)
+	}
+}
+
+func TestCampaignResultWriteJSONReturnsWriterError(t *testing.T) {
+	if err := new(CampaignResult).WriteJSON(failingWriter{}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("error = %v, want %v", err, io.ErrClosedPipe)
+	}
 }
 
 func TestIterationSeedDerivationIsIndependent(t *testing.T) {
