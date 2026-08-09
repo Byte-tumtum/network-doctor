@@ -386,195 +386,25 @@ namespaces; they never need root.
 ## Testing Network Doctor against broken networks
 
 `netdoc-sim` builds a throwaway virtual network from a YAML scenario, breaks it
-on purpose, runs netdoc inside it, and reports whether the diagnosis matched the
-fault that was actually injected:
+on purpose, runs the real netdoc binary inside it, and grades the diagnosis
+against the injected fault. It is an unprivileged, Linux-only development tool
+for deterministic regression testing; it does not alter the host network.
+
+The simulator supports written scenarios, reproducible fault campaigns,
+generated bug hunts, and triage of reproducible findings. Start with the
+scenario catalog and run any name it prints:
 
 ```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
 ./netdoc-sim scenarios
+./netdoc-sim run broken-dns
 ```
 
 `netdoc-sim scenarios` is the source of truth for the complete set of shipped
-built-in scenarios. Run any name it prints; for example:
-
-```sh
-./netdoc-sim run broken-dns
-./netdoc-sim run healthy-routed-network
-./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
-./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
-```
-
-```text
-Test: name that will not resolve — netdoc example.test:80 in client (4.016s)
-  Summary: System DNS cannot resolve example.test, but public DNS can — …
-  Verdict: dns   ✓
-  Expected findings: 6   matched: 6   false negatives: 0   false positives: 0
-```
-
-It needs no root: everything lives in an unprivileged user namespace that holds
-no privileges over the host's interfaces, routes, resolver or firewall, so it
-cannot touch them even by mistake. Grading is deterministic — probe ids and
-statuses, never the prose — and a mismatch comes with a suggested improvement
-to netdoc.
-
-Campaigns rebuild and clean a complete namespace environment for every
-iteration, run sequentially, and execute the real netdoc binary. A SHA-256
-derivation over the campaign seed, scenario name, and iteration produces an
-independent signed 64-bit iteration seed, so iteration 37 never depends on
-having run 0–36. Before netdoc starts, that seed resolves every bounded YAML
-range into an explicit schedule: canonical netem latency/jitter/loss plus its
-kernel PRNG seed, and per-A/per-AAAA DNS `answer`/`servfail` outcomes. Reports
-retain the schedule, derived seed, stable diagnosis fingerprint, normal
-simulation report, aggregate FP/FN/timeout counts, and a direct reproduction
-command. `--fail-fast` stops after the first mismatch but still cleans and
-reports it; default execution completes every run. Campaign exits use the
-existing simulator contract: 0 matched, 1 comparison mismatch, 2 usage, and 3
-configuration/runtime failure.
-
-Faults can also change while netdoc is running. A scenario declares a bounded
-list of offsets and states — `scheduled_netem`, `scheduled_dns`
-(`answer`/`servfail`/`drop`/`delay`) and `scheduled_link` — and the whole
-timeline is resolved and validated before a namespace exists. One scheduler
-goroutine drives it from a single epoch, **T0: the instant just before the
-first netdoc process starts**, and the runner joins that goroutine before
-teardown, so no scheduled change can reach an environment that is being
-dismantled. The report records the requested offset, the offset it was actually
-applied at, and what the kernel says the qdisc or link became. The simulator
-controls the requested fault timeline; ordinary OS scheduler timing may shift
-actual application by a small amount, and nothing here claims otherwise.
-
-That makes transient failures testable. `transient-dns-outage` loses the
-resolver mid-run and gets it back, `latency-spike` opens and closes a large
-spike inside one run, `transient-connectivity-loss` takes the path away for
-750 ms, and `fault-during-probe` changes the resolver's state while one of its
-answers is still in flight. Because the simulator knows an outage was
-temporary even when netdoc cannot, the report can say so: it flags a resolver
-that recovered mid-run and was never resampled, a failure that had already
-healed being described as a lasting state, an impairment that opened and closed
-inside one run with nothing flagged, and a probe that succeeded while a probe it
-depends on failed — the last only when no transition during the run explains it.
-
-The fixed `packet-loss`, `high-jitter`, `intermittent-dns`, and `tcp-reset`
-scenarios isolate each mechanism. `tc -s` readback proves an active netem qdisc
-and records actual drops; successful attempt timings provide min/max RTT spread.
-DNS scheduling is synchronized by query family and records sequence, scheduled
-outcome, and actual outcome. The reset service accepts the TCP handshake and
-uses `SO_LINGER=0`; `target_tcp` therefore passes while the SSH banner row fails
-with `connection_reset`, rather than being confused with refusal. DNS timeout
-and retryable resolver failures may similarly expose `dns_timeout` and
-`dns_temporary_failure` causes. This is deterministic fault injection and
-diagnostic testing, not a statistical performance benchmark.
-
-The SOCKS pair uses the same private hostname and topology. With `socks5`, the
-client resolver returns NXDOMAIN after the proxy greeting succeeds, so no
-CONNECT request is sent. With `socks5h`, the proxy receives a domain-name
-CONNECT, resolves it through its own namespace-local DNS server, and reaches
-the private destination. Structured report evidence records DNS source,
-name/type/result/count and the SOCKS address type/result; the client is also
-filtered from reaching the destination directly. No public DNS server or
-external internet service participates.
-
-The simulator-owned proxy is intentionally not a full SOCKS implementation: it
-supports bounded no-auth CONNECT for IPv4, IPv6, and domain destinations, but
-not authentication, BIND, UDP ASSOCIATE, or chaining. It adds no dependency or
-external daemon. If user namespaces are unavailable, run
-`netdoc-sim capabilities`; for CI, set `NETDOC_SIM_REQUIRE_NETNS=1` so an
-unavailable namespace backend fails instead of skipping.
-
-The TLS trio uses one local hostname and exercises the real `tls` and `https`
-rows. `tls-valid` trusts a simulator root and completes both the handshake and
-a minimal HTTP response. `tls-expired-certificate` uses the same trusted name
-but a leaf whose `NotAfter` is already past. `tls-hostname-mismatch` uses a
-currently valid, trusted leaf for `different-target.test` while netdoc requests
-`secure-target.test`. The reports require the exact stable cause and record
-whether TCP reached the service, the requested SNI, certificate mode/SANs and
-validity window, whether a certificate was presented, and the server-side
-handshake result.
-
-ECDSA keys and certificates are generated by Go inside the target node holder;
-private keys never leave memory. The holder writes only its public root to the
-run's mode-`0700` workspace as a mode-`0600` bundle. Trusted tests receive a
-simulator-derived `SSL_CERT_FILE` only for that netdoc process; inherited host
-certificate overrides are stripped, and no host trust store is modified. The
-bundle disappears during cleanup. No public CA, DNS server, or internet service
-is involved.
-
-This is deliberately not a TLS conformance suite. The service supports a
-bounded TLS 1.2-or-later handshake and a minimal HTTP/1.1 `204` response. It
-does not test OCSP, CRLs, mutual TLS, TLS-version matrices, cipher selection, or
-full HTTPS response semantics.
-
-The routed scenarios use explicit L2 segments, node interfaces, routes, and
-metrics. Each segment becomes one bridge inside the director namespace; router
-nodes receive a veth on each named segment and enable IPv4 forwarding only in
-their own network namespace (and IPv6 forwarding when the topology carries
-IPv6). `healthy-routed-network` is the two-segment
-control. `gateway-unreachable` retains a selected default route but proves its
-next-hop neighbor failed. `wrong-default-route` selects a reachable gateway
-whose isolated upstream cannot carry egress. The multiple-interface scenario
-proves Linux chose the lower-metric broken default while a controlled netdoc
-run through the other live segment and a specific route reaches the target.
-
-Reports record logical link/segment state, namespace forwarding readback,
-configured routes, `ip route get` selections, neighbor reachability, and
-controlled reachability results. The real `internet_tcp` row adds an optional
-stable route cause (`no_default_route`, `gateway_unreachable`,
-`selected_path_failed`, or `preferred_route_failed`) without changing its
-wording, status, or verdict. All endpoints remain local: no host route,
-forwarding sysctl, firewall, public DNS server, or internet service is used.
-The dual-stack trio puts static IPv4 and IPv6 addresses on each logical
-interface and installs independent defaults through the same router.
-`dual-stack-healthy` proves A and AAAA resolution plus successful TCP egress in
-both families. The two mirror scenarios keep both DNS records and both routes
-but drop one forwarded family inside the router namespace. Netdoc dials the
-numeric IPv4 and IPv6 endpoints with `tcp4` and `tcp6`, so Happy Eyeballs cannot
-hide the broken family; JSON and simulator reachability evidence record each
-result separately.
-
-IPv4 and IPv6 forwarding and `disable_ipv6` are written and read back only in
-node-holder namespaces. The integration control snapshots host forwarding,
-IPv4/IPv6 routes, and interfaces before and after the run and requires byte-for-
-byte equality. DNS `records` may contain one A and one AAAA address for the same
-name, and query evidence retains the type. Everything is statically addressed;
-no public DNS or internet service participates.
-
-Routing remains deliberately small: static IPv4/IPv6 unicast, defaults,
-specific routes, and metrics. NAT/NAT66, SLAAC, router advertisements, DHCPv6,
-ECMP, policy routing, link-local routing, routing loops, dynamic routing, and
-VPN/tunnel interfaces are not implemented.
-
-Scenarios can also be generated rather than written. `netdoc-sim hunt` mutates
-one of the three known-good controls (`healthy`, `healthy-routed-network`,
-`dual-stack-healthy`) with bounded, materialized faults, where case *N* is
-derived from the hunt seed and case number alone — so `--seed S --case N`
-rebuilds exactly that network without having run any other case.
-`netdoc-sim triage` runs those hunts at fixed documented seeds, re-runs each
-candidate finding's own case to prove it reproduces, and files only the
-survivors as GitHub issues, deduplicated by a fingerprint over scenario, seed,
-case and finding:
-
-```sh
-./netdoc-sim hunt healthy --seed 20260101 --cases 20
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --json
-./netdoc-sim triage --scenarios healthy --cases 5
-./netdoc-sim triage --create
-```
-
-A finding that does not reproduce is never filed, and anything that stops
-triage from checking — a hunt that could not run, unparseable output, a failing
-`gh` call — fails the run instead of filing a guess. The nightly workflow is
-`.github/workflows/hunt.yml`; it hunts and reproduces on every run but files
-nothing until issue creation is explicitly opted into, per run through the
-`create` dispatch input or per repository through the `NETDOC_HUNT_CREATE`
-variable.
-
-**Changing a probe endpoint in `internal/diagnostic/checks.go` will break the
-`healthy` scenario on purpose.** Scenarios claim netdoc's hardcoded addresses
-(`internetEndpoints4`, `publicDNSIP`, `probeHost`) for a node inside the
-simulation, so they have to be updated together. See
-**[docs/simulation.md](docs/simulation.md)** for that coupling, plus the
-scenario format, the fault types, the suggestion rules, and the known
-limitations.
+built-in scenarios rather than the README. See the **[complete simulator
+guide](docs/simulation.md)** for setup and requirements, commands and workflows,
+scenario authoring, campaigns, hunt and triage usage, reports, troubleshooting,
+tests, and limitations.
 
 ## Development
 
