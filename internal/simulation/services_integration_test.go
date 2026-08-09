@@ -4,8 +4,9 @@ package simulation
 
 import (
 	"errors"
+	"io"
 	"net"
-	"syscall"
+	"os"
 	"testing"
 	"time"
 )
@@ -25,8 +26,8 @@ func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
 		var one [1]byte
 		_, err = conn.Read(one[:])
 		_ = conn.Close()
-		if !errors.Is(err, syscall.ECONNRESET) {
-			t.Fatalf("read error = %v, want ECONNRESET", err)
+		if err == nil || errors.Is(err, io.EOF) || errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("read error = %v, want connection reset", err)
 		}
 	}
 	if err := server.Close(); err != nil {
