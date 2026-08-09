@@ -208,7 +208,7 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			self = "" // no askpass helper; ssh falls back to asking on the tty
 		}
 		args, env, err := sshCommand(m.ssh.host, strings.TrimSpace(m.ssh.user.Value()),
-			m.ssh.keyPath(), m.ssh.pass.Value(), self)
+			m.ssh.keyPath(), m.ssh.pass.Value(), self, runtime.GOOS)
 		if err != nil {
 			// The panel renders this raw, and one of these errors now quotes an
 			// exec failure. Clean at the assignment, which is the only one.
@@ -235,7 +235,7 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // sshCommand builds the argv and environment for the form's answers. self is
 // this binary's path, used as ssh's askpass helper; an empty self drops the
 // password and leaves ssh to prompt for it on the terminal.
-func sshCommand(host, login, key, password, self string) (args, env []string, err error) {
+func sshCommand(host, login, key, password, self, goos string) (args, env []string, err error) {
 	if host == "" {
 		return nil, nil, errors.New("no target host — press r to set one")
 	}
@@ -259,6 +259,15 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 		args = append(args, "-l", login)
 	}
 	if password != "" && self != "" {
+		if goos == "windows" {
+			version, err := sshVersion()
+			if err != nil {
+				return nil, nil, fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%v) — retry with the password field blank and let ssh ask", err)
+			}
+			if err := windowsForcedAskpass(version); err != nil {
+				return nil, nil, err
+			}
+		}
 		// Asked with the same argv the session will use, because a Match block
 		// can key off the port, the login, or the host and hand back a
 		// different HostName than a bare query would.
@@ -300,6 +309,33 @@ func sshCommand(host, login, key, password, self string) (args, env []string, er
 // better answer than a frozen screen. A var so the timeout test needn't wait
 // it out.
 var sshConfigTimeout = 3 * time.Second
+
+// sshVersion identifies the Windows client before relying on forced askpass.
+// OpenSSH writes -V to stderr, so CombinedOutput is intentional.
+var sshVersion = func() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ssh", "-V").CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func windowsForcedAskpass(version string) error {
+	// 8.6 is the first Win32-OpenSSH project release whose Windows source
+	// honors SSH_ASKPASS_REQUIRE=force; the preceding release is 8.1.
+	const prefix = "OpenSSH_for_Windows_"
+	rest, ok := strings.CutPrefix(version, prefix)
+	if !ok {
+		return errors.New("cannot verify Windows OpenSSH forced-askpass support — retry with the password field blank and let ssh ask")
+	}
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(rest, "%d.%dp%d", &major, &minor, &patch); err != nil {
+		return errors.New("cannot verify Windows OpenSSH forced-askpass support — retry with the password field blank and let ssh ask")
+	}
+	if major < 8 || major == 8 && minor < 6 {
+		return fmt.Errorf("Windows OpenSSH %d.%d cannot use the password field safely; version 8.6 or newer is required — retry with the password field blank and let ssh ask", major, minor)
+	}
+	return nil
+}
 
 // sshEffective asks ssh what the target really resolves to once ssh_config has
 // had its say: the HostName a password prompt will name, and whether anything

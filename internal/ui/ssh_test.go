@@ -55,7 +55,7 @@ func TestSSHCommand(t *testing.T) {
 	stubSSHEffective(t, "example.com", false)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args, env, err := sshCommand(tt.host, tt.login, tt.keyArg, tt.password, "/usr/bin/netdoc")
+			args, env, err := sshCommand(tt.host, tt.login, tt.keyArg, tt.password, "/usr/bin/netdoc", "linux")
 			if err != nil {
 				t.Fatalf("sshCommand: %v", err)
 			}
@@ -100,7 +100,7 @@ func TestSSHDisplayUsesPlatformQuoter(t *testing.T) {
 // Without a helper path there is nothing to feed the password to, so ssh must
 // be left to ask on the terminal rather than told the prompt count.
 func TestSSHCommandWithoutHelper(t *testing.T) {
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "")
+	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -109,6 +109,67 @@ func TestSSHCommandWithoutHelper(t *testing.T) {
 	}
 	if env != nil {
 		t.Errorf("env = %v, want nil", env)
+	}
+}
+
+// This pins only Network Doctor's version gate. The assertion that Win32-
+// OpenSSH actually honors forced askpass comes from its Windows source and
+// still needs a real Windows client for end-to-end verification.
+func TestWindowsForcedAskpassVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		wantErr bool
+	}{
+		{"OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2", true},
+		{"OpenSSH_for_Windows_8.6p1, LibreSSL 3.4.3", false},
+		{"OpenSSH_for_Windows_10.0p2, LibreSSL 4.0.0", false},
+		{"OpenSSH_for_Windows_11.1p1, LibreSSL 4.1.0", false},
+		{"OpenSSH_for_Windows_8.6p, LibreSSL 3.4.3", true},
+		{"OpenSSH_9.8p1, OpenSSL 3.0.0", true},
+		{"not OpenSSH", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			if err := windowsForcedAskpass(tt.version); (err != nil) != tt.wantErr {
+				t.Errorf("windowsForcedAskpass(%q) error = %v, wantErr %v", tt.version, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSSHCommandAllowsBlankWindowsPassword(t *testing.T) {
+	oldVersion := sshVersion
+	sshVersion = func() (string, error) {
+		t.Fatal("ssh -V must not run without a password to inject")
+		return "", errors.New("unreachable")
+	}
+	t.Cleanup(func() { sshVersion = oldVersion })
+
+	args, env, err := sshCommand("example.com", "alice", "", "", `C:\netdoc.exe`, "windows")
+	if err != nil {
+		t.Fatalf("sshCommand: %v", err)
+	}
+	if !slices.Equal(args, []string{"-l", "alice", "example.com"}) {
+		t.Errorf("args = %v, want [-l alice example.com]", args)
+	}
+	if env != nil {
+		t.Errorf("env = %v, want nil", env)
+	}
+}
+
+func TestSSHCommandRejectsUnsupportedWindowsAskpass(t *testing.T) {
+	oldVersion := sshVersion
+	sshVersion = func() (string, error) {
+		return "OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2", nil
+	}
+	t.Cleanup(func() { sshVersion = oldVersion })
+
+	args, env, err := sshCommand("example.com", "alice", "", "hunter2", `C:\netdoc.exe`, "windows")
+	if err == nil || !strings.Contains(err.Error(), "password field blank") {
+		t.Fatalf("sshCommand error = %v, want the safe blank-field fallback", err)
+	}
+	if args != nil || env != nil {
+		t.Errorf("args = %v, env = %v, want neither handed to ssh", args, env)
 	}
 }
 
@@ -136,7 +197,7 @@ func stubSSHEffectiveErr(t *testing.T, err error) {
 // never match its own prompt, and the legitimate password would be refused.
 func TestSSHCommandResolvesTheAlias(t *testing.T) {
 	stubSSHEffective(t, "real.example.com", false)
-	_, env, err := sshCommand("alias", "alice", "", "hunter2", "/usr/bin/netdoc")
+	_, env, err := sshCommand("alias", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -152,7 +213,7 @@ func TestSSHCommandResolvesTheAlias(t *testing.T) {
 // has to know it cannot attribute a host-less prompt to the target.
 func TestSSHCommandMarksProxiedConnections(t *testing.T) {
 	stubSSHEffective(t, "example.com", true)
-	_, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc")
+	_, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -167,7 +228,7 @@ func TestSSHCommandMarksProxiedConnections(t *testing.T) {
 // the login and say why, so the retry with a blank field is the user's choice.
 func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
 	stubSSHEffectiveErr(t, errors.New("exit status 255"))
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc")
+	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	if err == nil {
 		t.Fatal("sshCommand succeeded, want a refusal")
 	}
@@ -193,7 +254,7 @@ func TestSSHCommandBoundsAStalledConfigRead(t *testing.T) {
 	t.Cleanup(func() { sshConfigTimeout = old })
 
 	start := time.Now()
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc")
+	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	elapsed := time.Since(start)
 
 	// Unbounded, this waits out the fake's full sleep and then succeeds on its
@@ -241,7 +302,7 @@ func TestSSHCommandWithoutPasswordIgnoresConfigFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { sshEffective = old })
 
-	args, env, err := sshCommand("example.com", "alice", "", "", "/usr/bin/netdoc")
+	args, env, err := sshCommand("example.com", "alice", "", "", "/usr/bin/netdoc", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -264,7 +325,7 @@ func TestSSHCommandQueriesWithTheRealArgv(t *testing.T) {
 	sshEffective = func(args []string) (string, bool, error) { got = args; return "example.com", false, nil }
 	t.Cleanup(func() { sshEffective = old })
 
-	if _, _, err := sshCommand("example.com:2222", "alice", "", "hunter2", "/usr/bin/netdoc"); err != nil {
+	if _, _, err := sshCommand("example.com:2222", "alice", "", "hunter2", "/usr/bin/netdoc", "linux"); err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
 	want := []string{"-p", "2222", "-l", "alice", "example.com"}
@@ -294,7 +355,7 @@ func TestParseSSHConfig(t *testing.T) {
 }
 
 func TestSSHCommandNeedsHost(t *testing.T) {
-	if _, _, err := sshCommand("", "alice", "", "", "/usr/bin/netdoc"); err == nil {
+	if _, _, err := sshCommand("", "alice", "", "", "/usr/bin/netdoc", "linux"); err == nil {
 		t.Error("empty host = nil error, want one")
 	}
 }
@@ -321,7 +382,7 @@ func TestSSHHostValueRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseTarget: %v", err)
 			}
-			args, _, err := sshCommand(sshHostValue(target), "", "", "", "")
+			args, _, err := sshCommand(sshHostValue(target), "", "", "", "", "linux")
 			if err != nil {
 				t.Fatalf("sshCommand: %v", err)
 			}
