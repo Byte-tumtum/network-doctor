@@ -648,6 +648,73 @@ func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 	}
 }
 
+// dns-timeout-boundary only exists as a campaign: the delay it walks is drawn
+// per iteration, so `run` on the base scenario impairs nothing. Pinning one
+// iteration makes the draw a constant, and then the deadline is the only thing
+// left to move — the same held answer resolves under a timeout above the swept
+// range and is classified as a DNS timeout under one below it.
+func TestDNSTimeoutBoundaryCampaignCrossesTheDeadline(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(timeout string) IterationResult {
+		cmd := exec.Command(sim, "campaign", "dns-timeout-boundary", "--json", "--seed", "12345",
+			"--iteration", "3", "--netdoc", netdoc, "-timeout", timeout)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("campaign: %v", err)
+		}
+		var result CampaignResult
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatalf("campaign JSON: %v: %s", err, out)
+		}
+		if len(result.Outcomes) != 1 {
+			t.Fatalf("outcomes = %+v", result.Outcomes)
+		}
+		outcome := result.Outcomes[0]
+		if len(outcome.Schedule) != 1 || outcome.Schedule[0].Type != FaultScheduledDNS ||
+			outcome.Schedule[0].ScheduledResult != DNSOutcomeDelay ||
+			outcome.Schedule[0].Delay < 800*time.Millisecond || outcome.Schedule[0].Delay > 1300*time.Millisecond {
+			t.Fatalf("schedule is not a single swept delay: %+v", outcome.Schedule)
+		}
+		return outcome
+	}
+	// Above the swept range, so the answer always arrives.
+	slack := run("4s")
+	delay := slack.Schedule[0].Delay
+	if slack.Report.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v", slack.Report.Result, slack.Report.Error, slack.Report.Tests)
+	}
+	if got := diagnosisCheck(slack.Report.Tests[0], string(diagnostic.ProbeDNS)); got.Status != "PASS" {
+		t.Errorf("a %s answer under a 4s deadline = %+v", delay, got)
+	}
+	applied := appliedEvent(t, *slack.Report, FaultScheduledDNS, DNSOutcomeDelay)
+	if applied.Event.Delay != delay {
+		t.Errorf("applied delay %s is not the drawn one %s: %+v", applied.Event.Delay, delay, applied)
+	}
+	// The resolver really held the answer rather than the scheduler recording
+	// an intent nothing acted on.
+	held := false
+	for _, query := range slack.Report.Evidence.DNSQueries {
+		held = held || query.Service == "boundary-dns" && query.DelayMs == delay.Milliseconds()
+	}
+	if !held {
+		t.Errorf("no query held for %s: %+v", delay, slack.Report.Evidence.DNSQueries)
+	}
+	assertCleanedUp(t, *slack.Report)
+
+	// Below it, so the same answer is always late.
+	tight := run("300ms")
+	if tight.ScheduleID != slack.ScheduleID || tight.Schedule[0].Delay != delay {
+		t.Fatalf("the deadline changed the network too: %+v != %+v", tight.Schedule, slack.Schedule)
+	}
+	if got := diagnosisCheck(tight.Report.Tests[0], string(diagnostic.ProbeDNS)); got.Status != "FAIL" ||
+		got.Cause != diagnostic.DNSCauseTimeout {
+		t.Errorf("the same %s answer under a 300ms deadline = %+v", delay, got)
+	}
+	assertCleanedUp(t, *tight.Report)
+}
+
 func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
 	requireBackend(t)
 	hostBefore := captureHostNetworkState(t)

@@ -13,7 +13,8 @@ description: A seeded campaign that walks one resolver delay across netdoc's pro
 #
 #   netdoc-sim campaign dns-timeout-boundary --seed 12345 --iteration 3 --runs 5
 #
-# Not part of the CI set: the interesting iterations spend a probe deadline each.
+# A sweep of this shape is too slow for CI, which walks one pinned iteration
+# instead: the interesting iterations spend a probe deadline each.
 
 topology:
   subnet: 10.77.0.0/24

@@ -788,6 +788,14 @@ divergence check has anything to compare: every iteration otherwise draws
 parameters of its own, so each schedule fingerprint is a group of one and two
 runs that disagree about the same network look like two different networks.
 
+It is the one scenario the namespace integration tests reach through `campaign`
+rather than `run`. The delay is drawn per iteration, so the base scenario on its
+own impairs nothing and `netdoc-sim run dns-timeout-boundary` would assert a
+healthy resolve. Pinning `--iteration 3` turns the draw into a constant, which
+leaves the probe deadline as the only variable: the same held answer resolves
+under `-timeout 4s` and is classified `dns_timeout` under `-timeout 300ms`. The
+full sweep stays a local command — every iteration near the deadline costs one.
+
 ### Timed fault scenarios
 
 - `transient-dns-outage` — the resolver answers, goes silent, and recovers, all
