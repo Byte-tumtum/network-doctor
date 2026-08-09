@@ -25,3 +25,9 @@ func killGroup(cmd *exec.Cmd) error {
 	// a consolation prize; any surviving grandchildren get adopted by init.
 	return cmd.Process.Kill()
 }
+
+func startProcess(cmd *exec.Cmd) (func(), error) {
+	setProcGroup(cmd)
+	cmd.Cancel = func() error { return killGroup(cmd) }
+	return func() {}, cmd.Start()
+}

@@ -1,12 +1,11 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package ui
 
 import "os/exec"
 
-// setProcGroup is a no-op: on Windows the tool set (ping/tracert/pathping/
-// netstat/nslookup/curl) spawns no descendant trees, and on unsupported
-// GOOSes a plain Kill is the only portable cancellation.
+// Unsupported non-Unix platforms have only portable direct-process
+// cancellation.
 func setProcGroup(*exec.Cmd) {}
 
 func killGroup(cmd *exec.Cmd) error {
@@ -14,4 +13,10 @@ func killGroup(cmd *exec.Cmd) error {
 		return nil
 	}
 	return cmd.Process.Kill()
+}
+
+func startProcess(cmd *exec.Cmd) (func(), error) {
+	setProcGroup(cmd)
+	cmd.Cancel = func() error { return killGroup(cmd) }
+	return func() {}, cmd.Start()
 }

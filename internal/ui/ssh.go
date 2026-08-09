@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -348,14 +349,21 @@ var sshEffective = func(args []string) (host string, proxied bool, err error) {
 	defer cancel()
 	// -G prints the resolved config and connects to nothing.
 	cmd := exec.CommandContext(ctx, "ssh", append([]string{"-G"}, args...)...)
-	setProcGroup(cmd) // Match exec spawns descendants; the deadline has to reach them too
-	cmd.Cancel = func() error { return killGroup(cmd) }
 	cmd.WaitDelay = time.Second // don't hang on Wait if one of them holds the pipe
-	out, err := cmd.Output()
+	var out, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	cleanup, err := startProcess(cmd)
+	if err == nil {
+		err = cmd.Wait()
+		cleanup()
+		if exit, ok := err.(*exec.ExitError); ok {
+			exit.Stderr = stderr.Bytes()
+		}
+	}
 	if err != nil {
 		return "", false, err
 	}
-	host, proxied = parseSSHConfig(string(out))
+	host, proxied = parseSSHConfig(out.String())
 	return host, proxied, nil
 }
 

@@ -7,13 +7,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestKillGroupNilProcess(t *testing.T) {
@@ -57,27 +53,5 @@ func TestCleanupKillsGrandchild(t *testing.T) {
 			t.Fatalf("grandchild %d survived Cleanup", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// grandchildPID reads the pid the helper prints before it parks.
-func grandchildPID(t *testing.T, ch chan tea.Msg) int {
-	t.Helper()
-	timeout := time.After(20 * time.Second)
-	for {
-		select {
-		case msg := <-ch:
-			out, ok := msg.(ToolOutputMsg)
-			if !ok {
-				t.Fatalf("job ended before reporting a pid: %v", msg)
-			}
-			pid, err := strconv.Atoi(strings.TrimSpace(out.Line))
-			if err != nil {
-				t.Fatalf("helper printed %q, want a pid", out.Line)
-			}
-			return pid
-		case <-timeout:
-			t.Fatal("helper never reported its grandchild's pid")
-		}
 	}
 }

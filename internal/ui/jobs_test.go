@@ -1,4 +1,4 @@
-// Job lifecycle against GO_HELPER subprocesses: streaming, process-group
+// Job lifecycle against GO_HELPER subprocesses: streaming, process-tree
 // cancellation, timeouts, line truncation, and overflow still delivering the
 // terminal event.
 
@@ -7,6 +7,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -38,18 +39,44 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Printf("flood %d\n", i)
 		}
 	case "grandchild":
-		// A child of the child, reachable only through the process group. Its
+		// A child of the child, reachable only through the managed tree. Its
 		// output is discarded rather than inherited, so it can't hold our
 		// stdout pipe open and stall the drain after we die.
-		child := exec.Command("sleep", "300")
+		child := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+		child.Env = append(os.Environ(), "GO_HELPER=1", "GO_HELPER_MODE=descendant")
+		child.Stdout, child.Stderr = io.Discard, io.Discard
 		if err := child.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "grandchild:", err)
 			os.Exit(1)
 		}
 		fmt.Println(child.Process.Pid)
 		time.Sleep(30 * time.Second)
+	case "descendant":
+		time.Sleep(5 * time.Minute)
 	}
 	os.Exit(0)
+}
+
+// grandchildPID reads the pid the helper prints before it parks.
+func grandchildPID(t *testing.T, ch chan tea.Msg) int {
+	t.Helper()
+	timeout := time.After(20 * time.Second)
+	for {
+		select {
+		case msg := <-ch:
+			out, ok := msg.(ToolOutputMsg)
+			if !ok {
+				t.Fatalf("job ended before reporting a pid: %v", msg)
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(out.Line))
+			if err != nil {
+				t.Fatalf("helper printed %q, want a pid", out.Line)
+			}
+			return pid
+		case <-timeout:
+			t.Fatal("helper never reported its grandchild's pid")
+		}
+	}
 }
 
 func startHelper(t *testing.T, parent context.Context, mode string, extra ...string) *job {

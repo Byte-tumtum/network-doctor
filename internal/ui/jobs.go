@@ -73,7 +73,7 @@ type job struct {
 	cancel context.CancelFunc
 }
 
-// startTool launches name+args as a process-group leader, streaming sanitized
+// startTool launches name+args as a managed process tree, streaming sanitized
 // output lines and a guaranteed terminal event on job.ch. env nil = inherit.
 // timeout <= 0 means the default toolTimeout.
 // Returns the job and the first wait command to feed into Bubble Tea.
@@ -84,8 +84,6 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = env
-	setProcGroup(cmd) // own process group (Unix) so we can kill descendants (e.g. mtr-packet)
-	cmd.Cancel = func() error { return killGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second // don't hang on Wait if a child holds the pipe
 
 	stdout, err := cmd.StdoutPipe()
@@ -98,7 +96,8 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 		cancel()
 		return nil, nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	cleanup, err := startProcess(cmd)
+	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
@@ -113,6 +112,7 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 		wg.Go(func() { streamReader(stderr, name, id, gen, j.ch, &dropped) })
 		wg.Wait() // drain both pipes to EOF before Wait (no drain/wait race)
 		werr := cmd.Wait()
+		cleanup()
 		// Guaranteed (blocking) terminal send, last — never dropped.
 		j.ch <- ToolDoneMsg{
 			JobID:      id,
@@ -152,7 +152,7 @@ func (j *job) drain() {
 // waitDone blocks until the job's terminal event lands or deadline fires. Only
 // shutdown uses it — while the app is up, Update owns this channel. Cancelling
 // a job is not the same as having killed it: exec runs cmd.Cancel on its own
-// goroutine, so without this wait the process could exit before the SIGKILL
+// goroutine, so without this wait the process could exit before termination
 // goes out.
 func (j *job) waitDone(deadline <-chan struct{}) {
 	if j == nil || j.ch == nil {
