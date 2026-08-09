@@ -332,7 +332,7 @@ func windowsForcedAskpass(version string) error {
 		return errors.New("cannot verify Windows OpenSSH forced-askpass support — retry with the password field blank and let ssh ask")
 	}
 	if major < 8 || major == 8 && minor < 6 {
-		return fmt.Errorf("Windows OpenSSH %d.%d cannot use the password field safely; version 8.6 or newer is required — retry with the password field blank and let ssh ask", major, minor)
+		return fmt.Errorf("installed Windows OpenSSH %d.%d cannot use the password field safely; version 8.6 or newer is required — retry with the password field blank and let ssh ask", major, minor)
 	}
 	return nil
 }
