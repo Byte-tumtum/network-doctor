@@ -9,11 +9,95 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/simulation"
 )
+
+func TestRunDispatch(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	scenarios := strings.Join(simulation.LibraryNames(), "\n") + "\n"
+	tests := []struct {
+		name           string
+		args           []string
+		code           int
+		stdout         string
+		stdoutContains string
+		stderr         string
+	}{
+		{name: "no arguments", code: exitUsage, stdoutContains: "Usage: netdoc-sim <command> [arguments]"},
+		{name: "unknown command", args: []string{"bogus"}, code: exitUsage,
+			stderr: "netdoc-sim: unknown command \"bogus\"\nrun 'netdoc-sim help' for usage\n"},
+		{name: "validate missing scenario", args: []string{"validate"}, code: exitUsage,
+			stderr: "netdoc-sim: validate takes one scenario\n"},
+		{name: "validate extra scenario", args: []string{"validate", "healthy", "healthy"}, code: exitUsage,
+			stderr: "netdoc-sim: validate takes one scenario\n"},
+		{name: "validate scenario", args: []string{"validate", "healthy"}, code: exitOK,
+			stdout: "ok: healthy-network — 3 node(s), 0 fault(s), 1 test(s), 6 expected check(s)\n"},
+		{name: "inspect missing id", args: []string{"inspect"}, code: exitUsage,
+			stderr: "netdoc-sim: inspect takes one simulation id\n"},
+		{name: "cleanup all with id", args: []string{"cleanup", "-all", "123"}, code: exitUsage,
+			stderr: "netdoc-sim: -all takes no simulation id\n"},
+		{name: "scenarios", args: []string{"scenarios"}, code: exitOK, stdout: scenarios},
+		{name: "list empty", args: []string{"list"}, code: exitOK,
+			stdout: "no simulations are being kept alive\n"},
+		{name: "cleanup all empty", args: []string{"cleanup", "-all"}, code: exitOK,
+			stdout: "nothing to clean up\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != tt.code {
+				t.Errorf("code = %d, want %d", code, tt.code)
+			}
+			if tt.stdoutContains != "" {
+				if !strings.Contains(stdout.String(), tt.stdoutContains) {
+					t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tt.stdoutContains)
+				}
+			} else if stdout.String() != tt.stdout {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.stdout)
+			}
+			if stderr.String() != tt.stderr {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tt.stderr)
+			}
+		})
+	}
+}
+
+// The run launcher deliberately receives the subcommand name and removes it
+// before parsing. Pin both the scenario and its trailing flag so another argv
+// slice cannot silently shift or drop either one.
+func TestRunDispatchKeepsArgvAligned(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"run", "healthy", "-repeat", "0"}, &stdout, &stderr)
+	if code != exitUsage || stdout.Len() != 0 || stderr.String() != "netdoc-sim: -repeat must be at least 1\n" {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunDispatchCapabilities(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"capabilities"}, &stdout, &stderr)
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"Backend:", "Supported:", "A run will:", "It will not touch the host's interfaces"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+	switch {
+	case strings.Contains(out, "Supported: true") && code != exitOK:
+		t.Errorf("supported host returned code %d", code)
+	case strings.Contains(out, "Supported: false") && code != exitError:
+		t.Errorf("unsupported host returned code %d", code)
+	case !strings.Contains(out, "Supported: true") && !strings.Contains(out, "Supported: false"):
+		t.Errorf("stdout has no supported status: %q", out)
+	}
+}
 
 // The launcher resolves the netdoc binary in the user's own working directory
 // and $PATH, then hands the director a command line built from what it parsed.
