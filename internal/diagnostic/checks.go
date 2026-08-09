@@ -813,8 +813,10 @@ func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 // check net/http applies to HTTP(S)_PROXY and this file has to apply itself to
 // the ALL_PROXY fallback.
 // ponytail: suffix and "*" matching only, no IP or CIDR entries; the only host
-// asked about is probeHost, a fixed public name that is never a literal IP.
-// The day a caller passes a host the user chose, drop this for
+// asked about is probeHost, a fixed public name that is never a literal IP —
+// proxyProbe is the sole caller and hardcodes it even when the user names a
+// target, an invariant TestProxyProbeOnlyAsksAboutProbeHost pins. The day a
+// caller passes a host the user chose, that test fails: drop this for
 // golang.org/x/net/http/httpproxy, the matcher net/http itself uses.
 func noProxyBypasses(host string) bool {
 	np := os.Getenv("NO_PROXY")

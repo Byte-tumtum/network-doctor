@@ -650,6 +650,38 @@ func TestProxyProbeAuthRequired(t *testing.T) {
 	}
 }
 
+// noProxyBypasses matches suffixes and "*" only — no IP literals, no CIDR — and
+// is safe solely because probeHost is the one host it is ever asked about. Pin
+// that: whatever target the user names, the proxy probe still asks about
+// probeHost. If this fails, noProxyBypasses must become httpproxy.
+func TestProxyProbeOnlyAsksAboutProbeHost(t *testing.T) {
+	targets := []*Target{
+		nil,
+		{Host: "10.0.0.7", IP: net.ParseIP("10.0.0.7"), Port: 443, Proto: ProtoTLSHTTP},
+		{Host: "intranet.corp", Port: 22, Proto: ProtoSSH},
+	}
+	for _, target := range targets {
+		var asked []string
+		o := &netops{proxyFromEnv: func(req *http.Request) (*url.URL, error) {
+			asked = append(asked, req.URL.Hostname())
+			return nil, nil
+		}}
+		for _, p := range o.buildProbes(target) {
+			if p.ID == ProbeProxy {
+				p.Run(context.Background(), nil)
+			}
+		}
+		if len(asked) == 0 {
+			t.Fatalf("target %+v: proxy probe never consulted the environment", target)
+		}
+		for _, h := range asked {
+			if h != probeHost {
+				t.Errorf("target %+v: proxy probe asked about %q, want %q", target, h, probeHost)
+			}
+		}
+	}
+}
+
 // HTTP_PROXY-only environments (no HTTPS_PROXY) still count as configured.
 func TestProxyProbeFallsBackToHTTP(t *testing.T) {
 	ops := &netops{proxyFromEnv: func(req *http.Request) (*url.URL, error) {
