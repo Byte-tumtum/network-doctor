@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 
 Name:           network-doctor
-Version:        1.10.3
+Version:        1.10.8
 Release:        1%{?dist}
 Summary:        Terminal UI that diagnoses network connectivity and explains where the connection breaks
 
@@ -44,5 +44,8 @@ install -Dpm0755 netdoc %{buildroot}%{_bindir}/netdoc
 %{_bindir}/netdoc
 
 %changelog
+* Sun Aug 09 2026 Michael Placzek <heymaikol@proton.me> - 1.10.8-1
+- Update to 1.10.8
+
 * Mon Aug 03 2026 Michael Placzek <heymaikol@proton.me> - 1.10.3-1
 - Initial COPR package
