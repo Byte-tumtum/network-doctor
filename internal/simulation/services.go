@@ -397,7 +397,7 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, s
 				source = from.String()
 			}
 			var sequence int
-			sequence, scheduled, delay = state.next(qtype)
+			sequence, scheduled, delay = state.next(name, qtype)
 			actual := result
 			switch scheduled {
 			case DNSOutcomeSERVFAIL:
@@ -487,17 +487,27 @@ func (g *delayGroup) Close() error {
 // Nothing here draws a random value. Trusted simulator code decides; the
 // service only reads.
 type dnsState struct {
-	mu        sync.Mutex
-	a         []string
-	aaaa      []string
-	aIndex    int
-	aaaaIndex int
-	live      string
-	delay     time.Duration
+	mu   sync.Mutex
+	a    []string
+	aaaa []string
+	// asked counts queries per normalized name and family, so the schedule a
+	// scenario writes for one name is walked by that name alone. A netdoc run
+	// asks this resolver for whatever it likes — the captive-portal host, a
+	// public-DNS comparison — and how many of those it sends varies with the
+	// host it runs on. A counter shared across names would let that variation
+	// slide the target's failure and recovery around.
+	//
+	// One entry per name asked, for the life of one simulation. The resolver
+	// only listens inside the scenario's namespace, and every query it answers
+	// already writes a line to the evidence file, which is the larger of the
+	// two by far.
+	asked map[string]int
+	live  string
+	delay time.Duration
 }
 
 func newDNSState(fault *DNSFault) *dnsState {
-	s := &dnsState{}
+	s := &dnsState{asked: make(map[string]int)}
 	if fault != nil {
 		s.a = append([]string(nil), fault.A...)
 		s.aaaa = append([]string(nil), fault.AAAA...)
@@ -524,24 +534,27 @@ func (s *dnsState) set(outcome string, delay time.Duration) error {
 	return nil
 }
 
-// next reports the sequence number, outcome and delay for one query.
-func (s *dnsState) next(qtype uint16) (int, string, time.Duration) {
+// next reports the sequence number, outcome and delay for one query. The
+// sequence counts queries for this name and family only.
+func (s *dnsState) next(name string, qtype uint16) (int, string, time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	outcome := DNSOutcomeAnswer
 	sequence := 1
+	var schedule []string
+	var family string
 	switch qtype {
 	case dnsTypeA:
-		s.aIndex++
-		sequence = s.aIndex
-		if s.aIndex <= len(s.a) {
-			outcome = s.a[s.aIndex-1]
-		}
+		schedule, family = s.a, "A"
 	case dnsTypeAAAA:
-		s.aaaaIndex++
-		sequence = s.aaaaIndex
-		if s.aaaaIndex <= len(s.aaaa) {
-			outcome = s.aaaa[s.aaaaIndex-1]
+		schedule, family = s.aaaa, "AAAA"
+	}
+	if family != "" {
+		key := dnsKey(name) + "\x00" + family
+		s.asked[key]++
+		sequence = s.asked[key]
+		if sequence <= len(schedule) {
+			outcome = schedule[sequence-1]
 		}
 	}
 	if s.live != "" {

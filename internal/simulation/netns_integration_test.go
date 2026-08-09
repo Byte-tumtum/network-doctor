@@ -287,16 +287,28 @@ func TestIntermittentDNSScenario(t *testing.T) {
 	if rep.Result != ResultPass {
 		t.Fatalf("result = %s (error %q); tests=%+v DNS=%+v", rep.Result, rep.Error, rep.Tests, rep.Evidence.DNSQueries)
 	}
-	servfail, answer := false, false
+	// Both outcomes have to belong to the target name, in that order: the point
+	// of the scenario is that this name failed and then this name recovered.
+	// Counting outcomes across every name the run happened to ask about is what
+	// let unrelated queries decide when the recovery landed.
+	servfail, answer := 0, 0
 	for _, query := range rep.Evidence.DNSQueries {
-		if query.Service != "intermittent-resolver" {
+		if query.Service != "intermittent-resolver" || query.Name != "flaky-target.test" ||
+			query.QueryType != "A" {
 			continue
 		}
-		servfail = servfail || query.ScheduledOutcome == DNSOutcomeSERVFAIL && query.ActualOutcome == "SERVFAIL"
-		answer = answer || query.ScheduledOutcome == DNSOutcomeAnswer && query.ActualOutcome == "ANSWER"
+		switch {
+		case query.ScheduledOutcome == DNSOutcomeSERVFAIL && query.ActualOutcome == "SERVFAIL":
+			servfail = query.Sequence
+		case query.ScheduledOutcome == DNSOutcomeAnswer && query.ActualOutcome == "ANSWER":
+			if answer == 0 {
+				answer = query.Sequence
+			}
+		}
 	}
-	if !servfail || !answer {
-		t.Errorf("scheduled resolver did not prove both outcomes: %+v", rep.Evidence.DNSQueries)
+	if servfail == 0 || answer == 0 || servfail > answer {
+		t.Errorf("target A queries did not fail and then recover (last servfail %d, first answer %d): %+v",
+			servfail, answer, rep.Evidence.DNSQueries)
 	}
 	if cause := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeDNS)).Cause; cause != diagnostic.DNSCauseTemporaryFailure {
 		t.Errorf("first DNS cause = %q", cause)

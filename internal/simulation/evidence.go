@@ -94,7 +94,7 @@ type DNSEvidence struct {
 }
 
 // DNSQueryEvidence preserves scheduled query order rather than aggregating it.
-// Sequence is scoped to service and query type.
+// Sequence is scoped to service, queried name, and query type.
 type DNSQueryEvidence struct {
 	Node             string `json:"node"`
 	Service          string `json:"service"`
@@ -352,8 +352,8 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	})
 	sort.Slice(out.DNSQueries, func(i, j int) bool {
 		a, b := out.DNSQueries[i], out.DNSQueries[j]
-		if a.Node+a.Service+a.QueryType != b.Node+b.Service+b.QueryType {
-			return a.Node+a.Service+a.QueryType < b.Node+b.Service+b.QueryType
+		if a.Node+a.Service+a.Name+a.QueryType != b.Node+b.Service+b.Name+b.QueryType {
+			return a.Node+a.Service+a.Name+a.QueryType < b.Node+b.Service+b.Name+b.QueryType
 		}
 		return a.Sequence < b.Sequence
 	})

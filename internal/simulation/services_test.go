@@ -163,9 +163,49 @@ func TestDNSScheduleIsPerFamilyAndBounded(t *testing.T) {
 		{dnsTypeAAAA, 2, DNSOutcomeAnswer}, // exhausted schedules fail open
 		{dnsTypeA, 3, DNSOutcomeAnswer},
 	} {
-		seq, outcome, _ := s.next(tc.qtype)
+		seq, outcome, _ := s.next("target.test", tc.qtype)
 		if seq != tc.seq || outcome != tc.outcome {
 			t.Errorf("next(%d) = %d/%s, want %d/%s", tc.qtype, seq, outcome, tc.seq, tc.outcome)
+		}
+	}
+}
+
+// A scenario writes a schedule for the name it is making a point about. Queries
+// for anything else — netdoc's captive-portal host, a public-DNS comparison,
+// whatever a future probe adds — must not spend that name's budget, because how
+// many of those a run sends is not fixed.
+func TestDNSScheduleIsPerName(t *testing.T) {
+	s := newDNSState(&DNSFault{A: []string{DNSOutcomeSERVFAIL, DNSOutcomeSERVFAIL}})
+	if seq, outcome, _ := s.next("target.test", dnsTypeA); seq != 1 || outcome != DNSOutcomeSERVFAIL {
+		t.Fatalf("first target query = %d/%s", seq, outcome)
+	}
+	for i := 0; i < 5; i++ {
+		if seq, outcome, _ := s.next("connectivitycheck.gstatic.com", dnsTypeA); seq != i+1 || outcome == "" {
+			t.Fatalf("unrelated query %d = %d/%s", i, seq, outcome)
+		}
+	}
+	if seq, outcome, _ := s.next("target.test", dnsTypeA); seq != 2 || outcome != DNSOutcomeSERVFAIL {
+		t.Errorf("second target query = %d/%s, want 2/%s — unrelated names ate the schedule",
+			seq, outcome, DNSOutcomeSERVFAIL)
+	}
+	if seq, outcome, _ := s.next("target.test", dnsTypeA); seq != 3 || outcome != DNSOutcomeAnswer {
+		t.Errorf("third target query = %d/%s, want 3/%s", seq, outcome, DNSOutcomeAnswer)
+	}
+}
+
+// The counter key is a DNS name, so it carries DNS name equality: case is not
+// significant and the root dot is optional. Otherwise one stub resolver's
+// trailing dot would hand a name a second, untouched schedule.
+func TestDNSScheduleNormalizesNames(t *testing.T) {
+	s := newDNSState(&DNSFault{A: []string{DNSOutcomeSERVFAIL, DNSOutcomeSERVFAIL, DNSOutcomeAnswer}})
+	for i, name := range []string{"target.test", "TARGET.test.", "Target.Test"} {
+		seq, outcome, _ := s.next(name, dnsTypeA)
+		want := DNSOutcomeSERVFAIL
+		if i == 2 {
+			want = DNSOutcomeAnswer
+		}
+		if seq != i+1 || outcome != want {
+			t.Errorf("next(%q) = %d/%s, want %d/%s", name, seq, outcome, i+1, want)
 		}
 	}
 }

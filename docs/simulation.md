@@ -712,10 +712,14 @@ not a claim of statistical significance.
   sample count. Netdoc currently evaluates one RTT per probe, so the report
   emits the deterministic `jitter_sampling_gap` suggestion instead of inventing
   a jitter diagnosis.
-- `intermittent-dns` uses synchronized A and AAAA sequences. Each query records
-  node, source, name, type, family-local sequence number, scheduled outcome, and
-  actual `ANSWER`/`NODATA`/`NXDOMAIN`/`SERVFAIL` result. Exhausted schedules
-  answer normally; indexing cannot run past a slice.
+- `intermittent-dns` uses synchronized A and AAAA sequences. Every queried name
+  walks the schedule independently, so a query for one name cannot advance
+  another name's position — how many times a run asks about the captive-portal
+  host or any other name varies with the host, and the fault belongs to the name
+  the scenario is making a point about. Each query records node, source, name,
+  type, name- and family-local sequence number, scheduled outcome, and actual
+  `ANSWER`/`NODATA`/`NXDOMAIN`/`SERVFAIL` result. Exhausted schedules answer
+  normally; indexing cannot run past a slice.
 - `tcp-reset` accepts a TCP connection, performs one bounded read, sets
   `SO_LINGER=0`, and closes. Evidence distinguishes accepted and reset events;
   the SSH banner probe uses the stable `connection_reset` cause. The service is

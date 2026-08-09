@@ -17,16 +17,20 @@ topology:
           zone:
             flaky-target.test: 10.77.0.20
             connectivitycheck.gstatic.com: 10.77.0.1
-          # Eight per family. One netdoc run asks this resolver for two names —
-          # the target and the captive-portal probe host — the stub resolver
-          # retries each once after a SERVFAIL, and netdoc resamples the target
-          # once more before calling DNS unavailable: six queries per family, so
-          # eight outlast the first run however the two names interleave. The
-          # whole first run therefore fails. Whatever is left over does not save
-          # the second run either: its own resample rides over a leftover pair.
+          # Six per family, and every name walks the schedule on its own — what
+          # netdoc asks this resolver about the captive-portal host cannot move
+          # the target's failure or its recovery.
+          #
+          # One netdoc run spends four queries per family on the target: the
+          # stub resolver retries each SERVFAIL once, and netdoc resamples the
+          # name once more before calling DNS unavailable. Four servfails is
+          # therefore the whole first run. The second run starts at slot five,
+          # so its own retry and resample reach the answers past the schedule,
+          # and it recovers. Anything from three to six queries per run lands
+          # the same way; the number is not on a knife edge.
           dns_fault:
-            a: [servfail, servfail, servfail, servfail, servfail, servfail, servfail, servfail]
-            aaaa: [servfail, servfail, servfail, servfail, servfail, servfail, servfail, servfail]
+            a: [servfail, servfail, servfail, servfail, servfail, servfail]
+            aaaa: [servfail, servfail, servfail, servfail, servfail, servfail]
     - name: internet
       address: 10.77.0.1
       aliases: [1.1.1.1, 8.8.8.8]
