@@ -337,9 +337,9 @@ All probes, the diagnosis engine, and the TUI are pure Go and identical on Linux
 
 Windows built-in toolbox commands are decoded from the active OEM code page before their output is sanitized. UTF-8 tools like `curl.exe` and `nmap` are left untouched.
 
-## Roadmap
+## Feature summary
 
-Implemented: native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
+Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
 
 ## Built with
 
