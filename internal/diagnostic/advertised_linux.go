@@ -3,12 +3,20 @@
 package diagnostic
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"os/exec"
 	"time"
 )
+
+const maxAvahiOutput = 1 << 20
+
+type cappedAvahiOutput []byte
+
+func (out *cappedAvahiOutput) Write(p []byte) (int, error) {
+	*out = append(*out, p[:min(len(p), maxAvahiOutput-len(*out))]...)
+	return len(p), nil
+}
 
 // AdvertisedNames returns the device names advertised through the platform's
 // DNS-SD browser, keyed by IP. They win over reverse DNS because they are
@@ -25,17 +33,11 @@ func AdvertisedNames(ctx context.Context, ips []string) map[string]string {
 	cmd := exec.CommandContext(ctx, "avahi-browse",
 		"--all", "--terminate", "--resolve", "--parsable", "--no-db-lookup")
 	cmd.WaitDelay = time.Second // don't hang on Wait if a child holds the pipe
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil
-	}
+	var out cappedAvahiOutput
+	cmd.Stdout = &out
 	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
+	if err := cmd.Run(); err != nil {
 		return nil
 	}
-	var out bytes.Buffer
-	_, _ = io.Copy(&out, io.LimitReader(stdout, 1<<20))
-	_, _ = io.Copy(io.Discard, stdout)
-	_ = cmd.Wait()
-	return parseAvahiNames(out.Bytes(), ips)
+	return parseAvahiNames(out, ips)
 }
