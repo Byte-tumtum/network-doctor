@@ -2,6 +2,11 @@
 %global debug_package %{nil}
 
 Name:           network-doctor
+# Placeholder, not a per-release chore. The copr job in the release workflow
+# rewrites this from the git tag before building, so published RPMs always
+# match the release. Here it only selects which release's Source0/Source1
+# tarballs a hand-run rpmbuild/mock/spectool downloads, so bump it (with a
+# changelog entry) only when you want a manual build of a newer version.
 Version:        1.10.8
 Release:        1%{?dist}
 Summary:        Terminal UI that diagnoses network connectivity and explains where the connection breaks
