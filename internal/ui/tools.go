@@ -34,6 +34,93 @@ var toolLookPath = exec.LookPath
 // before that probe has a result (toolbox mode, a failed or unfinished run).
 func (m model) selectedIP() net.IP { return m.results[diagnostic.ProbeTargetTCP].SelectedIP }
 
+// toolBind is the --iface selection as the drill-down tools need it: the
+// interface name the user named (empty when --iface named an exact local IP,
+// or was not given) and the one source address per family the probes are
+// pinned to. The zero value means "no --iface", and every builder below then
+// emits exactly the command it emitted before this existed.
+//
+// The split matters because the tools disagree: some options take an interface
+// name (traceroute -i), some take a source address (pathping -i), and one takes
+// either (Linux ping -I). A name binds both families at once; an address binds
+// one, so it must match the family of the address the tool will actually talk
+// to.
+type toolBind struct {
+	iface  string
+	v4, v6 net.IP
+}
+
+func bindFor(sources *diagnostic.SourceAddresses) toolBind {
+	if sources == nil {
+		return toolBind{}
+	}
+	return toolBind{iface: sources.Iface, v4: sources.IPv4, v6: sources.IPv6}
+}
+
+// source is the local address to bind for a destination in dst's family, or
+// nil when the selection has none — no source of the right family means the
+// caller must leave the option off, never substitute the other family.
+//
+// A nil dst (a hostname with no probe result yet) has no family to follow. A
+// single-family selection is still unambiguous, and --iface <address> always
+// is one, so it binds; a dual-stack interface does not, because picking one
+// half would pin a command the resolver might have taken the other way.
+func (b toolBind) source(dst net.IP) net.IP {
+	switch {
+	case isIPv6(dst):
+		return b.v6
+	case dst != nil:
+		return b.v4
+	case b.v6 == nil:
+		return b.v4
+	case b.v4 == nil:
+		return b.v6
+	}
+	return nil
+}
+
+// bindFunc renders a tool's binding option for a destination address, or nil
+// when that tool cannot bind for this destination.
+type bindFunc func(dst net.IP) []string
+
+// addr binds through an option that takes a source address only.
+func (b toolBind) addr(flag string) bindFunc {
+	return func(dst net.IP) []string {
+		if src := b.source(dst); src != nil {
+			return []string{flag, src.String()}
+		}
+		return nil
+	}
+}
+
+// named binds through nameFlag when --iface named an interface, and falls back
+// to addrFlag with the family-matched source when it named an exact IP.
+func (b toolBind) named(nameFlag, addrFlag string) bindFunc {
+	return func(dst net.IP) []string {
+		if b.iface != "" {
+			return []string{nameFlag, b.iface}
+		}
+		return b.addr(addrFlag)(dst)
+	}
+}
+
+// either binds through a single option that accepts a name or an address.
+func (b toolBind) either(flag string) bindFunc { return b.named(flag, flag) }
+
+// v6Only gates a binding to IPv6 destinations. Microsoft documents both
+// Windows source-address options that netdoc could use — ping /S and
+// tracert /S — as "available on IPv6 only", so an IPv4 or not-yet-known
+// destination keeps the unbound command instead of carrying an option that
+// command rejects for the family it is about to use.
+func v6Only(bind bindFunc) bindFunc {
+	return func(dst net.IP) []string {
+		if !isIPv6(dst) {
+			return nil
+		}
+		return bind(dst)
+	}
+}
+
 const lanDiscoveryName = "LAN scan"
 
 func cacheAvailability(tools []Tool) []Tool {
@@ -48,7 +135,10 @@ func cacheAvailability(tools []Tool) []Tool {
 // (production passes runtime.GOOS; tests exercise all tables from one OS).
 // Same hotkeys everywhere. The target-independent tools (routes, sockets) are
 // always offered; the target-dependent set only when a host is given.
-func toolsFor(t *diagnostic.Target, goos string) []Tool {
+// b is the --iface selection the probes are pinned to, so the drill-downs
+// leave from the same interface the evidence came from; a zero b is "no
+// --iface" and every command keeps the shape it has without one.
+func toolsFor(t *diagnostic.Target, goos string, b toolBind) []Tool {
 	quote := quoterFor(goos)
 
 	var tools []Tool
@@ -77,11 +167,16 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 	switch goos {
 	case "darwin":
 		// BSD ping's -W is milliseconds and semantics differ; omit it.
-		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "-c", "4", host))
+		// macOS ping binds an interface with -b boundif (an Apple addition)
+		// and a source address with -S src_addr.
+		tools = append(tools, boundTool(quote, "p", "ping the host", "ping", b.named("-b", "-S"), host, "-c", "4"))
 	case "windows":
-		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "-n", "4", "-w", "2000", host))
+		// Windows ping has no interface option, and its -S srcaddr is
+		// documented IPv6-only.
+		tools = append(tools, boundTool(quote, "p", "ping the host", "ping", v6Only(b.addr("-S")), host, "-n", "4", "-w", "2000"))
 	default:
-		tools = append(tools, staticTool(quote, "p", "ping the host", "ping", "-c", "4", "-W", "2", host))
+		// iputils ping's -I takes "either interface name or address".
+		tools = append(tools, boundTool(quote, "p", "ping the host", "ping", b.either("-I"), host, "-c", "4", "-W", "2"))
 	}
 
 	if goos == "windows" {
@@ -101,21 +196,24 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 	case diagnostic.ProtoSMTP:
 		tools = append(tools, smtpTool(quote, host, t.Port))
 	default:
-		tools = append(tools, curlTool(host, goos))
+		tools = append(tools, curlTool(host, goos, b))
 	}
 
 	if goos == "windows" {
 		tools = append(tools,
-			staticTool(quote, "t", "trace the path", "tracert", "-w", "2000", "-h", "20", host))
+			boundTool(quote, "t", "trace the path", "tracert", v6Only(b.addr("-S")), host, "-w", "2000", "-h", "20"))
 		// pathping's full run takes ~30–60 s; give it its own budget.
-		pp := staticTool(quote, "m", "path quality", "pathping", "-h", "20", "-q", "5", "-p", "100", "-w", "500", host)
+		// Unlike ping and tracert, pathping's -i IPaddress carries no family
+		// restriction.
+		pp := boundTool(quote, "m", "path quality", "pathping", b.addr("-i"), host, "-h", "20", "-q", "5", "-p", "100", "-w", "500")
 		pp.Timeout = 90 * time.Second
 		tools = append(tools, pp)
 	} else {
 		tools = append(tools,
-			staticTool(quote, "t", "trace the path", "traceroute", "-w", "2", "-q", "1", "-m", "20", host),
+			// Both Linux and BSD traceroute take -i device and -s src_addr.
+			boundTool(quote, "t", "trace the path", "traceroute", b.named("-i", "-s"), host, "-w", "2", "-q", "1", "-m", "20"),
 			// mtr report mode only — never curses inside our TUI.
-			staticTool(quote, "m", "path quality", "mtr", "--report", "--report-cycles", "5", host))
+			boundTool(quote, "m", "path quality", "mtr", b.named("-I", "-a"), host, "--report", "--report-cycles", "5"))
 	}
 
 	// Targeted nmap actively scans the host, so it is gated behind a shown-command
@@ -139,6 +237,12 @@ func toolsFor(t *diagnostic.Target, goos string) []Tool {
 // nothing — worse than a top-1000 scan that finishes. Deliberately no
 // -sV/-O/-A: version and OS detection are louder, slower, and not needed to
 // answer "is the port open?".
+//
+// Deliberately not bound to --iface: nmap documents -S only as "Spoof source
+// address", a raw-packet feature whose effect on a connect scan is stated
+// nowhere but a runtime warning, and -e needs the raw sockets netdoc never
+// asks for. A scan that silently ignored the binding would be worse evidence
+// than one that visibly does not claim it.
 func nmapTool(quote func([]string) string, host string) Tool {
 	return Tool{
 		Key: "n", Name: "port scan", Bin: "nmap", Confirm: true, Timeout: 120 * time.Second,
@@ -205,17 +309,24 @@ func lanDiscoveryTool(quote func([]string) string, cidr string) Tool {
 // command are both curl.exe, so the pasted line bypasses PowerShell 5.1's
 // curl→Invoke-WebRequest alias; the display targets PowerShell quoting (cmd.exe
 // paste is not supported). Elsewhere the display keeps the POSIX LC_ALL=C form.
-func curlTool(host, goos string) Tool {
+//
+// --interface takes an "interface name, IP address or hostname", with one
+// documented exception: "curl does not support using network interface names
+// for this option on Windows". Windows therefore gets the family-matched
+// source address instead — the same link, spelled the way that build honors.
+func curlTool(host, goos string, b toolBind) Tool {
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
 	bin, devNull := "curl", "/dev/null"
+	bind := b.either("--interface")
 	if goos == "windows" {
 		bin, devNull = "curl.exe", "NUL"
+		bind = b.addr("--interface")
 	}
 	return Tool{
 		Key: "c", Name: "web check", Bin: bin,
-		Build: func(t *diagnostic.Target, _ net.IP) ([]string, []string, string) {
+		Build: func(t *diagnostic.Target, sel net.IP) ([]string, []string, string) {
 			scheme := "https"
 			if t.Proto == diagnostic.ProtoHTTP {
 				scheme = "http"
@@ -233,8 +344,9 @@ func curlTool(host, goos string) Tool {
 				"--proto", "=https,http",
 				"--connect-timeout", "3", "--max-time", "10",
 				"-w", `%{http_code} %{time_total} %{remote_ip} %{ssl_verify_result}\n`,
-				url,
 			}
+			args = append(args, bind(targetIP(t, sel))...)
+			args = append(args, url)
 			// LC_ALL=C is set via env, not an argv token, for locale-proof -w
 			// output (harmless on Windows).
 			env := append(os.Environ(), "LC_ALL=C")
@@ -282,6 +394,21 @@ func smtpTool(quote func([]string) string, host string, port int) Tool {
 // exec.Command copies it — so Build hands out the captured slice as-is.
 func staticTool(quote func([]string) string, key, name, bin string, args ...string) Tool {
 	return Tool{Key: key, Name: name, Bin: bin, Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
+		return args, nil, bin + " " + quote(args)
+	}}
+}
+
+// boundTool builds a host-directed tool as fixed flags, then the binding
+// option for the --iface selection, then the host — every command shaped this
+// way takes its destination last. bind returns nothing when there is no
+// --iface, or when this tool has no option that fits the destination's family,
+// so the argv is then exactly the unbound one.
+func boundTool(quote func([]string) string, key, name, bin string, bind bindFunc, host string, flags ...string) Tool {
+	return Tool{Key: key, Name: name, Bin: bin, Build: func(t *diagnostic.Target, sel net.IP) ([]string, []string, string) {
+		// Full-slice expression: each Build owns its argv, so a later append
+		// can never write into the captured flags.
+		args := append(flags[:len(flags):len(flags)], bind(targetIP(t, sel))...)
+		args = append(args, host)
 		return args, nil, bin + " " + quote(args)
 	}}
 }

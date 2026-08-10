@@ -176,6 +176,31 @@ func TestSourceIPResolvesLoopbackInterface(t *testing.T) {
 	if !ip.IsLoopback() {
 		t.Errorf("SourceIP(%q) = %v, want a loopback address", name, ip)
 	}
+	// The interface name rides along for the drill-down tools whose binding
+	// option takes a name; the exact-IP form has no name to report.
+	sources, err := ResolveSource(name)
+	if err != nil {
+		t.Fatalf("ResolveSource(%q): %v", name, err)
+	}
+	if sources.Iface != name {
+		t.Errorf("ResolveSource(%q).Iface = %q, want %q", name, sources.Iface, name)
+	}
+	for _, literal := range []net.IP{sources.IPv4, sources.IPv6} {
+		if literal == nil {
+			continue
+		}
+		byIP, err := ResolveSource(literal.String())
+		if err != nil {
+			t.Fatalf("ResolveSource(%q): %v", literal, err)
+		}
+		if byIP.Iface != "" {
+			t.Errorf("ResolveSource(%q).Iface = %q, want empty", literal, byIP.Iface)
+		}
+		if !byIP.primary().Equal(literal) || byIP.IPv4 != nil && byIP.IPv6 != nil {
+			t.Errorf("ResolveSource(%q) = %+v, want only that address", literal, byIP)
+		}
+	}
+
 	// The exact-IP form has to accept what the name form just handed back.
 	again, err := SourceIP(ip.String())
 	if err != nil {

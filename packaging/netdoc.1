@@ -92,7 +92,38 @@ field (RFC 3339, UTC) and are otherwise the one-shot report unchanged.
 .BI \-iface " name\fR|\fPaddress"
 Bind probe traffic to an interface name or to an exact local IP address, so
 the checks follow a specific link (a VPN tunnel, a second NIC) rather than the
-system's default route.
+system's default route. Where the native tool supports it, the path drill-downs
+follow the same selection:
+.BR ping ,
+.BR traceroute ,
+.BR mtr ,
+and
+.B curl
+bind by interface name on Linux and macOS, or by the selected address when
+.B \-\-iface
+names an exact IP. Windows tools bind by source address instead. On Windows
+.B ping
+and
+.B tracert
+accept a source address for IPv6 destinations only, so an IPv4 run is unbound,
+and
+.B curl.exe
+cannot bind by interface name, though it can use the resolved source address.
+Address-only binding follows the literal target's family, then the address
+selected by the target TCP check. If neither settles the family, a single-family
+selection may be used, but a dual-stack selection is left unbound rather than
+guessed. A missing matching source family is also left unbound. The DNS lookup
+.RB ( dig ,
+.B nslookup
+on Windows), the
+.B nmap
+connect scan, and the SSH and SMTP handshake checks remain unchanged and
+unbound. The DNS tools query the system resolver, often a loopback stub, rather
+than the target; nmap's
+.B \-S
+is a spoofing option rather than documented connect-scan binding. Local-state
+tools open no sockets, and the LAN scan derives its subnet from the selected
+probe source address.
 .TP
 .BI \-public\-dns " address"
 IP address of the resolver used for the second-opinion DNS check, which is

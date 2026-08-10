@@ -82,7 +82,7 @@ func TestToolsForDefinitions(t *testing.T) {
 		{"n", "port scan", "nmap", nmapArgs, "nmap " + shellArgs(nmapArgs), false},
 	}
 
-	got := toolsFor(tgt, "linux")
+	got := toolsFor(tgt, "linux", toolBind{})
 	if len(got) != len(wantHost) {
 		t.Fatalf("toolsFor(host) returned %d tools, want %d", len(got), len(wantHost))
 	}
@@ -108,7 +108,7 @@ func TestToolsForDefinitions(t *testing.T) {
 	}
 
 	// No-target set: only the target-independent tools, same order.
-	generic := toolsFor(nil, "linux")
+	generic := toolsFor(nil, "linux", toolBind{})
 	wantGeneric := []string{"i", "s"}
 	if len(generic) != len(wantGeneric) {
 		t.Fatalf("toolsFor(nil) returned %d tools, want %d", len(generic), len(wantGeneric))
@@ -134,7 +134,7 @@ func TestToolsForProtocol(t *testing.T) {
 	}
 
 	ssh := mustTarget(t, "example.com:22")
-	c := findC(toolsFor(ssh, "linux"))
+	c := findC(toolsFor(ssh, "linux", toolBind{}))
 	if c.Name != "SSH check" || c.Bin != "ssh" {
 		t.Fatalf("ssh target c-slot = {Name:%q Bin:%q}, want SSH check/ssh", c.Name, c.Bin)
 	}
@@ -156,14 +156,14 @@ func TestToolsForProtocol(t *testing.T) {
 	}
 
 	// Windows: throwaway known-hosts file is NUL, display uses psArgs.
-	cw := findC(toolsFor(ssh, "windows"))
+	cw := findC(toolsFor(ssh, "windows", toolBind{}))
 	argsW, _, _ := cw.Build(ssh, nil)
 	if !slices.Contains(argsW, "UserKnownHostsFile=NUL") {
 		t.Errorf("windows ssh argv = %q, want UserKnownHostsFile=NUL", argsW)
 	}
 
 	smtp := mustTarget(t, "mail.example.com:587")
-	c = findC(toolsFor(smtp, "linux"))
+	c = findC(toolsFor(smtp, "linux", toolBind{}))
 	if c.Name != "SMTP check" || c.Bin != "openssl" {
 		t.Fatalf("smtp target c-slot = {Name:%q Bin:%q}, want SMTP check/openssl", c.Name, c.Bin)
 	}
@@ -176,7 +176,7 @@ func TestToolsForProtocol(t *testing.T) {
 	// HTTPS and no-proto targets keep curl.
 	for _, raw := range []string{"github.com", "example.com:9999"} {
 		tgt := mustTarget(t, raw)
-		if c := findC(toolsFor(tgt, "linux")); c.Bin != "curl" {
+		if c := findC(toolsFor(tgt, "linux", toolBind{})); c.Bin != "curl" {
 			t.Errorf("%s c-slot bin = %q, want curl", raw, c.Bin)
 		}
 	}
@@ -198,7 +198,7 @@ func TestToolsCTargetArg(t *testing.T) {
 	}
 	for _, tt := range tests {
 		target := mustTarget(t, tt.target)
-		args, _, _ := toolByKey(t, toolsFor(target, "linux"), "c").Build(target, nil)
+		args, _, _ := toolByKey(t, toolsFor(target, "linux", toolBind{}), "c").Build(target, nil)
 		if got := args[len(args)-1]; got != tt.want {
 			t.Errorf("tool target for %q = %q, want %q", tt.target, got, tt.want)
 		}
@@ -208,7 +208,7 @@ func TestToolsCTargetArg(t *testing.T) {
 func TestDigReversesLiteralTargets(t *testing.T) {
 	for _, raw := range []string{"1.1.1.1", "2001:db8::1"} {
 		target := mustTarget(t, raw)
-		tool := toolByKey(t, toolsFor(target, "linux"), "d")
+		tool := toolByKey(t, toolsFor(target, "linux", toolBind{}), "d")
 		args, _, display := tool.Build(target, nil)
 		want := []string{"+time=2", "+tries=1", "-x", raw}
 		if tool.Name != "reverse DNS lookup" || !slices.Equal(args, want) || display != "dig "+shellArgs(want) {
@@ -223,7 +223,7 @@ func TestDigReversesLiteralTargets(t *testing.T) {
 func TestNmapTool(t *testing.T) {
 	tgt := mustTarget(t, "example.com:8443")
 	var tool Tool
-	for _, x := range toolsFor(tgt, "linux") {
+	for _, x := range toolsFor(tgt, "linux", toolBind{}) {
 		if x.Key == "n" {
 			tool = x
 		}
@@ -243,13 +243,13 @@ func TestNmapTool(t *testing.T) {
 		t.Errorf("nmap display = %q, want it to start with the command", display)
 	}
 	allTarget := mustTarget(t, "example.com")
-	allArgs, _, _ := toolByKey(t, toolsFor(allTarget, "linux"), "n").Build(allTarget, nil)
+	allArgs, _, _ := toolByKey(t, toolsFor(allTarget, "linux", toolBind{}), "n").Build(allTarget, nil)
 	wantAll := []string{"-sT", "-Pn", "--host-timeout", "110s", "example.com"}
 	if !slices.Equal(allArgs, wantAll) {
 		t.Errorf("nmap implicit-port argv = %q, want %q", allArgs, wantAll)
 	}
 	v6 := mustTarget(t, "[2001:db8::1]:8443")
-	v6Args, _, _ := toolByKey(t, toolsFor(v6, "linux"), "n").Build(v6, nil)
+	v6Args, _, _ := toolByKey(t, toolsFor(v6, "linux", toolBind{}), "n").Build(v6, nil)
 	wantV6 := []string{"-sT", "-Pn", "--host-timeout", "110s", "-6", "-p", "8443", "2001:db8::1"}
 	if !slices.Equal(v6Args, wantV6) {
 		t.Errorf("nmap IPv6 argv = %q, want %q", v6Args, wantV6)
@@ -284,7 +284,7 @@ func TestToolsFollowSelectedFamily(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			target := mustTarget(t, tt.target)
-			tools := toolsFor(target, "linux")
+			tools := toolsFor(target, "linux", toolBind{})
 			args, _, _ := toolByKey(t, tools, "n").Build(target, tt.sel)
 			if got := slices.Contains(args, "-6"); got != tt.wantV6 {
 				t.Errorf("nmap argv %q: -6 present = %v, want %v", args, got, tt.wantV6)
@@ -344,7 +344,7 @@ func toolByKey(t *testing.T, tools []Tool, key string) Tool {
 // 90 s timeout.
 func TestToolsForWindows(t *testing.T) {
 	tgt := mustTarget(t, "github.com")
-	tools := toolsFor(tgt, "windows")
+	tools := toolsFor(tgt, "windows", toolBind{})
 
 	wantBins := map[string]string{
 		"i": "route", "s": "netstat", "p": "ping", "d": "nslookup",
@@ -401,7 +401,7 @@ func TestToolsForWindows(t *testing.T) {
 // is milliseconds), dig/curl/traceroute/mtr as on Linux.
 func TestToolsForDarwin(t *testing.T) {
 	tgt := mustTarget(t, "github.com")
-	tools := toolsFor(tgt, "darwin")
+	tools := toolsFor(tgt, "darwin", toolBind{})
 
 	if args, _, _ := toolByKey(t, tools, "i").Build(tgt, nil); !slices.Equal(args, []string{"-rn"}) {
 		t.Errorf("darwin routes argv = %q", args)
@@ -432,7 +432,7 @@ func TestToolTablesSameHotkeys(t *testing.T) {
 	want := []string{"i", "s", "p", "d", "c", "t", "m", "n"}
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		var keys []string
-		for _, tl := range toolsFor(tgt, goos) {
+		for _, tl := range toolsFor(tgt, goos, toolBind{}) {
 			keys = append(keys, tl.Key)
 		}
 		if !slices.Equal(keys, want) {

@@ -293,6 +293,10 @@ type netops struct {
 type SourceAddresses struct {
 	IPv4 net.IP
 	IPv6 net.IP
+	// Iface is the selected interface name. It is empty when --iface was
+	// omitted or given an exact local IP; probes bind by the addresses above,
+	// while drill-down tools may bind by this name.
+	Iface string
 }
 
 var defaultOps = &netops{
@@ -349,6 +353,7 @@ func ResolveSource(iface string) (*SourceAddresses, error) {
 		return nil, fmt.Errorf("addresses for interface %q: %w", iface, err)
 	}
 	if sources := sourceAddresses(addrs); sources != nil {
+		sources.Iface = chosen.Name
 		return sources, nil
 	}
 	return nil, fmt.Errorf("interface %q has no usable IP address", iface)

@@ -370,7 +370,7 @@ func (m *model) doRestart() tea.Cmd {
 	wasTicking := m.spinnerActive()
 	m.clearCancel()
 	m.ctx = nil
-	m.tools = toolsFor(m.target, runtime.GOOS)
+	m.tools = toolsFor(m.target, runtime.GOOS, bindFor(m.sources))
 	m.generation++
 	m.selMoved = false
 	m.results = map[diagnostic.ProbeID]diagnostic.ProbeResult{}

@@ -264,7 +264,7 @@ func NewWithSources(t *diagnostic.Target, sources *diagnostic.SourceAddresses, t
 		publicDNS:  publicDNS,
 		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
 		started:    map[diagnostic.ProbeID]bool{},
-		tools:      toolsFor(t, runtime.GOOS),
+		tools:      toolsFor(t, runtime.GOOS, bindFor(sources)),
 		spinner:    sp,
 		toolbox:    toolbox,
 		watch:      watch,
