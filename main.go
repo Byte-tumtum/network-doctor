@@ -147,6 +147,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	iface := fs.String("iface", "", "bind probes to an interface name or exact local IP")
 	publicDNS := fs.String("public-dns", diagnostic.DefaultPublicDNS, "second-opinion DNS resolver IP; empty skips that check")
+	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 
@@ -230,11 +231,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
-	histFile := ""
-	if dir, err := os.UserConfigDir(); err == nil {
-		histFile = filepath.Join(dir, "netdoc", "history")
-	}
-	p := tea.NewProgram(ui.NewWithSources(t, sources, *toolbox, *watch, histFile, version, *publicDNS), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewWithSources(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -244,6 +241,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return ui.ExitCode(final)
+}
+
+// historyFile is where target history persists between sessions. "" is the
+// UI's existing "in-memory only" path — it neither loads nor writes the file,
+// and leaves any existing one alone — so -no-history is just that path taken
+// on purpose rather than a second opt-out mechanism.
+func historyFile(disabled bool) string {
+	dir, err := os.UserConfigDir()
+	if disabled || err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "netdoc", "history")
 }
 
 // printUsage writes the full help text: usage line, the target grammar

@@ -804,6 +804,34 @@ func TestHistoryPersistsAcrossSessions(t *testing.T) {
 	}
 }
 
+// The empty path is what --no-history hands the UI: nothing is loaded, a typed
+// target is remembered for the session only, and the file already on disk is
+// neither read nor rewritten.
+func TestEmptyHistoryPathNeitherLoadsNorWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history")
+	const existing = "github.com:443\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewWithSource(mustTarget(t, "one.test"), nil, false, false, "", "test").(model)
+	if got := strings.Join(m.history, ","); got != "one.test" {
+		t.Fatalf("history = %q, want the launch target alone", got)
+	}
+	u, _ := m.Update(keyMsg("r"))
+	m = asModel(t, u)
+	m.input.SetValue("two.test")
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	if got := strings.Join(m.history, ","); got != "one.test,two.test" {
+		t.Fatalf("in-session history = %q, want both targets", got)
+	}
+
+	if b, err := os.ReadFile(path); err != nil || string(b) != existing {
+		t.Fatalf("history file = %q (err %v), want it untouched", b, err)
+	}
+}
+
 func TestSaveHistoryDoesNotFollowSymlink(t *testing.T) {
 	dir := t.TempDir()
 	victim := filepath.Join(dir, "victim")

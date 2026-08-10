@@ -35,6 +35,7 @@ _netdoc() {
             -watch --watch
             -iface --iface
             -public-dns --public-dns
+            -no-history --no-history
             -timeout --timeout
             -version --version
             -h -help --help

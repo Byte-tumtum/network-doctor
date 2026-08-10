@@ -10,6 +10,8 @@ import (
 	"errors"
 	"flag"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -53,6 +55,7 @@ func TestRun(t *testing.T) {
 		{"bad iface", []string{"-iface", "netdoc-no-such-interface"}, 2, "", "-iface:"},
 		{"version ignores bad timeout", []string{"-timeout", "-1s", "-version"}, 0, "netdoc dev", ""},
 		{"bad timeout", []string{"-timeout", "-1s"}, 2, "", "-timeout must be positive"},
+		{"help lists -no-history", []string{"-help"}, 0, "-no-history", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,6 +222,23 @@ func TestPrintUsageTargetForms(t *testing.T) {
 	want := "Target forms:\n" + diagnostic.TargetForms + "\n\nFlags:"
 	if !strings.Contains(buf.String(), want) {
 		t.Errorf("usage output missing the target-forms section:\n%s", buf.String())
+	}
+}
+
+// -no-history is only a choice of the path handed to the UI, which already
+// treats "" as in-memory only, so the seam worth pinning is that path: the
+// default still points at the config file, the flag still resolves to "".
+func TestHistoryFile(t *testing.T) {
+	if got := historyFile(true); got != "" {
+		t.Errorf("historyFile(true) = %q, want the empty path", got)
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir on this host: %v", err)
+	}
+	want := filepath.Join(dir, "netdoc", "history")
+	if got := historyFile(false); got != want {
+		t.Errorf("historyFile(false) = %q, want %q", got, want)
 	}
 }
 

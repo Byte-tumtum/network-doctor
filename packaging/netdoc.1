@@ -107,6 +107,13 @@ drops the check entirely: the row disappears from the report and no query
 leaves the machine, which is what a strict egress policy or a privacy
 requirement calls for.
 .TP
+.B \-no\-history
+Neither read nor write the saved target history for this run, so the targets
+typed in the terminal UI stay in that session only. An existing history file is
+left untouched; see
+.B FILES
+for where it lives and how to clear it.
+.TP
 .BI \-timeout " duration"
 Per-check probe timeout, as a Go duration string such as
 .B 2s
@@ -216,9 +223,10 @@ On macOS this is
 .IR ~/Library/Application\ Support/netdoc/history ,
 and on Windows
 .IR %AppData%\enetdoc\ehistory .
-Exit
+.B \-\-no\-history
+skips the file entirely for one run, without removing it. Exit
 .B netdoc
-and delete the file to clear the history.
+and delete the file to clear what is already saved.
 .SH SEE ALSO
 .BR ping (8),
 .BR dig (1),

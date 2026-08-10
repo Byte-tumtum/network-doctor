@@ -191,6 +191,7 @@ netdoc --json --watch host  # headless: one JSON report per line, until interrup
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
 netdoc --public-dns "" host       # drop the second opinion: no third-party resolver is queried
+netdoc --no-history host          # don't read or save the target history file
 ```
 
 `--timeout` overrides the per-check probe timeout; see `netdoc --help` for the default. `--watch` starts another pass five seconds after each run; in the TUI it shows the last 20 states plus a failure count for every check, and with `--json` it streams the same report on stdout, one compact JSON object per line, until the process is interrupted. Those lines carry an extra `ts` field (RFC 3339, UTC) and are otherwise the one-shot report unchanged — one-shot output stays pretty-printed, with no `ts`.
@@ -200,7 +201,7 @@ netdoc --public-dns "" host       # drop the second opinion: no third-party reso
 
 The target parser has two independent axes: **port** (explicit `:port` > scheme default > 443) and **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp` scheme wins; otherwise it is inferred from the port — `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP, `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 
-The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. Exit `netdoc` and delete that file to clear history.
+The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. `--no-history` turns that off for one run: the file is neither read nor written, so the targets you type stay in that session only. It leaves an existing file untouched — exit `netdoc` and delete it to clear what is already saved.
 
 | Key | Action |
 |-----|--------|
