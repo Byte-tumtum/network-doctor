@@ -151,6 +151,8 @@ const (
 	// ServiceTLS generates an in-memory private CA and leaf key, writes only the
 	// public CA certificate to the simulator workspace, and serves bounded TLS.
 	ServiceTLS = "tls"
+	// ServiceQUIC completes a real QUIC handshake with h3 ALPN over UDP.
+	ServiceQUIC = "quic"
 	// ServiceTCPReset accepts a TCP handshake and closes with SO_LINGER=0 so a
 	// protocol probe observes ECONNRESET rather than connection refusal.
 	ServiceTCPReset = "tcp_reset"
@@ -376,7 +378,7 @@ type ExpectedCheck struct {
 // a scenario can assert on it.
 var knownProbeIDs = []diagnostic.ProbeID{
 	diagnostic.ProbeIface, diagnostic.ProbeSSID, diagnostic.ProbeInternet,
-	diagnostic.ProbeProxy, diagnostic.ProbeDNS, diagnostic.ProbeDNSPublic,
+	diagnostic.ProbeQUIC, diagnostic.ProbeProxy, diagnostic.ProbeDNS, diagnostic.ProbeDNSPublic,
 	diagnostic.ProbeTargetTCP, diagnostic.ProbePMTU, diagnostic.ProbeTLS,
 	diagnostic.ProbeHTTP, diagnostic.ProbeHTTPS, diagnostic.ProbeSSH,
 	diagnostic.ProbeSMTP,
@@ -391,6 +393,7 @@ var knownCauses = []string{
 	diagnostic.ProxyCauseProxyDNS,
 	diagnostic.ProxyCauseDestinationUnreachable,
 	diagnostic.ProxyCauseProtocol,
+	diagnostic.QUICCauseHandshake,
 	diagnostic.TLSCauseCertificateExpired,
 	diagnostic.TLSCauseCertificateNotYet,
 	diagnostic.TLSCauseHostnameMismatch,
@@ -661,18 +664,18 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil {
 				return fmt.Errorf("node %q: socks5 service has unsupported options", n.Name)
 			}
-		case ServiceTLS:
+		case ServiceTLS, ServiceQUIC:
 			if svc.Port == 0 {
 				svc.Port = 443
 			}
 			if svc.Name == "" {
-				return fmt.Errorf("node %q: tls service needs a name", n.Name)
+				return fmt.Errorf("node %q: %s service needs a name", n.Name, svc.Type)
 			}
 			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DNSFault != nil {
-				return fmt.Errorf("node %q: tls service has unsupported options", n.Name)
+				return fmt.Errorf("node %q: %s service has unsupported options", n.Name, svc.Type)
 			}
 			if err := validateTLSCertificate(svc.Certificate); err != nil {
-				return fmt.Errorf("node %q: tls service certificate: %w", n.Name, err)
+				return fmt.Errorf("node %q: %s service certificate: %w", n.Name, svc.Type, err)
 			}
 		default:
 			return fmt.Errorf("node %q: unknown service type %q", n.Name, svc.Type)

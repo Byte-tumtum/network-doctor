@@ -33,6 +33,7 @@ topology:
             connectivitycheck.gstatic.com: 10.77.2.20
         - {type: http, port: 80}
         - {type: tcp, port: 443}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
     - name: target
       interfaces:
         - {segment: target-lan, address: 10.77.3.20/24}

@@ -24,6 +24,7 @@ topology:
           port: 80
         - type: tcp
           port: 443
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
 
 faults:
   # Egress-only delay, so the round trip costs about one delay. Well clear of

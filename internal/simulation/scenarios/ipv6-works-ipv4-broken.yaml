@@ -37,6 +37,7 @@ topology:
       services:
         - {name: dual-http, type: http, port: 80}
         - {name: dual-tcp, type: tcp, port: 443}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
   routes:
     - {node: client, destination: default, via: 10.78.1.1}
     - {node: client, destination: "::/0", via: "2001:db8:77:1::1"}

@@ -22,18 +22,18 @@ func mustTarget(t *testing.T, s string) *diagnostic.Target {
 	return target
 }
 
-// Generic mode: egress, proxy egress, and DNS are siblings — an egress
+// Generic mode: TCP/QUIC egress, proxy egress, and DNS are siblings — an egress
 // failure must not skip DNS, so DNS-down-but-internet-up remains diagnosable.
 func TestSiblingIndependence(t *testing.T) {
 	m := newModel(nil, false)
 	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass}
 	m.started[diagnostic.ProbeIface] = true
 	cmds := m.scheduleStep()
-	if len(cmds) != 5 {
-		t.Fatalf("want 5 dispatched (internet, proxy, system/public dns, ssid), got %d", len(cmds))
+	if len(cmds) != 6 {
+		t.Fatalf("want 6 dispatched (TCP/QUIC internet, proxy, system/public dns, ssid), got %d", len(cmds))
 	}
-	if !m.started[diagnostic.ProbeInternet] || !m.started[diagnostic.ProbeProxy] || !m.started[diagnostic.ProbeDNS] || !m.started[diagnostic.ProbeDNSPublic] || !m.started[diagnostic.ProbeSSID] {
-		t.Fatal("internet+proxy+system/public dns+ssid should all be dispatched")
+	if !m.started[diagnostic.ProbeInternet] || !m.started[diagnostic.ProbeQUIC] || !m.started[diagnostic.ProbeProxy] || !m.started[diagnostic.ProbeDNS] || !m.started[diagnostic.ProbeDNSPublic] || !m.started[diagnostic.ProbeSSID] {
+		t.Fatal("TCP/QUIC internet+proxy+system/public dns+ssid should all be dispatched")
 	}
 	if _, ok := m.results[diagnostic.ProbeDNS]; ok {
 		t.Error("dns must be dispatched, not skipped by an egress failure")
@@ -71,6 +71,7 @@ func TestDowngradeRunsWhenSkipsFinishRun(t *testing.T) {
 	pass(diagnostic.ProbeIface)
 	pass(diagnostic.ProbeSSID)
 	fail(diagnostic.ProbeInternet)
+	pass(diagnostic.ProbeQUIC)
 	pass(diagnostic.ProbeProxy)
 	pass(diagnostic.ProbeDNS)
 	pass(diagnostic.ProbeDNSPublic)
@@ -93,6 +94,7 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 		diagnostic.ProbeIface,
 		diagnostic.ProbeSSID,
 		diagnostic.ProbeInternet,
+		diagnostic.ProbeQUIC,
 		diagnostic.ProbeProxy,
 		diagnostic.ProbeDNS,
 		diagnostic.ProbeDNSPublic,
@@ -105,8 +107,8 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 
 	u, _ := m.Update(probeDoneMsg{id: diagnostic.ProbeTargetTCP, res: diagnostic.ProbeResult{Status: diagnostic.StatusFail, Detail: "connection refused"}})
 	nm := asModel(t, u)
-	if nm.selected != 5 {
-		t.Fatalf("selected = %d, want first failed probe 5", nm.selected)
+	if nm.selected != 6 {
+		t.Fatalf("selected = %d, want first failed probe 6", nm.selected)
 	}
 	if !strings.Contains(nm.bodyView(false), "connection refused") {
 		t.Error("details panel must show the selected failure")

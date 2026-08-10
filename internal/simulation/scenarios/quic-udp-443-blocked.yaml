@@ -1,5 +1,5 @@
-name: packet-loss
-description: Moderate seeded packet loss degrades one otherwise healthy local network.
+name: quic-udp-443-blocked
+description: TCP/443 remains healthy while the Internet endpoint silently drops QUIC traffic on UDP/443.
 
 topology:
   subnet: 10.77.0.0/24
@@ -9,30 +9,38 @@ topology:
       address: 10.77.0.10
       gateway: 10.77.0.1
       resolver: 10.77.0.1
+
     - name: internet
       address: 10.77.0.1
       aliases: [1.1.1.1, 8.8.8.8]
       services:
         - type: dns
           zone:
+            example.test: 10.77.0.20
             connectivitycheck.gstatic.com: 10.77.0.1
         - {type: http, port: 80}
         - {type: tcp, port: 443}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
 
+    - name: server
+      address: 10.77.0.20
+      services:
+        - {type: http, port: 80}
+
 faults:
-  - type: netem
-    node: client
-    delay: 20ms
-    loss: 10%
-    seed: 219540062
+  - {type: drop, node: internet, direction: inbound, protocol: udp, port: 443}
 
 tests:
-  - {name: connectivity under loss, node: client}
+  - name: TCP healthy but QUIC silently dropped
+    node: client
+    target: example.test:80
 
 expect:
-  verdict: ok
+  verdict: degraded
   checks:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: PASS}
+    - {id: quic_udp_443, status: FAIL, cause: timeout}
     - {id: dns, status: PASS}
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}

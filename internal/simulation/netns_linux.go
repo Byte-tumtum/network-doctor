@@ -905,8 +905,14 @@ func (e *netnsEnv) TrustAnchor(service string) (string, error) {
 	}
 	for _, node := range e.scenario.Topology.Nodes {
 		for _, svc := range node.Services {
-			if svc.Name == service && svc.Type == ServiceTLS {
+			if svc.Name != service {
+				continue
+			}
+			if svc.Type == ServiceTLS {
 				return filepath.Join(e.work, service+"-ca.pem"), nil
+			}
+			if svc.Type == ServiceQUIC {
+				return quicTrustAnchorPath(e.work, service), nil
 			}
 		}
 	}

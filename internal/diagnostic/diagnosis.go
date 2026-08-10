@@ -74,6 +74,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return "System DNS is failing, but public DNS resolves the name — check the configured resolver, VPN, or DNS filter.", gv
 		case directOK() && fail(ProbeDNS) && bothNotFound:
 			return "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv
+		case directOK() && has(ProbeQUIC) && fail(ProbeQUIC):
+			return "Direct TCP/443 works, but the QUIC handshake over UDP/443 failed — applications can fall back to TCP, which may feel slower.", VerdictDegraded
 		case warn(ProbeDNSPublic) && functional(res[ProbeDNS].Status):
 			return "Online, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", gv
 		case ip && dn && prxDown:
@@ -148,6 +150,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		return hp + " accepts TCP but the service banner check failed.", VerdictService
 	case (has(ProbeSSH) && warn(ProbeSSH)) || (has(ProbeSMTP) && warn(ProbeSMTP)):
 		return hp + " accepts TCP but sent no service banner.", VerdictDegraded
+	case has(ProbeQUIC) && fail(ProbeQUIC) && directOK():
+		return "The target and direct TCP/443 work, but the QUIC handshake over UDP/443 failed — applications can fall back to TCP, which may feel slower.", VerdictDegraded
 	case fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded):
 		return "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded
 	case prxDown && directOK():

@@ -38,6 +38,7 @@ topology:
             connectivitycheck.gstatic.com: 10.77.2.20
         - {name: routed-http, type: http, port: 80}
         - {name: routed-tls-control, type: tcp, port: 443}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
   routes:
     - {node: client, destination: default, via: 10.77.1.1}
     - {node: client, destination: 10.77.2.0/24, via: 10.77.1.1}

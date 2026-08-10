@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -306,9 +307,15 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 		}
 	}
 	var commandEnv []string
+	// QUIC's simulator CA lives in its own directory so the real netdoc binary
+	// can trust that fixed fixture without implicitly trusting target TLS
+	// services that a scenario did not opt into.
+	if root, err := env.TrustAnchor(quicProbeService); err == nil {
+		commandEnv = append(commandEnv, "SSL_CERT_DIR="+filepath.Dir(root))
+	}
 	if t.Proxy != nil {
 		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))
-		commandEnv = []string{"ALL_PROXY=" + out.Proxy}
+		commandEnv = append(commandEnv, "ALL_PROXY="+out.Proxy)
 	}
 	if t.Trust != nil {
 		out.Trust = t.Trust.Service

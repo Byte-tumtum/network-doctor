@@ -23,22 +23,22 @@ func mustTarget(t *testing.T, s string) *Target {
 	return tg
 }
 
-// A target adds iface, internet, proxy, system/public dns, target_tcp, path_mtu,
-// ssid, plus whatever rows its protocol contributes.
+// A target adds iface, TCP and QUIC Internet checks, proxy, system/public DNS,
+// target_tcp, path_mtu, ssid, plus whatever rows its protocol contributes.
 func TestBuildProbesShape(t *testing.T) {
 	cases := []struct {
 		target string // empty means no target
 		want   int
 	}{
-		{"", 6},                   // no target — no target_tcp/path_mtu/protocol rows
-		{"github.com", 11},        // + tls, http, https
-		{"http://example.com", 9}, // + http
-		{"host:22", 9},            // + ssh banner
-		{"ssh://host:2222", 9},    // + ssh banner
-		{"host:25", 9},            // + smtp banner
-		{"host:587", 9},           // + smtp banner
-		{"smtp://host:2525", 9},   // + smtp banner
-		{"host:9999", 8},          // ProtoNone — stops at path_mtu
+		{"", 7},                    // no target — no target_tcp/path_mtu/protocol rows
+		{"github.com", 12},         // + tls, http, https
+		{"http://example.com", 10}, // + http
+		{"host:22", 10},            // + ssh banner
+		{"ssh://host:2222", 10},    // + ssh banner
+		{"host:25", 10},            // + smtp banner
+		{"host:587", 10},           // + smtp banner
+		{"smtp://host:2525", 10},   // + smtp banner
+		{"host:9999", 9},           // ProtoNone — stops at path_mtu
 	}
 	for _, c := range cases {
 		var tg *Target
@@ -132,12 +132,29 @@ func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
 	if got := deps[ProbeSSID]; len(got) != 1 || got[0] != ProbeIface {
 		t.Fatalf("ssid deps = %v, want [iface]", got)
 	}
-	for _, id := range []ProbeID{ProbeInternet, ProbeProxy, ProbeDNS, ProbeDNSPublic} {
+	for _, id := range []ProbeID{ProbeInternet, ProbeQUIC, ProbeProxy, ProbeDNS, ProbeDNSPublic} {
 		got := deps[id]
 		if len(got) != 1 || got[0] != ProbeIface {
 			t.Errorf("%s deps = %v, want [iface]", id, got)
 		}
 	}
+}
+
+func TestQUICProbeIsConcurrentSiblingAfterInternetTCP(t *testing.T) {
+	probes := BuildProbesFrom(nil, nil)
+	for i, probe := range probes {
+		if probe.ID != ProbeQUIC {
+			continue
+		}
+		if i == 0 || probes[i-1].ID != ProbeInternet {
+			t.Fatalf("QUIC row index = %d, want immediately after Internet TCP", i)
+		}
+		if len(probe.Deps) != 1 || probe.Deps[0] != ProbeIface {
+			t.Fatalf("QUIC deps = %v, want [iface] so TCP and QUIC run independently", probe.Deps)
+		}
+		return
+	}
+	t.Fatal("QUIC probe missing from DAG")
 }
 
 func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {

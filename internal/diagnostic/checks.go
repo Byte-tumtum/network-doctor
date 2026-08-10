@@ -114,6 +114,7 @@ const (
 	ProbeIface     ProbeID = "iface"
 	ProbeSSID      ProbeID = "ssid"
 	ProbeInternet  ProbeID = "internet_tcp"
+	ProbeQUIC      ProbeID = "quic_udp_443"
 	ProbeProxy     ProbeID = "proxy_connect"
 	ProbeDNS       ProbeID = "dns"
 	ProbeDNSPublic ProbeID = "dns_public"
@@ -124,6 +125,13 @@ const (
 	ProbeHTTPS     ProbeID = "https"
 	ProbeSSH       ProbeID = "ssh_banner"
 	ProbeSMTP      ProbeID = "smtp_banner"
+)
+
+// QUIC failure causes distinguish a silent UDP/443 path from endpoint or
+// protocol failures without claiming that a firewall was proven responsible.
+const (
+	QUICCauseTimeout   = "timeout"
+	QUICCauseHandshake = "quic_handshake_failure"
 )
 
 // ProbeResult is the typed contract the diagnosis engine and renderer consume.
@@ -236,6 +244,10 @@ var tlsRecordHeader = []byte{0x16, 0x03, 0x01, 0x40, 0x00}
 // probeHost is the host used by the generic (no-target) DNS + egress probes.
 const probeHost = "connectivitycheck.gstatic.com"
 
+// quicProbePort is separate from the target port: this Internet-health probe
+// always asks the fixed connectivity endpoint whether QUIC works on UDP/443.
+const quicProbePort = 443
+
 // DefaultPublicDNS is the second-opinion resolver used unless --public-dns
 // names another. Every label and detail string derives from the configured
 // value, and an empty one drops the probe entirely, so a network with a strict
@@ -273,6 +285,7 @@ type netops struct {
 	// resolver), bypassing whatever the system is configured to use.
 	lookupPublicIP func(ctx context.Context, host, server string) ([]net.IP, error)
 	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
+	quicHandshake  func(context.Context, net.Conn, *tls.Config) (quicState, error)
 	sendBuffer     func(net.Conn) (int, error)
 	tcpMSS         func(net.Conn) (int, error)
 	dialTLS        func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
@@ -308,9 +321,10 @@ var defaultOps = &netops{
 	lookupPublicIP: func(ctx context.Context, host, server string) ([]net.IP, error) {
 		return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext, server)
 	},
-	dialContext: new(net.Dialer).DialContext,
-	sendBuffer:  socketSendBuffer,
-	tcpMSS:      socketMSS,
+	dialContext:   new(net.Dialer).DialContext,
+	quicHandshake: handshakeQUIC,
+	sendBuffer:    socketSendBuffer,
+	tcpMSS:        socketMSS,
 	dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: new(net.Dialer), Config: cfg}
 		return d.DialContext(ctx, network, addr)
@@ -706,6 +720,7 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	iface := Probe{ID: ProbeIface, Name: "Interface", Run: o.ifaceProbe}
 	network := Probe{ID: ProbeSSID, Name: "Wi-Fi network", Deps: []ProbeID{ProbeIface}, Run: o.ssidProbe}
 	internet := Probe{ID: ProbeInternet, Name: "Internet (TCP egress)", Deps: []ProbeID{ProbeIface}, Run: o.internetProbe}
+	quicProbe := Probe{ID: ProbeQUIC, Name: "QUIC / UDP 443", Deps: []ProbeID{ProbeIface}, Run: o.quicProbe(probeHost, quicProbePort)}
 	// Direct and proxied egress are reported separately: the native probes
 	// deliberately bypass proxies, so on a proxy-only network the direct row
 	// fails while this row proves the environment proxy carries traffic.
@@ -715,7 +730,7 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 		// Egress, proxy egress, system DNS, and public DNS are siblings: each
 		// depends only on the interface, so one failure never hides another.
 		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(probeHost, nil)}
-		probes := []Probe{iface, internet, proxy, dns}
+		probes := []Probe{iface, internet, quicProbe, proxy, dns}
 		if publicDNSIP != "" {
 			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil, publicDNSIP)})
 		}
@@ -729,7 +744,7 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	// Path MTU hangs off the TCP connect rather than off any protocol row: a
 	// black hole breaks SSH and SMTP exactly as thoroughly as it breaks TLS.
 	pmtu := Probe{ID: ProbePMTU, Name: "Path MTU " + hp, Deps: []ProbeID{ProbeTargetTCP}, Run: o.pmtuProbe(port, t.Proto)}
-	probes := []Probe{iface, internet, proxy, dns}
+	probes := []Probe{iface, internet, quicProbe, proxy, dns}
 	if publicDNSIP != "" {
 		probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP, publicDNSIP)})
 	}

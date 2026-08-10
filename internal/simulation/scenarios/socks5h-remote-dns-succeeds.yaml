@@ -22,6 +22,7 @@ topology:
           zone: {}
         - {name: portal, type: http, port: 80}
         - {name: internet-tls, type: tcp, port: 443}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
         - {name: control-target, type: tcp, port: 9999}
 
     - name: proxy

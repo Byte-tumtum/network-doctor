@@ -80,8 +80,8 @@ func TestSourceAddressesSelectAndBindEachFamily(t *testing.T) {
 		dest      string
 		wantLocal net.IP
 	}{
-		{"dual IPv4 probe", []net.Addr{&net.IPAddr{IP: v6}, &net.IPAddr{IP: v4}}, v4, v6, "tcp4", "192.0.2.1:443", v4},
-		{"dual IPv6 probe", []net.Addr{&net.IPAddr{IP: v4}, &net.IPAddr{IP: v6}}, v4, v6, "tcp6", "[2001:db8::1]:443", v6},
+		{"dual IPv4 QUIC probe", []net.Addr{&net.IPAddr{IP: v6}, &net.IPAddr{IP: v4}}, v4, v6, "udp4", "192.0.2.1:443", v4},
+		{"dual IPv6 QUIC probe", []net.Addr{&net.IPAddr{IP: v4}, &net.IPAddr{IP: v6}}, v4, v6, "udp6", "[2001:db8::1]:443", v6},
 		{"IPv4 only", []net.Addr{&net.IPAddr{IP: v4}}, v4, nil, "udp", "192.0.2.53:53", v4},
 		{"IPv6 only", []net.Addr{&net.IPAddr{IP: v6}}, nil, v6, "udp", "[2001:db8::53]:53", v6},
 	}
@@ -115,7 +115,7 @@ func TestSelectedSourceDoesNotFallBackAcrossFamilies(t *testing.T) {
 	if source, family := v4Only.forDial("tcp6", "[2001:db8::1]:443"); source != nil || family != 6 {
 		t.Fatalf("IPv6 selection from IPv4-only interface = (%v, %d), want (nil, 6)", source, family)
 	}
-	if _, err := dialContextFromSources(v4Only)(context.Background(), "tcp6", "[2001:db8::1]:443"); err == nil || !strings.Contains(err.Error(), "no IPv6 source address") {
+	if _, err := dialContextFromSources(v4Only)(context.Background(), "udp6", "[2001:db8::1]:443"); err == nil || !strings.Contains(err.Error(), "no IPv6 source address") {
 		t.Fatalf("IPv6 dial from IPv4-only interface error = %v", err)
 	}
 
@@ -123,7 +123,7 @@ func TestSelectedSourceDoesNotFallBackAcrossFamilies(t *testing.T) {
 	if source, family := v6Only.forDial("tcp4", "192.0.2.1:443"); source != nil || family != 4 {
 		t.Fatalf("IPv4 selection from IPv6-only interface = (%v, %d), want (nil, 4)", source, family)
 	}
-	if _, err := dialContextFromSources(v6Only)(context.Background(), "tcp4", "192.0.2.1:443"); err == nil || !strings.Contains(err.Error(), "no IPv4 source address") {
+	if _, err := dialContextFromSources(v6Only)(context.Background(), "udp4", "192.0.2.1:443"); err == nil || !strings.Contains(err.Error(), "no IPv4 source address") {
 		t.Fatalf("IPv4 dial from IPv6-only interface error = %v", err)
 	}
 }

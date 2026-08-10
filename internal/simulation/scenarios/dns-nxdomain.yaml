@@ -18,6 +18,7 @@ topology:
             connectivitycheck.gstatic.com: 10.77.0.1
         - {type: http, port: 80}
         - {type: tcp, port: 443}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
 
 tests:
   - {name: target name does not exist, node: client, target: missing.test:80}

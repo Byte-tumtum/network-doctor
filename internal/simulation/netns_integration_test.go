@@ -198,6 +198,7 @@ func TestTierOneScenarios(t *testing.T) {
 		{name: "packet-loss", testCount: 1},
 		{name: "http-error", testCount: 1},
 		{name: "missing-subnet-route", testCount: 1},
+		{name: "quic-udp-443-blocked", testCount: 1, extra: []string{"-timeout", timedTimeout}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.name == "packet-loss" {
@@ -254,6 +255,14 @@ func TestTierOneScenarios(t *testing.T) {
 							t.Errorf("client unexpectedly has target-subnet route: %+v", route)
 						}
 					}
+				}
+			case "quic-udp-443-blocked":
+				quic := diagnosisCheck(out, string(diagnostic.ProbeQUIC))
+				if diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" ||
+					diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "PASS" ||
+					quic.Status != "FAIL" || quic.Cause != diagnostic.QUICCauseTimeout ||
+					!strings.Contains(strings.Join(out.TimedOut, ","), string(diagnostic.ProbeQUIC)) {
+					t.Errorf("TCP-good/QUIC-bad evidence: %+v", out)
 				}
 			}
 			assertCleanedUp(t, rep)

@@ -199,9 +199,10 @@ Some semantics are easy to get wrong even after reading a scenario:
 - `socks5` resolves on the client before CONNECT; `socks5h` sends the hostname
   to the proxy's resolver. The paired SOCKS scenarios prove the location with
   DNS and CONNECT evidence rather than inferring it from success.
-- TLS scenarios generate a private CA and leaf in memory. Only the public CA is
-  written inside the mode-`0700` run workspace, and trusted code sets
-  `SSL_CERT_FILE` for that netdoc process without modifying a host trust store.
+- TLS and QUIC fixtures generate private keys and certificates in memory. Only
+  public CA certificates are written inside the mode-`0700` run workspace;
+  trusted code points the netdoc process at the selected TLS CA and the
+  isolated QUIC trust directory without modifying a host trust store.
 
 ### Timed faults
 
@@ -370,7 +371,7 @@ integration tests unless it exposes a reason to verify namespace behavior.
 - Topology is static unicast IPv4/IPv6 over simulator-owned bridges: no NAT,
   address autoconfiguration, dynamic routing, tunnels, ECMP, or VLAN model.
 - Simulator services are deliberately narrow probe fixtures, not general DNS,
-  HTTP, proxy, TLS, or TCP implementations.
+  HTTP, proxy, TLS, QUIC, or TCP implementations.
 - Timed faults reproduce requested content and ordering, not hard real-time
   application.
 - Campaigns are sequential fault-injection runs, not network-performance or

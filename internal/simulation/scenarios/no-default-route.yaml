@@ -26,6 +26,7 @@ topology:
           port: 80
         - type: tcp
           port: 443
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
 
 faults:
   - type: no_default_route
