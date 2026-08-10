@@ -269,9 +269,12 @@ func TestReconcileDNS(t *testing.T) {
 	t.Run("unrelated answers warn", func(t *testing.T) {
 		res := map[ProbeID]ProbeResult{
 			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{ip1}},
-			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{elsewhere}},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{elsewhere}, resolver: DefaultPublicDNS},
 		}
 		reconcileDNS(res)
+		if !strings.Contains(res[ProbeDNSPublic].Detail, "public "+DefaultPublicDNS+":") {
+			t.Errorf("detail = %q, want it to name the resolver", res[ProbeDNSPublic].Detail)
+		}
 		if res[ProbeDNSPublic].Status != StatusWarn || !strings.Contains(res[ProbeDNSPublic].Detail, "split DNS") {
 			t.Fatalf("public result = %+v, want explanatory warning", res[ProbeDNSPublic])
 		}

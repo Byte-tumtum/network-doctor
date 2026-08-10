@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -145,6 +146,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	iface := fs.String("iface", "", "bind probes to an interface name or exact local IP")
+	publicDNS := fs.String("public-dns", diagnostic.DefaultPublicDNS, "second-opinion DNS resolver IP; empty skips that check")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 
@@ -189,6 +191,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
 	}
+	// An IP, never a hostname: resolving the second opinion through the
+	// resolver it exists to cross-check would defeat the check. Empty is a
+	// deliberate opt-out and the one value that isn't validated — nothing is
+	// dialed, so there is nothing to parse.
+	if *publicDNS != "" {
+		ip := net.ParseIP(*publicDNS)
+		if ip == nil {
+			fmt.Fprintf(stderr, "netdoc: -public-dns: %q is not an IP address\n", textsafe.Clean(*publicDNS))
+			return 2
+		}
+		*publicDNS = ip.String() // canonical form, so the row label matches the probe
+	}
 	var sources *diagnostic.SourceAddresses
 	if *iface != "" {
 		var err error
@@ -210,7 +224,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *jsonOut {
-		return runJSON(context.Background(), t, sources, *watch, stdout, stderr)
+		return runJSON(context.Background(), t, sources, *watch, *publicDNS, stdout, stderr)
 	}
 
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
@@ -220,7 +234,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if dir, err := os.UserConfigDir(); err == nil {
 		histFile = filepath.Join(dir, "netdoc", "history")
 	}
-	p := tea.NewProgram(ui.NewWithSources(t, sources, *toolbox, *watch, histFile, version), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewWithSources(t, sources, *toolbox, *watch, histFile, version, *publicDNS), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -313,7 +327,7 @@ var runAll = diagnostic.RunAll
 // With watch it never stops on its own: one compact report per line, forever,
 // until the terminal interrupts it. That's NDJSON, but not a new schema — the
 // line is the same report struct, plus the ts that makes a stream readable.
-func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, stdout, stderr io.Writer) int {
+func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	if !watch {
 		enc.SetIndent("", "  ")
@@ -329,7 +343,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 	// success, so an interrupt before the first line lands has to fail closed.
 	code := 1
 	for {
-		probes := diagnostic.BuildProbesFromSources(t, sources)
+		probes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
 		results := runAll(ctx, probes)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,

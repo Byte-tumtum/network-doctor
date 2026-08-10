@@ -19,6 +19,11 @@ _netdoc() {
             # A Go duration string; nothing to enumerate.
             return
             ;;
+        -public-dns | --public-dns)
+            # An IP address, or the empty string to skip the check. Neither is
+            # enumerable, so offer nothing rather than local filenames.
+            return
+            ;;
     esac
 
     # Targets are hostnames, URLs, and IP literals — none of them enumerable, so
@@ -29,6 +34,7 @@ _netdoc() {
             -json --json
             -watch --watch
             -iface --iface
+            -public-dns --public-dns
             -timeout --timeout
             -version --version
             -h -help --help

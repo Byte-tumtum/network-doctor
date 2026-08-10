@@ -4,7 +4,12 @@ package diagnostic
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -42,6 +47,78 @@ func TestBuildProbesShape(t *testing.T) {
 		}
 		if got := len(BuildProbesFrom(tg, nil)); got != c.want {
 			t.Errorf("BuildProbesFrom(%q) = %d probes, want %d", c.target, got, c.want)
+		}
+	}
+}
+
+// --public-dns names the second-opinion resolver, and both target and generic
+// mode have to honor it. An empty value removes the row from the DAG rather
+// than emitting a skipped one: a row that still had to dial in order to report
+// itself skipped would not be an opt-out.
+func TestBuildProbesPublicDNSIsConfigurable(t *testing.T) {
+	for _, tc := range []struct {
+		name, publicDNS, want string
+	}{
+		{"default", DefaultPublicDNS, "DNS (public 8.8.8.8)"},
+		{"custom IPv4", "9.9.9.9", "DNS (public 9.9.9.9)"},
+		{"custom IPv6", "2620:fe::fe", "DNS (public 2620:fe::fe)"},
+		{"disabled", "", ""}, // absent — the loop below leaves want empty
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, target := range []*Target{nil, mustTarget(t, "example.com:443")} {
+				got := ""
+				for _, p := range BuildProbesFromSources(target, nil, tc.publicDNS) {
+					if p.ID == ProbeDNSPublic {
+						got = p.Name
+					}
+				}
+				if got != tc.want {
+					t.Errorf("target %v: public DNS row = %q, want %q", target, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// The opt-out has to be real rather than cosmetic: with the row disabled, no
+// probe in the DAG may quietly reach a resolver. Port 53 is the assertion —
+// 8.8.8.8:443 stays a fixed direct-egress endpoint, which is a different row
+// with a different question.
+func TestDisabledPublicDNSNeverQueriesTheResolver(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		dialed []string
+	)
+	o := &netops{
+		interfaces:     func() ([]net.Interface, error) { return nil, nil },
+		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) { return nil, nil },
+		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+			return []net.IP{net.ParseIP("192.0.2.1")}, "192.0.2.53:53", nil
+		},
+		lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, error) {
+			t.Errorf("queried %q with the public-DNS check disabled", server)
+			return nil, nil
+		},
+		proxyFromEnv: func(*http.Request) (*url.URL, error) { return nil, nil },
+		ssid:         func(context.Context, string) string { return "" },
+		dialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+			mu.Lock()
+			dialed = append(dialed, addr)
+			mu.Unlock()
+			return nil, errors.New("no network in tests")
+		},
+	}
+	for _, p := range o.buildProbes(nil, "") {
+		if p.ID == ProbeDNSPublic {
+			t.Fatal("the public DNS probe is still in the DAG")
+		}
+		p.Run(context.Background(), map[ProbeID]ProbeResult{})
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, addr := range dialed {
+		if strings.HasSuffix(addr, ":53") {
+			t.Errorf("dialed resolver %q with the public-DNS check disabled", addr)
 		}
 	}
 }

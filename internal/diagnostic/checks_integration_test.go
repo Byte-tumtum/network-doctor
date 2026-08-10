@@ -238,7 +238,7 @@ func TestPublicResolverDialsFromSourceLoopback(t *testing.T) {
 		targets = append(targets, addr)
 		mu.Unlock()
 		return dial(ctx, network, stub.addr())
-	})
+	}, publicDNSServer(DefaultPublicDNS))
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
@@ -251,8 +251,8 @@ func TestPublicResolverDialsFromSourceLoopback(t *testing.T) {
 		t.Fatal("the dial hook was never called")
 	}
 	for _, addr := range targets {
-		if addr != publicDNSServer {
-			t.Errorf("dialed %q, want %q", addr, publicDNSServer)
+		if addr != publicDNSServer(DefaultPublicDNS) {
+			t.Errorf("dialed %q, want %q", addr, publicDNSServer(DefaultPublicDNS))
 		}
 	}
 	stub.wantSources(t, net.ParseIP("127.0.0.1"))

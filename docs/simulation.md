@@ -93,7 +93,7 @@ scenarios go stale silently unless the endpoints are updated to match.**
 | `internet_tcp` | `1.1.1.1:443`, `8.8.8.8:443` | `internetEndpoints4` |
 | `internet_tcp` | `2606:4700:4700::1111`, `2001:4860:4860::8888` | `internetEndpoints6` |
 | `internet_tcp` | `http://connectivitycheck.gstatic.com/generate_204` (captive-portal check) | `probeHost`, `portalProbeURL` |
-| `dns_public` | `8.8.8.8:53` | `publicDNSIP`, `publicDNSServer` |
+| `dns_public` | `8.8.8.8:53` (the `--public-dns` default; the flag can repoint or remove the row) | `DefaultPublicDNS`, `publicDNSServer` |
 | `dns` | resolves `connectivitycheck.gstatic.com` when no target is given | `probeHost` |
 
 Most scenarios mirror these in the `aliases` list on their simulated internet

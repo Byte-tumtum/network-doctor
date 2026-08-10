@@ -204,7 +204,7 @@ func reconcileDNS(res map[ProbeID]ProbeResult) {
 		system.Fix = "check the hostname or publish the missing DNS record"
 	case system.Status == StatusPass && public.DNSNotFound:
 		public.Status = StatusWarn
-		public.Detail = "system DNS resolves the name, but " + publicDNSIP + " reports no records — split DNS or filtering may be intentional"
+		public.Detail = "system DNS resolves the name, but " + public.resolver + " reports no records — split DNS or filtering may be intentional"
 	case system.DNSNotFound && len(public.Addrs) > 0:
 		public.Status = StatusWarn
 		public.Detail += " — system DNS reports no records; split DNS or filtering may be intentional"
@@ -212,7 +212,7 @@ func reconcileDNS(res map[ProbeID]ProbeResult) {
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
 	case system.Status == StatusPass && len(public.Addrs) > 0 && !answersAgree(system.Addrs, public.Addrs):
 		public.Status = StatusWarn
-		public.Detail = "answers point elsewhere — system: " + joinIPs(system.Addrs) + "; public " + publicDNSIP + ": " + joinIPs(public.Addrs) + " (split DNS may be intentional)"
+		public.Detail = "answers point elsewhere — system: " + joinIPs(system.Addrs) + "; public " + public.resolver + ": " + joinIPs(public.Addrs) + " (split DNS may be intentional)"
 	case system.Status == StatusFail && len(public.Addrs) > 0:
 		system.Detail += " — but public DNS resolves it"
 		system.Fix = "check the configured resolver, VPN, or DNS filter"

@@ -120,7 +120,10 @@ type model struct {
 	target  *diagnostic.Target
 	probes  []diagnostic.Probe
 	sources *diagnostic.SourceAddresses
-	version string
+	// publicDNS is the second-opinion resolver IP the run was started with, or
+	// "" when it is disabled; every probe rebuild reuses it.
+	publicDNS string
+	version   string
 
 	// results + started are owned exclusively by Update; probe goroutines get an
 	// immutable snapshot, never the live map.
@@ -230,6 +233,8 @@ var (
 // NewWithSource constructs the terminal application with probe dials pinned to
 // source; a nil source leaves them unpinned. histFile is where target history
 // persists across sessions; "" keeps it in-memory only.
+// It keeps the default second-opinion resolver; NewWithSources takes a
+// configured one.
 func NewWithSource(t *diagnostic.Target, source net.IP, toolbox, watch bool, histFile, version string) tea.Model {
 	var sources *diagnostic.SourceAddresses
 	if source != nil {
@@ -240,13 +245,15 @@ func NewWithSource(t *diagnostic.Target, source net.IP, toolbox, watch bool, his
 			sources.IPv6 = source
 		}
 	}
-	return NewWithSources(t, sources, toolbox, watch, histFile, version)
+	return NewWithSources(t, sources, toolbox, watch, histFile, version, diagnostic.DefaultPublicDNS)
 }
 
 // NewWithSources constructs the terminal application with separate selected
-// IPv4 and IPv6 source addresses; nil leaves dials unpinned.
-func NewWithSources(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version string) tea.Model {
-	probes := diagnostic.BuildProbesFromSources(t, sources)
+// IPv4 and IPv6 source addresses; nil leaves dials unpinned. publicDNS is the
+// second-opinion resolver IP, or "" to leave that check out — the value is
+// retained so re-runs and target switches keep honoring it.
+func NewWithSources(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string) tea.Model {
+	probes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
@@ -254,6 +261,7 @@ func NewWithSources(t *diagnostic.Target, sources *diagnostic.SourceAddresses, t
 		target:     t,
 		probes:     probes,
 		sources:    sources,
+		publicDNS:  publicDNS,
 		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
 		started:    map[diagnostic.ProbeID]bool{},
 		tools:      toolsFor(t, runtime.GOOS),

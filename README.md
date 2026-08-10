@@ -136,7 +136,7 @@ Probes form a **dependency graph with independent branches**, so an unrelated fa
 - **Proxy-egress path** (independent of both): `Interface → Internet (env
   proxy)`. Native probes deliberately bypass proxies, so this row reports the environment-configured proxy separately — a proxy-only corporate network reads "online via proxy" rather than offline.
 - **Public-DNS path** (independent of system DNS): `Interface → DNS (public
-  8.8.8.8)`. Failing to reach the third-party resolver is N/A; differing answers warn about split DNS or filtering but never fail the run on their own.
+  8.8.8.8)`. Failing to reach the third-party resolver is N/A; differing answers warn about split DNS or filtering but never fail the run on their own. `--public-dns` picks a different resolver, and `--public-dns ""` removes the row.
 - **Wi-Fi metadata path**: `Interface → Wi-Fi network`. SSID discovery runs beside network checks, so slow OS lookup never delays them.
 - **Plain HTTP path**: `Interface → DNS → HTTP :80`.
 - **Selected target path**: `Interface → DNS → TCP → TLS → HTTPS` for secure web targets, or applicable protocol row for other ports.
@@ -151,7 +151,7 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 | **Internet (TCP egress)** | A TCP connect to well-known anycast `:443` endpoints succeeds | IPv4 and IPv6 probed independently in parallel; either family passes, both are reported |
 | **Internet (env proxy)** | The `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` proxy grants a tunnel | HTTP `CONNECT`; `socks5` resolves locally and sends an address, while `socks5h` sends the hostname for proxy-side DNS; N/A when no proxy is configured or `NO_PROXY` exempts the probe host |
 | **DNS** | The host resolves to an IPv4 or IPv6 address (system resolution) | IP-literal targets are N/A; all A/AAAA records are retained |
-| **DNS (public 8.8.8.8)** | A direct query to Google Public DNS provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail |
+| **DNS (public 8.8.8.8)** | A direct query to Google Public DNS provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail; `--public-dns` changes the resolver or removes the row |
 | **TCP** | A TCP connect to the target port succeeds | races A/AAAA records Happy-Eyeballs style (RFC 8305), pins the winner |
 | **Path MTU** | a 24 KiB write drains beyond the measured kernel send buffer | finds evidence consistent with an MTU/PMTU black hole — never a Fail, see below |
 | **TLS** | The TLS handshake (SNI + cert verification) succeeds | certificate time, hostname, issuer, protocol, timeout, early-close, and TCP failures receive stable JSON causes |
@@ -189,10 +189,14 @@ netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug 
 netdoc --watch host     # TUI: re-run continuously and track intermittent failures
 netdoc --json --watch host  # headless: one JSON report per line, until interrupted
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
+netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
+netdoc --public-dns "" host       # drop the second opinion: no third-party resolver is queried
 ```
 
 `--timeout` overrides the per-check probe timeout; see `netdoc --help` for the default. `--watch` starts another pass five seconds after each run; in the TUI it shows the last 20 states plus a failure count for every check, and with `--json` it streams the same report on stdout, one compact JSON object per line, until the process is interrupted. Those lines carry an extra `ts` field (RFC 3339, UTC) and are otherwise the one-shot report unchanged — one-shot output stays pretty-printed, with no `ts`.
 `--iface` binds IPv4 and IPv6 probe connections and DNS lookups to the interface's first usable address of the matching family. IPv4-only and IPv6-only interfaces use only their available family; pass an exact local IP to restrict probes to that address's family.
+
+`--public-dns` sets the resolver behind the second-opinion DNS row, defaulting to `8.8.8.8`. It takes an IP literal, IPv4 or IPv6 — a hostname is rejected with exit `2`, since resolving it would go through the very resolver the row exists to cross-check. An empty value (`--public-dns ""` or `--public-dns=`) removes the check: the row is absent from the TUI and from the JSON report, and no query is sent, which is what a strict egress policy or a privacy requirement needs. The value applies to `--watch` and `--json` runs and to target switches inside the TUI. Note that this flag governs only the DNS second opinion; the direct-egress row still connects to fixed anycast `:443` endpoints and the captive-portal check still reaches `connectivitycheck.gstatic.com`.
 
 The target parser has two independent axes: **port** (explicit `:port` > scheme default > 443) and **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp` scheme wins; otherwise it is inferred from the port — `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP, `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 

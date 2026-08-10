@@ -265,6 +265,67 @@ func TestRunJSON(t *testing.T) {
 	}
 }
 
+// -public-dns is the opt-out for the one third-party resolver netdoc queries.
+// Driven through run() rather than the flag set, because the value has to
+// survive parsing, validation, and probe construction to reach the report.
+func TestRunPublicDNSFlag(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+		}
+		return results
+	}
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode int
+		wantRow  string // "" means the row must be absent
+	}{
+		{"default is unchanged", nil, 0, "DNS (public 8.8.8.8)"},
+		{"custom IPv4", []string{"-public-dns", "9.9.9.9"}, 0, "DNS (public 9.9.9.9)"},
+		{"custom IPv6", []string{"-public-dns", "2620:fe::fe"}, 0, "DNS (public 2620:fe::fe)"},
+		{"IPv6 is canonicalized", []string{"-public-dns", "2620:00fe:0000::00FE"}, 0, "DNS (public 2620:fe::fe)"},
+		{"empty argument disables", []string{"-public-dns", ""}, 0, ""},
+		{"empty via equals disables", []string{"-public-dns="}, 0, ""},
+		{"hostname rejected", []string{"-public-dns", "dns.google"}, 2, ""},
+		{"truncated address rejected", []string{"-public-dns", "8.8.8"}, 2, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run(append([]string{"-json"}, tt.args...), &stdout, &stderr)
+			if code != tt.wantCode {
+				t.Fatalf("exit = %d, want %d; stderr: %s", code, tt.wantCode, stderr.String())
+			}
+			if tt.wantCode != 0 {
+				if !strings.Contains(stderr.String(), "-public-dns") {
+					t.Errorf("stderr = %q, want it to name the rejected flag", stderr.String())
+				}
+				if stdout.Len() != 0 {
+					t.Errorf("stdout = %q, want no report for a rejected value", stdout.String())
+				}
+				return
+			}
+			var rep report
+			if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+				t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+			}
+			got := ""
+			for _, c := range rep.Checks {
+				if c.ID == "dns_public" {
+					got = c.Name
+				}
+			}
+			if got != tt.wantRow {
+				t.Errorf("dns_public row = %q, want %q", got, tt.wantRow)
+			}
+		})
+	}
+}
+
 // -timeout is the only knob on the bounded-time contract, and rejecting a bad
 // value proves nothing about a good one: a positive duration has to reach the
 // probes before the run starts.
@@ -325,7 +386,7 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	defer cancel()
 	var buf, stderr bytes.Buffer
 	out := &cancelAfter{buf: &buf, n: 3, cancel: cancel}
-	if got := runJSON(ctx, nil, nil, true, out, &stderr); got != 1 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, out, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 
@@ -363,7 +424,7 @@ func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if got := runJSON(ctx, nil, nil, true, &stdout, &stderr); got != 1 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, &stdout, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 	if stdout.Len() != 0 {

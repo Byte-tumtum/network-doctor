@@ -94,6 +94,19 @@ Bind probe traffic to an interface name or to an exact local IP address, so
 the checks follow a specific link (a VPN tunnel, a second NIC) rather than the
 system's default route.
 .TP
+.BI \-public\-dns " address"
+IP address of the resolver used for the second-opinion DNS check, which is
+queried directly to compare its answer against the system resolver's. Must be
+an IP literal, IPv4 or IPv6 \(em a hostname is rejected, since resolving it
+would defeat the purpose of the check. The default is
+.BR 8.8.8.8 .
+An empty value
+.RB ( \-\-public\-dns
+.BR \(dq\(dq )
+drops the check entirely: the row disappears from the report and no query
+leaves the machine, which is what a strict egress policy or a privacy
+requirement calls for.
+.TP
 .BI \-timeout " duration"
 Per-check probe timeout, as a Go duration string such as
 .B 2s
@@ -175,6 +188,15 @@ Send the probes out through a specific interface:
 .RS 4
 .EX
 netdoc \-\-iface wg0 github.com
+.EE
+.RE
+.PP
+Take the second opinion from a different resolver, or drop it altogether:
+.PP
+.RS 4
+.EX
+netdoc \-\-public\-dns 9.9.9.9 github.com
+netdoc \-\-public\-dns "" github.com
 .EE
 .RE
 .PP

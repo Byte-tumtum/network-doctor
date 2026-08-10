@@ -287,11 +287,15 @@ func TestPublicDNSProbe(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
-			ops := &netops{lookupPublicIP: func(context.Context, string) ([]net.IP, error) {
-				called = true
+			server := ""
+			ops := &netops{lookupPublicIP: func(_ context.Context, _, srv string) ([]net.IP, error) {
+				called, server = true, srv
 				return tc.ips, tc.err
 			}}
-			r := ops.publicDNSProbe("example.com", tc.litIP)(context.Background(), nil)
+			r := ops.publicDNSProbe("example.com", tc.litIP, DefaultPublicDNS)(context.Background(), nil)
+			if called && server != "8.8.8.8:53" {
+				t.Errorf("queried %q, want 8.8.8.8:53", server)
+			}
 			if r.Status != tc.status || r.DNSNotFound != tc.missing {
 				t.Errorf("result = %+v, want status %s, not-found %v", r, tc.status, tc.missing)
 			}

@@ -148,6 +148,9 @@ type ProbeResult struct {
 	Detail      string
 	Fix         string
 	timedOut    bool // protocol failure was a timeout; used to correlate PMTU evidence.
+	// resolver is the second-opinion DNS server ProbeDNSPublic queried, so the
+	// cross-probe pass can name it in prose without reaching for a constant.
+	resolver string
 }
 
 // Portal is structured captive-portal evidence. RedirectURL is empty when the
@@ -233,12 +236,15 @@ var tlsRecordHeader = []byte{0x16, 0x03, 0x01, 0x40, 0x00}
 // probeHost is the host used by the generic (no-target) DNS + egress probes.
 const probeHost = "connectivitycheck.gstatic.com"
 
-// publicDNSIP is the second-opinion resolver; every label and detail string
-// derives from it so switching providers stays a one-line change.
-const (
-	publicDNSIP     = "8.8.8.8"
-	publicDNSServer = publicDNSIP + ":53"
-)
+// DefaultPublicDNS is the second-opinion resolver used unless --public-dns
+// names another. Every label and detail string derives from the configured
+// value, and an empty one drops the probe entirely, so a network with a strict
+// egress policy never dials it.
+const DefaultPublicDNS = "8.8.8.8"
+
+// publicDNSServer is the dial address for a second-opinion resolver IP; it
+// brackets IPv6 literals.
+func publicDNSServer(ip string) string { return net.JoinHostPort(ip, "53") }
 
 // portalProbeURL answers 204 with an empty body on an unintercepted path.
 // Plain HTTP on purpose — that's the request a captive portal grabs.
@@ -262,8 +268,10 @@ type netops struct {
 	sources        *SourceAddresses
 	// lookupIP resolves host and reports the resolver that was dialed, as a
 	// host:port string. An empty server means "couldn't tell", not "none".
-	lookupIP       func(ctx context.Context, host string) ([]net.IP, string, error)
-	lookupPublicIP func(ctx context.Context, host string) ([]net.IP, error)
+	lookupIP func(ctx context.Context, host string) ([]net.IP, string, error)
+	// lookupPublicIP resolves host against server (a host:port second-opinion
+	// resolver), bypassing whatever the system is configured to use.
+	lookupPublicIP func(ctx context.Context, host, server string) ([]net.IP, error)
 	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
 	sendBuffer     func(net.Conn) (int, error)
 	tcpMSS         func(net.Conn) (int, error)
@@ -293,8 +301,8 @@ var defaultOps = &netops{
 	lookupIP: func(ctx context.Context, host string) ([]net.IP, string, error) {
 		return lookupIPWithDial(ctx, host, new(net.Dialer).DialContext)
 	},
-	lookupPublicIP: func(ctx context.Context, host string) ([]net.IP, error) {
-		return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext)
+	lookupPublicIP: func(ctx context.Context, host, server string) ([]net.IP, error) {
+		return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext, server)
 	},
 	dialContext: new(net.Dialer).DialContext,
 	sendBuffer:  socketSendBuffer,
@@ -433,8 +441,8 @@ func opsFromSources(sources *SourceAddresses) *netops {
 	o.lookupIP = func(ctx context.Context, host string) ([]net.IP, string, error) {
 		return lookupIPWithDial(ctx, host, o.dialContext)
 	}
-	o.lookupPublicIP = func(ctx context.Context, host string) ([]net.IP, error) {
-		return lookupIPPublicWithDial(ctx, host, o.dialContext)
+	o.lookupPublicIP = func(ctx context.Context, host, server string) ([]net.IP, error) {
+		return lookupIPPublicWithDial(ctx, host, o.dialContext, server)
 	}
 	o.portalCheck = func(ctx context.Context) (int, string, error) {
 		return portalCheckWithDial(ctx, o.dialContext)
@@ -565,11 +573,11 @@ func lookupIPWithDial(ctx context.Context, host string, dial func(context.Contex
 
 // lookupIPPublicWithDial bypasses the configured resolver for a second opinion.
 // Unavailability is reported as N/A by publicDNSProbe, never as a failure.
-func lookupIPPublicWithDial(ctx context.Context, host string, dial func(context.Context, string, string) (net.Conn, error)) ([]net.IP, error) {
+func lookupIPPublicWithDial(ctx context.Context, host string, dial func(context.Context, string, string) (net.Conn, error), server string) ([]net.IP, error) {
 	r := net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return dial(ctx, network, publicDNSServer)
+			return dial(ctx, network, server)
 		},
 	}
 	return r.LookupIP(ctx, "ip", host)
@@ -632,21 +640,25 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 // ProbeResult strings as-is and a new probe can't reintroduce terminal
 // injection by forgetting to Clean at the source. It is also the one place
 // both runners (RunAll and the ui scheduler) share, so timing lives here too.
+// It keeps the default second-opinion resolver; BuildProbesFromSources is the
+// entry point that takes a configured one.
 func BuildProbesFrom(t *Target, source net.IP) []Probe {
 	if source == nil {
-		return BuildProbesFromSources(t, nil)
+		return BuildProbesFromSources(t, nil, DefaultPublicDNS)
 	}
-	return BuildProbesFromSources(t, sourceAddresses([]net.Addr{&net.IPAddr{IP: source}}))
+	return BuildProbesFromSources(t, sourceAddresses([]net.Addr{&net.IPAddr{IP: source}}), DefaultPublicDNS)
 }
 
 // BuildProbesFromSources is BuildProbesFrom with separate selected-interface
-// addresses for IPv4 and IPv6.
-func BuildProbesFromSources(t *Target, sources *SourceAddresses) []Probe {
+// addresses for IPv4 and IPv6, and with the second-opinion resolver named
+// explicitly: publicDNS is a bare IP, or "" to leave that probe out of the DAG
+// altogether — a skipped row would still have had to dial to be skipped.
+func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS string) []Probe {
 	o := defaultOps
 	if sources != nil {
 		o = opsFromSources(sources)
 	}
-	probes := o.buildProbes(t)
+	probes := o.buildProbes(t, publicDNS)
 	for i := range probes {
 		probes[i].Run = wrapRun(probes[i].Run)
 	}
@@ -683,7 +695,9 @@ func cleanResult(r ProbeResult) ProbeResult {
 	return r
 }
 
-func (o *netops) buildProbes(t *Target) []Probe {
+// buildProbes assembles the DAG. publicDNSIP names the second-opinion
+// resolver; "" leaves the row out entirely rather than emitting a skipped one.
+func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	iface := Probe{ID: ProbeIface, Name: "Interface", Run: o.ifaceProbe}
 	network := Probe{ID: ProbeSSID, Name: "Wi-Fi network", Deps: []ProbeID{ProbeIface}, Run: o.ssidProbe}
 	internet := Probe{ID: ProbeInternet, Name: "Internet (TCP egress)", Deps: []ProbeID{ProbeIface}, Run: o.internetProbe}
@@ -696,19 +710,25 @@ func (o *netops) buildProbes(t *Target) []Probe {
 		// Egress, proxy egress, system DNS, and public DNS are siblings: each
 		// depends only on the interface, so one failure never hides another.
 		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(probeHost, nil)}
-		publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil)}
-		return []Probe{iface, internet, proxy, dns, publicDNS, network}
+		probes := []Probe{iface, internet, proxy, dns}
+		if publicDNSIP != "" {
+			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil, publicDNSIP)})
+		}
+		return append(probes, network)
 	}
 
 	host, port := t.Host, t.Port
 	hp := net.JoinHostPort(host, strconv.Itoa(port)) // brackets IPv6 literals
 	dns := Probe{ID: ProbeDNS, Name: "DNS " + host, Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(host, t.IP)}
-	publicDNS := Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP)}
 	ttcp := Probe{ID: ProbeTargetTCP, Name: "TCP " + hp, Deps: []ProbeID{ProbeDNS}, Run: o.targetTCPProbe(port)}
 	// Path MTU hangs off the TCP connect rather than off any protocol row: a
 	// black hole breaks SSH and SMTP exactly as thoroughly as it breaks TLS.
 	pmtu := Probe{ID: ProbePMTU, Name: "Path MTU " + hp, Deps: []ProbeID{ProbeTargetTCP}, Run: o.pmtuProbe(port, t.Proto)}
-	probes := []Probe{iface, internet, proxy, dns, publicDNS, ttcp, pmtu, network}
+	probes := []Probe{iface, internet, proxy, dns}
+	if publicDNSIP != "" {
+		probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP, publicDNSIP)})
+	}
+	probes = append(probes, ttcp, pmtu, network)
 
 	switch t.Proto {
 	case ProtoTLSHTTP:
@@ -1433,26 +1453,28 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 	}
 }
 
-func (o *netops) publicDNSProbe(host string, litIP net.IP) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
+func (o *netops) publicDNSProbe(host string, litIP net.IP, publicDNSIP string) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 		if litIP != nil {
 			return ProbeResult{Status: StatusNA, Detail: "literal IP " + litIP.String() + " — no DNS needed"}
 		}
-		ips, err := o.lookupPublicIP(ctx, host)
+		ips, err := o.lookupPublicIP(ctx, host, publicDNSServer(publicDNSIP))
 		if dnsNotFound(err) || err == nil && len(ips) == 0 {
 			return ProbeResult{
 				Status:      StatusPass,
 				DNSNotFound: true,
+				resolver:    publicDNSIP,
 				Detail:      publicDNSIP + " reports no A/AAAA records for " + host,
 			}
 		}
 		if err != nil {
-			return ProbeResult{Status: StatusNA, Detail: "public DNS unavailable via " + publicDNSIP + ": " + err.Error()}
+			return ProbeResult{Status: StatusNA, resolver: publicDNSIP, Detail: "public DNS unavailable via " + publicDNSIP + ": " + err.Error()}
 		}
 		return ProbeResult{
-			Status: StatusPass,
-			Addrs:  ips,
-			Detail: host + " → " + joinIPs(ips) + " (via " + publicDNSIP + ")",
+			Status:   StatusPass,
+			Addrs:    ips,
+			resolver: publicDNSIP,
+			Detail:   host + " → " + joinIPs(ips) + " (via " + publicDNSIP + ")",
 		}
 	}
 }
