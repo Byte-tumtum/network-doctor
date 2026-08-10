@@ -21,6 +21,8 @@ _arguments \
   '(--toolbox -toolbox --json -json)'{--toolbox,-toolbox}'[start in toolbox mode]' \
   '(--json -json --toolbox -toolbox)'{--json,-json}'[run the checks headless and print a JSON report]' \
   '(--watch -watch)'{--watch,-watch}'[continuously re-run checks]' \
+  '*'{--check,-check}'[run stable probe IDs (comma-separated; repeatable)]:probe IDs:' \
+  '*'{--skip,-skip}'[skip stable probe IDs (comma-separated; repeatable)]:probe IDs:' \
   '(--iface -iface)'{--iface,-iface}'[bind probes to an interface name or exact local IP]:interface:_netdoc_ifaces' \
   '(--public-dns -public-dns)'{--public-dns,-public-dns}'[second-opinion DNS resolver IP, empty to skip (default 8.8.8.8)]:ip address:' \
   '(--no-history -no-history)'{--no-history,-no-history}"[don't read or write the saved target history]" \

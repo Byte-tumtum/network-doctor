@@ -55,6 +55,8 @@ func TestRun(t *testing.T) {
 		{"bad iface", []string{"-iface", "netdoc-no-such-interface"}, 2, "", "-iface:"},
 		{"version ignores bad timeout", []string{"-timeout", "-1s", "-version"}, 0, "netdoc dev", ""},
 		{"bad timeout", []string{"-timeout", "-1s"}, 2, "", "-timeout must be positive"},
+		{"help lists check", []string{"-help"}, 0, "-check", ""},
+		{"help lists skip", []string{"-help"}, 0, "-skip", ""},
 		{"help lists -no-history", []string{"-help"}, 0, "-no-history", ""},
 	}
 	for _, tt := range tests {
@@ -285,6 +287,196 @@ func TestRunJSON(t *testing.T) {
 	}
 }
 
+func TestRunProbeSelectionFlags(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+		}
+		return results
+	}
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"one check", []string{"--check", "tls"}, []string{"iface", "dns", "target_tcp", "tls"}},
+		{"comma-separated checks", []string{"--check", "dns,target_tcp,tls"}, []string{"iface", "dns", "target_tcp", "tls"}},
+		{"repeated checks", []string{"--check", "dns,target_tcp", "--check", "tls"}, []string{"iface", "dns", "target_tcp", "tls"}},
+		{"equals check", []string{"--check=dns,target_tcp"}, []string{"iface", "dns", "target_tcp"}},
+		{"duplicate checks", []string{"--check", "dns,dns"}, []string{"iface", "dns"}},
+		{"one skip", []string{"--skip", "quic_udp_443"}, []string{"iface", "internet_tcp", "proxy_connect", "dns", "dns_public", "dns_encrypted", "target_tcp", "path_mtu", "ssid", "tls", "http", "https"}},
+		{"multiple skips", []string{"--skip", "internet_tcp,quic_udp_443"}, []string{"iface", "proxy_connect", "dns", "dns_public", "dns_encrypted", "target_tcp", "path_mtu", "ssid", "tls", "http", "https"}},
+		{"repeated skips", []string{"--skip", "internet_tcp", "--skip", "quic_udp_443"}, []string{"iface", "proxy_connect", "dns", "dns_public", "dns_encrypted", "target_tcp", "path_mtu", "ssid", "tls", "http", "https"}},
+		{"equals repeated skips", []string{"--skip=dns", "--skip=target_tcp"}, []string{"iface", "internet_tcp", "quic_udp_443", "proxy_connect", "dns_public", "dns_encrypted", "ssid"}},
+		{"combined", []string{"--check", "dns,target_tcp,tls", "--skip", "dns"}, []string{}},
+		{"argument order", []string{"--check", "tls,dns,target_tcp"}, []string{"iface", "dns", "target_tcp", "tls"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"--json", "example.com"}, tt.args...)
+			if got := run(args, &stdout, &stderr); got != 0 {
+				t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+			}
+			var rep report
+			if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, len(rep.Checks))
+			for i, check := range rep.Checks {
+				got[i] = check.ID
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("check IDs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunKnownButInapplicableProbeSelection(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+		}
+		return results
+	}
+	runReport := func(t *testing.T, args ...string) report {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if got := run(args, &stdout, &stderr); got != 0 {
+			t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+		}
+		var rep report
+		if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	ids := func(rep report) []string {
+		got := make([]string, len(rep.Checks))
+		for i, check := range rep.Checks {
+			got[i] = check.ID
+		}
+		return got
+	}
+
+	empty := runReport(t, "--json", "--check", "tls", "host:9999")
+	if len(empty.Checks) != 0 || empty.Summary != "No checks selected." || empty.Verdict != diagnostic.VerdictOK || !empty.OK {
+		t.Fatalf("inapplicable check report = %+v", empty)
+	}
+
+	baseline := runReport(t, "--json", "host:9999")
+	skipped := runReport(t, "--json", "--skip", "tls", "host:9999")
+	if !reflect.DeepEqual(ids(skipped), ids(baseline)) {
+		t.Errorf("inapplicable skip changed DAG: %v != %v", ids(skipped), ids(baseline))
+	}
+	if skipped.Summary != baseline.Summary || skipped.Verdict != baseline.Verdict || skipped.OK != baseline.OK {
+		t.Errorf("inapplicable skip changed diagnosis: %+v != %+v", skipped, baseline)
+	}
+
+	withoutPublic := runReport(t, "--json", "--public-dns", "", "--skip", "dns_public", "host:9999")
+	for _, id := range ids(withoutPublic) {
+		if id == "dns_public" {
+			t.Fatal("disabled public DNS probe was constructed")
+		}
+	}
+}
+
+func TestProbeListRejectsAtomically(t *testing.T) {
+	var list probeList
+	if err := list.Set("dns,"); err == nil {
+		t.Fatal("trailing empty probe ID accepted")
+	}
+	if len(list) != 0 {
+		t.Fatalf("failed parse retained IDs: %v", list)
+	}
+	if err := list.Set("dns"); err != nil {
+		t.Fatal(err)
+	}
+	if err := list.Set("target_tcp,,tls"); err == nil {
+		t.Fatal("later malformed probe list accepted")
+	}
+	if want := (probeList{diagnostic.ProbeDNS}); !reflect.DeepEqual(list, want) {
+		t.Fatalf("later failed parse changed IDs: %v, want %v", list, want)
+	}
+}
+
+func TestBuildReportEmptySelection(t *testing.T) {
+	rep := buildReport(nil, nil, nil, true)
+	if rep.Checks == nil || rep.Summary != "No checks selected." || rep.Verdict != diagnostic.VerdictOK || !rep.OK {
+		t.Fatalf("empty report = %+v", rep)
+	}
+	b, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"checks":[]`)) {
+		t.Fatalf("empty checks JSON = %s, want []", b)
+	}
+}
+
+func TestRunRejectsInvalidProbeSelectionBeforeDiagnostics(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runs := 0
+	runAll = func(context.Context, []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		runs++
+		return nil
+	}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"unknown check", []string{"--check", "bogus"}, `unknown probe ID "bogus"`},
+		{"unknown skip", []string{"--skip", "bogus"}, `unknown probe ID "bogus"`},
+		{"deterministic unknown", []string{"--check", "zzz,aaa"}, `unknown probe ID "aaa"`},
+		{"whitespace is not normalized", []string{"--check", " dns"}, `unknown probe ID " dns"`},
+		{"empty check", []string{"--check", ""}, "empty probe ID"},
+		{"empty equals check", []string{"--check="}, "empty probe ID"},
+		{"empty trailing check", []string{"--check", "dns,"}, "empty probe ID"},
+		{"empty middle check", []string{"--check", "dns,,tls"}, "empty probe ID"},
+		{"empty leading skip", []string{"--skip", ",dns"}, "empty probe ID"},
+		{"empty skip", []string{"--skip", ""}, "empty probe ID"},
+		{"empty equals skip", []string{"--skip="}, "empty probe ID"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"--json"}, tt.args...)
+			args = append(args, "example.com")
+			if got := run(args, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2", got)
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tt.want)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+	if runs != 0 {
+		t.Errorf("diagnostics ran %d times for rejected selections", runs)
+	}
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--json", "--check", "bogus", "example.com"}, &stdout, &stderr); got != 2 {
+		t.Fatalf("global-ID error exit = %d, want 2", got)
+	}
+	if !strings.Contains(stderr.String(), "ssh_banner") || !strings.Contains(stderr.String(), "smtp_banner") {
+		t.Errorf("valid-ID list is target-specific: %q", stderr.String())
+	}
+	if runs != 0 {
+		t.Errorf("diagnostics ran %d times while listing valid IDs", runs)
+	}
+}
+
 // -public-dns is the opt-out for the one third-party resolver netdoc queries.
 // Driven through run() rather than the flag set, because the value has to
 // survive parsing, validation, and probe construction to reach the report.
@@ -406,7 +598,7 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	defer cancel()
 	var buf, stderr bytes.Buffer
 	out := &cancelAfter{buf: &buf, n: 3, cancel: cancel}
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, out, &stderr); got != 1 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, out, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 
@@ -428,6 +620,36 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	}
 }
 
+func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
+	origRun, origEvery := runAll, ui.WatchEvery
+	t.Cleanup(func() { runAll, ui.WatchEvery = origRun, origEvery })
+	ui.WatchEvery = time.Millisecond
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		if len(probes) != 0 {
+			t.Fatalf("empty selection ran probes: %v", probes)
+		}
+		return map[diagnostic.ProbeID]diagnostic.ProbeResult{}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var buf, stderr bytes.Buffer
+	out := &cancelAfter{buf: &buf, n: 2, cancel: cancel}
+	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, selection, out, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	for i, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rep report
+		if err := json.Unmarshal([]byte(line), &rep); err != nil {
+			t.Fatalf("line %d: %v", i, err)
+		}
+		if rep.Checks == nil || len(rep.Checks) != 0 || rep.Summary != "No checks selected." || !rep.OK {
+			t.Errorf("line %d empty report = %+v", i, rep)
+		}
+	}
+}
+
 // If the context is already cancelled before the first pass completes, there
 // is no report to trust — runJSON must fail closed rather than default to 0.
 func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
@@ -444,7 +666,7 @@ func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, &stdout, &stderr); got != 1 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, &stdout, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 	if stdout.Len() != 0 {
@@ -471,7 +693,7 @@ func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 			Attempts: []diagnostic.Attempt{{IP: net.ParseIP("192.168.1.1"), Dur: 300 * time.Microsecond}},
 		},
 	}
-	rep := buildReport(nil, probes, results)
+	rep := buildReport(nil, probes, results, false)
 	if rep.Checks[0].Ms != 1 {
 		t.Errorf("sub-millisecond check ms = %d, want 1", rep.Checks[0].Ms)
 	}
@@ -491,7 +713,7 @@ func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing
 		}},
 		diagnostic.ProbeIface: {Status: diagnostic.StatusPass},
 	}
-	rep := buildReport(nil, probes, results)
+	rep := buildReport(nil, probes, results, false)
 	if rep.Checks[0].Families == nil || rep.Checks[0].Families.IPv4 != "reachable" || rep.Checks[0].Families.IPv6 != "unreachable" {
 		t.Errorf("internet families = %+v", rep.Checks[0].Families)
 	}
@@ -518,7 +740,7 @@ func TestBuildReportKeepsEncryptedResolverWarningFunctional(t *testing.T) {
 		diagnostic.ProbeDNS:          {Status: diagnostic.StatusPass},
 		diagnostic.ProbeDNSEncrypted: {Status: diagnostic.StatusWarn, Detail: "resolver answered SERVFAIL"},
 	}
-	rep := buildReport(nil, probes, results)
+	rep := buildReport(nil, probes, results, false)
 	if !rep.OK || rep.FailedStage != "" || rep.Verdict != diagnostic.VerdictDegraded ||
 		rep.Checks[2].Status != "WARN" || rep.Summary == "" {
 		t.Fatalf("report = %+v, want a visible WARN that remains functional and does not become a failed stage", rep)
@@ -554,7 +776,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		},
 	}
-	rep := buildReport(target, probes, results)
+	rep := buildReport(target, probes, results, false)
 
 	if rep.OK {
 		t.Error("OK = true, want false (DNS failed)")
@@ -609,7 +831,7 @@ func TestBuildReportGenericAllPass(t *testing.T) {
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
 		diagnostic.ProbeIface: {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Detail: "up"},
 	}
-	rep := buildReport(nil, probes, results)
+	rep := buildReport(nil, probes, results, false)
 	if !rep.OK {
 		t.Error("OK = false, want true")
 	}

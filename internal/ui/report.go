@@ -154,7 +154,7 @@ func (m model) report() string {
 // diagnosis summary.
 func (m model) verdictLine() string {
 	order, firstFail, anyWarn := m.resultState()
-	summary, _ := diagnostic.Diagnose(m.target, order, m.results)
+	summary, _ := m.diagnose(order)
 	switch {
 	case firstFail != nil:
 		return "FAIL — " + summary

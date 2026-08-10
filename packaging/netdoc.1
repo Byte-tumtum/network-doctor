@@ -1,4 +1,4 @@
-.TH NETDOC 1 "2026-08-09" "network-doctor" "User Commands"
+.TH NETDOC 1 "2026-08-10" "network-doctor" "User Commands"
 .SH NAME
 netdoc \- diagnose network connectivity and explain where the connection breaks
 .SH SYNOPSIS
@@ -88,6 +88,22 @@ it streams one compact JSON report per line until the process is interrupted;
 those lines carry an extra
 .B ts
 field (RFC 3339, UTC) and are otherwise the one-shot report unchanged.
+.TP
+.BI \-check " probe[,probe...]"
+Run only the named stable probe IDs and the prerequisite closure derived from
+the probe DAG. May be repeated; values are combined without changing canonical
+probe order.
+.TP
+.BI \-skip " probe[,probe...]"
+Omit the named stable probe IDs. Dependents whose prerequisite chain is then
+unavailable are omitted too. May be repeated and combined with
+.BR \-check .
+Unknown or empty IDs are rejected before diagnostics start, and the error lists
+every valid stable ID. A known ID that does not apply to the current target is
+harmless: it selects no row with
+.B \-check
+and changes nothing with
+.BR \-skip .
 .TP
 .BI \-iface " name\fR|\fPaddress"
 Bind probe traffic to an interface name or to an exact local IP address, so
@@ -218,6 +234,16 @@ Follow an intermittent failure as it happens:
 .RS 4
 .EX
 netdoc \-\-json \-\-watch github.com | jq \-c 'select(.ok | not) | {ts, failed_stage, summary}'
+.EE
+.RE
+.PP
+Select a narrow diagnostic branch, or omit unrelated egress probes:
+.PP
+.RS 4
+.EX
+netdoc \-\-check dns,target_tcp,tls example.com
+netdoc \-\-skip internet_tcp,quic_udp_443 example.com
+netdoc \-\-check tls \-\-skip target_tcp example.com
 .EE
 .RE
 .PP

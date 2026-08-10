@@ -12,6 +12,8 @@ complete -c netdoc -f
 complete -c netdoc -o toolbox -l toolbox -d 'Start in toolbox mode'
 complete -c netdoc -o json -l json -d 'Run the checks headless and print a JSON report'
 complete -c netdoc -o watch -l watch -d 'Continuously re-run checks'
+complete -c netdoc -o check -l check -r -d 'Run stable probe IDs (comma-separated; repeatable)'
+complete -c netdoc -o skip -l skip -r -d 'Skip stable probe IDs (comma-separated; repeatable)'
 complete -c netdoc -o no-history -l no-history -d "Don't read or write the saved target history"
 complete -c netdoc -o version -l version -d 'Print version and exit'
 complete -c netdoc -s h -o help -l help -d 'Print usage and exit'

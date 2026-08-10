@@ -126,6 +126,40 @@ func hostAfterAt(pair string) string {
 	return ""
 }
 
+type probeList []diagnostic.ProbeID
+
+func (p *probeList) String() string {
+	ids := make([]string, len(*p))
+	for i, id := range *p {
+		ids[i] = string(id)
+	}
+	return strings.Join(ids, ",")
+}
+
+func (p *probeList) Set(value string) error {
+	ids := strings.Split(value, ",")
+	for _, id := range ids {
+		if id == "" {
+			return errors.New("empty probe ID")
+		}
+	}
+	for _, id := range ids {
+		*p = append(*p, diagnostic.ProbeID(id))
+	}
+	return nil
+}
+
+func (p probeList) set() map[diagnostic.ProbeID]struct{} {
+	if len(p) == 0 {
+		return nil
+	}
+	set := make(map[diagnostic.ProbeID]struct{}, len(p))
+	for _, id := range p {
+		set[id] = struct{}{}
+	}
+	return set
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	// The SSH login form (S) runs this binary as ssh's askpass helper so the
 	// password reaches ssh through the environment instead of an argv every
@@ -147,6 +181,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	iface := fs.String("iface", "", "bind probes to an interface name or exact local IP")
 	publicDNS := fs.String("public-dns", diagnostic.DefaultPublicDNS, "second-opinion DNS resolver IP; empty skips that check")
+	var checks, skips probeList
+	fs.Var(&checks, "check", "run stable probe IDs in `probe[,probe...]` form; repeatable")
+	fs.Var(&skips, "skip", "skip stable probe IDs in `probe[,probe...]` form; repeatable")
 	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
@@ -223,15 +260,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		t = parsed
 	}
+	selection := diagnostic.ProbeSelection{Check: checks.set(), Skip: skips.set()}
+	if err := selection.Validate(); err != nil {
+		fmt.Fprintln(stderr, "netdoc:", err)
+		return 2
+	}
 
 	if *jsonOut {
-		return runJSON(context.Background(), t, sources, *watch, *publicDNS, stdout, stderr)
+		return runJSON(context.Background(), t, sources, *watch, *publicDNS, selection, stdout, stderr)
 	}
 
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
-	p := tea.NewProgram(ui.NewWithSources(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -336,7 +378,7 @@ var runAll = diagnostic.RunAll
 // With watch it never stops on its own: one compact report per line, forever,
 // until the terminal interrupts it. That's NDJSON, but not a new schema — the
 // line is the same report struct, plus the ts that makes a stream readable.
-func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, stdout, stderr io.Writer) int {
+func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, selection diagnostic.ProbeSelection, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	if !watch {
 		enc.SetIndent("", "  ")
@@ -352,14 +394,15 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 	// success, so an interrupt before the first line lands has to fail closed.
 	code := 1
 	for {
-		probes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
+		allProbes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
+		probes := selection.Apply(allProbes)
 		results := runAll(ctx, probes)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,
 			// so reporting that pass would be a lie.
 			return code
 		}
-		rep := buildReport(t, probes, results)
+		rep := buildReport(t, probes, results, len(probes) != len(allProbes))
 		code = 0
 		if !rep.OK {
 			code = 1
@@ -385,8 +428,8 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 // buildReport flattens probe results into the stable JSON shape, preserving
 // probe order. OK means "no check failed" — Warn, Skip, and N/A don't count
 // against it, same as everywhere else in the app.
-func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) report {
-	rep := report{Version: version, OK: true}
+func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult, filtered bool) report {
+	rep := report{Version: version, Checks: []reportCheck{}, OK: true}
 	if t != nil {
 		rep.Target = &reportTarget{Host: t.Host, Port: t.Port, Protocol: t.Proto.String()}
 	}
@@ -433,6 +476,10 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		}
 		rep.Checks = append(rep.Checks, c)
 	}
-	rep.Summary, rep.Verdict = diagnostic.Diagnose(t, order, results)
+	if filtered {
+		rep.Summary, rep.Verdict = diagnostic.DiagnoseSelected(probes, results)
+	} else {
+		rep.Summary, rep.Verdict = diagnostic.Diagnose(t, order, results)
+	}
 	return rep
 }

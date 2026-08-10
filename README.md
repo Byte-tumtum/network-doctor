@@ -199,6 +199,9 @@ netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
 netdoc --watch host     # TUI: re-run continuously and track intermittent failures
 netdoc --json --watch host  # headless: one JSON report per line, until interrupted
+netdoc --check dns,target_tcp,tls example.com  # run only these IDs and their prerequisites
+netdoc --skip internet_tcp,quic_udp_443 example.com  # omit these probe branches
+netdoc --check tls --skip target_tcp example.com  # a skipped prerequisite blocks TLS
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
 netdoc --public-dns "" host       # drop the second opinion: no third-party resolver is queried
@@ -206,6 +209,9 @@ netdoc --no-history host          # don't read or save the target history file
 ```
 
 `--timeout` overrides the per-check probe timeout; see `netdoc --help` for the default. `--watch` starts another pass five seconds after each run; in the TUI it shows the last 20 states plus a failure count for every check, and with `--json` it streams the same report on stdout, one compact JSON object per line, until the process is interrupted. Those lines carry an extra `ts` field (RFC 3339, UTC) and are otherwise the one-shot report unchanged — one-shot output stays pretty-printed, with no `ts`.
+
+`--check` accepts comma-separated stable probe IDs and limits the run to those probes plus the prerequisite closure from the existing DAG. `--skip` removes IDs and any dependent probes whose prerequisites are then unavailable. Both flags are repeatable and combine by union; their argument order never changes row order. Unknown or empty IDs are rejected with exit `2`, before diagnostics start, and the error lists every valid stable ID. A known ID that does not apply to the current target is harmless: `--check` may select no rows, while `--skip` changes nothing. Omitted probes do not run and do not appear in the TUI or JSON. The same selection policy is retained by `--watch`, TUI restarts, and target changes.
+
 `--iface` binds IPv4 and IPv6 probe connections and DNS lookups to the interface's first usable address of the matching family. IPv4-only and IPv6-only interfaces use only their available family; pass an exact local IP to restrict probes to that address's family.
 
 The path drill-downs follow the same selection where the native tool supports it. On Linux and macOS, `ping`, `traceroute`, `mtr`, and `curl` use the selected interface name, or the selected address when `--iface` names an exact IP. Windows tools bind by source address instead: `pathping` and `curl.exe` use the resolved address, while `ping` and `tracert` can do so only for IPv6 destinations. `curl.exe` cannot bind by interface name, but can use that interface's resolved source address.
@@ -365,7 +371,7 @@ Windows built-in toolbox commands are decoded from the active OEM code page befo
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
+Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
 
 ## Built with
 

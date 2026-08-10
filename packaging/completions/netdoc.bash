@@ -15,8 +15,8 @@ _netdoc() {
             COMPREPLY=($(compgen -W "$(command ls /sys/class/net 2>/dev/null)" -- "$cur"))
             return
             ;;
-        -timeout | --timeout)
-            # A Go duration string; nothing to enumerate.
+        -timeout | --timeout | -check | --check | -skip | --skip)
+            # These values have nothing useful to enumerate.
             return
             ;;
         -public-dns | --public-dns)
@@ -33,6 +33,8 @@ _netdoc() {
             -toolbox --toolbox
             -json --json
             -watch --watch
+            -check --check
+            -skip --skip
             -iface --iface
             -public-dns --public-dns
             -no-history --no-history

@@ -6,6 +6,7 @@ package ui
 import (
 	"context"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +150,55 @@ func TestWatchRecordsAndRestarts(t *testing.T) {
 	}
 	if len(restarted.runHistory[last.ID]) != 1 || cmd == nil {
 		t.Fatal("watch restart must retain history and schedule the probe root")
+	}
+}
+
+func TestWatchAndTargetRestartPreserveProbeSelection(t *testing.T) {
+	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
+	m := NewWithSelection(mustTarget(t, "example.com"), nil, false, true, "", "test", diagnostic.DefaultPublicDNS, selection).(model)
+	want := []diagnostic.ProbeID{diagnostic.ProbeIface, diagnostic.ProbeDNS, diagnostic.ProbeTargetTCP, diagnostic.ProbeTLS}
+	ids := func(probes []diagnostic.Probe) []diagnostic.ProbeID {
+		got := make([]diagnostic.ProbeID, len(probes))
+		for i, probe := range probes {
+			got[i] = probe.ID
+		}
+		return got
+	}
+	if got := ids(m.probes); !reflect.DeepEqual(got, want) {
+		t.Fatalf("initial probes = %v, want %v", got, want)
+	}
+
+	m.doRestart()
+	if got := ids(m.probes); !reflect.DeepEqual(got, want) {
+		t.Errorf("watch restart probes = %v, want %v", got, want)
+	}
+	m.applyTarget(mustTarget(t, "example.org"))
+	if got := ids(m.probes); !reflect.DeepEqual(got, want) {
+		t.Errorf("target restart probes = %v, want %v", got, want)
+	}
+
+	conditional := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeSSH: {}}}
+	m = NewWithSelection(nil, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, conditional).(model)
+	if len(m.probes) != 0 {
+		t.Fatalf("generic SSH selection = %v, want empty", ids(m.probes))
+	}
+	m.applyTarget(mustTarget(t, "ssh://example.org"))
+	want = []diagnostic.ProbeID{diagnostic.ProbeIface, diagnostic.ProbeDNS, diagnostic.ProbeTargetTCP, diagnostic.ProbeSSH}
+	if got := ids(m.probes); !reflect.DeepEqual(got, want) {
+		t.Errorf("conditional selection after target change = %v, want %v", got, want)
+	}
+}
+
+func TestEmptySelectionCompletesAndKeepsWatching(t *testing.T) {
+	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
+	m := NewWithSelection(nil, nil, false, true, "", "test", diagnostic.DefaultPublicDNS, selection).(model)
+	if !m.allDone() || ExitCode(m) != 0 || !strings.Contains(m.banner(), "No checks selected") {
+		t.Fatalf("empty selection did not complete cleanly: done=%v exit=%d banner=%q", m.allDone(), ExitCode(m), m.banner())
+	}
+	u, cmd := m.Update(scheduleMsg{gen: m.generation})
+	m = asModel(t, u)
+	if cmd == nil {
+		t.Fatal("empty watched selection did not schedule the next pass")
 	}
 }
 
