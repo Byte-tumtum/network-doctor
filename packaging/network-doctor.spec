@@ -40,11 +40,22 @@ go build -ldflags "-s -w -X main.version=%{version}" -o netdoc .
 
 %install
 install -Dpm0755 netdoc %{buildroot}%{_bindir}/netdoc
+install -Dpm0644 packaging/netdoc.1 %{buildroot}%{_mandir}/man1/netdoc.1
+install -Dpm0644 packaging/completions/netdoc.bash %{buildroot}%{_datadir}/bash-completion/completions/netdoc
+install -Dpm0644 packaging/completions/netdoc.zsh %{buildroot}%{_datadir}/zsh/site-functions/_netdoc
+install -Dpm0644 packaging/completions/netdoc.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/netdoc.fish
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/netdoc
+# Glob: brp-compress gzips the page after %install, so the name gains a suffix.
+%{_mandir}/man1/netdoc.1*
+# Not %dir-owned: bash-completion, zsh, and fish are not dependencies, and the
+# completion is useless without the shell anyway. Owning the file only.
+%{_datadir}/bash-completion/completions/netdoc
+%{_datadir}/zsh/site-functions/_netdoc
+%{_datadir}/fish/vendor_completions.d/netdoc.fish
 
 %changelog
 * Sun Aug 09 2026 Michael Placzek <heymaikol@proton.me> - 1.10.8-1

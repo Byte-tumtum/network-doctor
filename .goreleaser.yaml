@@ -59,6 +59,17 @@ nfpms:
     contents:
       - src: LICENSE
         dst: /usr/share/doc/network-doctor/LICENSE
+      # Uncompressed: nfpm does not compress, and man reads a plain .1 fine.
+      # rpmbuild's brp-compress gzips it in the COPR build, hence the glob in
+      # the spec's %files.
+      - src: packaging/netdoc.1
+        dst: /usr/share/man/man1/netdoc.1
+      - src: packaging/completions/netdoc.bash
+        dst: /usr/share/bash-completion/completions/netdoc
+      - src: packaging/completions/netdoc.zsh
+        dst: /usr/share/zsh/site-functions/_netdoc
+      - src: packaging/completions/netdoc.fish
+        dst: /usr/share/fish/vendor_completions.d/netdoc.fish
 
 homebrew_casks:
   - repository:

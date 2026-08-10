@@ -1,0 +1,217 @@
+.TH NETDOC 1 "2026-08-09" "network-doctor" "User Commands"
+.SH NAME
+netdoc \- diagnose network connectivity and explain where the connection breaks
+.SH SYNOPSIS
+.B netdoc
+.RI [ flags ]
+.RI [ target ]
+.SH DESCRIPTION
+.B netdoc
+diagnoses network connectivity layer by layer and reports where the path
+breaks in plain English. With no
+.I target
+it runs the generic local and internet checks; with a
+.I target
+it also probes that endpoint.
+.PP
+Probes run unprivileged and time-bounded, and form a dependency graph with
+independent branches, so an unrelated failure never hides a working path.
+.PP
+By default
+.B netdoc
+starts a terminal UI. With
+.B \-json
+it runs headless and prints a machine-readable report instead.
+.PP
+Flags may be given before or after the
+.IR target ,
+and each accepts both the single-dash and double-dash spelling
+.RB ( \-json
+and
+.BR \-\-json
+are the same flag).
+.SH TARGET
+.TP
+.B example.com
+hostname (default port 443)
+.TP
+.B example.com:8022
+hostname with port (protocol inferred from the port)
+.TP
+.B ssh://example.com:8022
+URL (scheme sets protocol and default port; path ignored)
+.TP
+.BR 192.0.2.1 ", " 2001:db8::1
+IP literal
+.TP
+.B [2001:db8::1]:443
+IP literal with port (IPv6 needs the brackets)
+.PP
+Recognized URL schemes are
+.BR http ,
+.BR https ,
+.BR ssh ,
+and
+.BR smtp .
+At most one target may be given.
+.SH OPTIONS
+.TP
+.B \-toolbox
+Start in toolbox mode, which opens directly on the network tools pane
+.RB ( ping ,
+.BR dig ,
+.BR curl ,
+.BR traceroute ,
+.BR mtr ,
+.BR ss ,
+.BR ip ,
+.BR nmap )
+instead of the diagnosis view. Cannot be combined with
+.BR \-json .
+.TP
+.B \-json
+Run the checks headless and print a JSON report on standard output. The field
+names and the status vocabulary
+.RB ( PASS ,
+.BR WARN ,
+.BR FAIL ,
+.BR SKIP ,
+.BR N/A )
+are a stable contract, safe to script against.
+.TP
+.B \-watch
+Continuously re-run the checks, starting another pass five seconds after each
+one finishes. In the terminal UI this shows the last 20 states and a failure
+count per check. Combined with
+.BR \-json ,
+it streams one compact JSON report per line until the process is interrupted;
+those lines carry an extra
+.B ts
+field (RFC 3339, UTC) and are otherwise the one-shot report unchanged.
+.TP
+.BI \-iface " name\fR|\fPaddress"
+Bind probe traffic to an interface name or to an exact local IP address, so
+the checks follow a specific link (a VPN tunnel, a second NIC) rather than the
+system's default route.
+.TP
+.BI \-timeout " duration"
+Per-check probe timeout, as a Go duration string such as
+.B 2s
+or
+.BR 1500ms .
+Must be positive. The default is
+.BR 4s .
+.TP
+.B \-version
+Print the version and exit.
+.TP
+.BR \-help ", " \-h
+Print usage and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+The chain completed with no failed row. Skipped rows are allowed.
+.TP
+.B 1
+A row failed, the terminal UI was quit before the chain finished, or the run
+itself errored. Under
+.B \-json \-watch
+this is the last completed pass's status.
+.TP
+.B 2
+Bad arguments, or a target the parser rejected.
+.SH EXAMPLES
+.PP
+Run the generic local and internet diagnosis:
+.PP
+.RS 4
+.EX
+netdoc
+.EE
+.RE
+.PP
+Diagnose the path to a host, over HTTP, TLS, and HTTPS:
+.PP
+.RS 4
+.EX
+netdoc github.com
+.EE
+.RE
+.PP
+Let the port select the protocol rows, here the SSH banner check:
+.PP
+.RS 4
+.EX
+netdoc github.com:22
+.EE
+.RE
+.PP
+Keep SSH on a nonstandard port with an explicit scheme:
+.PP
+.RS 4
+.EX
+netdoc ssh://host:2222
+.EE
+.RE
+.PP
+Get one JSON report on standard output, for scripts, CI, or a bug report:
+.PP
+.RS 4
+.EX
+netdoc \-\-json github.com
+.EE
+.RE
+.PP
+Follow an intermittent failure as it happens:
+.PP
+.RS 4
+.EX
+netdoc \-\-json \-\-watch github.com | jq \-c 'select(.ok | not) | {ts, failed_stage, summary}'
+.EE
+.RE
+.PP
+Send the probes out through a specific interface:
+.PP
+.RS 4
+.EX
+netdoc \-\-iface wg0 github.com
+.EE
+.RE
+.PP
+Use the exit status in a shell script:
+.PP
+.RS 4
+.EX
+netdoc github.com || echo "path to github is broken"
+.EE
+.RE
+.SH FILES
+.TP
+.I $XDG_CONFIG_HOME/netdoc/history
+Up to 50 recent targets, saved by the terminal UI between sessions. Normally
+.IR ~/.config/netdoc/history .
+On macOS this is
+.IR ~/Library/Application\ Support/netdoc/history ,
+and on Windows
+.IR %AppData%\enetdoc\ehistory .
+Exit
+.B netdoc
+and delete the file to clear the history.
+.SH SEE ALSO
+.BR ping (8),
+.BR dig (1),
+.BR curl (1),
+.BR traceroute (8),
+.BR mtr (8),
+.BR ss (8),
+.BR ip (8),
+.BR nmap (1),
+.BR ssh (1)
+.PP
+Full documentation, including the JSON report schema and the verdict table:
+.UR https://github.com/heymaikol/network-doctor
+.UE
+.SH BUGS
+Report issues at
+.UR https://github.com/heymaikol/network-doctor/issues
+.UE

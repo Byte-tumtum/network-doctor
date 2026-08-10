@@ -1,0 +1,28 @@
+#compdef netdoc
+
+# zsh completion for netdoc(1). Installed as _netdoc on zsh's fpath.
+#
+# Hand-maintained: netdoc uses the stdlib flag package, which has no completion
+# generator. Keep this in sync with the flags in main.go.
+
+# Interface names only. -iface also takes a local IP address, which is not
+# offered here: the useful ones are already on these links.
+_netdoc_ifaces() {
+  local -a ifaces
+  ifaces=(/sys/class/net/*(N:t))
+  (( $#ifaces )) && _describe -t interfaces 'interface' ifaces
+}
+
+# No -s: it would let single-letter options stack, and the single-dash long
+# spellings below (-json) would be read as stacked letters.
+# Targets are hostnames, URLs, and IP literals — none of them enumerable, so
+# the positional completes to nothing rather than to local filenames.
+_arguments \
+  '(--toolbox -toolbox --json -json)'{--toolbox,-toolbox}'[start in toolbox mode]' \
+  '(--json -json --toolbox -toolbox)'{--json,-json}'[run the checks headless and print a JSON report]' \
+  '(--watch -watch)'{--watch,-watch}'[continuously re-run checks]' \
+  '(--iface -iface)'{--iface,-iface}'[bind probes to an interface name or exact local IP]:interface:_netdoc_ifaces' \
+  '(--timeout -timeout)'{--timeout,-timeout}'[per-check probe timeout (default 4s)]:duration:' \
+  '(- *)'{--version,-version}'[print version and exit]' \
+  '(- *)'{--help,-help,-h}'[print usage and exit]' \
+  ':target:'
