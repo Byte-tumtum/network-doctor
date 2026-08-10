@@ -23,22 +23,23 @@ func mustTarget(t *testing.T, s string) *Target {
 	return tg
 }
 
-// A target adds iface, TCP and QUIC Internet checks, proxy, system/public DNS,
-// target_tcp, path_mtu, ssid, plus whatever rows its protocol contributes.
+// A target adds iface, TCP and QUIC Internet checks, proxy, system/public/
+// encrypted DNS, target_tcp, path_mtu, ssid, plus whatever rows its protocol
+// contributes.
 func TestBuildProbesShape(t *testing.T) {
 	cases := []struct {
 		target string // empty means no target
 		want   int
 	}{
-		{"", 7},                    // no target — no target_tcp/path_mtu/protocol rows
-		{"github.com", 12},         // + tls, http, https
-		{"http://example.com", 10}, // + http
-		{"host:22", 10},            // + ssh banner
-		{"ssh://host:2222", 10},    // + ssh banner
-		{"host:25", 10},            // + smtp banner
-		{"host:587", 10},           // + smtp banner
-		{"smtp://host:2525", 10},   // + smtp banner
-		{"host:9999", 9},           // ProtoNone — stops at path_mtu
+		{"", 8},                    // no target — no target_tcp/path_mtu/protocol rows
+		{"github.com", 13},         // + tls, http, https
+		{"http://example.com", 11}, // + http
+		{"host:22", 11},            // + ssh banner
+		{"ssh://host:2222", 11},    // + ssh banner
+		{"host:25", 11},            // + smtp banner
+		{"host:587", 11},           // + smtp banner
+		{"smtp://host:2525", 11},   // + smtp banner
+		{"host:9999", 10},          // ProtoNone — stops at path_mtu
 	}
 	for _, c := range cases {
 		var tg *Target
@@ -132,7 +133,7 @@ func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
 	if got := deps[ProbeSSID]; len(got) != 1 || got[0] != ProbeIface {
 		t.Fatalf("ssid deps = %v, want [iface]", got)
 	}
-	for _, id := range []ProbeID{ProbeInternet, ProbeQUIC, ProbeProxy, ProbeDNS, ProbeDNSPublic} {
+	for _, id := range []ProbeID{ProbeInternet, ProbeQUIC, ProbeProxy, ProbeDNS, ProbeDNSPublic, ProbeDNSEncrypted} {
 		got := deps[id]
 		if len(got) != 1 || got[0] != ProbeIface {
 			t.Errorf("%s deps = %v, want [iface]", id, got)

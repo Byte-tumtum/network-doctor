@@ -507,6 +507,24 @@ func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing
 	}
 }
 
+func TestBuildReportKeepsEncryptedResolverWarningFunctional(t *testing.T) {
+	probes := []diagnostic.Probe{
+		{ID: diagnostic.ProbeInternet, Name: "Internet"},
+		{ID: diagnostic.ProbeDNS, Name: "DNS"},
+		{ID: diagnostic.ProbeDNSEncrypted, Name: "DNS (encrypted DoH/DoT)"},
+	}
+	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbeInternet:     {Status: diagnostic.StatusPass},
+		diagnostic.ProbeDNS:          {Status: diagnostic.StatusPass},
+		diagnostic.ProbeDNSEncrypted: {Status: diagnostic.StatusWarn, Detail: "resolver answered SERVFAIL"},
+	}
+	rep := buildReport(nil, probes, results)
+	if !rep.OK || rep.FailedStage != "" || rep.Verdict != diagnostic.VerdictDegraded ||
+		rep.Checks[2].Status != "WARN" || rep.Summary == "" {
+		t.Fatalf("report = %+v, want a visible WARN that remains functional and does not become a failed stage", rep)
+	}
+}
+
 func TestBuildReport(t *testing.T) {
 	target, err := diagnostic.ParseTarget("example.com:443")
 	if err != nil {

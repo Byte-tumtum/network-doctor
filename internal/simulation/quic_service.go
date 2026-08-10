@@ -15,7 +15,11 @@ import (
 
 const (
 	quicProbeService = "internet-quic"
-	quicTrustSubdir  = "quic-roots"
+	// probeTrustSubdir is the isolated directory the fixed-endpoint fixtures
+	// (QUIC, encrypted DNS) write their public CAs to. It is trusted through
+	// SSL_CERT_DIR for the netdoc process alone, so a scenario's target TLS
+	// services stay untrusted unless the scenario asks for them.
+	probeTrustSubdir = "probe-roots"
 )
 
 type quicServer struct {
@@ -32,7 +36,7 @@ func startQUICService(ctx context.Context, svc Service, addresses []string, trus
 	if err != nil {
 		return nil, err
 	}
-	rootDir := filepath.Join(trustDir, quicTrustSubdir)
+	rootDir := filepath.Join(trustDir, probeTrustSubdir)
 	if err := os.MkdirAll(rootDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -106,6 +110,6 @@ func (s *quicServer) Close() error {
 	return closeErr
 }
 
-func quicTrustAnchorPath(work, service string) string {
-	return filepath.Join(work, quicTrustSubdir, service+"-ca.pem")
+func probeTrustAnchorPath(work, service string) string {
+	return filepath.Join(work, probeTrustSubdir, service+"-ca.pem")
 }

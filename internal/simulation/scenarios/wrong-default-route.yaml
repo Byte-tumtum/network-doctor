@@ -37,7 +37,7 @@ topology:
             routed-target.test: 10.77.2.20
             connectivitycheck.gstatic.com: 10.77.2.20
         - {name: routed-http, type: http, port: 80}
-        - {name: routed-tls-control, type: tcp, port: 443}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.2.20}}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
   routes:
     - {node: client, destination: default, via: 10.77.1.1}
@@ -61,6 +61,7 @@ tests:
         - {id: iface, status: PASS}
         - {id: internet_tcp, status: WARN, cause: selected_path_failed}
         - {id: dns, status: PASS}
+        - {id: dns_encrypted, status: FAIL}
         - {id: target_tcp, status: PASS}
         - {id: http, status: PASS}
 
@@ -70,3 +71,6 @@ expect:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: WARN, cause: selected_path_failed}
     - {id: dns, status: PASS}
+    # The encrypted resolver is reached over the failed default path, so this
+    # is that routing failure showing up again, not a block on DoH/DoT.
+    - {id: dns_encrypted, status: FAIL}

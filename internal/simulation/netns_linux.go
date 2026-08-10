@@ -911,8 +911,8 @@ func (e *netnsEnv) TrustAnchor(service string) (string, error) {
 			if svc.Type == ServiceTLS {
 				return filepath.Join(e.work, service+"-ca.pem"), nil
 			}
-			if svc.Type == ServiceQUIC {
-				return quicTrustAnchorPath(e.work, service), nil
+			if svc.Type == ServiceQUIC || svc.Type == ServiceEncryptedDNS {
+				return probeTrustAnchorPath(e.work, service), nil
 			}
 		}
 	}

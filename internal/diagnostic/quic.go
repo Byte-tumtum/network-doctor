@@ -155,17 +155,8 @@ func (o *netops) quicProbe(host string, port int) func(context.Context, map[Prob
 		if err != nil || len(ips) == 0 {
 			return ProbeResult{Status: StatusNA, Detail: "cannot resolve QUIC endpoint " + host + ": unable to determine UDP/443 reachability"}
 		}
-		if o.sources != nil {
-			compatible := ips[:0]
-			for _, ip := range ips {
-				if ip.To4() != nil && o.sources.IPv4 != nil || ip.To4() == nil && o.sources.IPv6 != nil {
-					compatible = append(compatible, ip)
-				}
-			}
-			ips = compatible
-			if len(ips) == 0 {
-				return ProbeResult{Status: StatusNA, Detail: "QUIC endpoint has no address family available on the selected interface"}
-			}
+		if ips = o.compatibleSourceIPs(ips); len(ips) == 0 {
+			return ProbeResult{Status: StatusNA, Detail: "QUIC endpoint has no address family available on the selected interface"}
 		}
 
 		state, selected, source, attempts, rtt, err := o.dialQUICIPs(ctx, ips, host, port)

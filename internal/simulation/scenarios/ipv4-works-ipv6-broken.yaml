@@ -36,7 +36,7 @@ topology:
       aliases: [1.1.1.1, 8.8.8.8, "2606:4700:4700::1111", "2001:4860:4860::8888"]
       services:
         - {name: dual-http, type: http, port: 80}
-        - {name: dual-tcp, type: tcp, port: 443}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, records: [{name: connectivitycheck.gstatic.com, address: 10.78.2.20}]}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
   routes:
     - {node: client, destination: default, via: 10.78.1.1}

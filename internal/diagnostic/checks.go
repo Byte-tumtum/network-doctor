@@ -118,13 +118,17 @@ const (
 	ProbeProxy     ProbeID = "proxy_connect"
 	ProbeDNS       ProbeID = "dns"
 	ProbeDNSPublic ProbeID = "dns_public"
-	ProbeTargetTCP ProbeID = "target_tcp"
-	ProbePMTU      ProbeID = "path_mtu"
-	ProbeTLS       ProbeID = "tls"
-	ProbeHTTP      ProbeID = "http"
-	ProbeHTTPS     ProbeID = "https"
-	ProbeSSH       ProbeID = "ssh_banner"
-	ProbeSMTP      ProbeID = "smtp_banner"
+	// ProbeDNSEncrypted is an independent branch off the interface, not a child
+	// of the plaintext rows: plain and encrypted DNS are separate capabilities,
+	// and either can work while the other is blocked.
+	ProbeDNSEncrypted ProbeID = "dns_encrypted"
+	ProbeTargetTCP    ProbeID = "target_tcp"
+	ProbePMTU         ProbeID = "path_mtu"
+	ProbeTLS          ProbeID = "tls"
+	ProbeHTTP         ProbeID = "http"
+	ProbeHTTPS        ProbeID = "https"
+	ProbeSSH          ProbeID = "ssh_banner"
+	ProbeSMTP         ProbeID = "smtp_banner"
 )
 
 // QUIC failure causes distinguish a silent UDP/443 path from endpoint or
@@ -725,6 +729,11 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	// deliberately bypass proxies, so on a proxy-only network the direct row
 	// fails while this row proves the environment proxy carries traffic.
 	proxy := Probe{ID: ProbeProxy, Name: "Internet (env proxy)", Deps: []ProbeID{ProbeIface}, Run: o.proxyProbe}
+	// Encrypted DNS is its own branch off the interface, beside the plaintext
+	// rows rather than under them: a network can carry ordinary DNS while
+	// blocking DoH/DoT, which is what makes "DNS works but the browser cannot
+	// resolve" diagnosable at all.
+	encryptedDNS := Probe{ID: ProbeDNSEncrypted, Name: "DNS (encrypted DoH/DoT)", Deps: []ProbeID{ProbeIface}, Run: o.encryptedDNSProbe(defaultEncryptedDNS, probeHost)}
 
 	if t == nil {
 		// Egress, proxy egress, system DNS, and public DNS are siblings: each
@@ -734,6 +743,7 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 		if publicDNSIP != "" {
 			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil, publicDNSIP)})
 		}
+		probes = append(probes, encryptedDNS)
 		return append(probes, network)
 	}
 
@@ -748,7 +758,7 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	if publicDNSIP != "" {
 		probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP, publicDNSIP)})
 	}
-	probes = append(probes, ttcp, pmtu, network)
+	probes = append(probes, encryptedDNS, ttcp, pmtu, network)
 
 	switch t.Proto {
 	case ProtoTLSHTTP:
@@ -1914,6 +1924,24 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 		r.Status = StatusWarn
 		r.Detail += " — warning: " + strings.Join(notes, ", ")
 	}
+}
+
+// compatibleSourceIPs drops destinations whose address family the selected
+// interface has no source address for. Probes that dial a fixed endpoint use it
+// so --iface never produces a cross-family dial, and so an interface that
+// simply lacks a family reports N/A rather than a failure it could not avoid.
+// Without a selection every family is usable and the list is returned as-is.
+func (o *netops) compatibleSourceIPs(ips []net.IP) []net.IP {
+	if o.sources == nil {
+		return ips
+	}
+	out := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip.To4() != nil && o.sources.IPv4 != nil || ip.To4() == nil && o.sources.IPv6 != nil {
+			out = append(out, ip)
+		}
+	}
+	return out
 }
 
 // splitAttemptFamilies partitions attempts into the winner's address family

@@ -22,8 +22,7 @@ topology:
             connectivitycheck.gstatic.com: 10.77.0.1
         - type: http
           port: 80
-        - type: tcp
-          port: 443
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
 
 faults:

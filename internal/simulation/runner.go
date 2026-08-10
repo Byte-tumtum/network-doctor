@@ -307,11 +307,15 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 		}
 	}
 	var commandEnv []string
-	// QUIC's simulator CA lives in its own directory so the real netdoc binary
-	// can trust that fixed fixture without implicitly trusting target TLS
-	// services that a scenario did not opt into.
-	if root, err := env.TrustAnchor(quicProbeService); err == nil {
-		commandEnv = append(commandEnv, "SSL_CERT_DIR="+filepath.Dir(root))
+	// The fixed-endpoint fixtures (QUIC, encrypted DNS) share one CA directory
+	// so the real netdoc binary can trust them without implicitly trusting
+	// target TLS services that a scenario did not opt into. Either fixture names
+	// the same directory; whichever the scenario has is enough.
+	for _, fixture := range []string{quicProbeService, encryptedDNSProbeService} {
+		if root, err := env.TrustAnchor(fixture); err == nil {
+			commandEnv = append(commandEnv, "SSL_CERT_DIR="+filepath.Dir(root))
+			break
+		}
 	}
 	if t.Proxy != nil {
 		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))

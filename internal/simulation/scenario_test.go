@@ -419,3 +419,34 @@ func TestIsSafeHostname(t *testing.T) {
 		}
 	}
 }
+
+// The simulated internet claims netdoc's fixed endpoint addresses, so it has to
+// answer what netdoc actually sends there. This is the guard for the
+// encrypted-DNS row: a node that claims 1.1.1.1 without the encrypted_dns
+// fixture makes every scenario report a blocked encrypted resolver, and the
+// healthy scenarios would flip to "degraded" for a reason that is the
+// simulator's, not netdoc's.
+func TestLibraryScenariosServeEncryptedDNSWhereTheyClaimItsAddress(t *testing.T) {
+	for _, name := range LibraryNames() {
+		scenario, err := LibraryScenario(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, node := range scenario.Topology.Nodes {
+			claims := false
+			for _, alias := range node.Aliases {
+				claims = claims || alias == "1.1.1.1"
+			}
+			if !claims {
+				continue
+			}
+			served := false
+			for _, svc := range node.Services {
+				served = served || svc.Type == ServiceEncryptedDNS && svc.Port == 443
+			}
+			if !served {
+				t.Errorf("%s: node %q claims 1.1.1.1 but serves no encrypted_dns fixture on 443", name, node.Name)
+			}
+		}
+	}
+}

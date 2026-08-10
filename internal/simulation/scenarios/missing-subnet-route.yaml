@@ -32,7 +32,7 @@ topology:
             subnet-target.test: 10.77.3.20
             connectivitycheck.gstatic.com: 10.77.2.20
         - {type: http, port: 80}
-        - {type: tcp, port: 443}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.2.20}}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
     - name: target
       interfaces:

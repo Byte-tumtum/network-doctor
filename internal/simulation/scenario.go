@@ -153,6 +153,11 @@ const (
 	ServiceTLS = "tls"
 	// ServiceQUIC completes a real QUIC handshake with h3 ALPN over UDP.
 	ServiceQUIC = "quic"
+	// ServiceEncryptedDNS answers netdoc's encrypted-DNS probe over both
+	// transports from one static zone: RFC 8484 DoH on the service port and RFC
+	// 7858 DoT on 853. It also accepts the plain TCP connect the direct-egress
+	// probe makes, so it stands in for a tcp service on the same port.
+	ServiceEncryptedDNS = "encrypted_dns"
 	// ServiceTCPReset accepts a TCP handshake and closes with SO_LINGER=0 so a
 	// protocol probe observes ECONNRESET rather than connection refusal.
 	ServiceTCPReset = "tcp_reset"
@@ -379,6 +384,7 @@ type ExpectedCheck struct {
 var knownProbeIDs = []diagnostic.ProbeID{
 	diagnostic.ProbeIface, diagnostic.ProbeSSID, diagnostic.ProbeInternet,
 	diagnostic.ProbeQUIC, diagnostic.ProbeProxy, diagnostic.ProbeDNS, diagnostic.ProbeDNSPublic,
+	diagnostic.ProbeDNSEncrypted,
 	diagnostic.ProbeTargetTCP, diagnostic.ProbePMTU, diagnostic.ProbeTLS,
 	diagnostic.ProbeHTTP, diagnostic.ProbeHTTPS, diagnostic.ProbeSSH,
 	diagnostic.ProbeSMTP,
@@ -394,6 +400,7 @@ var knownCauses = []string{
 	diagnostic.ProxyCauseDestinationUnreachable,
 	diagnostic.ProxyCauseProtocol,
 	diagnostic.QUICCauseHandshake,
+	diagnostic.EncryptedDNSCauseUnavailable,
 	diagnostic.TLSCauseCertificateExpired,
 	diagnostic.TLSCauseCertificateNotYet,
 	diagnostic.TLSCauseHostnameMismatch,
@@ -676,6 +683,21 @@ func (n *Node) validateServices(names map[string]bool) error {
 			}
 			if err := validateTLSCertificate(svc.Certificate); err != nil {
 				return fmt.Errorf("node %q: %s service certificate: %w", n.Name, svc.Type, err)
+			}
+		case ServiceEncryptedDNS:
+			// The zone is the answer the probe correlates against, so this
+			// service takes one exactly as the plaintext DNS service does.
+			if svc.Port == 0 {
+				svc.Port = 443
+			}
+			if svc.Name == "" {
+				return fmt.Errorf("node %q: encrypted_dns service needs a name", n.Name)
+			}
+			if svc.Status != 0 || svc.Body != "" || svc.DNSFault != nil {
+				return fmt.Errorf("node %q: encrypted_dns service has unsupported options", n.Name)
+			}
+			if err := validateTLSCertificate(svc.Certificate); err != nil {
+				return fmt.Errorf("node %q: encrypted_dns service certificate: %w", n.Name, err)
 			}
 		default:
 			return fmt.Errorf("node %q: unknown service type %q", n.Name, svc.Type)

@@ -103,7 +103,7 @@ family-specific routes and reachability remain separate evidence.
 ## Probe endpoint drift
 
 **Check this section before changing fixed probe endpoints in
-`internal/diagnostic/checks.go`.**
+`internal/diagnostic/checks.go` or `internal/diagnostic/encrypteddns.go`.**
 
 The simulation has no internet. Scenarios claim netdoc's compiled-in public
 addresses as node aliases and serve its fixed probe names from simulator DNS.
@@ -111,18 +111,18 @@ If an internet, captive-portal, default public-DNS, or probe-host constant
 changes, update the corresponding `aliases`, DNS records, and expectations
 under `internal/simulation/scenarios/`.
 
-`healthy` is the canary. It expects the fixed internet and public-DNS probes to
-pass; endpoint drift makes it fail with a `false_positive` suggestion naming
-the stale probe. That failure is intentional. Update the affected scenarios
-and rerun:
+`healthy` is the canary. It expects the fixed internet, public-DNS, and
+encrypted-DNS probes to pass; endpoint drift makes it fail with a
+`false_positive` suggestion naming the stale probe. That failure is
+intentional. Update the affected scenarios and rerun:
 
 ```sh
 ./netdoc-sim run healthy
 ```
 
 Do not make the control tolerant. A second manually maintained endpoint table
-would drift for the same reason, so the authoritative values remain in
-`internal/diagnostic/checks.go` and the scenario files that claim them.
+would drift for the same reason, so the authoritative values remain in the
+production probe files and the scenario files that claim them.
 
 ## Scenario authoring
 
@@ -199,10 +199,17 @@ Some semantics are easy to get wrong even after reading a scenario:
 - `socks5` resolves on the client before CONNECT; `socks5h` sends the hostname
   to the proxy's resolver. The paired SOCKS scenarios prove the location with
   DNS and CONNECT evidence rather than inferring it from success.
-- TLS and QUIC fixtures generate private keys and certificates in memory. Only
-  public CA certificates are written inside the mode-`0700` run workspace;
-  trusted code points the netdoc process at the selected TLS CA and the
-  isolated QUIC trust directory without modifying a host trust store.
+- TLS, QUIC, and encrypted-DNS fixtures generate private keys and certificates
+  in memory. Only public CA certificates are written inside the mode-`0700` run
+  workspace; trusted code points the netdoc process at the selected TLS CA and
+  at the isolated fixed-endpoint trust directory the QUIC and encrypted-DNS
+  fixtures share, without modifying a host trust store.
+- The `encrypted_dns` fixture answers netdoc's encrypted-DNS row over both
+  transports from one static zone — RFC 8484 DoH on its port and RFC 7858 DoT
+  on 853 — and accepts the plain TCP connect the direct-egress row makes, which
+  is why the simulated internet serves it on 443 instead of a `tcp` sink. A node
+  that claims `1.1.1.1` without it makes every scenario report a blocked
+  encrypted resolver; a library test enforces that pairing.
 
 ### Timed faults
 
@@ -371,7 +378,7 @@ integration tests unless it exposes a reason to verify namespace behavior.
 - Topology is static unicast IPv4/IPv6 over simulator-owned bridges: no NAT,
   address autoconfiguration, dynamic routing, tunnels, ECMP, or VLAN model.
 - Simulator services are deliberately narrow probe fixtures, not general DNS,
-  HTTP, proxy, TLS, QUIC, or TCP implementations.
+  HTTP, proxy, TLS, QUIC, encrypted-DNS, or TCP implementations.
 - Timed faults reproduce requested content and ordering, not hard real-time
   application.
 - Campaigns are sequential fault-injection runs, not network-performance or

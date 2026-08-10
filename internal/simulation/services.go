@@ -158,6 +158,12 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			return nil, nil, err
 		}
 		return []io.Closer{server}, nil, nil
+	case ServiceEncryptedDNS:
+		server, err := startEncryptedDNSService(ctx, svc, addresses, trustDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []io.Closer{server}, nil, nil
 	}
 	return nil, nil, fmt.Errorf("unknown service type %q", svc.Type)
 }

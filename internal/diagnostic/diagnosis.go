@@ -30,13 +30,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	warn := func(id ProbeID) bool { return res[id].Status == StatusWarn }
 	timedOut := func(id ProbeID) bool { return res[id].timedOut }
 	has := func(id ProbeID) bool { _, ok := res[id]; return ok }
-	// directOK means direct egress genuinely worked: a Pass, or a Warn the
-	// probe produced itself. A Warn planted by downgradeEgress doesn't count —
-	// that's a Fail wearing a nicer hat.
-	directOK := func() bool {
-		r := res[ProbeInternet]
-		return functional(r.Status) && !r.downgraded
-	}
+	directOK := func() bool { return directEgressOK(res) }
 
 	if fail(ProbeIface) {
 		return "No usable network interface — the link is down.", VerdictNetwork
@@ -76,6 +70,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv
 		case directOK() && has(ProbeQUIC) && fail(ProbeQUIC):
 			return "Direct TCP/443 works, but the QUIC handshake over UDP/443 failed — applications can fall back to TCP, which may feel slower.", VerdictDegraded
+		case encryptedDNSBlocked(res):
+			return encryptedDNSSummary, VerdictDegraded
 		case warn(ProbeDNSPublic) && functional(res[ProbeDNS].Status):
 			return "Online, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", gv
 		case ip && dn && prxDown:
@@ -152,6 +148,8 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		return hp + " accepts TCP but sent no service banner.", VerdictDegraded
 	case has(ProbeQUIC) && fail(ProbeQUIC) && directOK():
 		return "The target and direct TCP/443 work, but the QUIC handshake over UDP/443 failed — applications can fall back to TCP, which may feel slower.", VerdictDegraded
+	case encryptedDNSBlocked(res):
+		return encryptedDNSSummary, VerdictDegraded
 	case fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded):
 		return "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded
 	case prxDown && directOK():
@@ -184,6 +182,47 @@ func functional(s Status) bool {
 	return s == StatusPass || s == StatusWarn
 }
 
+// encryptedDNSSummary is what the probes can actually support: plaintext
+// resolution demonstrably works and encrypted resolution demonstrably does not.
+// It stops there. Nothing here proves the network *forced* anything — an
+// operator's intent is not observable from a client, and neither is whatever a
+// browser did next about it.
+const encryptedDNSSummary = "Plain DNS works, but encrypted DNS could not complete a verified exchange — the resolver may be unavailable, or the network may be blocking or interfering with DoH/DoT."
+
+// directEgressOK means direct egress genuinely worked: a Pass, or a Warn the
+// probe produced itself. A Warn planted by downgradeEgress doesn't count —
+// that's a Fail wearing a nicer hat.
+func directEgressOK(res map[ProbeID]ProbeResult) bool {
+	r := res[ProbeInternet]
+	return functional(r.Status) && !r.downgraded
+}
+
+// encryptedDNSBlocked reports the one state that is specific to encrypted DNS:
+// the encrypted row failed while the network is otherwise carrying traffic and
+// plaintext resolution still works. When DNS is failing outright, or when there
+// is no working egress to reach any resolver, the encrypted row is a symptom
+// and not a diagnosis — so this deliberately says no.
+func encryptedDNSBlocked(res map[ProbeID]ProbeResult) bool {
+	encrypted, ok := res[ProbeDNSEncrypted]
+	if !ok || encrypted.Status != StatusFail {
+		return false
+	}
+	// Without working direct egress the encrypted resolver is simply one more
+	// address this machine cannot reach, and the path is the story. Naming
+	// encrypted DNS there would blame the transport for a broken route.
+	if !directEgressOK(res) {
+		return false
+	}
+	// Presence is checked per row rather than read off the map: an absent probe
+	// yields the zero ProbeResult, whose Status is StatusPass.
+	for _, id := range []ProbeID{ProbeDNS, ProbeDNSPublic} {
+		if plain, ok := res[id]; ok && functional(plain.Status) {
+			return true
+		}
+	}
+	return false
+}
+
 // Finalize applies the cross-probe passes that only make sense once every probe
 // has a result: results that read each other, rather than the network. Both
 // runners call it — RunAll on its way out, the ui scheduler when the last
@@ -192,6 +231,24 @@ func functional(s Status) bool {
 func Finalize(res map[ProbeID]ProbeResult) {
 	reconcileDNS(res)
 	downgradeEgress(res)
+	// After the downgrade, so "direct egress worked" means what the finished
+	// report says it means rather than what it said mid-pass.
+	reconcileEncryptedDNS(res)
+}
+
+// reconcileEncryptedDNS adds the one thing the encrypted row cannot know on its
+// own: whether plaintext resolution was working at the same time. That
+// comparison is the difference between "encrypted DNS specifically is not
+// getting through" and "DNS is broken", and it is as far as the evidence goes —
+// the row states what both probes observed and never what the network intended.
+func reconcileEncryptedDNS(res map[ProbeID]ProbeResult) {
+	if !encryptedDNSBlocked(res) {
+		return
+	}
+	encrypted := res[ProbeDNSEncrypted]
+	encrypted.Detail += " — plain DNS resolves at the same time, so this is specific to encrypted DNS"
+	encrypted.Fix = "encrypted DNS cannot complete a verified exchange while ordinary DNS works — the resolver may be unavailable, or a filter or middlebox may block or intercept DoH/DoT"
+	res[ProbeDNSEncrypted] = encrypted
 }
 
 // reconcileDNS compares the independently collected system and public answers.
