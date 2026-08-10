@@ -310,31 +310,31 @@ func TestBoundToolArgvIndependentPerCall(t *testing.T) {
 // End to end: the selection --iface resolved has to survive into the model's
 // own tool table and outlive a restart, which rebuilds it. Asserted without
 // naming a flag, since the table is built for the running GOOS — every
-// platform binds ping to one or the other spelling of the selection.
+// platform binds curl to one or the other spelling of the selection.
 func TestModelToolsCarryTheIfaceSelection(t *testing.T) {
 	tgt := mustTarget(t, "github.com")
 	sources := &diagnostic.SourceAddresses{IPv4: src4, IPv6: src6, Iface: "wg0"}
 	m := NewWithSources(tgt, sources, false, false, "", "test", diagnostic.DefaultPublicDNS).(model)
 
 	bound := func(m model) bool {
-		args, _, _ := toolByKey(t, m.tools, "p").Build(tgt, src4)
+		args, _, _ := toolByKey(t, m.tools, "c").Build(tgt, src4)
 		return slices.Contains(args, "wg0") || slices.Contains(args, src4.String())
 	}
 	if !bound(m) {
-		args, _, _ := toolByKey(t, m.tools, "p").Build(tgt, src4)
-		t.Fatalf("ping argv = %q, want it bound to the --iface selection", args)
+		args, _, _ := toolByKey(t, m.tools, "c").Build(tgt, src4)
+		t.Fatalf("curl argv = %q, want it bound to the --iface selection", args)
 	}
 	(&m).doRestart()
 	if !bound(m) {
-		args, _, _ := toolByKey(t, m.tools, "p").Build(tgt, src4)
-		t.Errorf("restart dropped the binding: ping argv = %q", args)
+		args, _, _ := toolByKey(t, m.tools, "c").Build(tgt, src4)
+		t.Errorf("restart dropped the binding: curl argv = %q", args)
 	}
 
 	// Without --iface the same table stays exactly as it was.
 	plain := NewWithSources(tgt, nil, false, false, "", "test", diagnostic.DefaultPublicDNS).(model)
 	if bound(plain) {
-		args, _, _ := toolByKey(t, plain.tools, "p").Build(tgt, src4)
-		t.Errorf("ping argv without --iface = %q, want no binding", args)
+		args, _, _ := toolByKey(t, plain.tools, "c").Build(tgt, src4)
+		t.Errorf("curl argv without --iface = %q, want no binding", args)
 	}
 }
 
