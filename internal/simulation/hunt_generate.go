@@ -26,7 +26,9 @@ const (
 	HuntMaxCaseNumber    = 999999
 )
 
-var huntBaseNames = []string{"dual-stack-healthy", "healthy", "healthy-routed-network"}
+// Sorted: validHuntBase binary-searches this list.
+var huntBaseNames = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
+	"socks5h-remote-dns-succeeds", "tls-valid"}
 
 // HuntBaseNames returns the deliberately small set of known-good controls the
 // first generator is allowed to mutate.

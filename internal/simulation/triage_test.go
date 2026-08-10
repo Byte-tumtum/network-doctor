@@ -20,14 +20,20 @@ func sampleFinding() HuntFinding {
 // The seeds are a published contract: a finding filed last night has to
 // reproduce tonight from the same scenario and seed.
 func TestTriageBaselineSeedsAreFixed(t *testing.T) {
-	want := map[string]int64{"healthy": 20260101, "healthy-routed-network": 20260102, "dual-stack-healthy": 20260103}
+	want := map[string]int64{"healthy": 20260101, "healthy-routed-network": 20260102, "dual-stack-healthy": 20260103,
+		"tls-valid": 20260104, "socks5h-remote-dns-succeeds": 20260105}
 	baselines := TriageBaselines()
 	if len(baselines) != len(want) {
 		t.Fatalf("baselines = %+v", baselines)
 	}
+	seen := make(map[string]int, len(want))
 	for _, baseline := range baselines {
+		seen[baseline.Scenario]++
 		if want[baseline.Scenario] != baseline.Seed {
 			t.Errorf("%s seed = %d, want %d", baseline.Scenario, baseline.Seed, want[baseline.Scenario])
+		}
+		if _, err := LibraryScenario(baseline.Scenario); err != nil {
+			t.Errorf("%s does not load: %v", baseline.Scenario, err)
 		}
 		if !validHuntBase(baseline.Scenario) {
 			t.Errorf("%s is not a hunt base", baseline.Scenario)
@@ -35,6 +41,11 @@ func TestTriageBaselineSeedsAreFixed(t *testing.T) {
 		got, ok := TriageBaselineFor(baseline.Scenario)
 		if !ok || got != baseline {
 			t.Errorf("TriageBaselineFor(%s) = %+v, %t", baseline.Scenario, got, ok)
+		}
+	}
+	for scenario, count := range seen {
+		if count != 1 {
+			t.Errorf("%s appears %d times, want exactly once", scenario, count)
 		}
 	}
 	if _, ok := TriageBaselineFor("broken-dns"); ok {

@@ -41,6 +41,8 @@ var triageBaselines = []TriageBaseline{
 	{Scenario: "healthy", Seed: 20260101},
 	{Scenario: "healthy-routed-network", Seed: 20260102},
 	{Scenario: "dual-stack-healthy", Seed: 20260103},
+	{Scenario: "tls-valid", Seed: 20260104},
+	{Scenario: "socks5h-remote-dns-succeeds", Seed: 20260105},
 }
 
 // TriageBaselines returns the fixed baseline scenarios and seeds.
