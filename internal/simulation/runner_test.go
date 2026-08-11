@@ -453,9 +453,10 @@ func TestRunDoesNotCopyTargetDiagnosisIntoReachabilityEvidence(t *testing.T) {
 
 // TestInternetFamilyProbesFollowNodeAddresses covers eligibility: which
 // families the simulator will dial at all. A family the node has no address
-// for is not probed and therefore has no observation to report — which is what
-// keeps a single-stack topology from reading as an outage in the family it
-// never had.
+// for is reported unavailable rather than dialed — which is what keeps a
+// single-stack topology from reading as an outage in the family it never had.
+// Both families are always listed, so an absent one is stated, not inferred
+// from a missing record.
 func TestInternetFamilyProbesFollowNodeAddresses(t *testing.T) {
 	v4 := Interface{Segment: "lan", IPv4: "10.78.1.10/24"}
 	v6 := Interface{Segment: "lan", IPv6: "2001:db8:77:1::10/64"}
@@ -465,24 +466,24 @@ func TestInternetFamilyProbesFollowNodeAddresses(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		node Node
-		want []string
+		want map[string]bool
 	}{
-		{"dual stack", Node{Interfaces: []Interface{dual}}, []string{"ipv4", "ipv6"}},
-		{"split interfaces", Node{Interfaces: []Interface{v4, v6}}, []string{"ipv4", "ipv6"}},
-		{"IPv4 only", Node{Interfaces: []Interface{v4}}, []string{"ipv4"}},
-		{"IPv6 only", Node{Interfaces: []Interface{v6}}, []string{"ipv6"}},
-		{"no addresses", Node{}, nil},
+		{"dual stack", Node{Interfaces: []Interface{dual}}, map[string]bool{"ipv4": true, "ipv6": true}},
+		{"split interfaces", Node{Interfaces: []Interface{v4, v6}}, map[string]bool{"ipv4": true, "ipv6": true}},
+		{"IPv4 only", Node{Interfaces: []Interface{v4}}, map[string]bool{"ipv4": true, "ipv6": false}},
+		{"IPv6 only", Node{Interfaces: []Interface{v6}}, map[string]bool{"ipv4": false, "ipv6": true}},
+		{"no addresses", Node{}, map[string]bool{"ipv4": false, "ipv6": false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var got []string
+			got := map[string]bool{}
 			for _, probe := range internetFamilyProbes(&tc.node) {
-				got = append(got, probe.family)
+				got[probe.family] = probe.available
 				if len(probe.endpoints) == 0 {
 					t.Errorf("family %s has no endpoint to dial", probe.family)
 				}
 			}
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("probed families = %v, want %v", got, tc.want)
+				t.Errorf("family availability = %v, want %v", got, tc.want)
 			}
 		})
 	}

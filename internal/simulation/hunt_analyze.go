@@ -233,29 +233,31 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 	return truth
 }
 
+// observedFamilyTruth reads the one measured record for this family and repeats
+// its state. It invents nothing: no record means no observation was taken, and
+// an unobserved family is unknown, not unavailable — only the holder-side probe
+// gets to say a family was absent. Two records leave no single answer.
 func observedFamilyTruth(report *Report, family string) string {
 	client := observedClient(report)
 	if client == "" {
 		return "unknown"
 	}
-	count, reachable := 0, false
-	for _, observation := range report.Evidence.Reachability {
-		if observation.From == client && observation.Family == family {
-			count++
-			reachable = observation.Reachable
+	state := "unknown"
+	for _, observation := range report.Evidence.FamilyReachability {
+		if observation.Node != client || observation.Family != family {
+			continue
+		}
+		if state != "unknown" {
+			return "unknown"
+		}
+		switch observation.State {
+		case FamilyStateReachable, FamilyStateUnreachable, FamilyStateUnavailable:
+			state = observation.State
+		default:
+			return "unknown"
 		}
 	}
-	switch count {
-	case 0:
-		return "unavailable"
-	case 1:
-		if reachable {
-			return "reachable"
-		}
-		return "unreachable"
-	default:
-		return "unknown"
-	}
+	return state
 }
 
 func observedClient(report *Report) string {
@@ -381,8 +383,8 @@ func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bo
 		!linkState(report, mutation.Node, mutation.Segment, false) ||
 		!linkState(report, mutation.Node, selected.Segment, true) ||
 		!routerForwardsIPv4(report, mutation.Node) ||
-		!reachabilityMatches(report, mutation.TargetNode, mutation.Family,
-			[]string{selected.Segment, selected.Via}, false) {
+		!familyReachabilityMatches(report, mutation.TargetNode, mutation.Family,
+			[]string{selected.Segment, selected.Via}, FamilyStateUnreachable) {
 		return false
 	}
 
@@ -394,7 +396,7 @@ func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bo
 			if alternate.Destination != "default" || alternate.Family != mutation.Family ||
 				alternate.Via == selected.Via || alternate.Segment == selected.Segment || alternate.Metric <= selected.Metric ||
 				!gatewayReachable(report, mutation.TargetNode, alternate) ||
-				!reachabilityMatches(report, mutation.TargetNode, "", []string{alternate.Segment, alternate.Via}, true) {
+				!reachabilityMatches(report, mutation.TargetNode, []string{alternate.Segment, alternate.Via}, true) {
 				continue
 			}
 			for _, gateway := range report.Topology {
@@ -445,9 +447,18 @@ func routerForwardsIPv4(report *Report, node string) bool {
 	return false
 }
 
-func reachabilityMatches(report *Report, from, family string, via []string, reachable bool) bool {
+func reachabilityMatches(report *Report, from string, via []string, reachable bool) bool {
 	for _, item := range report.Evidence.Reachability {
-		if item.From == from && item.Family == family && item.Reachable == reachable && slices.Equal(item.Via, via) {
+		if item.From == from && item.Family == "" && item.Reachable == reachable && slices.Equal(item.Via, via) {
+			return true
+		}
+	}
+	return false
+}
+
+func familyReachabilityMatches(report *Report, node, family string, via []string, state string) bool {
+	for _, item := range report.Evidence.FamilyReachability {
+		if item.Node == node && item.Family == family && item.State == state && slices.Equal(item.Via, via) {
 			return true
 		}
 	}

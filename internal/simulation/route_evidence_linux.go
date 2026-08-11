@@ -136,7 +136,7 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 			strings.Join([]string{b.Node, b.Destination, b.Family, b.Via, b.Segment, strconv.Itoa(b.Metric),
 				strconv.FormatBool(b.Selected), b.Source}, "\x00")
 	})
-	if err := e.observeInternetReachability(ctx, &out); err != nil {
+	if err := e.observeFamilyReachability(ctx, &out); err != nil {
 		return Evidence{}, err
 	}
 	if err := e.observeControlledTargetReachability(ctx, &out); err != nil {
@@ -150,14 +150,16 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 // times the endpoints of every family of every test node.
 const internetObservationTimeout = 2 * time.Second
 
-// observeInternetReachability dials the controlled Internet endpoints from
-// inside each node netdoc was run in, and records what it found. It runs after
-// the tests, so it is a point-in-time observation of the state the run finished
-// in — the same instant the route and neighbor evidence above describes.
+// observeFamilyReachability dials the controlled Internet endpoints from inside
+// each node netdoc was run in, and records what it found. It runs after the
+// tests, so it is a point-in-time observation of the state the run finished in
+// — the same instant the route and neighbor evidence above describes.
 //
 // Nothing here reads a diagnosis, a verdict or a scenario expectation. That is
-// the point: this evidence has to be able to contradict netdoc.
-func (e *netnsEnv) observeInternetReachability(ctx context.Context, out *Evidence) error {
+// the point: this evidence has to be able to contradict netdoc. The topology is
+// consulted for one thing only, whether the node has an address in the family
+// at all; every other outcome comes from the holder's connection attempt.
+func (e *netnsEnv) observeFamilyReachability(ctx context.Context, out *Evidence) error {
 	seen := map[string]bool{}
 	for _, test := range e.scenario.Tests {
 		if seen[test.Node] {
@@ -169,14 +171,19 @@ func (e *netnsEnv) observeInternetReachability(ctx context.Context, out *Evidenc
 			continue
 		}
 		for _, probe := range internetFamilyProbes(np.node) {
-			reachable, err := e.observeFamily(ctx, np, probe.endpoints)
-			if err != nil {
-				return fmt.Errorf("observe %s reachability from %s: %w", probe.family, test.Node, err)
+			item := FamilyReachabilityEvidence{Node: test.Node, Family: probe.family, State: FamilyStateUnavailable}
+			if probe.available {
+				reachable, err := e.observeFamily(ctx, np, probe.endpoints)
+				if err != nil {
+					return fmt.Errorf("observe %s reachability from %s: %w", probe.family, test.Node, err)
+				}
+				item.State = FamilyStateUnreachable
+				if reachable {
+					item.State = FamilyStateReachable
+				}
+				item.Target, item.Via = probe.target, selectedPath(out.Routes, test.Node, probe.family)
 			}
-			out.Reachability = append(out.Reachability, ReachabilityEvidence{
-				From: test.Node, To: probe.target, Family: probe.family,
-				Via: selectedPath(out.Routes, test.Node, probe.family), Reachable: reachable,
-			})
+			out.FamilyReachability = append(out.FamilyReachability, item)
 		}
 	}
 	return nil

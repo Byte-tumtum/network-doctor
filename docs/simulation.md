@@ -105,9 +105,16 @@ the node holder tries controlled endpoints from inside its own namespace until
 one answers. It reads no diagnosis, verdict, or scenario expectation, so this
 evidence can contradict netdoc — which is the point of having it. It is a
 point-in-time observation of the state the run finished in, so under a timed
-fault it describes that instant, not the whole run. A family the client carries
-no address for is not dialed and produces no record at all: untested is not the
-same as unreachable.
+fault it describes that instant, not the whole run.
+
+It lands in `family_reachability`, separately from the reachability records
+below, and carries one of three states per family: `reachable`, `unreachable`,
+or `unavailable`. A family the client carries no address for is `unavailable` —
+nothing was dialed, so no target or path is named, and untested is not the same
+as unreachable. Both families always get a record, so a family with no record
+means the measurement never ran; readers treat that as unknown rather than as
+an absent family. `unavailable` is also a word netdoc never uses, which is what
+keeps the two sides distinguishable in a report.
 
 Multipath scenarios also probe literal test targets when the address and TCP
 service are both simulator-owned, providing an independent alternate-path

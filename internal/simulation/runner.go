@@ -239,23 +239,24 @@ type familyProbe struct {
 	family    string
 	target    string
 	endpoints []string
+	// available reports whether the node carries an address in this family at
+	// all. That is the one thing the topology settles on its own, because it is
+	// a provisioning fact rather than a network fact.
+	available bool
 }
 
-// internetFamilyProbes lists the families worth observing from this node. A
-// family the node carries no address for is absent from the list rather than
-// present and unreachable: there is nothing to test, and a topology that never
-// had IPv6 is not a topology whose IPv6 went down. Presence alone decides
-// eligibility — whether the path works is settled by dialing it, not by
-// reading the topology.
+// internetFamilyProbes lists both address families with the provisioning fact
+// attached. A family the node carries no address for is reported unavailable
+// rather than dialed: there is nothing to test, and a topology that never had
+// IPv6 is not a topology whose IPv6 went down. Whether an available family
+// works is never read from here — it is settled by dialing it.
 func internetFamilyProbes(n *Node) []familyProbe {
-	var out []familyProbe
-	for _, probe := range []familyProbe{
+	out := []familyProbe{
 		{family: "ipv4", target: "IPv4 internet endpoints", endpoints: internetEndpoints4},
 		{family: "ipv6", target: "IPv6 internet endpoints", endpoints: internetEndpoints6},
-	} {
-		if n.hasFamily(probe.family) {
-			out = append(out, probe)
-		}
+	}
+	for i := range out {
+		out[i].available = n.hasFamily(out[i].family)
 	}
 	return out
 }

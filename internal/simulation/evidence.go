@@ -28,6 +28,8 @@ type Evidence struct {
 	Routes           []RouteEvidence           `json:"routes"`
 	Routers          []RouterEvidence          `json:"routers"`
 	Reachability     []ReachabilityEvidence    `json:"reachability"`
+	// FamilyReachability is measured, never derived. See its type comment.
+	FamilyReachability []FamilyReachabilityEvidence `json:"family_reachability"`
 }
 
 type PacketConditionEvidence struct {
@@ -81,6 +83,34 @@ type ReachabilityEvidence struct {
 	Family    string   `json:"family,omitempty"`
 	Via       []string `json:"via"`
 	Reachable bool     `json:"reachable"`
+}
+
+// Address family states a FamilyReachabilityEvidence can carry. Unavailable and
+// unreachable are deliberately distinct: a family the node was never given an
+// address in was not tested, which is not the same claim as a family that was
+// dialed and did not answer.
+const (
+	FamilyStateReachable   = "reachable"
+	FamilyStateUnreachable = "unreachable"
+	FamilyStateUnavailable = "unavailable"
+)
+
+// FamilyReachabilityEvidence is the simulator's own point-in-time answer to one
+// question: from inside this node's namespace, does a TCP connection to the
+// controlled endpoints of this address family complete?
+//
+// It is a state rather than a bool because there are three outcomes, and it is
+// its own type rather than a ReachabilityEvidence so that the only way to fill
+// it in is to dial. The single producer is the node holder, which never sees
+// netdoc's report; anything derived from a diagnosis, a scenario expectation or
+// a fault record belongs somewhere else. Absence of a record for a family is
+// not "unavailable" — it means no observation was taken at all.
+type FamilyReachabilityEvidence struct {
+	Node   string   `json:"node"`
+	Family string   `json:"family"`
+	Target string   `json:"target,omitempty"`
+	Via    []string `json:"via,omitempty"`
+	State  string   `json:"state"`
 }
 
 // DNSEvidence aggregates identical queries observed by a DNS service.
@@ -412,5 +442,6 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	out.Routes = []RouteEvidence{}
 	out.Routers = []RouterEvidence{}
 	out.Reachability = []ReachabilityEvidence{}
+	out.FamilyReachability = []FamilyReachabilityEvidence{}
 	return out
 }

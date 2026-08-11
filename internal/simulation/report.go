@@ -165,6 +165,9 @@ func (r *Report) finish() {
 	if r.Evidence.Reachability == nil {
 		r.Evidence.Reachability = []ReachabilityEvidence{}
 	}
+	if r.Evidence.FamilyReachability == nil {
+		r.Evidence.FamilyReachability = []FamilyReachabilityEvidence{}
+	}
 	if r.Error != "" || len(r.Cleanup.Errors) > 0 {
 		r.Result = ResultError
 		return
@@ -358,7 +361,8 @@ func (r *Report) WriteText(w io.Writer) {
 	}
 
 	if len(r.Evidence.DNS) > 0 || len(r.Evidence.DNSQueries) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 || len(r.Evidence.TCPResets) > 0 || len(r.Evidence.PacketConditions) > 0 ||
-		len(r.Evidence.Links) > 0 || len(r.Evidence.Routes) > 0 || len(r.Evidence.Routers) > 0 || len(r.Evidence.Reachability) > 0 {
+		len(r.Evidence.Links) > 0 || len(r.Evidence.Routes) > 0 || len(r.Evidence.Routers) > 0 || len(r.Evidence.Reachability) > 0 ||
+		len(r.Evidence.FamilyReachability) > 0 {
 		p("Structured evidence")
 		for _, e := range r.Evidence.Links {
 			p("  LINK  %-10s %-16s %-18s up=%t", e.Node, e.Segment, e.Address, e.Up)
@@ -384,6 +388,9 @@ func (r *Report) WriteText(w io.Writer) {
 		}
 		for _, e := range r.Evidence.Reachability {
 			p("  PATH  %-10s -> %-24s via %-32s %-4s reachable=%t", e.From, e.To, strings.Join(e.Via, " -> "), e.Family, e.Reachable)
+		}
+		for _, e := range r.Evidence.FamilyReachability {
+			p("  FAMILY %-10s %-4s %-12s via %s", e.Node, e.Family, e.State, strings.Join(e.Via, " -> "))
 		}
 		for _, e := range r.Evidence.DNS {
 			p("  DNS   %-10s from %-13s %-6s %-28s %-8s %s ×%d", e.Node, e.Source, e.QueryType, e.Name, e.Result, e.Service, e.Count)

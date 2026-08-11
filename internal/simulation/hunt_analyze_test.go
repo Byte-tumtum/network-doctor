@@ -44,32 +44,39 @@ func TestObservedTruthUsesServiceAndKernelEvidence(t *testing.T) {
 
 func boolPointer(value bool) *bool { return &value }
 
-func familyTruthReport(ipv4, ipv6 *bool) *Report {
+// familyTruthReport builds the measured record the holder would have written.
+// An empty state means the measurement was never taken, which is a different
+// report from one that recorded the family as unavailable.
+func familyTruthReport(ipv4, ipv6 string) *Report {
 	report := &Report{Topology: []NodeInfo{{Name: "client", Role: "client"}}}
-	if ipv4 != nil {
-		report.Evidence.Reachability = append(report.Evidence.Reachability,
-			ReachabilityEvidence{From: "client", Family: "ipv4", Reachable: *ipv4})
-	}
-	if ipv6 != nil {
-		report.Evidence.Reachability = append(report.Evidence.Reachability,
-			ReachabilityEvidence{From: "client", Family: "ipv6", Reachable: *ipv6})
+	for _, item := range []FamilyReachabilityEvidence{
+		{Node: "client", Family: "ipv4", State: ipv4},
+		{Node: "client", Family: "ipv6", State: ipv6},
+	} {
+		if item.State != "" {
+			report.Evidence.FamilyReachability = append(report.Evidence.FamilyReachability, item)
+		}
 	}
 	return report
 }
 
 func TestObservedTruthUsesIndependentFamilyReachability(t *testing.T) {
-	reachable, unreachable := true, false
 	for _, tc := range []struct {
 		name       string
-		ipv4, ipv6 *bool
+		ipv4, ipv6 string
 		want4      string
 		want6      string
 	}{
-		{"dual stack reachable", &reachable, &reachable, "reachable", "reachable"},
-		{"IPv4 broken", &unreachable, &reachable, "unreachable", "reachable"},
-		{"IPv6 broken", &reachable, &unreachable, "reachable", "unreachable"},
-		{"IPv4 only", &reachable, nil, "reachable", "unavailable"},
-		{"IPv6 only", nil, &reachable, "unavailable", "reachable"},
+		{"dual stack reachable", FamilyStateReachable, FamilyStateReachable, "reachable", "reachable"},
+		{"IPv4 broken", FamilyStateUnreachable, FamilyStateReachable, "unreachable", "reachable"},
+		{"IPv6 broken", FamilyStateReachable, FamilyStateUnreachable, "reachable", "unreachable"},
+		{"IPv4 only", FamilyStateReachable, FamilyStateUnavailable, "reachable", "unavailable"},
+		{"IPv6 only", FamilyStateUnavailable, FamilyStateReachable, "unavailable", "reachable"},
+		// An absent record is an absent measurement. Reading it as "unavailable"
+		// would let a probe that silently never ran look like a family the
+		// topology never had.
+		{"IPv6 never measured", FamilyStateReachable, "", "reachable", "unknown"},
+		{"nothing measured", "", "", "unknown", "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			truth := collectObservedTruth(huntManifest(), familyTruthReport(tc.ipv4, tc.ipv6))
@@ -78,28 +85,30 @@ func TestObservedTruthUsesIndependentFamilyReachability(t *testing.T) {
 			}
 		})
 	}
-	report := familyTruthReport(&reachable, nil)
+	report := familyTruthReport(FamilyStateReachable, FamilyStateUnavailable)
 	report.Topology = append(report.Topology, NodeInfo{Name: "router", Role: "router"})
+	report.Evidence.FamilyReachability = append(report.Evidence.FamilyReachability,
+		FamilyReachabilityEvidence{Node: "router", Family: "ipv4", State: FamilyStateUnreachable})
 	report.Evidence.Reachability = append(report.Evidence.Reachability,
-		ReachabilityEvidence{From: "router", Family: "ipv4", Reachable: false},
-		ReachabilityEvidence{From: "client", To: "target.test:443", Reachable: false})
+		ReachabilityEvidence{From: "client", To: "target.test:443", Reachable: false},
+		ReachabilityEvidence{From: "client", To: "IPv4 internet endpoints", Family: "ipv4", Reachable: false})
 	if got := collectObservedTruth(huntManifest(), report).IPv4; got != "reachable" {
 		t.Fatalf("non-family observation changed client IPv4 truth to %q", got)
 	}
 }
 
 func TestObservedTruthRejectsAmbiguousFamilyEvidence(t *testing.T) {
-	reachable := true
 	for _, tc := range []struct {
 		name        string
-		observation ReachabilityEvidence
+		observation FamilyReachabilityEvidence
 	}{
-		{"duplicate", ReachabilityEvidence{From: "client", Family: "ipv4", Reachable: true}},
-		{"conflicting duplicate", ReachabilityEvidence{From: "client", Family: "ipv4", Reachable: false}},
+		{"duplicate", FamilyReachabilityEvidence{Node: "client", Family: "ipv4", State: FamilyStateReachable}},
+		{"conflicting duplicate", FamilyReachabilityEvidence{Node: "client", Family: "ipv4", State: FamilyStateUnreachable}},
+		{"unknown state", FamilyReachabilityEvidence{Node: "client", Family: "ipv4", State: "probably"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			report := familyTruthReport(&reachable, nil)
-			report.Evidence.Reachability = append(report.Evidence.Reachability, tc.observation)
+			report := familyTruthReport(FamilyStateReachable, FamilyStateUnavailable)
+			report.Evidence.FamilyReachability = append(report.Evidence.FamilyReachability, tc.observation)
 			if got := collectObservedTruth(huntManifest(), report).IPv4; got != "unknown" {
 				t.Fatalf("ambiguous IPv4 truth = %q, want unknown", got)
 			}
@@ -108,9 +117,8 @@ func TestObservedTruthRejectsAmbiguousFamilyEvidence(t *testing.T) {
 }
 
 func TestObservedTruthFamilyReachabilityIgnoresDiagnosis(t *testing.T) {
-	reachable, unreachable := true, false
-	a := familyTruthReport(&unreachable, &reachable)
-	b := familyTruthReport(&unreachable, &reachable)
+	a := familyTruthReport(FamilyStateUnreachable, FamilyStateReachable)
+	b := familyTruthReport(FamilyStateUnreachable, FamilyStateReachable)
 	a.Tests = []TestOutcome{{Diagnosis: &Diagnosis{Checks: []DiagnosisCheck{{ID: "internet_tcp", Families: &DiagnosisFamilies{IPv4: "reachable", IPv6: "unreachable"}}}}}}
 	b.Tests = []TestOutcome{{Diagnosis: &Diagnosis{Checks: []DiagnosisCheck{{ID: "internet_tcp", Families: &DiagnosisFamilies{IPv4: "unreachable", IPv6: "reachable"}}}}}}
 	if gotA, gotB := collectObservedTruth(huntManifest(), a), collectObservedTruth(huntManifest(), b); !reflect.DeepEqual(gotA, gotB) {
@@ -438,7 +446,7 @@ func TestMutationObservedMatchesExactNetemDNSTimelineAndLinkEvidence(t *testing.
 }
 
 func preferredPathReport() Report {
-	unreachable, reachable := false, true
+	reachable := true
 	return Report{
 		Topology: []NodeInfo{
 			{Name: "client", Role: "client", Routes: []RouteInfo{
@@ -474,9 +482,11 @@ func preferredPathReport() Report {
 				{Node: "alternate-gateway", IPv4Forwarding: true},
 			},
 			Reachability: []ReachabilityEvidence{
-				{From: "client", To: "IPv4 internet endpoints", Family: "ipv4",
-					Via: []string{"preferred-lan", "10.79.1.1"}, Reachable: unreachable},
 				{From: "client", To: "9.9.9.9:80", Via: []string{"alternate-lan", "10.79.3.1"}, Reachable: reachable},
+			},
+			FamilyReachability: []FamilyReachabilityEvidence{
+				{Node: "client", Family: "ipv4", Target: "IPv4 internet endpoints",
+					Via: []string{"preferred-lan", "10.79.1.1"}, State: FamilyStateUnreachable},
 			},
 		},
 	}
@@ -510,27 +520,34 @@ func TestPreferredPathMutationObservedFromIndependentPathConsequence(t *testing.
 	nearMisses := map[string]func(*Report){
 		"alternate selected": func(report *Report) {
 			report.Evidence.Routes[0].Via, report.Evidence.Routes[0].Segment = "10.79.3.1", "alternate-lan"
-			report.Evidence.Reachability[0].Via = []string{"alternate-lan", "10.79.3.1"}
+			report.Evidence.FamilyReachability[0].Via = []string{"alternate-lan", "10.79.3.1"}
 		},
 		"wrong gateway": func(report *Report) {
 			report.Evidence.Routes[0].Via = "10.79.1.254"
-			report.Evidence.Reachability[0].Via[1] = "10.79.1.254"
+			report.Evidence.FamilyReachability[0].Via[1] = "10.79.1.254"
 		},
 		"wrong selected segment": func(report *Report) {
 			report.Evidence.Routes[0].Segment = "other-lan"
-			report.Evidence.Reachability[0].Via[0] = "other-lan"
+			report.Evidence.FamilyReachability[0].Via[0] = "other-lan"
 		},
-		"targeted link remains up":         func(report *Report) { report.Evidence.Links[1].Up = true },
-		"preferred path remains reachable": func(report *Report) { report.Evidence.Reachability[0].Reachable = true },
+		"targeted link remains up": func(report *Report) { report.Evidence.Links[1].Up = true },
+		"preferred path remains reachable": func(report *Report) {
+			report.Evidence.FamilyReachability[0].State = FamilyStateReachable
+		},
+		// A family the client never had is not a family whose preferred path
+		// just failed, so "unavailable" must not stand in for the consequence.
+		"preferred family unavailable": func(report *Report) {
+			report.Evidence.FamilyReachability[0].State = FamilyStateUnavailable
+		},
 		"alternate route absent": func(report *Report) {
 			report.Topology[0].Routes = report.Topology[0].Routes[:1]
 			report.Evidence.Routes = report.Evidence.Routes[:1]
-			report.Evidence.Reachability = report.Evidence.Reachability[:1]
+			report.Evidence.FamilyReachability = nil
 		},
-		"alternate transport unavailable": func(report *Report) { report.Evidence.Reachability[1].Reachable = false },
+		"alternate transport unavailable": func(report *Report) { report.Evidence.Reachability[0].Reachable = false },
 		"wrong family": func(report *Report) {
 			report.Evidence.Routes[0].Family = "ipv6"
-			report.Evidence.Reachability[0].Family = "ipv6"
+			report.Evidence.FamilyReachability[0].Family = "ipv6"
 		},
 	}
 	for name, change := range nearMisses {

@@ -136,13 +136,11 @@ func TestHealthyScenario(t *testing.T) {
 	if rep.Tests[0].FalsePositives != 0 {
 		t.Errorf("netdoc flagged %d things in a healthy network", rep.Tests[0].FalsePositives)
 	}
-	// This topology is IPv4 only. The simulator observes the family the client
-	// actually carries and stays silent about the one it does not have: an
-	// absent family is untested, which is not an observed IPv6 outage.
-	assertObservedFamily(t, rep, "ipv4", true)
-	if _, count := familyReachability(rep, "client", "ipv6"); count != 0 {
-		t.Errorf("single-stack topology produced %d IPv6 observations: %+v", count, rep.Evidence.Reachability)
-	}
+	// This topology is IPv4 only. The simulator dials the family the client
+	// actually carries and records the one it does not have as unavailable:
+	// untested is not an observed IPv6 outage, and it is not silence either.
+	assertObservedFamily(t, rep, "ipv4", FamilyStateReachable)
+	assertObservedFamily(t, rep, "ipv6", FamilyStateUnavailable)
 	assertCleanedUp(t, rep)
 }
 
@@ -1137,7 +1135,7 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 		t.Fatalf("baseline result = %s; tests=%+v suggestions=%+v", baseline.Result, baseline.Tests, baseline.Suggestions)
 	}
 	baseline4, count := familyReachability(baseline, "client", "ipv4")
-	if count != 1 || !baseline4.Reachable || !reflect.DeepEqual(baseline4.Via, []string{"preferred-lan", "10.79.1.1"}) {
+	if count != 1 || baseline4.State != FamilyStateReachable || !reflect.DeepEqual(baseline4.Via, []string{"preferred-lan", "10.79.1.1"}) {
 		t.Fatalf("baseline preferred reachability = %+v count=%d", baseline4, count)
 	}
 	if alternate := targetObservation(t, baseline); !alternate.Reachable ||
@@ -1161,7 +1159,7 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 	}
 	rep := run(t, mutated)
 	mutated4, count := familyReachability(rep, "client", "ipv4")
-	if count != 1 || mutated4.Reachable || !reflect.DeepEqual(mutated4.Via, baseline4.Via) {
+	if count != 1 || mutated4.State != FamilyStateUnreachable || !reflect.DeepEqual(mutated4.Via, baseline4.Via) {
 		t.Fatalf("mutated preferred reachability = %+v count=%d; baseline=%+v", mutated4, count, baseline4)
 	}
 	if alternate := targetObservation(t, rep); !alternate.Reachable ||
@@ -1182,8 +1180,8 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 	}
 	check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
 	findings := familyMismatchFindings(analyzeHuntCase(manifest, &rep, truth))
-	t.Logf("mutation=%+v baseline IPv4=%t via=%v mutated IPv4=%t via=%v diagnosis=%s/%s families=%+v mismatch_findings=%+v",
-		mutation, baseline4.Reachable, baseline4.Via, mutated4.Reachable, mutated4.Via,
+	t.Logf("mutation=%+v baseline IPv4=%s via=%v mutated IPv4=%s via=%v diagnosis=%s/%s families=%+v mismatch_findings=%+v",
+		mutation, baseline4.State, baseline4.Via, mutated4.State, mutated4.Via,
 		check.Status, check.Cause, check.Families, findings)
 	assertCleanedUp(t, baseline)
 	assertCleanedUp(t, rep)
@@ -1225,13 +1223,13 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 		}
 		return rep
 	}
-	observed := func(t *testing.T, rep Report, family string) ReachabilityEvidence {
+	observed := func(t *testing.T, rep Report, family string) FamilyReachabilityEvidence {
 		t.Helper()
 		item, count := familyReachability(rep, "client", family)
 		if count != 1 {
-			t.Fatalf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.Reachability)
+			t.Fatalf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.FamilyReachability)
 		}
-		if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.From != "client" || item.To != want || len(item.Via) == 0 {
+		if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.Node != "client" || item.Target != want || len(item.Via) == 0 {
 			t.Fatalf("%s observation = %+v, want client to %q over a selected path", family, item, want)
 		}
 		return item
@@ -1239,8 +1237,8 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 
 	baseline := run(t, control)
 	baseline4, baseline6 := observed(t, baseline, "ipv4"), observed(t, baseline, "ipv6")
-	if !baseline4.Reachable || !baseline6.Reachable {
-		t.Fatalf("dual-stack baseline = IPv4 %t, IPv6 %t; want both reachable", baseline4.Reachable, baseline6.Reachable)
+	if baseline4.State != FamilyStateReachable || baseline6.State != FamilyStateReachable {
+		t.Fatalf("dual-stack baseline = IPv4 %q, IPv6 %q; want both reachable", baseline4.State, baseline6.State)
 	}
 	baselineTruth := collectObservedTruth(GeneratedCaseManifest{}, &baseline)
 	baselineFingerprint := truthFingerprint(baselineTruth)
@@ -1265,7 +1263,7 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 		{id: "encrypted_dns.doh_invalid", ipv4: true, ipv6: true},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
-			if !baseline4.Reachable || !baseline6.Reachable {
+			if baseline4.State != FamilyStateReachable || baseline6.State != FamilyStateReachable {
 				t.Fatal("mutation has no reachable dual-stack baseline")
 			}
 			op := huntOperator(t, tc.id)
@@ -1298,14 +1296,13 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 
 			rep := run(t, mutated)
 			ipv4, ipv6 := observed(t, rep, "ipv4"), observed(t, rep, "ipv6")
-			if ipv4.Reachable != tc.ipv4 || ipv6.Reachable != tc.ipv6 {
-				t.Errorf("independent reachability after %s = IPv4 %t, IPv6 %t; want %t, %t",
-					tc.id, ipv4.Reachable, ipv6.Reachable, tc.ipv4, tc.ipv6)
+			want4, want6 := familyState(tc.ipv4), familyState(tc.ipv6)
+			if ipv4.State != want4 || ipv6.State != want6 {
+				t.Errorf("independent reachability after %s = IPv4 %q, IPv6 %q; want %q, %q",
+					tc.id, ipv4.State, ipv6.State, want4, want6)
 			}
 			if strings.HasPrefix(tc.id, "family.") {
 				truth := collectObservedTruth(GeneratedCaseManifest{}, &rep)
-				want4, want6 := map[bool]string{true: "reachable", false: "unreachable"}[tc.ipv4],
-					map[bool]string{true: "reachable", false: "unreachable"}[tc.ipv6]
 				if truth.IPv4 != want4 || truth.IPv6 != want6 {
 					t.Fatalf("truth after %s = IPv4 %q, IPv6 %q; want %q, %q", tc.id, truth.IPv4, truth.IPv6, want4, want6)
 				}
@@ -1729,7 +1726,8 @@ func TestDualStackHealthyScenario(t *testing.T) {
 	if before != after {
 		t.Errorf("host network state changed across dual-stack run\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-	assertDualStackScenario(t, rep, diagnostic.FamilyReachable, diagnostic.FamilyReachable, "")
+	assertDualStackScenario(t, rep, diagnostic.FamilyReachable, diagnostic.FamilyReachable, "",
+		FamilyStateReachable, FamilyStateReachable)
 	if !hasForwardingFamilies(rep, "gateway", true, true) {
 		t.Errorf("dual forwarding evidence = %+v", rep.Evidence.Routers)
 	}
@@ -1742,7 +1740,8 @@ func TestDualStackHealthyScenario(t *testing.T) {
 func TestIPv4WorksIPv6BrokenScenario(t *testing.T) {
 	requireBackend(t)
 	rep := runScenario(t, "ipv4-works-ipv6-broken")
-	assertDualStackScenario(t, rep, diagnostic.FamilyReachable, diagnostic.FamilyUnreachable, diagnostic.FamilyCauseIPv6Unreachable)
+	assertDualStackScenario(t, rep, diagnostic.FamilyReachable, diagnostic.FamilyUnreachable, diagnostic.FamilyCauseIPv6Unreachable,
+		FamilyStateReachable, FamilyStateUnreachable)
 	if len(rep.Faults) != 1 || rep.Faults[0].Family != "ipv6" {
 		t.Errorf("IPv6 fault evidence = %+v", rep.Faults)
 	}
@@ -1751,10 +1750,104 @@ func TestIPv4WorksIPv6BrokenScenario(t *testing.T) {
 func TestIPv6WorksIPv4BrokenScenario(t *testing.T) {
 	requireBackend(t)
 	rep := runScenario(t, "ipv6-works-ipv4-broken")
-	assertDualStackScenario(t, rep, diagnostic.FamilyUnreachable, diagnostic.FamilyReachable, diagnostic.FamilyCauseIPv4Unreachable)
+	assertDualStackScenario(t, rep, diagnostic.FamilyUnreachable, diagnostic.FamilyReachable, diagnostic.FamilyCauseIPv4Unreachable,
+		FamilyStateUnreachable, FamilyStateReachable)
 	if len(rep.Faults) != 1 || rep.Faults[0].Family != "ipv4" {
 		t.Errorf("IPv4 fault evidence = %+v", rep.Faults)
 	}
+}
+
+// ipv6OnlyScenario is a routed IPv6-only client: two segments, a forwarding
+// router in between, and no IPv4 anywhere. It exists to separate the two states
+// a broken family and an absent family would otherwise share. It lives here
+// rather than in the shipped library because the assertion is about the
+// simulator's own measurement, not about a diagnosis worth pinning.
+const ipv6OnlyScenario = `name: ipv6-only-client
+description: A routed IPv6-only client with no IPv4 address, route, or record.
+topology:
+  segments:
+    - {name: client-lan, ipv6: "2001:db8:76:1::/64"}
+    - {name: upstream, ipv6: "2001:db8:76:2::/64"}
+  nodes:
+    - name: client
+      role: client
+      resolver: "2001:db8:76:1::53"
+      interfaces:
+        - {segment: client-lan, ipv6: "2001:db8:76:1::10/64"}
+    - name: resolver
+      interfaces:
+        - {segment: client-lan, ipv6: "2001:db8:76:1::53/64"}
+      services:
+        - name: v6-resolver
+          type: dns
+          records:
+            - {name: v6-target.test, address: "2001:db8:76:2::20"}
+            - {name: connectivitycheck.gstatic.com, address: "2001:db8:76:2::20"}
+    - name: gateway
+      role: router
+      interfaces:
+        - {segment: client-lan, ipv6: "2001:db8:76:1::1/64"}
+        - {segment: upstream, ipv6: "2001:db8:76:2::1/64"}
+    - name: target
+      interfaces:
+        - {segment: upstream, ipv6: "2001:db8:76:2::20/64"}
+      aliases: ["2606:4700:4700::1111", "2001:4860:4860::8888"]
+      services:
+        - {name: v6-http, type: http, port: 80}
+        - {name: v6-internet, type: http, port: 443}
+  routes:
+    - {node: client, destination: "::/0", via: "2001:db8:76:1::1"}
+    - {node: gateway, destination: "2606:4700:4700::1111/128", via: "2001:db8:76:2::20"}
+    - {node: gateway, destination: "2001:4860:4860::8888/128", via: "2001:db8:76:2::20"}
+    - {node: target, destination: "2001:db8:76:1::/64", via: "2001:db8:76:2::1"}
+tests:
+  - {name: IPv6-only client reaches its target, node: client, target: "v6-target.test:80"}
+expect:
+  checks:
+    - {id: iface, status: PASS}
+`
+
+// TestIPv6OnlyClientSeparatesUnavailableFromUnreachable is the case that fails
+// if the two states are ever collapsed. The client has no IPv4 address at all,
+// so IPv4 is unavailable — nothing was dialed, and no claim is made about a
+// path that does not exist. IPv6 is reachable across a router, so the same run
+// also shows the measurement is not merely "the neighbor answered".
+//
+// It doubles as the anti-circularity check: netdoc's family vocabulary has only
+// reachable and unreachable, so an "unavailable" state cannot have come from a
+// diagnosis, and whatever netdoc concluded about IPv4 here is required to be
+// something else.
+func TestIPv6OnlyClientSeparatesUnavailableFromUnreachable(t *testing.T) {
+	requireBackend(t)
+	path := filepath.Join(t.TempDir(), "ipv6-only-client.yaml")
+	if err := os.WriteFile(path, []byte(ipv6OnlyScenario), 0o600); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+	rep := runScenario(t, path)
+	if rep.Error != "" || !rep.Cleanup.Done {
+		t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
+	}
+	assertObservedFamily(t, rep, "ipv4", FamilyStateUnavailable)
+	assertObservedFamily(t, rep, "ipv6", FamilyStateReachable)
+
+	// The IPv6 record has to name the routed path, not a directly connected
+	// one, or "reachable" would only mean the client-lan gateway answered.
+	item, _ := familyReachability(rep, "client", "ipv6")
+	if !reflect.DeepEqual(item.Via, []string{"client-lan", "2001:db8:76:1::1"}) {
+		t.Errorf("IPv6 observation path = %v, want the routed client-lan gateway", item.Via)
+	}
+
+	truth := collectObservedTruth(GeneratedCaseManifest{}, &rep)
+	if truth.IPv4 != "unavailable" || truth.IPv6 != "reachable" {
+		t.Errorf("truth = IPv4 %q, IPv6 %q; want unavailable, reachable", truth.IPv4, truth.IPv6)
+	}
+	check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
+	if check.Families != nil && check.Families.IPv4 == FamilyStateUnavailable {
+		t.Fatalf("netdoc published an %q family, so the simulator state could have been copied from it: %+v",
+			FamilyStateUnavailable, check.Families)
+	}
+	t.Logf("simulator IPv4=%s IPv6=%s; netdoc families=%+v", truth.IPv4, truth.IPv6, check.Families)
+	assertCleanedUp(t, rep)
 }
 
 // TestFamilyReachabilityIgnoresScenarioExpectations proves the observation is
@@ -1785,11 +1878,11 @@ func TestFamilyReachabilityIgnoresScenarioExpectations(t *testing.T) {
 	if rep.Result == ResultPass {
 		t.Errorf("an expectation that contradicts the injected fault was graded a pass: %+v", rep.Tests)
 	}
-	assertObservedFamily(t, rep, "ipv4", true)
-	assertObservedFamily(t, rep, "ipv6", false)
+	assertObservedFamily(t, rep, "ipv4", FamilyStateReachable)
+	assertObservedFamily(t, rep, "ipv6", FamilyStateUnreachable)
 }
 
-func assertDualStackScenario(t *testing.T, rep Report, ipv4, ipv6, cause string) {
+func assertDualStackScenario(t *testing.T, rep Report, ipv4, ipv6, cause, observed4, observed6 string) {
 	t.Helper()
 	if rep.Result != ResultPass {
 		t.Fatalf("result = %s error=%q tests=%+v suggestions=%+v evidence=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions, rep.Evidence)
@@ -1808,8 +1901,11 @@ func assertDualStackScenario(t *testing.T, rep Report, ipv4, ipv6, cause string)
 	if !hasDNSQueryType(rep, dnsName, "A") || !hasDNSQueryType(rep, dnsName, "AAAA") {
 		t.Errorf("A/AAAA query evidence = %+v", rep.Evidence.DNS)
 	}
-	assertObservedFamily(t, rep, "ipv4", ipv4 == diagnostic.FamilyReachable)
-	assertObservedFamily(t, rep, "ipv6", ipv6 == diagnostic.FamilyReachable)
+	// The wanted simulator states are spelled out rather than derived from the
+	// wanted diagnosis: the two sides have to be able to disagree, so the test
+	// must not compute one from the other.
+	assertObservedFamily(t, rep, "ipv4", observed4)
+	assertObservedFamily(t, rep, "ipv6", observed6)
 	if rep.Tests[0].FalsePositives != 0 || rep.Tests[0].FalseNegatives != 0 {
 		t.Errorf("comparison fp=%d fn=%d", rep.Tests[0].FalsePositives, rep.Tests[0].FalseNegatives)
 	}
@@ -1982,11 +2078,21 @@ func hasDNSQueryType(rep Report, name, queryType string) bool {
 // address family from one node, and how many such observations it made. Exactly
 // one is the contract: a family is either eligible and observed once, or absent
 // from the topology and not observed at all.
-func familyReachability(rep Report, node, family string) (ReachabilityEvidence, int) {
-	var found ReachabilityEvidence
+// familyState names the state a reachable/unreachable expectation stands for.
+// Unavailable has no boolean spelling on purpose: it is not an outcome a probe
+// can return.
+func familyState(reachable bool) string {
+	if reachable {
+		return FamilyStateReachable
+	}
+	return FamilyStateUnreachable
+}
+
+func familyReachability(rep Report, node, family string) (FamilyReachabilityEvidence, int) {
+	var found FamilyReachabilityEvidence
 	count := 0
-	for _, item := range rep.Evidence.Reachability {
-		if item.From == node && item.Family == family {
+	for _, item := range rep.Evidence.FamilyReachability {
+		if item.Node == node && item.Family == family {
 			found, count = item, count+1
 		}
 	}
@@ -1995,19 +2101,29 @@ func familyReachability(rep Report, node, family string) (ReachabilityEvidence, 
 
 // assertObservedFamily checks the simulator's own observation, which is
 // collected by dialing the controlled endpoints from inside the client
-// namespace and never reads netdoc's verdict.
-func assertObservedFamily(t *testing.T, rep Report, family string, reachable bool) {
+// namespace and never reads netdoc's verdict. Every family is expected to have
+// exactly one record, including an unavailable one: a family with no record at
+// all means the measurement never ran, which no caller should accept as an
+// answer.
+func assertObservedFamily(t *testing.T, rep Report, family, state string) {
 	t.Helper()
 	item, count := familyReachability(rep, "client", family)
 	if count != 1 {
-		t.Errorf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.Reachability)
+		t.Errorf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.FamilyReachability)
 		return
 	}
-	if item.Reachable != reachable {
-		t.Errorf("simulator observed %s reachable=%t, want %t: %+v", family, item.Reachable, reachable, item)
+	if item.State != state {
+		t.Errorf("simulator observed %s %q, want %q: %+v", family, item.State, state, item)
 	}
-	if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.To != want {
-		t.Errorf("%s observation names %q, want %q", family, item.To, want)
+	if item.State == FamilyStateUnavailable {
+		// Nothing was dialed, so there is no endpoint and no path to name.
+		if item.Target != "" || len(item.Via) != 0 {
+			t.Errorf("unavailable %s observation claims a dialed path: %+v", family, item)
+		}
+		return
+	}
+	if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.Target != want {
+		t.Errorf("%s observation names %q, want %q", family, item.Target, want)
 	}
 	if len(item.Via) == 0 {
 		t.Errorf("%s observation records no selected path: %+v", family, item)
