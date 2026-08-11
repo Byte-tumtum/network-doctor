@@ -29,11 +29,16 @@ go run . github.com
 
 The code is split by responsibility:
 
-- `main.go` owns CLI parsing, process I/O, and application startup.
-- `internal/diagnostic` owns targets, probes, and verdict logic.
-- `internal/ui` owns Bubble Tea interaction, rendering, and tool jobs.
-- `internal/textsafe` sanitizes remote and subprocess output.
+- `main.go` owns CLI arguments, process I/O, and application startup.
+- `internal/diagnostic` owns target parsing, native probes, per-OS route/SSID lookups, and verdict logic without depending on terminal presentation.
+- `internal/ui` owns Bubble Tea state, rendering, and tool jobs.
+- `internal/textsafe` sanitizes untrusted remote and subprocess text shared by both layers.
 - `internal/simulation` + `cmd/netdoc-sim` build virtual networks to test the diagnosis engine against; nothing here ships in the `netdoc` binary.
+
+The UI depends on diagnostics; diagnostics do not depend on the UI. Add network
+semantics under `internal/diagnostic`, and interaction or rendering behavior
+under `internal/ui`. The simulator depends on `internal/diagnostic` for probe
+ids and target parsing, and on nothing in `internal/ui`.
 
 Keep network semantics independent of the UI. Put OS-specific behavior in
 build-tagged or platform-suffixed files, keep probes unprivileged and bounded,

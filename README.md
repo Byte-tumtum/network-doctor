@@ -453,15 +453,8 @@ tests, and limitations.
 
 ## Development
 
-The code is split by responsibility:
-
-- `main.go` owns CLI arguments, process I/O, application startup.
-- `internal/diagnostic` owns target parsing, native probes, per-OS route/SSID lookups, verdict logic without depending on terminal presentation.
-- `internal/ui` owns Bubble Tea state, rendering, tool jobs.
-- `internal/textsafe` sanitizes untrusted remote and subprocess text shared by both layers.
-- `internal/simulation` + `cmd/netdoc-sim` build virtual networks to test the diagnosis engine against; nothing here ships in the `netdoc` binary.
-
-The UI depends on diagnostics; diagnostics do not depend on the UI. Add network semantics under `internal/diagnostic`, and interaction or rendering behavior under `internal/ui`. The simulator depends on `internal/diagnostic` for probe ids and target parsing, and on nothing in `internal/ui`.
+The package layout and the dependency rules between the packages are documented
+in [CONTRIBUTING.md](CONTRIBUTING.md#development).
 
 ## License
 
