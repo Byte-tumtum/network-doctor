@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1187,6 +1188,133 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// TestFamilyDropMutationsMoveHolderSideObservation validates the family oracle
+// on its own, before any hunt analysis is allowed to depend on it. It asserts
+// two layers and nothing else: the raw observation the client holder produced by
+// dialing the controlled endpoints from inside its own namespace, and the truth
+// derived from it. No finding, no verdict and no expectation row is consulted,
+// so a failure here is an oracle failure rather than an analysis failure.
+func TestFamilyDropMutationsMoveHolderSideObservation(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	control := cloneScenario(loadHuntBase(t, "dual-stack-healthy"))
+	canonicalScenarioInput(control)
+	if err := control.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// truthFamilies reads the two derived values without letting a test name a
+	// family in one layer and check the other, which is how a swap hides.
+	truthFamilies := func(truth ObservedTruth) map[string]string {
+		return map[string]string{"ipv4": truth.IPv4, "ipv6": truth.IPv6}
+	}
+
+	baseline := runScenarioDefinition(t, sim, netdoc, control)
+	for _, family := range []string{"ipv4", "ipv6"} {
+		if item := clientFamilyObservation(t, baseline, family); item.State != FamilyStateReachable {
+			t.Fatalf("healthy dual-stack %s observation = %q, want %q", family, item.State, FamilyStateReachable)
+		}
+	}
+	baselineTruth := truthFamilies(collectObservedTruth(GeneratedCaseManifest{}, &baseline))
+	if baselineTruth["ipv4"] != FamilyStateReachable || baselineTruth["ipv6"] != FamilyStateReachable {
+		t.Fatalf("healthy dual-stack truth = %v, want both %q", baselineTruth, FamilyStateReachable)
+	}
+	assertCleanedUp(t, baseline)
+
+	for _, tc := range []struct{ id, dropped, intact string }{
+		{id: "family.ipv4_drop", dropped: "ipv4", intact: "ipv6"},
+		{id: "family.ipv6_drop", dropped: "ipv6", intact: "ipv4"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			op := huntOperator(t, tc.id)
+			if !op.applicable(control) {
+				t.Fatal("production applicability predicate rejected the dual-stack baseline")
+			}
+			mutation, err := op.generate(newTestRNG(), control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = op.id
+			if mutation.Family != tc.dropped {
+				t.Fatalf("%s generated family %q, want %q", tc.id, mutation.Family, tc.dropped)
+			}
+			mutated := cloneScenario(control)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			mutated.Name = "oracle-" + strings.ReplaceAll(tc.id, ".", "-")
+			if err := mutated.Validate(); err != nil {
+				t.Fatal(err)
+			}
+
+			rep := runScenarioDefinition(t, sim, netdoc, mutated)
+			// A generator that edits metadata without reaching the kernel would
+			// leave both families reachable below; this says so directly.
+			applied := false
+			for _, fault := range rep.Faults {
+				if fault.Type == FaultDrop && fault.Node == mutation.Node && fault.Family == tc.dropped &&
+					slices.Contains(fault.Command, "nfproto") {
+					applied = true
+				}
+			}
+			if !applied {
+				t.Fatalf("%s applied no %s drop rule at %s: %+v", tc.id, tc.dropped, mutation.Node, rep.Faults)
+			}
+
+			// The dropped family was dialed and refused. Unavailable would mean
+			// the client lost its address in that family, which this mutation
+			// does not do, and a missing record would mean nothing was measured.
+			dropped := clientFamilyObservation(t, rep, tc.dropped)
+			if dropped.State != FamilyStateUnreachable {
+				t.Errorf("%s observation after %s = %q, want %q", tc.dropped, tc.id, dropped.State, FamilyStateUnreachable)
+			}
+			if intact := clientFamilyObservation(t, rep, tc.intact); intact.State != FamilyStateReachable {
+				t.Errorf("%s observation after %s = %q, want %q (the topology still carries it)",
+					tc.intact, tc.id, intact.State, FamilyStateReachable)
+			}
+
+			truth := collectObservedTruth(GeneratedCaseManifest{}, &rep)
+			got := truthFamilies(truth)
+			if got[tc.dropped] != FamilyStateUnreachable || got[tc.intact] != FamilyStateReachable {
+				t.Fatalf("truth after %s = %v, want %s %q and %s %q",
+					tc.id, got, tc.dropped, FamilyStateUnreachable, tc.intact, FamilyStateReachable)
+			}
+
+			// Rewrite what netdoc concluded, leaving the holder's observation
+			// alone. Truth measured inside the namespace cannot move; truth
+			// copied out of the diagnosis would flip to reachable.
+			if fabricated := truthFamilies(collectObservedTruth(GeneratedCaseManifest{},
+				claimingFamilies(rep, FamilyStateReachable, FamilyStateReachable))); !reflect.DeepEqual(fabricated, got) {
+				t.Fatalf("%s truth followed a substituted diagnosis: %v, want the observed %v", tc.id, fabricated, got)
+			}
+			t.Logf("%s observed %s=%s %s=%s over %v", tc.id, tc.dropped, dropped.State, tc.intact,
+				got[tc.intact], dropped.Via)
+			assertCleanedUp(t, rep)
+		})
+	}
+}
+
+// claimingFamilies copies a report with netdoc's internet check rewritten to
+// claim these two family states, so a caller can prove what does not read it.
+func claimingFamilies(rep Report, ipv4, ipv6 string) *Report {
+	out := rep
+	out.Tests = append([]TestOutcome(nil), rep.Tests...)
+	for i := range out.Tests {
+		if out.Tests[i].Diagnosis == nil {
+			continue
+		}
+		diagnosis := *out.Tests[i].Diagnosis
+		diagnosis.Checks = append([]DiagnosisCheck(nil), diagnosis.Checks...)
+		for c := range diagnosis.Checks {
+			if diagnosis.Checks[c].ID == string(diagnostic.ProbeInternet) {
+				diagnosis.Checks[c].Families = &DiagnosisFamilies{IPv4: ipv4, IPv6: ipv6}
+			}
+		}
+		out.Tests[i].Diagnosis = &diagnosis
+	}
+	return &out
+}
+
 func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 	requireBackend(t)
 	netdoc, sim := buildBinaries(t)
@@ -1198,41 +1326,11 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 	}
 	run := func(t *testing.T, scenario *Scenario) Report {
 		t.Helper()
-		definition := cloneScenario(scenario)
-		canonicalScenarioInput(definition)
-		blob, err := yaml.Marshal(definition)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(t.TempDir(), "mutation.yaml")
-		if err := os.WriteFile(path, blob, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc)
-		out, err := cmd.Output()
-		var exit *exec.ExitError
-		if err != nil && !asExitError(err, &exit) {
-			t.Fatalf("run mutation: %v", err)
-		}
-		var rep Report
-		if err := json.Unmarshal(out, &rep); err != nil {
-			t.Fatalf("mutation report is not JSON: %v: %s", err, out)
-		}
-		if rep.Error != "" || !rep.Cleanup.Done {
-			t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
-		}
-		return rep
+		return runScenarioDefinition(t, sim, netdoc, scenario)
 	}
 	observed := func(t *testing.T, rep Report, family string) FamilyReachabilityEvidence {
 		t.Helper()
-		item, count := familyReachability(rep, "client", family)
-		if count != 1 {
-			t.Fatalf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.FamilyReachability)
-		}
-		if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.Node != "client" || item.Target != want || len(item.Via) == 0 {
-			t.Fatalf("%s observation = %+v, want client to %q over a selected path", family, item, want)
-		}
-		return item
+		return clientFamilyObservation(t, rep, family)
 	}
 
 	baseline := run(t, control)
@@ -2086,6 +2184,52 @@ func familyState(reachable bool) string {
 		return FamilyStateReachable
 	}
 	return FamilyStateUnreachable
+}
+
+// runScenarioDefinition runs an in-memory scenario end to end through the real
+// simulator binary, the same way the CLI does, and returns its report.
+func runScenarioDefinition(t *testing.T, sim, netdoc string, scenario *Scenario) Report {
+	t.Helper()
+	definition := cloneScenario(scenario)
+	canonicalScenarioInput(definition)
+	blob, err := yaml.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "mutation.yaml")
+	if err := os.WriteFile(path, blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc)
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if err != nil && !asExitError(err, &exit) {
+		t.Fatalf("run mutation: %v", err)
+	}
+	var rep Report
+	if err := json.Unmarshal(out, &rep); err != nil {
+		t.Fatalf("mutation report is not JSON: %v: %s", err, out)
+	}
+	if rep.Error != "" || !rep.Cleanup.Done {
+		t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
+	}
+	return rep
+}
+
+// clientFamilyObservation returns the client's single holder-side answer for one
+// address family. Exactly one record is required on purpose: a family with no
+// record was never dialed, and no assertion may let that absence stand in for a
+// measured state.
+func clientFamilyObservation(t *testing.T, rep Report, family string) FamilyReachabilityEvidence {
+	t.Helper()
+	item, count := familyReachability(rep, "client", family)
+	if count != 1 {
+		t.Fatalf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.FamilyReachability)
+	}
+	if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.Node != "client" || item.Target != want || len(item.Via) == 0 {
+		t.Fatalf("%s observation = %+v, want client to %q over a selected path", family, item, want)
+	}
+	return item
 }
 
 func familyReachability(rep Report, node, family string) (FamilyReachabilityEvidence, int) {
