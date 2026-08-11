@@ -2,8 +2,10 @@ package simulation
 
 import (
 	"net/http"
+	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
@@ -35,6 +37,34 @@ func refusedProxyEvidence() Evidence {
 func droppedQUICEvidence() Evidence {
 	return Evidence{PacketDrops: []PacketDropEvidence{{Node: "target", Protocol: "udp", Port: 443,
 		Direction: DirectionInbound, Packets: 4}}}
+}
+
+func resetTCPEvidence() Evidence {
+	return Evidence{TCPResets: []TCPResetEvidence{{Node: "target", Service: "http-target", Event: "reset",
+		Result: "connection_reset", Count: 1}}}
+}
+
+func invalidDoHEvidence() Evidence {
+	return Evidence{ServiceReplies: []ServiceReplyEvidence{{Node: "resolver", Service: encryptedDNSProbeService,
+		Type: ServiceEncryptedDNS, Port: 443, Result: DoHResponseInvalid, Count: 1}}}
+}
+
+func http503Evidence() Evidence {
+	return Evidence{ServiceReplies: []ServiceReplyEvidence{{Node: "target", Type: ServiceHTTP, Port: 80,
+		Status: http.StatusServiceUnavailable, Result: replyResponded, Count: 1}}}
+}
+
+// servedDNSEvidence is one query a client really sent and the answer the
+// resolver really gave it, which is a different record from the scheduler's
+// note that the resolver was moved into that state.
+func servedDNSEvidence(service, outcome string) Evidence {
+	return Evidence{DNSQueries: []DNSQueryEvidence{{Node: "resolver", Service: service, Name: "example.com.",
+		QueryType: "A", Sequence: 1, ActualOutcome: outcome}}}
+}
+
+func appliedDNSFault(service, outcome string, offset time.Duration) []FaultEventEvidence {
+	return []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledDNS, Service: service,
+		Outcome: outcome, Offset: offset}, Result: EventApplied}}
 }
 
 func unrecognizedConditions(findings []HuntCaseFinding) []string {
@@ -472,12 +502,13 @@ func TestHuntOracleWithoutAClientDiagnosis(t *testing.T) {
 func TestHuntOracleClaimsNothingAboutUndiagnosedFaults(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
+		mutation GeneratedMutation
 		evidence Evidence
 	}{
-		{"HTTP 503", Evidence{ServiceReplies: []ServiceReplyEvidence{{Node: "target", Type: ServiceHTTP,
-			Port: 80, Status: http.StatusServiceUnavailable, Result: replyResponded, Count: 1}}}},
-		{"invalid DoH while DoT resolves", Evidence{ServiceReplies: []ServiceReplyEvidence{{Node: "resolver",
-			Service: "doh", Type: ServiceEncryptedDNS, Result: DoHResponseInvalid, Count: 1}}}},
+		{"HTTP 503", GeneratedMutation{ID: "http.status_503", Node: "target", TargetPort: 80,
+			Status: http.StatusServiceUnavailable}, http503Evidence()},
+		{"invalid DoH while DoT resolves", GeneratedMutation{ID: "encrypted_dns.doh_invalid", Node: "resolver",
+			Service: encryptedDNSProbeService}, invalidDoHEvidence()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			report := oracleReport(oracleDiagnosis(DiagnosisCheck{ID: "http", Status: "PASS"},
@@ -485,6 +516,376 @@ func TestHuntOracleClaimsNothingAboutUndiagnosedFaults(t *testing.T) {
 			if got := observedConditions(report.Evidence, ObservedTruth{}); len(got) != 0 {
 				t.Fatalf("a fault netdoc does not diagnose became an expectation: %v", got)
 			}
+			// The fault really did reach the wire — this is the observed case,
+			// not the unobserved one — and it still accuses nobody.
+			manifest := huntManifest(tc.mutation)
+			truth := collectObservedTruth(manifest, report)
+			if !slices.Equal(truth.ObservedFaults, []string{tc.mutation.ID}) {
+				t.Fatalf("observed faults = %v, want %q", truth.ObservedFaults, tc.mutation.ID)
+			}
+			for _, finding := range analyzeHuntCase(manifest, report, truth) {
+				if finding.Category == FindingFalseNegative {
+					t.Fatalf("an undiagnosed fault produced %s", finding.Code)
+				}
+			}
 		})
+	}
+}
+
+// scopedFamilyCase is one mutation family's observation contract: the run that
+// proves the fault reached somebody, the fully scoped manifest entry that owns
+// it, and the manifest entries that left a scope key blank. Every blanked entry
+// is paired with the same genuine evidence, so the only thing under test is
+// whether an unanswerable question can confirm itself.
+type scopedFamilyCase struct {
+	name     string
+	report   Report
+	mutation GeneratedMutation
+	blanked  []GeneratedMutation
+}
+
+// TestMutationScopeIsRequiredForEveryFamily extends the scope rule past the
+// three families the condition oracle also asks about. A manifest that does not
+// say where its effect belongs establishes nothing, and a blank key must not
+// meet a record that happens to be blank in the same place: otherwise a
+// half-filled manifest confirms itself from a fault some other node produced.
+func TestMutationScopeIsRequiredForEveryFamily(t *testing.T) {
+	for _, tc := range []scopedFamilyCase{
+		{
+			name:     "TCP reset",
+			report:   Report{Evidence: resetTCPEvidence()},
+			mutation: GeneratedMutation{ID: "service.tcp_reset", Node: "target", TargetPort: 80},
+			blanked:  []GeneratedMutation{{ID: "service.tcp_reset", TargetPort: 80}, {ID: "service.tcp_reset"}},
+		},
+		{
+			name:     "invalid DoH",
+			report:   Report{Evidence: invalidDoHEvidence()},
+			mutation: GeneratedMutation{ID: "encrypted_dns.doh_invalid", Node: "resolver", Service: encryptedDNSProbeService},
+			blanked: []GeneratedMutation{
+				{ID: "encrypted_dns.doh_invalid", Service: encryptedDNSProbeService},
+				{ID: "encrypted_dns.doh_invalid", Node: "resolver"},
+				{ID: "encrypted_dns.doh_invalid"},
+			},
+		},
+		{
+			name:     "HTTP 503",
+			report:   Report{Evidence: http503Evidence()},
+			mutation: GeneratedMutation{ID: "http.status_503", Node: "target", TargetPort: 80, Status: http.StatusServiceUnavailable},
+			blanked: []GeneratedMutation{
+				{ID: "http.status_503", TargetPort: 80, Status: http.StatusServiceUnavailable},
+				{ID: "http.status_503", Node: "target", Status: http.StatusServiceUnavailable},
+				{ID: "http.status_503", Node: "target", TargetPort: 80},
+				{ID: "http.status_503"},
+			},
+		},
+		{
+			name: "DNS SERVFAIL",
+			report: Report{Timeline: appliedDNSFault("resolver", DNSOutcomeSERVFAIL, 0),
+				Evidence: servedDNSEvidence("resolver", dnsServedSERVFAIL)},
+			mutation: GeneratedMutation{ID: "dns.servfail", Service: "resolver"},
+			blanked:  []GeneratedMutation{{ID: "dns.servfail"}},
+		},
+		{
+			name: "DNS drop",
+			report: Report{Timeline: appliedDNSFault("resolver", DNSOutcomeDrop, 0),
+				Evidence: servedDNSEvidence("resolver", dnsServedDropped)},
+			mutation: GeneratedMutation{ID: "dns.drop", Service: "resolver"},
+			blanked:  []GeneratedMutation{{ID: "dns.drop"}},
+		},
+		{
+			name: "timeline DNS outage",
+			report: Report{Timeline: appliedDNSFault("resolver", DNSOutcomeDrop, 150*time.Millisecond),
+				Evidence: servedDNSEvidence("resolver", dnsServedDropped)},
+			mutation: GeneratedMutation{ID: "timeline.dns_outage", Service: "resolver", StartMS: 150},
+			blanked:  []GeneratedMutation{{ID: "timeline.dns_outage", StartMS: 150}},
+		},
+		{
+			name: "persistent loss",
+			report: Report{Evidence: Evidence{PacketConditions: []PacketConditionEvidence{{Node: "gateway",
+				Segment: "upstream", Active: true, LossPercent: 17, Seed: 11}}}},
+			mutation: GeneratedMutation{ID: "netem.loss", Node: "gateway", Segment: "upstream", LossPercent: 17, NetemSeed: 11},
+			blanked: []GeneratedMutation{
+				{ID: "netem.loss", Segment: "upstream", LossPercent: 17, NetemSeed: 11},
+				{ID: "netem.loss", Node: "gateway", LossPercent: 17, NetemSeed: 11},
+			},
+		},
+		{
+			name: "transient link down",
+			report: Report{Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledLink,
+				Node: "gateway", Segment: "upstream", State: LinkStateDown}, Result: EventApplied}}},
+			mutation: GeneratedMutation{ID: "link.transient_down", Node: "gateway", Segment: "upstream"},
+			blanked: []GeneratedMutation{
+				{ID: "link.transient_down", Segment: "upstream"},
+				{ID: "link.transient_down", Node: "gateway"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Control: without this the blanked cases would pass on a reader that
+			// always says no.
+			if !mutationObserved(tc.mutation, &tc.report, ObservedTruth{}) {
+				t.Fatal("a fully scoped mutation was not observed in its own evidence")
+			}
+			for _, mutation := range tc.blanked {
+				if mutationObserved(mutation, &tc.report, ObservedTruth{}) {
+					t.Errorf("a mutation that never said where its effect belongs was counted as observed: %+v", mutation)
+				}
+			}
+			// The other half of the same rule: a holder-written record that nobody
+			// stamped is not an observation, so it cannot answer a fully scoped
+			// question either. Families scoped entirely on the fault scheduler's
+			// own timeline have no such record to strip.
+			unstamped := tc.report
+			unstamped.Evidence = unstampEvidence(tc.report.Evidence)
+			if reflect.DeepEqual(unstamped.Evidence, tc.report.Evidence) {
+				return
+			}
+			if mutationObserved(tc.mutation, &unstamped, ObservedTruth{}) {
+				t.Error("evidence from no node satisfied a node-scoped mutation")
+			}
+		})
+	}
+}
+
+// unstampEvidence removes the node every holder writes on its own records. Real
+// evidence always carries one, so these reports are only reachable by hand — the
+// point is that a record from nowhere stays worthless rather than matching
+// whatever asks for it.
+func unstampEvidence(evidence Evidence) Evidence {
+	out := evidence
+	out.TLS = append([]TLSEvidence(nil), evidence.TLS...)
+	out.SOCKSRequests = append([]SOCKSEvidence(nil), evidence.SOCKSRequests...)
+	out.PacketDrops = append([]PacketDropEvidence(nil), evidence.PacketDrops...)
+	out.TCPResets = append([]TCPResetEvidence(nil), evidence.TCPResets...)
+	out.ServiceReplies = append([]ServiceReplyEvidence(nil), evidence.ServiceReplies...)
+	out.DNSQueries = append([]DNSQueryEvidence(nil), evidence.DNSQueries...)
+	out.PacketConditions = append([]PacketConditionEvidence(nil), evidence.PacketConditions...)
+	for i := range out.TLS {
+		out.TLS[i].Node = ""
+	}
+	for i := range out.SOCKSRequests {
+		out.SOCKSRequests[i].Node = ""
+	}
+	for i := range out.PacketDrops {
+		out.PacketDrops[i].Node = ""
+	}
+	for i := range out.TCPResets {
+		out.TCPResets[i].Node = ""
+	}
+	for i := range out.ServiceReplies {
+		out.ServiceReplies[i].Node = ""
+	}
+	for i := range out.DNSQueries {
+		out.DNSQueries[i].Node = ""
+	}
+	for i := range out.PacketConditions {
+		out.PacketConditions[i].Node = ""
+	}
+	return out
+}
+
+// TestScheduledFaultThatReachedNobodyIsNotObserved is the regression the whole
+// oracle rests on: the manifest is intact and the simulator's own record that
+// the fault was configured, installed or applied is present, and the one thing
+// missing is evidence that a client was ever made to live with it. Nothing may
+// be claimed about netdoc for a fault that happened to nobody — not an observed
+// fault, and not a false negative.
+func TestScheduledFaultThatReachedNobodyIsNotObserved(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutation GeneratedMutation
+		report   Report
+	}{
+		{
+			name:     "resolver moved to SERVFAIL that nobody queried",
+			mutation: GeneratedMutation{ID: "dns.servfail", Service: "resolver"},
+			report:   Report{Timeline: appliedDNSFault("resolver", DNSOutcomeSERVFAIL, 0)},
+		},
+		{
+			name:     "resolver moved to drop that nobody queried",
+			mutation: GeneratedMutation{ID: "dns.drop", Service: "resolver"},
+			report:   Report{Timeline: appliedDNSFault("resolver", DNSOutcomeDrop, 0)},
+		},
+		{
+			name:     "outage window that opened and closed empty",
+			mutation: GeneratedMutation{ID: "timeline.dns_outage", Service: "resolver", StartMS: 150},
+			report:   Report{Timeline: appliedDNSFault("resolver", DNSOutcomeDrop, 150*time.Millisecond)},
+		},
+		{
+			name:     "reset service that was never dialed",
+			mutation: GeneratedMutation{ID: "service.tcp_reset", Node: "target", TargetPort: 80},
+			report: Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{Node: "target",
+				Service: "http-target", Type: ServiceTCPReset, Port: 80}}}},
+		},
+		{
+			name:     "expired certificate nobody was shown",
+			mutation: GeneratedMutation{ID: "service.tls_expired", Node: "target", Service: "web"},
+			report: Report{Evidence: Evidence{TLS: []TLSEvidence{{Node: "target", Service: "web",
+				CertificateMode: TLSCertificateExpired, CertificatePresented: false, Result: "no_handshake", Count: 1}}}},
+		},
+		{
+			name:     "proxy reached and never asked to CONNECT",
+			mutation: GeneratedMutation{ID: "proxy.connect_refused", Node: "proxy", Service: "socks", TargetPort: 443},
+			report: Report{Evidence: Evidence{SOCKSRequests: []SOCKSEvidence{{Node: "proxy", Service: "socks",
+				Event: "greeting", Result: "accepted", Count: 1}}}},
+		},
+		{
+			name:     "drop rule installed that matched no packet",
+			mutation: GeneratedMutation{ID: "quic.udp_443_block", Node: "target", TargetPort: 443},
+			report: Report{Faults: []FaultInfo{{Type: FaultDrop, Node: "target", Protocol: "udp", Port: 443,
+				Direction: DirectionInbound}},
+				Evidence: Evidence{PacketDrops: []PacketDropEvidence{{Node: "target", Protocol: "udp", Port: 443,
+					Direction: DirectionInbound, Packets: 0}}}},
+		},
+		{
+			name:     "DoH service in invalid mode that answered nobody",
+			mutation: GeneratedMutation{ID: "encrypted_dns.doh_invalid", Node: "resolver", Service: encryptedDNSProbeService},
+			report: Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{Node: "resolver",
+				Service: encryptedDNSProbeService, Type: ServiceEncryptedDNS, Port: 443, Mode: DoHResponseInvalid}}}},
+		},
+		{
+			name:     "HTTP service configured to 503 that answered nobody",
+			mutation: GeneratedMutation{ID: "http.status_503", Node: "target", TargetPort: 80, Status: http.StatusServiceUnavailable},
+			report: Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{Node: "target", Type: ServiceHTTP,
+				Port: 80, Status: http.StatusServiceUnavailable}}}},
+		},
+		{
+			name:     "IPv4 drop with no reachability measurement",
+			mutation: GeneratedMutation{ID: "family.ipv4_drop", Node: "gateway", Family: "ipv4"},
+			report:   Report{},
+		},
+		{
+			name:     "IPv6 drop on a family the node never had",
+			mutation: GeneratedMutation{ID: "family.ipv6_drop", Node: "gateway", Family: "ipv6"},
+			report: Report{Topology: []NodeInfo{{Name: "client", Role: "client"}},
+				Evidence: Evidence{FamilyReachability: []FamilyReachabilityEvidence{
+					{Node: "client", Family: "ipv6", State: FamilyStateUnavailable}}}},
+		},
+		{
+			name:     "link fault the kernel refused",
+			mutation: GeneratedMutation{ID: "link.transient_down", Node: "gateway", Segment: "upstream"},
+			report: Report{Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledLink,
+				Node: "gateway", Segment: "upstream", State: LinkStateDown}, Result: EventFailed}}},
+		},
+		{
+			name:     "netem qdisc that is not in force",
+			mutation: GeneratedMutation{ID: "netem.loss", Node: "gateway", Segment: "upstream", LossPercent: 17, NetemSeed: 11},
+			report: Report{Evidence: Evidence{PacketConditions: []PacketConditionEvidence{{Node: "gateway",
+				Segment: "upstream", Active: false, LossPercent: 17, Seed: 11}}}},
+		},
+		{
+			name: "preferred path failure with no path consequence",
+			mutation: GeneratedMutation{ID: "routing.preferred_path_failure", Node: "preferred-gateway",
+				TargetNode: "client", Segment: "preferred-upstream", Family: "ipv4"},
+			report: Report{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := huntManifest(tc.mutation)
+			report := tc.report
+			report.Cleanup = CleanupInfo{Done: true}
+			if len(report.Topology) == 0 {
+				report.Topology = []NodeInfo{{Name: "client", Role: "client"}}
+			}
+			// A diagnosis that noticed nothing at all, so any accusation the
+			// analyzer could make would be made.
+			report.Tests = []TestOutcome{{Name: "netdoc", Node: "client", ProcessOutcome: ProcessExited,
+				Diagnosis: oracleDiagnosis(DiagnosisCheck{ID: "internet_tcp", Status: "PASS",
+					Families: &DiagnosisFamilies{IPv4: FamilyStateReachable, IPv6: FamilyStateReachable}})}}
+			truth := collectObservedTruth(manifest, &report)
+			if len(truth.ObservedFaults) != 0 {
+				t.Fatalf("a fault that reached nobody was recorded as observed: %v", truth.ObservedFaults)
+			}
+			for _, finding := range analyzeHuntCase(manifest, &report, truth) {
+				if finding.Category == FindingFalseNegative || finding.Category == FindingDiagnosticContradiction {
+					t.Fatalf("mutation intent alone produced %s/%s", finding.Category, finding.Code)
+				}
+			}
+		})
+	}
+}
+
+// huntFamilyPath records the deliberate decision made for every mutation family
+// about how its hunt analysis works. It exists so that adding an operator to the
+// registry forces the same decision to be made again rather than defaulting to
+// silence.
+var huntFamilyPath = map[string]string{
+	// Generic: independently observed truth reconciled against one diagnosis by
+	// the condition oracle, with no protocol code in the comparison itself.
+	"family.ipv4_drop":      "generic",
+	"family.ipv6_drop":      "generic",
+	"service.tls_expired":   "generic",
+	"proxy.connect_refused": "generic",
+	"quic.udp_443_block":    "generic",
+	// Bespoke: the finding depends on meaning a state comparison cannot carry —
+	// DNS needs the last query per service rather than any query, and a reset
+	// is a coverage gap about classification rather than a missed fault.
+	"dns.servfail":        "bespoke",
+	"dns.drop":            "bespoke",
+	"timeline.dns_outage": "bespoke",
+	"service.tcp_reset":   "bespoke",
+	// No direct finding: the fault exists to move conditions the timeline,
+	// instability and route analyses read, or netdoc makes no claim about it.
+	"netem.loss":                     "no_finding",
+	"netem.latency":                  "no_finding",
+	"netem.jitter":                   "no_finding",
+	"timeline.netem_spike":           "no_finding",
+	"link.transient_down":            "no_finding",
+	"routing.preferred_path_failure": "no_finding",
+	"encrypted_dns.doh_invalid":      "no_finding",
+	"http.status_503":                "no_finding",
+}
+
+// TestEveryMutationFamilyDeclaresItsHuntPath keeps the classification honest in
+// both directions: no operator may exist without a decision, and no decision may
+// name an operator that no longer exists. The generic entries are checked against
+// the condition oracle rather than trusted, so moving a family in or out of the
+// table has to be a deliberate edit here too.
+func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
+	generic := map[string]bool{}
+	for _, operator := range huntMutationRegistry {
+		path, declared := huntFamilyPath[operator.id]
+		if !declared {
+			t.Errorf("mutation %q declares no hunt analysis path", operator.id)
+			continue
+		}
+		if path == "generic" {
+			generic[operator.id] = true
+		}
+	}
+	for id := range huntFamilyPath {
+		if !slices.ContainsFunc(huntMutationRegistry, func(o mutationOperator) bool { return o.id == id }) {
+			t.Errorf("hunt analysis path declared for unknown mutation %q", id)
+		}
+	}
+	// Every family called generic must really be one of the oracle's conditions,
+	// and the oracle must hold no condition that no family claims.
+	conditions := map[NetworkCondition]bool{}
+	for _, rule := range conditionOracle {
+		conditions[rule.condition] = true
+	}
+	for _, pair := range []struct {
+		id        string
+		condition NetworkCondition
+	}{
+		{"family.ipv4_drop", ConditionIPv4InternetUnreachable},
+		{"family.ipv6_drop", ConditionIPv6InternetUnreachable},
+		{"service.tls_expired", ConditionTLSCertificateExpired},
+		{"proxy.connect_refused", ConditionProxyDestinationRefused},
+		{"quic.udp_443_block", ConditionQUICUDP443Blocked},
+	} {
+		if !generic[pair.id] {
+			t.Errorf("%q is not declared generic but claims condition %q", pair.id, pair.condition)
+		}
+		if !conditions[pair.condition] {
+			t.Errorf("%q claims condition %q, which the oracle does not define", pair.id, pair.condition)
+		}
+		delete(conditions, pair.condition)
+	}
+	for condition := range conditions {
+		t.Errorf("oracle condition %q is claimed by no mutation family", condition)
+	}
+	if len(generic) != 5 {
+		t.Errorf("generic families = %v, want the five the oracle defines conditions for", generic)
 	}
 }

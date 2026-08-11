@@ -37,6 +37,15 @@ const (
 	FindingGeneratorDefect         = "generator_defect"
 )
 
+// dnsServedSERVFAIL and dnsServedDropped are the resolver's own words for what
+// it put on the wire, which is a different vocabulary from the scheduler's
+// outcome names: one describes an answer a client received, the other a state
+// the service was asked to enter.
+const (
+	dnsServedSERVFAIL = "SERVFAIL"
+	dnsServedDropped  = "DROPPED"
+)
+
 // ObservedTruth is deliberately coarse. It records only simulator evidence,
 // not conclusions inferred from the mutation request or copied from netdoc.
 // IPv4 and IPv6 describe point-in-time reachability when final evidence was
@@ -130,7 +139,7 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 		switch query.ActualOutcome {
 		case "ANSWER", "NODATA":
 			answered = true
-		case "DROPPED", "SERVFAIL":
+		case dnsServedDropped, dnsServedSERVFAIL:
 			dnsFailed = true
 		}
 	}
@@ -176,11 +185,8 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 			}
 		}
 	}
-	for _, event := range report.Evidence.TCPResets {
-		if event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0 {
-			truth.TCP = "reset"
-			break
-		}
+	if anyConnectionReset(report.Evidence) {
+		truth.TCP = "reset"
 	}
 	linkDown, linkRecovered := false, false
 	for _, event := range report.Timeline {
@@ -278,7 +284,7 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 	switch mutation.ID {
 	case "netem.loss", "netem.latency", "netem.jitter":
 		for _, condition := range report.Evidence.PacketConditions {
-			if condition.Node != mutation.Node || condition.Segment != mutation.Segment || !condition.Active {
+			if !sameName(mutation.Node, condition.Node) || !sameName(mutation.Segment, condition.Segment) || !condition.Active {
 				continue
 			}
 			latency := time.Duration(mutation.LatencyMS) * time.Millisecond
@@ -290,31 +296,32 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 		}
 	case "timeline.netem_spike":
 		return timelineApplied(report, func(event TimedEvent) bool {
-			return event.Type == FaultScheduledNetem && event.Node == mutation.Node && event.Segment == mutation.Segment &&
+			return event.Type == FaultScheduledNetem && sameName(mutation.Node, event.Node) && sameName(mutation.Segment, event.Segment) &&
 				event.Offset == time.Duration(mutation.StartMS)*time.Millisecond &&
 				event.Latency == time.Duration(mutation.LatencyMS)*time.Millisecond &&
 				event.Jitter == time.Duration(mutation.JitterMS)*time.Millisecond &&
 				event.LossPercent == mutation.LossPercent && event.NetemSeed == mutation.NetemSeed
 		})
+	// The DNS families want both halves. The timeline says this exact scheduled
+	// fault reached the resolver, and the resolver's per-query record says a
+	// client was actually served the faulty outcome — a resolver moved into
+	// SERVFAIL that nobody queried refused nobody.
 	case "dns.servfail", "dns.drop":
-		outcome := DNSOutcomeSERVFAIL
+		outcome, served := DNSOutcomeSERVFAIL, dnsServedSERVFAIL
 		if mutation.ID == "dns.drop" {
-			outcome = DNSOutcomeDrop
+			outcome, served = DNSOutcomeDrop, dnsServedDropped
 		}
 		return timelineApplied(report, func(event TimedEvent) bool {
-			return event.Type == FaultScheduledDNS && event.Service == mutation.Service && event.Offset == 0 && event.Outcome == outcome
-		})
+			return event.Type == FaultScheduledDNS && sameName(mutation.Service, event.Service) &&
+				event.Offset == 0 && event.Outcome == outcome
+		}) && dnsOutcomeServedAt(report.Evidence, mutation.Service, served)
 	case "timeline.dns_outage":
 		return timelineApplied(report, func(event TimedEvent) bool {
-			return event.Type == FaultScheduledDNS && event.Service == mutation.Service &&
+			return event.Type == FaultScheduledDNS && sameName(mutation.Service, event.Service) &&
 				event.Offset == time.Duration(mutation.StartMS)*time.Millisecond && event.Outcome == DNSOutcomeDrop
-		})
+		}) && dnsOutcomeServedAt(report.Evidence, mutation.Service, dnsServedDropped)
 	case "service.tcp_reset":
-		for _, event := range report.Evidence.TCPResets {
-			if event.Node == mutation.Node && event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0 {
-				return true
-			}
-		}
+		return connectionResetAt(report.Evidence, mutation.Node)
 	case "service.tls_expired":
 		return expiredCertificateRejectedAt(report.Evidence, mutation.Node, mutation.Service)
 	case "proxy.connect_refused":
@@ -322,27 +329,21 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 	case "quic.udp_443_block":
 		return udpPortDroppedAt(report.Evidence, mutation.Node, mutation.TargetPort)
 	case "encrypted_dns.doh_invalid":
-		for _, reply := range report.Evidence.ServiceReplies {
-			if reply.Node == mutation.Node && reply.Service == mutation.Service &&
-				reply.Type == ServiceEncryptedDNS && reply.Result == DoHResponseInvalid && reply.Count > 0 {
-				return true
-			}
-		}
+		return invalidDoHServedAt(report.Evidence, mutation.Node, mutation.Service)
 	case "http.status_503":
-		for _, reply := range report.Evidence.ServiceReplies {
-			if reply.Node == mutation.Node && reply.Type == ServiceHTTP && reply.Port == mutation.TargetPort &&
-				reply.Status == mutation.Status && reply.Count > 0 {
-				return true
-			}
-		}
+		return httpStatusServedAt(report.Evidence, mutation.Node, mutation.TargetPort, mutation.Status)
+	// The family drops are measured at the client rather than at the node the
+	// rule was installed on, because losing a family is a fact about what the
+	// client can still reach. observedFamilyTruth already required the record to
+	// name that client, so there is no scope left for the mutation to add.
 	case "family.ipv4_drop":
-		return truth.IPv4 == "unreachable"
+		return truth.IPv4 == FamilyStateUnreachable
 	case "family.ipv6_drop":
-		return truth.IPv6 == "unreachable"
+		return truth.IPv6 == FamilyStateUnreachable
 	case "link.transient_down":
 		return timelineApplied(report, func(event TimedEvent) bool {
-			return event.Type == FaultScheduledLink && event.Node == mutation.Node && event.Segment == mutation.Segment &&
-				event.Offset == 0 && event.State == LinkStateDown
+			return event.Type == FaultScheduledLink && sameName(mutation.Node, event.Node) &&
+				sameName(mutation.Segment, event.Segment) && event.Offset == 0 && event.State == LinkStateDown
 		})
 	case "routing.preferred_path_failure":
 		return preferredPathFailureObserved(mutation, report)
@@ -647,7 +648,7 @@ func dnsFailureDuring(test TestOutcome, queries []DNSQueryEvidence) bool {
 		}
 	}
 	for _, query := range last {
-		if query.ActualOutcome == "DROPPED" || query.ActualOutcome == "SERVFAIL" {
+		if query.ActualOutcome == dnsServedDropped || query.ActualOutcome == dnsServedSERVFAIL {
 			return true
 		}
 	}

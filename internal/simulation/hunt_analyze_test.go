@@ -27,7 +27,8 @@ func TestObservedTruthUsesServiceAndKernelEvidence(t *testing.T) {
 		Faults:   []FaultInfo{{Type: FaultNetem, Node: "gateway", LossPercent: 20}},
 		Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledDNS, Service: "r", Outcome: DNSOutcomeDrop}, Result: EventApplied}},
 		Evidence: Evidence{
-			DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED"}, {Service: "r", ActualOutcome: "ANSWER"}},
+			DNSQueries: []DNSQueryEvidence{{Node: "resolver", Service: "r", ActualOutcome: dnsServedDropped},
+				{Node: "resolver", Service: "r", ActualOutcome: "ANSWER"}},
 			PacketConditions: []PacketConditionEvidence{{Node: "gateway", Segment: "upstream", Active: true,
 				LossPercent: 20, DroppedPackets: 7}},
 			Routes: []RouteEvidence{{Selected: true, GatewayReachable: boolPointer(true)}},
@@ -334,6 +335,19 @@ func TestMutationObservedMatchesExactNetemDNSTimelineAndLinkEvidence(t *testing.
 	event := func(item TimedEvent) Report {
 		return Report{Timeline: []FaultEventEvidence{{Event: item, Result: EventApplied}}}
 	}
+	// served attaches the resolver's own record of what one real client query
+	// was answered with. The DNS families need it beside the scheduler's applied
+	// event, because a resolver moved into a faulty state that nobody queried
+	// refused nobody.
+	served := func(report Report, service, outcome string) Report {
+		report.Evidence.DNSQueries = []DNSQueryEvidence{{Node: "resolver-host", Service: service,
+			Name: "example.com.", QueryType: "A", Sequence: 1, ActualOutcome: outcome}}
+		return report
+	}
+	servfailScheduled := event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeSERVFAIL})
+	dropScheduled := event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeDrop})
+	outageScheduled := event(TimedEvent{Offset: 150 * time.Millisecond, Type: FaultScheduledDNS,
+		Service: "resolver", Outcome: DNSOutcomeDrop})
 	tests := []struct {
 		name       string
 		mutation   GeneratedMutation
@@ -409,34 +423,50 @@ func TestMutationObservedMatchesExactNetemDNSTimelineAndLinkEvidence(t *testing.
 		{
 			name:     "DNS SERVFAIL",
 			mutation: GeneratedMutation{ID: "dns.servfail", Service: "resolver"},
-			positive: event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeSERVFAIL}),
+			positive: served(servfailScheduled, "resolver", dnsServedSERVFAIL),
 			nearMisses: []Report{
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "other", Outcome: DNSOutcomeSERVFAIL}),
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeDrop}),
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeAnswer}),
+				served(event(TimedEvent{Type: FaultScheduledDNS, Service: "other", Outcome: DNSOutcomeSERVFAIL}), "resolver", dnsServedSERVFAIL),
+				served(dropScheduled, "resolver", dnsServedSERVFAIL),
+				served(event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeAnswer}), "resolver", dnsServedSERVFAIL),
+				// Applied at the resolver, and nobody was ever refused by it.
+				servfailScheduled,
+				served(servfailScheduled, "resolver", "ANSWER"),
+				served(servfailScheduled, "resolver", dnsServedDropped),
+				served(servfailScheduled, "other", dnsServedSERVFAIL),
+				served(servfailScheduled, "", dnsServedSERVFAIL),
 			},
 		},
 		{
 			name:     "DNS drop",
 			mutation: GeneratedMutation{ID: "dns.drop", Service: "resolver"},
-			positive: event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeDrop}),
+			positive: served(dropScheduled, "resolver", dnsServedDropped),
 			nearMisses: []Report{
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "other", Outcome: DNSOutcomeDrop}),
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeSERVFAIL}),
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeAnswer}),
+				served(event(TimedEvent{Type: FaultScheduledDNS, Service: "other", Outcome: DNSOutcomeDrop}), "resolver", dnsServedDropped),
+				served(servfailScheduled, "resolver", dnsServedDropped),
+				served(event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeAnswer}), "resolver", dnsServedDropped),
+				dropScheduled,
+				served(dropScheduled, "resolver", "ANSWER"),
+				served(dropScheduled, "resolver", dnsServedSERVFAIL),
+				served(dropScheduled, "other", dnsServedDropped),
 			},
 		},
 		{
 			name: "timeline DNS outage",
 			mutation: GeneratedMutation{ID: "timeline.dns_outage", Service: "resolver",
 				StartMS: 150, DurationMS: 700},
-			positive: event(TimedEvent{Offset: 150 * time.Millisecond, Type: FaultScheduledDNS,
-				Service: "resolver", Outcome: DNSOutcomeDrop}),
+			positive: served(outageScheduled, "resolver", dnsServedDropped),
 			nearMisses: []Report{
-				event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeDelay, Delay: 200 * time.Millisecond}),
-				event(TimedEvent{Offset: 850 * time.Millisecond, Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeAnswer}),
-				event(TimedEvent{Offset: 150 * time.Millisecond, Type: FaultScheduledDNS, Service: "other", Outcome: DNSOutcomeDrop}),
-				event(TimedEvent{Offset: 150 * time.Millisecond, Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeSERVFAIL}),
+				served(event(TimedEvent{Type: FaultScheduledDNS, Service: "resolver", Outcome: DNSOutcomeDelay,
+					Delay: 200 * time.Millisecond}), "resolver", dnsServedDropped),
+				served(event(TimedEvent{Offset: 850 * time.Millisecond, Type: FaultScheduledDNS, Service: "resolver",
+					Outcome: DNSOutcomeAnswer}), "resolver", dnsServedDropped),
+				served(event(TimedEvent{Offset: 150 * time.Millisecond, Type: FaultScheduledDNS, Service: "other",
+					Outcome: DNSOutcomeDrop}), "resolver", dnsServedDropped),
+				served(event(TimedEvent{Offset: 150 * time.Millisecond, Type: FaultScheduledDNS, Service: "resolver",
+					Outcome: DNSOutcomeSERVFAIL}), "resolver", dnsServedDropped),
+				// The outage window opened and closed with no query inside it.
+				outageScheduled,
+				served(outageScheduled, "resolver", "ANSWER"),
 			},
 		},
 		{
@@ -663,11 +693,20 @@ func TestObservedTruthProxyIgnoresGreetingResult(t *testing.T) {
 }
 
 func TestObservedTruthRequiresAnActualTCPReset(t *testing.T) {
-	accepted := &Report{Evidence: Evidence{TCPResets: []TCPResetEvidence{{Event: "accepted", Result: "connected", Count: 1}}}}
+	accepted := &Report{Evidence: Evidence{TCPResets: []TCPResetEvidence{{Node: "target", Event: "accepted",
+		Result: "connected", Count: 1}}}}
 	if truth := collectObservedTruth(huntManifest(), accepted); truth.TCP != "unknown" {
 		t.Fatalf("accepted connection counted as a reset: %+v", truth)
 	}
-	reset := &Report{Evidence: Evidence{TCPResets: []TCPResetEvidence{{Event: "reset", Result: "connection_reset", Count: 1}}}}
+	// A holder stamps its own name on every record it writes, so a reset from
+	// nowhere is not an observation anybody made.
+	unstamped := &Report{Evidence: Evidence{TCPResets: []TCPResetEvidence{{Event: "reset",
+		Result: "connection_reset", Count: 1}}}}
+	if truth := collectObservedTruth(huntManifest(), unstamped); truth.TCP != "unknown" {
+		t.Fatalf("unattributable reset became truth: %+v", truth)
+	}
+	reset := &Report{Evidence: Evidence{TCPResets: []TCPResetEvidence{{Node: "target", Event: "reset",
+		Result: "connection_reset", Count: 1}}}}
 	if truth := collectObservedTruth(huntManifest(), reset); truth.TCP != "reset" {
 		t.Fatalf("recorded connection reset was not observed: %+v", truth)
 	}

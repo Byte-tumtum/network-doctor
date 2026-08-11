@@ -246,12 +246,12 @@ func diagnosedFamily(d *Diagnosis, family string) string {
 	return ""
 }
 
-// The three predicates below define what it takes for one fault to have reached
-// the wire, judged from a single evidence record. They are shared so the
-// unscoped question the oracle asks and the scoped question per-mutation
-// observation asks cannot drift apart, and each requires the record to name the
-// node that produced it: a holder always stamps its own name, so a record
-// without one is not an observation anybody made.
+// The predicates below define what it takes for one fault to have reached the
+// wire, judged from a single evidence record. They are shared so the unscoped
+// question the oracle asks and the scoped question per-mutation observation
+// asks cannot drift apart, and each requires the record to name the node that
+// produced it: a holder always stamps its own name, so a record without one is
+// not an observation anybody made.
 //
 // rejectedExpiredCertificate wants the handshake rather than the service's
 // configured mode, because a certificate nobody was ever shown expired in
@@ -272,7 +272,35 @@ func refusedCONNECT(request SOCKSEvidence) bool {
 // nothing.
 func droppedInboundUDP(drop PacketDropEvidence, port int) bool {
 	return drop.Node != "" && drop.Protocol == "udp" && drop.Direction == DirectionInbound &&
-		drop.Packets > 0 && drop.Port == port
+		drop.Packets > 0 && sameNumber(port, drop.Port)
+}
+
+// resetConnection is the reset service's own record of having torn a connection
+// down after accepting it. A service that came up in reset mode and was never
+// dialed reset nobody.
+func resetConnection(event TCPResetEvidence) bool {
+	return event.Node != "" && event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0
+}
+
+// The two reply readers below want a reply the service actually sent, which is
+// why neither looks at ServiceStateEvidence: a service that started in a faulty
+// mode has a state, and until it answered somebody nothing was done to anyone.
+func servedInvalidDoH(reply ServiceReplyEvidence) bool {
+	return reply.Node != "" && reply.Type == ServiceEncryptedDNS &&
+		reply.Result == DoHResponseInvalid && reply.Count > 0
+}
+
+func servedHTTPStatus(reply ServiceReplyEvidence, status int) bool {
+	return reply.Node != "" && reply.Type == ServiceHTTP && reply.Count > 0 &&
+		sameNumber(status, reply.Status)
+}
+
+// servedDNSOutcome reads the outcome the resolver put on the wire for one real
+// query. The fault scheduler's own "applied" record is a different claim: it
+// says the resolver was moved into a faulty state, not that a client was ever
+// made to live with it.
+func servedDNSOutcome(query DNSQueryEvidence, outcome string) bool {
+	return query.Node != "" && outcome != "" && query.ActualOutcome == outcome
 }
 
 // The any* readers answer the oracle's question, which is unscoped on purpose:
@@ -289,40 +317,70 @@ func anyProxyCONNECTRefused(evidence Evidence) bool {
 }
 
 func anyUDPPortDropped(evidence Evidence, port int) bool {
-	return port != 0 && slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
+	return slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
 		return droppedInboundUDP(drop, port)
 	})
 }
 
+func anyConnectionReset(evidence Evidence) bool {
+	return slices.ContainsFunc(evidence.TCPResets, resetConnection)
+}
+
+// sameName and sameNumber are the whole of the scope rule, in one place so no
+// family can forget half of it. A scope key the manifest left blank is a
+// question nobody asked: it matches nothing, not even a record that happens to
+// be blank in the same place. Without that, a partially filled manifest would
+// confirm itself from a fault some other node produced, and blank would quietly
+// meet blank.
+func sameName(named, recorded string) bool { return named != "" && named == recorded }
+
+func sameNumber(named, recorded int) bool { return named != 0 && named == recorded }
+
 // The *At readers answer the different question of whether one mutation took
-// effect where it said it would. A mutation that does not name the place its
-// effect belongs establishes nothing: an unanswerable question is insufficient
-// evidence, not a wildcard, and treating it as one would let a partially filled
-// manifest confirm itself from a fault some other node produced.
+// effect where it said it would. Each one is a thin pairing of the scope rule
+// above with the shared wire predicate for its family, so the two questions
+// stay in step and neither can be loosened alone.
 func expiredCertificateRejectedAt(evidence Evidence, node, service string) bool {
-	if node == "" || service == "" {
-		return false
-	}
 	return slices.ContainsFunc(evidence.TLS, func(handshake TLSEvidence) bool {
-		return handshake.Node == node && handshake.Service == service && rejectedExpiredCertificate(handshake)
+		return sameName(node, handshake.Node) && sameName(service, handshake.Service) &&
+			rejectedExpiredCertificate(handshake)
 	})
 }
 
 func proxyCONNECTRefusedAt(evidence Evidence, node, service, destination string, port int) bool {
-	if node == "" || service == "" || destination == "" || port == 0 {
-		return false
-	}
 	return slices.ContainsFunc(evidence.SOCKSRequests, func(request SOCKSEvidence) bool {
-		return request.Node == node && request.Service == service &&
-			request.Destination == destination && request.Port == port && refusedCONNECT(request)
+		return sameName(node, request.Node) && sameName(service, request.Service) &&
+			sameName(destination, request.Destination) && sameNumber(port, request.Port) &&
+			refusedCONNECT(request)
 	})
 }
 
 func udpPortDroppedAt(evidence Evidence, node string, port int) bool {
-	if node == "" || port == 0 {
-		return false
-	}
 	return slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
-		return drop.Node == node && droppedInboundUDP(drop, port)
+		return sameName(node, drop.Node) && droppedInboundUDP(drop, port)
+	})
+}
+
+func connectionResetAt(evidence Evidence, node string) bool {
+	return slices.ContainsFunc(evidence.TCPResets, func(event TCPResetEvidence) bool {
+		return sameName(node, event.Node) && resetConnection(event)
+	})
+}
+
+func invalidDoHServedAt(evidence Evidence, node, service string) bool {
+	return slices.ContainsFunc(evidence.ServiceReplies, func(reply ServiceReplyEvidence) bool {
+		return sameName(node, reply.Node) && sameName(service, reply.Service) && servedInvalidDoH(reply)
+	})
+}
+
+func httpStatusServedAt(evidence Evidence, node string, port, status int) bool {
+	return slices.ContainsFunc(evidence.ServiceReplies, func(reply ServiceReplyEvidence) bool {
+		return sameName(node, reply.Node) && sameNumber(port, reply.Port) && servedHTTPStatus(reply, status)
+	})
+}
+
+func dnsOutcomeServedAt(evidence Evidence, service, outcome string) bool {
+	return slices.ContainsFunc(evidence.DNSQueries, func(query DNSQueryEvidence) bool {
+		return sameName(service, query.Service) && servedDNSOutcome(query, outcome)
 	})
 }
