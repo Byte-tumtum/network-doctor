@@ -67,7 +67,7 @@ func TestEncryptedDNSServiceAnswersDoHAndDoT(t *testing.T) {
 			}
 			listeners = append(listeners, ln)
 			return []net.Listener{ln}, nil
-		})
+		}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

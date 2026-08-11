@@ -109,6 +109,25 @@ func TestParseNetemStats(t *testing.T) {
 	}
 }
 
+func TestParseNftCounterPackets(t *testing.T) {
+	raw := []byte("table inet netdocsim {\n\tcounter drop_in_any_udp_443_any {\n\t\tpackets 7 bytes 392\n\t}\n}\n")
+	packets, err := parseNftCounterPackets(raw)
+	if err != nil || packets != 7 {
+		t.Fatalf("packets=%d err=%v", packets, err)
+	}
+	// An installed rule that matched nothing is a real reading, not an error.
+	zero := []byte("table inet netdocsim {\n\tcounter drop_out_ipv4_any_0_any {\n\t\tpackets 0 bytes 0\n\t}\n}\n")
+	if packets, err := parseNftCounterPackets(zero); err != nil || packets != 0 {
+		t.Fatalf("empty counter packets=%d err=%v", packets, err)
+	}
+	for _, bad := range [][]byte{nil, []byte("table inet netdocsim {\n\tcounter c {\n\t}\n}\n"),
+		[]byte("\t\tpackets nope bytes 392\n"), make([]byte, maxNftOutput+1)} {
+		if _, err := parseNftCounterPackets(bad); err == nil {
+			t.Errorf("accepted malformed nft output %q", bad)
+		}
+	}
+}
+
 func TestParseNetemConditionReadsKernelParameters(t *testing.T) {
 	raw := []byte("qdisc netem 8001: root refcnt 2 limit 1000 delay 250ms 40ms loss 17% seed 123\n" +
 		" Sent 400 bytes 10 pkt (dropped 3, overlimits 0 requeues 0)\n")

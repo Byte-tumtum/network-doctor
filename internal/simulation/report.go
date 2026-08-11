@@ -147,11 +147,17 @@ func (r *Report) finish() {
 	if r.Evidence.ServiceStates == nil {
 		r.Evidence.ServiceStates = []ServiceStateEvidence{}
 	}
+	if r.Evidence.ServiceReplies == nil {
+		r.Evidence.ServiceReplies = []ServiceReplyEvidence{}
+	}
 	if r.Evidence.TCPResets == nil {
 		r.Evidence.TCPResets = []TCPResetEvidence{}
 	}
 	if r.Evidence.PacketConditions == nil {
 		r.Evidence.PacketConditions = []PacketConditionEvidence{}
+	}
+	if r.Evidence.PacketDrops == nil {
+		r.Evidence.PacketDrops = []PacketDropEvidence{}
 	}
 	if r.Evidence.Links == nil {
 		r.Evidence.Links = []LinkEvidence{}
@@ -362,7 +368,7 @@ func (r *Report) WriteText(w io.Writer) {
 
 	if len(r.Evidence.DNS) > 0 || len(r.Evidence.DNSQueries) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 || len(r.Evidence.TCPResets) > 0 || len(r.Evidence.PacketConditions) > 0 ||
 		len(r.Evidence.Links) > 0 || len(r.Evidence.Routes) > 0 || len(r.Evidence.Routers) > 0 || len(r.Evidence.Reachability) > 0 ||
-		len(r.Evidence.FamilyReachability) > 0 {
+		len(r.Evidence.FamilyReachability) > 0 || len(r.Evidence.ServiceReplies) > 0 || len(r.Evidence.PacketDrops) > 0 {
 		p("Structured evidence")
 		for _, e := range r.Evidence.Links {
 			p("  LINK  %-10s %-16s %-18s up=%t", e.Node, e.Segment, e.Address, e.Up)
@@ -417,6 +423,14 @@ func (r *Report) WriteText(w io.Writer) {
 		}
 		for _, e := range r.Evidence.TCPResets {
 			p("  RESET %-10s %-10s %-24s ×%d", e.Node, e.Event, e.Result, e.Count)
+		}
+		for _, e := range r.Evidence.ServiceReplies {
+			p("  REPLY %-10s %-14s %-16s port=%-5d status=%-3d %-10s ×%d", e.Node, e.Type,
+				textsafe.Clean(e.Service), e.Port, e.Status, e.Result, e.Count)
+		}
+		for _, e := range r.Evidence.PacketDrops {
+			p("  DROP  %-10s %-8s %-4s %-5s port=%-5d to=%-16s packets=%d", e.Node, e.Direction,
+				e.Family, e.Protocol, e.Port, e.To, e.Packets)
 		}
 		p("")
 	}

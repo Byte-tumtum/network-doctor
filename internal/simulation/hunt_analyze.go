@@ -316,9 +316,14 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 			}
 		}
 	case "service.tls_expired":
-		for _, state := range report.Evidence.ServiceStates {
-			if state.Node == mutation.Node && state.Service == mutation.Service && state.Type == ServiceTLS &&
-				state.Mode == TLSCertificateExpired {
+		// The handshake, not the service's configured mode: a certificate that
+		// was never presented to anyone expired in private. The rejection is
+		// what makes it a fault, so the service has to have watched a client
+		// refuse the certificate it held out.
+		for _, handshake := range report.Evidence.TLS {
+			if handshake.Node == mutation.Node && handshake.Service == mutation.Service &&
+				handshake.CertificateMode == TLSCertificateExpired && handshake.CertificatePresented &&
+				handshake.Result == "client_rejected_certificate" && handshake.Count > 0 {
 				return true
 			}
 		}
@@ -331,23 +336,25 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 			}
 		}
 	case "quic.udp_443_block":
-		for _, fault := range report.Faults {
-			if fault.Type == FaultDrop && fault.Node == mutation.Node && fault.Protocol == "udp" &&
-				fault.Port == mutation.TargetPort && fault.Direction == DirectionInbound {
+		// The rule's own counter, not the fault record that installed it: an
+		// installed rule that never matched a packet blocked nothing.
+		for _, drop := range report.Evidence.PacketDrops {
+			if drop.Node == mutation.Node && drop.Protocol == "udp" && drop.Port == mutation.TargetPort &&
+				drop.Direction == DirectionInbound && drop.Packets > 0 {
 				return true
 			}
 		}
 	case "encrypted_dns.doh_invalid":
-		for _, state := range report.Evidence.ServiceStates {
-			if state.Node == mutation.Node && state.Service == mutation.Service && state.Type == ServiceEncryptedDNS &&
-				state.Mode == DoHResponseInvalid {
+		for _, reply := range report.Evidence.ServiceReplies {
+			if reply.Node == mutation.Node && reply.Service == mutation.Service &&
+				reply.Type == ServiceEncryptedDNS && reply.Result == DoHResponseInvalid && reply.Count > 0 {
 				return true
 			}
 		}
 	case "http.status_503":
-		for _, state := range report.Evidence.ServiceStates {
-			if state.Node == mutation.Node && state.Type == ServiceHTTP && state.Port == mutation.TargetPort &&
-				state.Status == mutation.Status {
+		for _, reply := range report.Evidence.ServiceReplies {
+			if reply.Node == mutation.Node && reply.Type == ServiceHTTP && reply.Port == mutation.TargetPort &&
+				reply.Status == mutation.Status && reply.Count > 0 {
 				return true
 			}
 		}

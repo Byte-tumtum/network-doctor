@@ -50,11 +50,11 @@ type encryptedDNSServer struct {
 // loopback ephemeral ports instead of the privileged ones the protocols fix.
 type listenFamiliesFunc func(addresses []string, port string) ([]net.Listener, error)
 
-func startEncryptedDNSService(ctx context.Context, svc Service, addresses []string, trustDir string) (*encryptedDNSServer, error) {
-	return startEncryptedDNSServiceWith(ctx, svc, addresses, trustDir, listenTCPFamilies)
+func startEncryptedDNSService(ctx context.Context, svc Service, addresses []string, trustDir string, recorder *evidenceRecorder) (*encryptedDNSServer, error) {
+	return startEncryptedDNSServiceWith(ctx, svc, addresses, trustDir, listenTCPFamilies, recorder)
 }
 
-func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []string, trustDir string, listen listenFamiliesFunc) (*encryptedDNSServer, error) {
+func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []string, trustDir string, listen listenFamiliesFunc, recorder *evidenceRecorder) (*encryptedDNSServer, error) {
 	zone, err := parseZone(svc.Zone, svc.Records)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []
 	config := &tls.Config{Certificates: []tls.Certificate{material.certificate}, MinVersion: tls.VersionTLS12}
 	server := &encryptedDNSServer{caPath: caPath, conns: make(map[net.Conn]struct{})}
 	server.doh = &http.Server{
-		Handler:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, zone, svc.DoHResponse) }),
+		Handler:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, zone, svc, recorder) }),
 		TLSConfig: config,
 		// A probe that connects to prove TCP works and hangs up without a
 		// ClientHello is the direct-egress check doing its job, not an error.
@@ -115,7 +115,7 @@ func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []
 // serveDoH answers the one request shape netdoc's probe makes. Anything else is
 // a 404: the fixture proves that a real RFC 8484 exchange completed, so it must
 // not answer a request the probe is not supposed to be sending.
-func serveDoH(w http.ResponseWriter, r *http.Request, zone map[string][]netip.Addr, responseMode string) {
+func serveDoH(w http.ResponseWriter, r *http.Request, zone map[string][]netip.Addr, svc Service, recorder *evidenceRecorder) {
 	if r.URL.Path != encryptedDNSPath || r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -130,12 +130,21 @@ func serveDoH(w http.ResponseWriter, r *http.Request, zone map[string][]netip.Ad
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	// Recorded once the body is on its way out, with what was in it: a fixture
+	// configured to answer with a malformed message has done nothing until a
+	// client has actually been handed one.
+	served := func(result string) {
+		_ = recorder.record(evidenceEvent{Kind: evidenceServiceReply, Service: svc.Name,
+			ServiceType: ServiceEncryptedDNS, ServicePort: svc.Port, ServiceStatus: http.StatusOK, Result: result})
+	}
 	w.Header().Set("Content-Type", encryptedDNSMediaType)
-	if responseMode == DoHResponseInvalid {
+	if svc.DoHResponse == DoHResponseInvalid {
 		_, _ = w.Write([]byte("not dns"))
+		served(DoHResponseInvalid)
 		return
 	}
 	_, _ = w.Write(reply)
+	served(replyResponded)
 }
 
 // serveDoT is DNS over TLS: every message, in both directions, behind the

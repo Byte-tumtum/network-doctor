@@ -137,7 +137,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			return nil, nil, err
 		}
 		for _, ln := range listeners {
-			go serveHTTP(ln, svc)
+			go serveHTTP(ln, svc, recorder)
 		}
 		return listenersAsClosers(listeners), nil, nil
 	case ServiceTCP:
@@ -174,7 +174,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 		}
 		return []io.Closer{server}, nil, nil
 	case ServiceEncryptedDNS:
-		server, err := startEncryptedDNSService(ctx, svc, addresses, trustDir)
+		server, err := startEncryptedDNSService(ctx, svc, addresses, trustDir, recorder)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -268,18 +268,27 @@ func dnsKey(name string) string {
 
 // serveHTTP answers netdoc's captive-portal probe with the 204 it wants and
 // everything else with the scenario's configured status.
-func serveHTTP(ln net.Listener, svc Service) {
+func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 	body := svc.Body
 	if body == "" {
 		body = "netdoc-sim\n"
 	}
+	// The status a client was actually served, recorded per reply. The
+	// configured status says what this service would answer; only this says it
+	// answered at all.
+	served := func(status int) {
+		_ = recorder.record(evidenceEvent{Kind: evidenceServiceReply, Service: svc.Name, ServiceType: ServiceHTTP,
+			ServicePort: svc.Port, ServiceStatus: status, Result: replyResponded})
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/generate_204", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
+		served(http.StatusNoContent)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(svc.Status)
 		fmt.Fprint(w, body)
+		served(svc.Status)
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	// Serve returns when the node holder closes the listener on shutdown.

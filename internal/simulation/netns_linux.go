@@ -807,6 +807,14 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 				in("nft", "add", "chain", "inet", nftTable, chain, "{ type filter hook "+hook+" priority 0; }"))
 			e.tables[key] = true
 		}
+		// A named counter, so the rule's match count can be read back on its own
+		// after the run rather than parsed out of the chain listing. Its name is
+		// derived from the fault, which is what the evidence collector has.
+		counter := dropCounterName(f)
+		if counterKey := f.Node + "/counter/" + counter; !e.tables[counterKey] {
+			steps = append(steps, in("nft", "add", "counter", "inet", nftTable, counter))
+			e.tables[counterKey] = true
+		}
 		rule := in("nft", "add", "rule", "inet", nftTable, chain)
 		what := "all traffic"
 		if f.To == "" && f.Family != "" {
@@ -833,7 +841,7 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 				what += " port " + strconv.Itoa(f.Port)
 			}
 		}
-		rule = append(rule, "drop")
+		rule = append(rule, "counter", "name", counter, "drop")
 		return append(steps, rule), np.node.Name + " " + where + " " + what, nil
 	case FaultNetem:
 		iface := np.interfaceForSegment(f.Segment)
@@ -904,6 +912,32 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 			np.node.Name, f.Segment, f.MTU), nil
 	}
 	return nil, "", fmt.Errorf("unknown fault type %q", f.Type)
+}
+
+// dropCounterName names the nftables counter one drop fault's rule feeds. It is
+// derived from the fault alone so that the collector, which sees the scenario
+// rather than the applied commands, can ask for the same counter by name. Two
+// identical faults share one counter, which is the honest total for a rule that
+// was installed twice.
+func dropCounterName(f Fault) string {
+	parts := []string{"drop", f.Direction, f.Family, f.Protocol, strconv.Itoa(f.Port), f.To}
+	for i, part := range parts {
+		if part == "" {
+			part = "any"
+		}
+		parts[i] = strings.Map(func(r rune) rune {
+			if isNftNameRune(r) {
+				return r
+			}
+			return '_'
+		}, part)
+	}
+	return strings.Join(parts, "_")
+}
+
+// isNftNameRune reports whether r may appear in an nftables object name.
+func isNftNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_'
 }
 
 // nftTable is the simulator's own table name. Rules only ever go here, and only

@@ -20,6 +20,7 @@ import (
 
 const maxRouteGetOutput = 4096
 const maxTCOutput = 4096
+const maxNftOutput = 4096
 
 func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 	paths := make([]string, 0, len(e.nodes))
@@ -92,6 +93,25 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 			condition.Seed = 0
 		}
 		out.PacketConditions = append(out.PacketConditions, condition)
+	}
+
+	countedDrops := map[string]bool{}
+	for _, fault := range e.scenario.Faults {
+		counter := dropCounterName(fault)
+		if fault.Type != FaultDrop || countedDrops[fault.Node+"\x00"+counter] {
+			continue
+		}
+		countedDrops[fault.Node+"\x00"+counter] = true
+		res := e.Exec(ctx, fault.Node, []string{"nft", "list", "counter", "inet", nftTable, counter}, nil)
+		if res.Err != nil || res.ExitCode != 0 {
+			return Evidence{}, fmt.Errorf("read drop counter on %s: %w", fault.Node, execResultError(res))
+		}
+		packets, parseErr := parseNftCounterPackets(res.Stdout)
+		if parseErr != nil {
+			return Evidence{}, fmt.Errorf("parse drop counter on %s: %w", fault.Node, parseErr)
+		}
+		out.PacketDrops = append(out.PacketDrops, PacketDropEvidence{Node: fault.Node, Family: fault.Family,
+			Protocol: fault.Protocol, Port: fault.Port, To: fault.To, Direction: fault.Direction, Packets: packets})
 	}
 
 	for node, destinations := range e.evidenceDestinations() {
@@ -261,6 +281,26 @@ func (e *netnsEnv) observeFamily(ctx context.Context, np *nodeProc, endpoints []
 		}
 	}
 	return false, nil
+}
+
+// parseNftCounterPackets reads the packet total out of one `nft list counter`
+// listing, whose counter line reads `packets 12 bytes 640`.
+func parseNftCounterPackets(raw []byte) (uint64, error) {
+	if len(raw) == 0 || len(raw) > maxNftOutput {
+		return 0, errors.New("nft counter output is empty or oversized")
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "packets" {
+			continue
+		}
+		packets, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("nft counter packets: %w", err)
+		}
+		return packets, nil
+	}
+	return 0, errors.New("nft counter output has no packet total")
 }
 
 func parseNetemStats(raw []byte) (bool, uint64, error) {

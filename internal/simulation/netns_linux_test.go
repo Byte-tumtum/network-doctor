@@ -160,6 +160,43 @@ func TestNetemFaultArgvIsGeneratedAndSeeded(t *testing.T) {
 	}
 }
 
+// A drop rule has to feed a counter, or the run ends with no way to tell a rule
+// that swallowed traffic from one that never saw any. The counter's name comes
+// from the fault, so the evidence collector can find it again from the scenario.
+func TestDropFaultArgvCountsWhatItDrops(t *testing.T) {
+	np := &nodeProc{pid: 42, node: &Node{Name: "internet"}}
+	env := &netnsEnv{tables: map[string]bool{}}
+	fault := Fault{Type: FaultDrop, Node: "internet", Direction: DirectionInbound, Protocol: "udp", Port: 443}
+	steps, _, err := env.faultSteps(fault, np)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := ""
+	for _, step := range steps {
+		all += strings.Join(step, " ") + "\n"
+	}
+	counter := dropCounterName(fault)
+	for _, want := range []string{
+		"nft add counter inet " + nftTable + " " + counter,
+		"udp dport 443 counter name " + counter + " drop",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("steps do not contain %q:\n%s", want, all)
+		}
+	}
+	// Distinct faults must not share a counter, or one rule's traffic would
+	// stand as evidence for another's.
+	outbound := dropCounterName(Fault{Type: FaultDrop, Node: "internet", Direction: DirectionOutbound, Family: "ipv4"})
+	if outbound == counter {
+		t.Errorf("inbound and outbound drops share counter %q", counter)
+	}
+	for _, name := range []string{counter, outbound, dropCounterName(Fault{To: "2001:db8::1"})} {
+		if strings.IndexFunc(name, func(r rune) bool { return !isNftNameRune(r) }) >= 0 {
+			t.Errorf("counter name %q is not an nft identifier", name)
+		}
+	}
+}
+
 // The black hole is two commands that have to arrive together: narrowing the
 // hop without suppressing the report produces ordinary PMTU discovery, and
 // suppressing without narrowing produces nothing at all. The suppression must

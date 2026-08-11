@@ -164,21 +164,29 @@ func TestMutationObservedUsesIndependentFamilyTruth(t *testing.T) {
 }
 
 func TestMutationObservedUsesIndependentProtocolServiceEvidence(t *testing.T) {
-	serviceState := func(item ServiceStateEvidence) Report {
-		return Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{item}}}
-	}
 	socksRequest := func(item SOCKSEvidence) Report {
 		return Report{Evidence: Evidence{SOCKSRequests: []SOCKSEvidence{item}}}
 	}
-	drop := func(node, protocol string, port int, direction string) Report {
-		return Report{Faults: []FaultInfo{{Type: FaultDrop, Node: node, Protocol: protocol, Port: port, Direction: direction}}}
+	handshake := func(item TLSEvidence) Report {
+		return Report{Evidence: Evidence{TLS: []TLSEvidence{item}}}
 	}
+	reply := func(item ServiceReplyEvidence) Report {
+		return Report{Evidence: Evidence{ServiceReplies: []ServiceReplyEvidence{item}}}
+	}
+	drop := func(item PacketDropEvidence) Report {
+		return Report{Evidence: Evidence{PacketDrops: []PacketDropEvidence{item}}}
+	}
+	// unconsumed is the fault standing there with nothing having happened to
+	// anyone; configuredOnly is the record that says only that the simulator
+	// asked for it. Neither is an observation.
 	tests := []struct {
-		name        string
-		mutation    GeneratedMutation
-		positive    Report
-		wrongObject Report
-		wrongState  Report
+		name           string
+		mutation       GeneratedMutation
+		positive       Report
+		wrongObject    Report
+		wrongState     Report
+		unconsumed     Report
+		configuredOnly Report
 	}{
 		{
 			name:     "TCP reset",
@@ -193,12 +201,17 @@ func TestMutationObservedUsesIndependentProtocolServiceEvidence(t *testing.T) {
 		{
 			name:     "expired TLS certificate",
 			mutation: GeneratedMutation{ID: "service.tls_expired", Node: "target", Service: "tls-target"},
-			positive: serviceState(ServiceStateEvidence{Node: "target", Service: "tls-target", Type: ServiceTLS,
-				Port: 443, Mode: TLSCertificateExpired}),
-			wrongObject: serviceState(ServiceStateEvidence{Node: "other", Service: "tls-target", Type: ServiceTLS,
-				Port: 443, Mode: TLSCertificateExpired}),
-			wrongState: serviceState(ServiceStateEvidence{Node: "target", Service: "tls-target", Type: ServiceTLS,
-				Port: 443, Mode: TLSCertificateValid}),
+			positive: handshake(TLSEvidence{Node: "target", Service: "tls-target", CertificateMode: TLSCertificateExpired,
+				CertificatePresented: true, Result: "client_rejected_certificate", Count: 1}),
+			wrongObject: handshake(TLSEvidence{Node: "other", Service: "tls-target", CertificateMode: TLSCertificateExpired,
+				CertificatePresented: true, Result: "client_rejected_certificate", Count: 1}),
+			wrongState: handshake(TLSEvidence{Node: "target", Service: "tls-target", CertificateMode: TLSCertificateValid,
+				CertificatePresented: true, Result: "passed", Count: 1}),
+			// The service held the expired certificate out and nobody took it.
+			unconsumed: handshake(TLSEvidence{Node: "target", Service: "tls-target", CertificateMode: TLSCertificateExpired,
+				CertificatePresented: false, Result: "client_closed", Count: 1}),
+			configuredOnly: Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{Node: "target",
+				Service: "tls-target", Type: ServiceTLS, Port: 443, Mode: TLSCertificateExpired}}}},
 		},
 		{
 			name: "proxy CONNECT refused",
@@ -210,31 +223,45 @@ func TestMutationObservedUsesIndependentProtocolServiceEvidence(t *testing.T) {
 				AddressType: "domain", Destination: proxyCONNECTTarget, Port: 443, Result: "connection_refused", Count: 1}),
 			wrongState: socksRequest(SOCKSEvidence{Node: "proxy", Service: "socks-proxy", Event: "connect",
 				AddressType: "domain", Destination: proxyCONNECTTarget, Port: 443, Result: "connected", Count: 1}),
+			// The proxy was reached and never asked to CONNECT anywhere.
+			unconsumed: socksRequest(SOCKSEvidence{Node: "proxy", Service: "socks-proxy", Event: "greeting",
+				Result: "accepted", Count: 1}),
 		},
 		{
 			name: "QUIC UDP 443 blocked",
 			mutation: GeneratedMutation{ID: "quic.udp_443_block", Node: "internet",
 				Service: quicProbeService, TargetPort: 443},
-			positive:    drop("internet", "udp", 443, DirectionInbound),
-			wrongObject: drop("other", "udp", 443, DirectionInbound),
-			wrongState:  drop("internet", "tcp", 443, DirectionInbound),
+			positive:    drop(PacketDropEvidence{Node: "internet", Protocol: "udp", Port: 443, Direction: DirectionInbound, Packets: 3}),
+			wrongObject: drop(PacketDropEvidence{Node: "other", Protocol: "udp", Port: 443, Direction: DirectionInbound, Packets: 3}),
+			wrongState:  drop(PacketDropEvidence{Node: "internet", Protocol: "tcp", Port: 443, Direction: DirectionInbound, Packets: 3}),
+			// The rule was installed and matched nothing.
+			unconsumed: drop(PacketDropEvidence{Node: "internet", Protocol: "udp", Port: 443, Direction: DirectionInbound}),
+			configuredOnly: Report{Faults: []FaultInfo{{Type: FaultDrop, Node: "internet", Protocol: "udp",
+				Port: 443, Direction: DirectionInbound}}},
 		},
 		{
 			name:     "invalid DoH response",
 			mutation: GeneratedMutation{ID: "encrypted_dns.doh_invalid", Node: "internet", Service: encryptedDNSProbeService},
-			positive: serviceState(ServiceStateEvidence{Node: "internet", Service: encryptedDNSProbeService,
-				Type: ServiceEncryptedDNS, Port: 443, Mode: DoHResponseInvalid}),
-			wrongObject: serviceState(ServiceStateEvidence{Node: "internet", Service: "other-doh",
-				Type: ServiceEncryptedDNS, Port: 443, Mode: DoHResponseInvalid}),
-			wrongState: serviceState(ServiceStateEvidence{Node: "internet", Service: encryptedDNSProbeService,
-				Type: ServiceEncryptedDNS, Port: 443}),
+			positive: reply(ServiceReplyEvidence{Node: "internet", Service: encryptedDNSProbeService,
+				Type: ServiceEncryptedDNS, Port: 443, Status: 200, Result: DoHResponseInvalid, Count: 1}),
+			wrongObject: reply(ServiceReplyEvidence{Node: "internet", Service: "other-doh",
+				Type: ServiceEncryptedDNS, Port: 443, Status: 200, Result: DoHResponseInvalid, Count: 1}),
+			wrongState: reply(ServiceReplyEvidence{Node: "internet", Service: encryptedDNSProbeService,
+				Type: ServiceEncryptedDNS, Port: 443, Status: 200, Result: replyResponded, Count: 1}),
+			configuredOnly: Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{Node: "internet",
+				Service: encryptedDNSProbeService, Type: ServiceEncryptedDNS, Port: 443, Mode: DoHResponseInvalid}}}},
 		},
 		{
-			name:        "HTTP status 503",
-			mutation:    GeneratedMutation{ID: "http.status_503", Node: "target", TargetPort: 80, Status: 503},
-			positive:    serviceState(ServiceStateEvidence{Node: "target", Type: ServiceHTTP, Port: 80, Status: 503}),
-			wrongObject: serviceState(ServiceStateEvidence{Node: "target", Type: ServiceHTTP, Port: 81, Status: 503}),
-			wrongState:  serviceState(ServiceStateEvidence{Node: "target", Type: ServiceHTTP, Port: 80, Status: 200}),
+			name:     "HTTP status 503",
+			mutation: GeneratedMutation{ID: "http.status_503", Node: "target", TargetPort: 80, Status: 503},
+			positive: reply(ServiceReplyEvidence{Node: "target", Type: ServiceHTTP, Port: 80, Status: 503,
+				Result: replyResponded, Count: 1}),
+			wrongObject: reply(ServiceReplyEvidence{Node: "target", Type: ServiceHTTP, Port: 81, Status: 503,
+				Result: replyResponded, Count: 1}),
+			wrongState: reply(ServiceReplyEvidence{Node: "target", Type: ServiceHTTP, Port: 80, Status: 200,
+				Result: replyResponded, Count: 1}),
+			configuredOnly: Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{Node: "target",
+				Type: ServiceHTTP, Port: 80, Status: 503}}}},
 		},
 	}
 
@@ -251,6 +278,12 @@ func TestMutationObservedUsesIndependentProtocolServiceEvidence(t *testing.T) {
 			}
 			if mutationObserved(tc.mutation, &tc.wrongState, ObservedTruth{}) {
 				t.Fatal("healthy or different state counted as observed")
+			}
+			if mutationObserved(tc.mutation, &tc.unconsumed, ObservedTruth{}) {
+				t.Fatal("fault that reached nobody counted as observed")
+			}
+			if mutationObserved(tc.mutation, &tc.configuredOnly, ObservedTruth{}) {
+				t.Fatal("scheduling the mutation counted as observing it")
 			}
 
 			truth := collectObservedTruth(huntManifest(tc.mutation), &tc.positive)
@@ -273,14 +306,15 @@ func TestProtocolServiceMutationObservationIgnoresDiagnosis(t *testing.T) {
 	}{
 		{
 			GeneratedMutation{ID: "service.tls_expired", Node: "target", Service: "tls-target"},
-			Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{
-				Node: "target", Service: "tls-target", Type: ServiceTLS, Port: 443, Mode: TLSCertificateExpired,
+			Report{Evidence: Evidence{TLS: []TLSEvidence{{
+				Node: "target", Service: "tls-target", CertificateMode: TLSCertificateExpired,
+				CertificatePresented: true, Result: "client_rejected_certificate", Count: 1,
 			}}}},
 		},
 		{
 			GeneratedMutation{ID: "http.status_503", Node: "target", TargetPort: 80, Status: 503},
-			Report{Evidence: Evidence{ServiceStates: []ServiceStateEvidence{{
-				Node: "target", Type: ServiceHTTP, Port: 80, Status: 503,
+			Report{Evidence: Evidence{ServiceReplies: []ServiceReplyEvidence{{
+				Node: "target", Type: ServiceHTTP, Port: 80, Status: 503, Result: replyResponded, Count: 1,
 			}}}},
 		},
 	}

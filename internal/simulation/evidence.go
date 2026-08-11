@@ -22,8 +22,10 @@ type Evidence struct {
 	SOCKSRequests    []SOCKSEvidence           `json:"socks_requests"`
 	TLS              []TLSEvidence             `json:"tls"`
 	ServiceStates    []ServiceStateEvidence    `json:"service_states"`
+	ServiceReplies   []ServiceReplyEvidence    `json:"service_replies"`
 	TCPResets        []TCPResetEvidence        `json:"tcp_resets"`
 	PacketConditions []PacketConditionEvidence `json:"packet_conditions"`
+	PacketDrops      []PacketDropEvidence      `json:"packet_drops"`
 	Links            []LinkEvidence            `json:"links"`
 	Routes           []RouteEvidence           `json:"routes"`
 	Routers          []RouterEvidence          `json:"routers"`
@@ -44,6 +46,21 @@ type PacketConditionEvidence struct {
 	ObservedMinRTT time.Duration `json:"observed_min_rtt_ms,omitempty"`
 	ObservedMaxRTT time.Duration `json:"observed_max_rtt_ms,omitempty"`
 	RTTSamples     int           `json:"rtt_samples"`
+}
+
+// PacketDropEvidence is the kernel's own count of the packets one drop fault's
+// rule matched, read back from that rule's nftables counter once the run ended.
+// A rule that was installed but never matched anything reports zero: a fault
+// that was injected and a fault that took effect are different claims, and only
+// the counter can tell them apart.
+type PacketDropEvidence struct {
+	Node      string `json:"node"`
+	Family    string `json:"family,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	To        string `json:"to,omitempty"`
+	Direction string `json:"direction"`
+	Packets   uint64 `json:"packets"`
 }
 
 // LinkEvidence describes one actual namespace interface using its logical
@@ -191,7 +208,28 @@ type ServiceStateEvidence struct {
 	Status  int    `json:"status,omitempty"`
 }
 
-const evidenceServiceState = "service_state"
+// ServiceReplyEvidence counts the replies a controlled service actually sent,
+// in the shape it sent them. It is the companion to ServiceStateEvidence and
+// deliberately not the same record: a service that came up in a faulty mode has
+// a state, but until a client reaches it and it answers, nothing was done to
+// anyone. Only a reply proves the fault reached the wire.
+type ServiceReplyEvidence struct {
+	Node    string `json:"node"`
+	Service string `json:"service,omitempty"`
+	Type    string `json:"type"`
+	Port    int    `json:"port"`
+	Status  int    `json:"status,omitempty"`
+	Result  string `json:"result"`
+	Count   int    `json:"count"`
+}
+
+const (
+	evidenceServiceState = "service_state"
+	evidenceServiceReply = "service_reply"
+	// replyResponded is the reply result of a service that answered normally,
+	// whatever the answer said. A faulty mode names itself instead.
+	replyResponded = "responded"
+)
 
 type evidenceEvent struct {
 	Kind             string `json:"kind"`
@@ -327,6 +365,7 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	socks := make(map[string]SOCKSEvidence)
 	tlsEvents := make(map[string]TLSEvidence)
 	resets := make(map[string]TCPResetEvidence)
+	replies := make(map[string]ServiceReplyEvidence)
 	for _, event := range events {
 		switch event.Kind {
 		case ServiceDNS:
@@ -362,6 +401,14 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 			item.Node, item.Service, item.Event, item.Result = event.Node, event.Service, event.Event, event.Result
 			item.Count++
 			resets[key] = item
+		case evidenceServiceReply:
+			key := strings.Join([]string{event.Node, event.Service, event.ServiceType,
+				strconv.Itoa(event.ServicePort), strconv.Itoa(event.ServiceStatus), event.Result}, "\x00")
+			item := replies[key]
+			item.Node, item.Service, item.Type = event.Node, event.Service, event.ServiceType
+			item.Port, item.Status, item.Result = event.ServicePort, event.ServiceStatus, event.Result
+			item.Count++
+			replies[key] = item
 		}
 	}
 	var out Evidence
@@ -389,6 +436,9 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	for _, item := range resets {
 		out.TCPResets = append(out.TCPResets, item)
 	}
+	for _, item := range replies {
+		out.ServiceReplies = append(out.ServiceReplies, item)
+	}
 	sort.Slice(out.DNS, func(i, j int) bool {
 		a, b := out.DNS[i], out.DNS[j]
 		return a.Node+a.Service+a.Source+a.Name+a.QueryType+a.Result < b.Node+b.Service+b.Source+b.Name+b.QueryType+b.Result
@@ -407,6 +457,11 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		a, b := out.ServiceStates[i], out.ServiceStates[j]
 		return strings.Join([]string{a.Node, a.Service, a.Type, strconv.Itoa(a.Port), a.Mode, strconv.Itoa(a.Status)}, "\x00") <
 			strings.Join([]string{b.Node, b.Service, b.Type, strconv.Itoa(b.Port), b.Mode, strconv.Itoa(b.Status)}, "\x00")
+	})
+	sort.Slice(out.ServiceReplies, func(i, j int) bool {
+		a, b := out.ServiceReplies[i], out.ServiceReplies[j]
+		return strings.Join([]string{a.Node, a.Service, a.Type, strconv.Itoa(a.Port), strconv.Itoa(a.Status), a.Result}, "\x00") <
+			strings.Join([]string{b.Node, b.Service, b.Type, strconv.Itoa(b.Port), strconv.Itoa(b.Status), b.Result}, "\x00")
 	})
 	sort.Slice(out.DNSQueries, func(i, j int) bool {
 		a, b := out.DNSQueries[i], out.DNSQueries[j]
@@ -431,6 +486,9 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	if out.ServiceStates == nil {
 		out.ServiceStates = []ServiceStateEvidence{}
 	}
+	if out.ServiceReplies == nil {
+		out.ServiceReplies = []ServiceReplyEvidence{}
+	}
 	if out.DNSQueries == nil {
 		out.DNSQueries = []DNSQueryEvidence{}
 	}
@@ -438,6 +496,7 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		out.TCPResets = []TCPResetEvidence{}
 	}
 	out.PacketConditions = []PacketConditionEvidence{}
+	out.PacketDrops = []PacketDropEvidence{}
 	out.Links = []LinkEvidence{}
 	out.Routes = []RouteEvidence{}
 	out.Routers = []RouterEvidence{}
