@@ -316,34 +316,11 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 			}
 		}
 	case "service.tls_expired":
-		// The handshake, not the service's configured mode: a certificate that
-		// was never presented to anyone expired in private. The rejection is
-		// what makes it a fault, so the service has to have watched a client
-		// refuse the certificate it held out.
-		for _, handshake := range report.Evidence.TLS {
-			if handshake.Node == mutation.Node && handshake.Service == mutation.Service &&
-				handshake.CertificateMode == TLSCertificateExpired && handshake.CertificatePresented &&
-				handshake.Result == "client_rejected_certificate" && handshake.Count > 0 {
-				return true
-			}
-		}
+		return expiredCertificateRejectedAt(report.Evidence, mutation.Node, mutation.Service)
 	case "proxy.connect_refused":
-		for _, request := range report.Evidence.SOCKSRequests {
-			if request.Node == mutation.Node && request.Service == mutation.Service && request.Event == "connect" &&
-				request.Destination == proxyCONNECTTarget && request.Port == mutation.TargetPort &&
-				request.Result == "connection_refused" && request.Count > 0 {
-				return true
-			}
-		}
+		return proxyCONNECTRefusedAt(report.Evidence, mutation.Node, mutation.Service, proxyCONNECTTarget, mutation.TargetPort)
 	case "quic.udp_443_block":
-		// The rule's own counter, not the fault record that installed it: an
-		// installed rule that never matched a packet blocked nothing.
-		for _, drop := range report.Evidence.PacketDrops {
-			if drop.Node == mutation.Node && drop.Protocol == "udp" && drop.Port == mutation.TargetPort &&
-				drop.Direction == DirectionInbound && drop.Packets > 0 {
-				return true
-			}
-		}
+		return udpPortDroppedAt(report.Evidence, mutation.Node, mutation.TargetPort)
 	case "encrypted_dns.doh_invalid":
 		for _, reply := range report.Evidence.ServiceReplies {
 			if reply.Node == mutation.Node && reply.Service == mutation.Service &&
@@ -566,7 +543,10 @@ func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth Obser
 			}
 		}
 	}
-	for _, finding := range familyDiagnosisFindings(report, truth) {
+	for _, finding := range unrecognizedConditionFindings(report, truth) {
+		add(finding)
+	}
+	for _, finding := range familyContradictionFindings(report, truth) {
 		add(finding)
 	}
 	if truth.TCP == "reset" && !diagnosisClassifiedReset(report) {
@@ -592,58 +572,27 @@ func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth Obser
 	return findings
 }
 
-func familyDiagnosisFindings(report *Report, truth ObservedTruth) []HuntCaseFinding {
-	if !familyTruthComparable(report) {
+// familyContradictionFindings is the opposite direction from the false-negative
+// oracle: the simulator reached a family that the diagnosis calls unreachable.
+// That is netdoc claiming something the network disagrees with, not a missed
+// condition, so it stays a contradiction and is reported separately.
+func familyContradictionFindings(report *Report, truth ObservedTruth) []HuntCaseFinding {
+	if !finalStateComparable(report) {
 		return nil
 	}
-	client := observedClient(report)
-	if client == "" {
-		return nil
-	}
-	// Final evidence is closest in time to the last netdoc run. Earlier runs can
-	// legitimately describe an older state in multi-test timeline scenarios.
-	var diagnosis *Diagnosis
-	for i := len(report.Tests) - 1; i >= 0; i-- {
-		if report.Tests[i].Node == client {
-			diagnosis = report.Tests[i].Diagnosis
-			break
-		}
-	}
+	diagnosis := finalClientDiagnosis(report)
 	if diagnosis == nil {
 		return nil
-	}
-	var families *DiagnosisFamilies
-	if check := checkByID(diagnosis, "internet_tcp"); check != nil {
-		families = check.Families
-	}
-	diagnosed := func(family string) string {
-		if families == nil {
-			return ""
-		}
-		if family == "ipv4" {
-			return families.IPv4
-		}
-		return families.IPv6
 	}
 	var findings []HuntCaseFinding
 	for _, family := range []struct {
 		name, truth string
 	}{{"ipv4", truth.IPv4}, {"ipv6", truth.IPv6}} {
-		actual := diagnosed(family.name)
-		category := ""
-		switch {
-		case family.truth == "unreachable" && actual != "unreachable":
-			category = FindingFalseNegative
-		case family.truth == "reachable" && actual == "unreachable":
-			category = FindingDiagnosticContradiction
-		}
-		if category == "" {
+		actual := diagnosedFamily(diagnosis, family.name)
+		if family.truth != FamilyStateReachable || actual != FamilyStateUnreachable {
 			continue
 		}
-		if actual == "" {
-			actual = "unreported"
-		}
-		findings = append(findings, HuntCaseFinding{Category: category, Severity: SeverityHigh,
+		findings = append(findings, HuntCaseFinding{Category: FindingDiagnosticContradiction, Severity: SeverityHigh,
 			Code: "family_reachability_mismatch", Probe: "internet_tcp", Family: family.name,
 			Expected: family.truth, Actual: actual,
 			Summary:  fmt.Sprintf("Final simulator truth says %s is %s, but Network Doctor reported %s.", family.name, family.truth, actual),
@@ -652,10 +601,13 @@ func familyDiagnosisFindings(report *Report, truth ObservedTruth) []HuntCaseFind
 	return findings
 }
 
-func familyTruthComparable(report *Report) bool {
-	// Separate samples can disagree under packet impairment or after a timed
-	// path transition without either observer being wrong. Final-state truth is
-	// not a temporal oracle, so leave those cases to the timeline analysis.
+// finalStateComparable reports whether the run ended on a path stable enough
+// for final-state evidence and the final diagnosis to describe the same
+// network. Separate samples can disagree under packet impairment or after a
+// timed path transition without either observer being wrong.
+func finalStateComparable(report *Report) bool {
+	// Final-state truth is not a temporal oracle, so leave those cases to the
+	// timeline analysis rather than accusing either side of being wrong.
 	for _, fault := range report.Faults {
 		if fault.Type == FaultNetem {
 			return false

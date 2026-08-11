@@ -361,9 +361,48 @@ restoration, failed, and skipped events do not qualify. These timed entries
 prove successful simulator state changes, not that netdoc sampled the affected
 window or observed an end-to-end consequence.
 
-Hunt analysis compares final family truth with the final client diagnosis only
-on stable paths. Unknown or unavailable families, persistent netem, and actual
-timed path impairments are not treated as a final-state diagnosis oracle.
+### What a hunt false negative means
+
+A hunt false negative means the simulator independently established a network
+condition whose diagnostic meaning Network Doctor failed to recognize. It does
+not mean a mutation expected probe X to fail and probe X did not fail.
+
+The oracle in `internal/simulation/hunt_oracle.go` is that contract in code. It
+runs on a vocabulary of `NetworkCondition` values — domain facts such as IPv4
+internet reachability lost, a target serving an expired TLS certificate, a proxy
+refusing its CONNECT destination, QUIC datagrams dropped on UDP/443 — and keeps
+two halves apart:
+
+- **observed**: reads simulator evidence and derived simulator truth only, never
+  `report.tests`. A mutation that was generated or applied establishes nothing;
+  only the certificate a client actually refused, the CONNECT a proxy actually
+  declined, the kernel counter that actually matched a packet, or the client's
+  own dial of a controlled endpoint does.
+- **recognized**: reads one diagnosis only, never simulator evidence.
+
+Recognition is expressed over netdoc's cause vocabulary and its structured
+`address_families` verdicts, not over probe ids, so a probe that is renamed,
+split, or merged without changing what the user is told leaves the oracle
+correct. One exception is annotated in the table: `timeout` is not unique in
+netdoc's cause vocabulary, so the QUIC entry scopes it to the QUIC row.
+
+Recognition is deliberately specific. An expired certificate reported as a
+generic handshake failure, a refused destination reported as an unreachable
+proxy, and any unrelated failing row are all misses, because each sends the user
+somewhere else. A cause on a passing row is context, not recognition.
+
+Reconciliation runs on the final client diagnosis and only on stable paths.
+Unknown or unavailable families, persistent netem, and actual timed path
+impairments are not treated as a final-state diagnosis oracle. The opposite
+direction — the simulator reached a family the diagnosis calls unreachable — is
+reported as `family_reachability_mismatch` with category
+`diagnostic_contradiction` rather than as a false negative.
+
+Two observed faults deliberately imply no condition, because netdoc reports no
+failure for either by design and the `http-error` control pins that down: an
+HTTP error status is a working service answering, and an invalid DoH response
+while DoT still resolves is encrypted DNS working. Adding an expectation there
+would invent a contract the probes never made.
 
 `routing.preferred_path_failure` uses `two-path-healthy`. It lowers the
 preferred router's upstream interface, beyond the client-visible gateway, so

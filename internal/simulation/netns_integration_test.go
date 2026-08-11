@@ -838,12 +838,16 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 		}
 		return rep
 	}
+	// condition is the semantic fact the generic hunt oracle should establish
+	// from this run's independent evidence, empty where the fault deliberately
+	// implies nothing Network Doctor claims to report.
 	tests := []struct {
-		id, base string
-		killed   bool
-		check    func(*testing.T, Report, Report)
+		id, base  string
+		killed    bool
+		condition NetworkCondition
+		check     func(*testing.T, Report, Report)
 	}{
-		{"service.tcp_reset", "healthy", true, func(t *testing.T, control, rep Report) {
+		{"service.tcp_reset", "healthy", true, "", func(t *testing.T, control, rep Report) {
 			if http := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); http.Status != "PASS" {
 				t.Errorf("working HTTP control = %+v", http)
 			}
@@ -856,7 +860,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("generated TCP reset evidence = %+v", rep.Evidence.TCPResets)
 			}
 		}},
-		{"service.tls_expired", "tls-valid", true, func(t *testing.T, control, rep Report) {
+		{"service.tls_expired", "tls-valid", true, ConditionTLSCertificateExpired, func(t *testing.T, control, rep Report) {
 			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" ||
 				!hasTLSEvidence(control, TLSCertificateValid, "secure-target.test", "secure-target.test", true, "passed") {
 				t.Errorf("valid TLS control = %+v, evidence = %+v", tls, control.Evidence.TLS)
@@ -872,7 +876,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("no expired certificate rejection evidence: %+v", rep.Evidence.TLS)
 			}
 		}},
-		{"proxy.connect_refused", "socks5h-remote-dns-succeeds", true, func(t *testing.T, control, rep Report) {
+		{"proxy.connect_refused", "socks5h-remote-dns-succeeds", true, ConditionProxyDestinationRefused, func(t *testing.T, control, rep Report) {
 			if proxy := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeProxy)); proxy.Status != "PASS" ||
 				!hasSOCKSEvidence(control, "connect", "domain", "connected") {
 				t.Errorf("working proxy control = %+v, evidence = %+v", proxy, control.Evidence.SOCKSRequests)
@@ -895,7 +899,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("proxy did not record destination refusal: %+v", rep.Evidence.SOCKSRequests)
 			}
 		}},
-		{"quic.udp_443_block", "healthy", true, func(t *testing.T, control, rep Report) {
+		{"quic.udp_443_block", "healthy", true, ConditionQUICUDP443Blocked, func(t *testing.T, control, rep Report) {
 			if quic := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeQUIC)); quic.Status != "PASS" {
 				t.Errorf("working QUIC control = %+v", quic)
 			}
@@ -908,7 +912,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("UDP-only QUIC failure = %+v", out)
 			}
 		}},
-		{"encrypted_dns.doh_invalid", "healthy", false, func(t *testing.T, control, rep Report) {
+		{"encrypted_dns.doh_invalid", "healthy", false, "", func(t *testing.T, control, rep Report) {
 			baseline := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeDNSEncrypted))
 			if baseline.Status != "PASS" || !strings.Contains(baseline.Detail, "DoH and DoT both completed") {
 				t.Errorf("working encrypted-DNS control = %+v", baseline)
@@ -919,7 +923,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("DoH-invalid/DoT-valid diagnosis = %+v", check)
 			}
 		}},
-		{"http.status_503", "healthy", false, func(t *testing.T, control, rep Report) {
+		{"http.status_503", "healthy", false, "", func(t *testing.T, control, rep Report) {
 			if baseline := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); baseline.Status != "PASS" || baseline.Detail != "HTTP 200 (responded)" {
 				t.Errorf("working HTTP control = %+v", baseline)
 			}
@@ -982,6 +986,24 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 			withoutObservation.ObservedFaults = []string{}
 			if truthFingerprint(truth) == truthFingerprint(withoutObservation) {
 				t.Errorf("%s observation did not change truth fingerprint", tc.id)
+			}
+			// The generic oracle against a real run, in both directions: the
+			// simulator's own evidence establishes exactly the expected semantic
+			// condition, the real diagnosis recognizes it, and a diagnosis with
+			// its semantics withdrawn does not.
+			var want []NetworkCondition
+			if tc.condition != "" {
+				want = []NetworkCondition{tc.condition}
+			}
+			if got := observedConditions(rep.Evidence, truth); !slices.Equal(got, want) {
+				t.Errorf("%s observed conditions = %v, want %v", tc.id, got, want)
+			}
+			if accused := unrecognizedConditionFindings(&rep, truth); len(accused) != 0 {
+				t.Errorf("%s: netdoc recognized the condition and hunt accused it anyway: %+v", tc.id, accused)
+			}
+			blind := unrecognizedConditionFindings(withoutSemantics(rep), truth)
+			if len(blind) != len(want) || (len(want) == 1 && blind[0].Expected != string(tc.condition)) {
+				t.Errorf("%s: withdrawing the diagnosis semantics did not surface %v: %+v", tc.id, want, blind)
 			}
 			tc.check(t, controlReport, rep)
 			assertCleanedUp(t, rep)
@@ -1315,6 +1337,61 @@ func claimingFamilies(rep Report, ipv4, ipv6 string) *Report {
 	return &out
 }
 
+// withoutSemantics copies a real run with every diagnostic cause and per-family
+// verdict withdrawn, leaving statuses alone. It is the diagnosis that noticed
+// something broke and never said what, which is the shape a false negative has.
+func withoutSemantics(rep Report) *Report {
+	out := rep
+	out.Tests = append([]TestOutcome(nil), rep.Tests...)
+	for i := range out.Tests {
+		if out.Tests[i].Diagnosis == nil {
+			continue
+		}
+		diagnosis := *out.Tests[i].Diagnosis
+		diagnosis.Checks = append([]DiagnosisCheck(nil), diagnosis.Checks...)
+		for c := range diagnosis.Checks {
+			diagnosis.Checks[c].Cause, diagnosis.Checks[c].Families = "", nil
+		}
+		out.Tests[i].Diagnosis = &diagnosis
+	}
+	return &out
+}
+
+// substituteFamilies copies a real run with the dropped family's structured
+// verdict rewritten to reachable, optionally also withdrawing the cause that
+// names the family. Only the diagnosis is touched, so the holder's own
+// measurements stay exactly where they were.
+func substituteFamilies(rep Report, mutationID string, withdrawCause bool) *Report {
+	out := rep
+	out.Tests = append([]TestOutcome(nil), rep.Tests...)
+	diagnosis := *out.Tests[0].Diagnosis
+	diagnosis.Checks = append([]DiagnosisCheck(nil), diagnosis.Checks...)
+	for i := range diagnosis.Checks {
+		if diagnosis.Checks[i].ID != string(diagnostic.ProbeInternet) {
+			continue
+		}
+		families := *diagnosis.Checks[i].Families
+		if mutationID == "family.ipv4_drop" {
+			families.IPv4 = FamilyStateReachable
+		} else {
+			families.IPv6 = FamilyStateReachable
+		}
+		diagnosis.Checks[i].Families = &families
+		if withdrawCause {
+			diagnosis.Checks[i].Cause = ""
+		}
+	}
+	out.Tests[0].Diagnosis = &diagnosis
+	return &out
+}
+
+func familyCauseFor(family string) string {
+	if family == "ipv4" {
+		return diagnostic.FamilyCauseIPv4Unreachable
+	}
+	return diagnostic.FamilyCauseIPv6Unreachable
+}
+
 func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 	requireBackend(t)
 	netdoc, sim := buildBinaries(t)
@@ -1428,32 +1505,34 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 					t.Fatalf("%s produced a mismatch despite agreeing diagnosis: %+v", tc.id, findings)
 				}
 
-				wrong := rep
-				wrong.Tests = append([]TestOutcome(nil), rep.Tests...)
-				diagnosis := *wrong.Tests[0].Diagnosis
-				diagnosis.Checks = append([]DiagnosisCheck(nil), diagnosis.Checks...)
-				for i := range diagnosis.Checks {
-					if diagnosis.Checks[i].ID != string(diagnostic.ProbeInternet) {
-						continue
-					}
-					families := *diagnosis.Checks[i].Families
-					if tc.id == "family.ipv4_drop" {
-						families.IPv4 = "reachable"
-					} else {
-						families.IPv6 = "reachable"
-					}
-					diagnosis.Checks[i].Families = &families
+				// Two substitutions against one real run, because a family loss
+				// has two legitimate diagnostic representations. Dropping only
+				// the structured verdict leaves netdoc's family cause standing,
+				// which still tells the user which family is gone; only
+				// withdrawing both is a genuine miss.
+				keptCause := substituteFamilies(rep, tc.id, false)
+				keptCauseTruth := collectObservedTruth(manifest, keptCause)
+				if !reflect.DeepEqual(keptCauseTruth, observedTruth) || !mutationObserved(mutation, keptCause, keptCauseTruth) {
+					t.Fatalf("substituted diagnosis changed simulator truth or mutation observation:\ntruth %+v\nwrong %+v", observedTruth, keptCauseTruth)
 				}
-				wrong.Tests[0].Diagnosis = &diagnosis
-				wrongTruth := collectObservedTruth(manifest, &wrong)
-				if !reflect.DeepEqual(wrongTruth, observedTruth) || !mutationObserved(mutation, &wrong, wrongTruth) {
+				cause := diagnosisCheck(keptCause.Tests[0], string(diagnostic.ProbeInternet)).Cause
+				if cause != familyCauseFor(mutation.Family) {
+					t.Fatalf("%s diagnosis cause = %q, want %q", tc.id, cause, familyCauseFor(mutation.Family))
+				}
+				if findings := familyMismatchFindings(analyzeHuntCase(manifest, keptCause, keptCauseTruth)); len(findings) != 0 {
+					t.Fatalf("%s equivalent recognition by cause was accused: %+v", tc.id, findings)
+				}
+
+				wrong := substituteFamilies(rep, tc.id, true)
+				wrongTruth := collectObservedTruth(manifest, wrong)
+				if !reflect.DeepEqual(wrongTruth, observedTruth) || !mutationObserved(mutation, wrong, wrongTruth) {
 					t.Fatalf("substituted diagnosis changed simulator truth or mutation observation:\ntruth %+v\nwrong %+v", observedTruth, wrongTruth)
 				}
-				findings := familyMismatchFindings(analyzeHuntCase(manifest, &wrong, wrongTruth))
+				findings := familyMismatchFindings(analyzeHuntCase(manifest, wrong, wrongTruth))
 				if len(findings) != 1 || findings[0].Category != FindingFalseNegative || findings[0].Family != mutation.Family {
 					t.Fatalf("%s wrong diagnosis findings = %+v", tc.id, findings)
 				}
-				t.Logf("%s truth IPv4=%s IPv6=%s fingerprint=%s mutationObserved=true diagnosis=agree wrong-diagnosis=%s-miss",
+				t.Logf("%s truth IPv4=%s IPv6=%s fingerprint=%s mutationObserved=true diagnosis=agree cause-only=recognized wrong-diagnosis=%s-miss",
 					tc.id, truth.IPv4, truth.IPv6, truthFingerprint(truth), mutation.Family)
 			}
 			assertCleanedUp(t, rep)

@@ -718,10 +718,15 @@ func familyDiagnosisReport(ipv4, ipv6 string) *Report {
 				Families: &DiagnosisFamilies{IPv4: ipv4, IPv6: ipv6}}}}}}, Suggestions: []Suggestion{}}
 }
 
+// familyMismatchFindings collects both directions of the family comparison: the
+// generic false-negative oracle's semantic condition and the contradiction
+// finding that stayed behind. Selecting on Family rather than on one code keeps
+// the test honest about which direction fired.
 func familyMismatchFindings(findings []HuntCaseFinding) []HuntCaseFinding {
 	var out []HuntCaseFinding
 	for _, finding := range findings {
-		if finding.Code == "family_reachability_mismatch" {
+		if finding.Family != "" && (finding.Code == "family_reachability_mismatch" ||
+			finding.Code == "unrecognized_network_condition") {
 			out = append(out, finding)
 		}
 	}
@@ -734,20 +739,19 @@ func TestHuntAnalysisComparesFamilyTruthWithDiagnosis(t *testing.T) {
 		truth4, truth6           string
 		diagnosis4, diagnosis6   string
 		wantCategory, wantFamily string
-		wantExpected, wantActual string
 	}{
-		{"IPv4 false negative", "unreachable", "reachable", "reachable", "reachable", FindingFalseNegative, "ipv4", "unreachable", "reachable"},
-		{"IPv6 false negative", "reachable", "unreachable", "reachable", "reachable", FindingFalseNegative, "ipv6", "unreachable", "reachable"},
-		{"IPv4 contradiction", "reachable", "reachable", "unreachable", "reachable", FindingDiagnosticContradiction, "ipv4", "reachable", "unreachable"},
-		{"IPv6 contradiction", "reachable", "reachable", "reachable", "unreachable", FindingDiagnosticContradiction, "ipv6", "reachable", "unreachable"},
-		{"reachable agreement", "reachable", "reachable", "reachable", "reachable", "", "", "", ""},
-		{"unreachable agreement", "unreachable", "reachable", "unreachable", "reachable", "", "", "", ""},
-		{"unreachable unreported", "unreachable", "reachable", "", "reachable", FindingFalseNegative, "ipv4", "unreachable", "unreported"},
-		{"unavailable unreported", "unavailable", "reachable", "", "reachable", "", "", "", ""},
-		{"unavailable reported reachable is outside reachability comparison", "unavailable", "reachable", "reachable", "reachable", "", "", "", ""},
-		{"unavailable reported unreachable is outside reachability comparison", "unavailable", "reachable", "unreachable", "reachable", "", "", "", ""},
-		{"unknown is not an oracle", "unknown", "reachable", "unreachable", "reachable", "", "", "", ""},
-		{"dual-stack mixed isolates IPv6", "reachable", "unreachable", "reachable", "reachable", FindingFalseNegative, "ipv6", "unreachable", "reachable"},
+		{"IPv4 false negative", "unreachable", "reachable", "reachable", "reachable", FindingFalseNegative, "ipv4"},
+		{"IPv6 false negative", "reachable", "unreachable", "reachable", "reachable", FindingFalseNegative, "ipv6"},
+		{"IPv4 contradiction", "reachable", "reachable", "unreachable", "reachable", FindingDiagnosticContradiction, "ipv4"},
+		{"IPv6 contradiction", "reachable", "reachable", "reachable", "unreachable", FindingDiagnosticContradiction, "ipv6"},
+		{"reachable agreement", "reachable", "reachable", "reachable", "reachable", "", ""},
+		{"unreachable agreement", "unreachable", "reachable", "unreachable", "reachable", "", ""},
+		{"unreachable unreported", "unreachable", "reachable", "", "reachable", FindingFalseNegative, "ipv4"},
+		{"unavailable unreported", "unavailable", "reachable", "", "reachable", "", ""},
+		{"unavailable reported reachable is outside reachability comparison", "unavailable", "reachable", "reachable", "reachable", "", ""},
+		{"unavailable reported unreachable is outside reachability comparison", "unavailable", "reachable", "unreachable", "reachable", "", ""},
+		{"unknown is not an oracle", "unknown", "reachable", "unreachable", "reachable", "", ""},
+		{"dual-stack mixed isolates IPv6", "reachable", "unreachable", "reachable", "reachable", FindingFalseNegative, "ipv6"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			truth := ObservedTruth{IPv4: tc.truth4, IPv6: tc.truth6}
@@ -762,9 +766,21 @@ func TestHuntAnalysisComparesFamilyTruthWithDiagnosis(t *testing.T) {
 				t.Fatalf("family findings = %+v, want one", findings)
 			}
 			finding := findings[0]
-			if finding.Category != tc.wantCategory || finding.Family != tc.wantFamily ||
-				finding.Expected != tc.wantExpected || finding.Actual != tc.wantActual || finding.Probe != "internet_tcp" {
+			if finding.Category != tc.wantCategory || finding.Family != tc.wantFamily {
 				t.Fatalf("family finding = %+v", finding)
+			}
+			// A false negative names the semantic condition and no probe; the
+			// contradiction is still a claim about the row that made it.
+			if tc.wantCategory == FindingFalseNegative {
+				want := string(ConditionIPv4InternetUnreachable)
+				if tc.wantFamily == "ipv6" {
+					want = string(ConditionIPv6InternetUnreachable)
+				}
+				if finding.Expected != want || finding.Actual != "unrecognized" || finding.Probe != "" {
+					t.Fatalf("false negative finding = %+v", finding)
+				}
+			} else if finding.Expected != "reachable" || finding.Actual != "unreachable" || finding.Probe != "internet_tcp" {
+				t.Fatalf("contradiction finding = %+v", finding)
 			}
 		})
 	}
@@ -784,7 +800,8 @@ func TestHuntAnalysisComparesFamilyTruthWithDiagnosis(t *testing.T) {
 			tc.change(report)
 			findings := familyMismatchFindings(analyzeHuntCase(huntManifest(), report,
 				ObservedTruth{IPv4: "unreachable", IPv6: "reachable"}))
-			if len(findings) != 1 || findings[0].Family != "ipv4" || findings[0].Actual != "unreported" {
+			if len(findings) != 1 || findings[0].Family != "ipv4" ||
+				findings[0].Expected != string(ConditionIPv4InternetUnreachable) {
 				t.Fatalf("absent family diagnosis findings = %+v", findings)
 			}
 		})
