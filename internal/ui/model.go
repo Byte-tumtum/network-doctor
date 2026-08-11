@@ -500,10 +500,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cur, other := m.cur, m.otherJobs
 		pending, confirm, ssh := m.pending, m.confirmTool, m.sshPrompt
 		notice, selMoved := m.notice, m.selMoved
+		// The LAN map is drawn from the parked scan job, so restoring the job
+		// without its map state leaves the user staring at the checks list.
+		// networkCIDR is copied, not recomputed: it labels the sweep that
+		// actually ran, and this pass's source address may differ.
+		// namesPending is deliberately not carried over — it tracks lookups
+		// issued under the old generation, whose replies this restart drops,
+		// so those rows fall back to nmap's own name instead of spinning
+		// forever.
+		mapOpen, mapSel, cidr, names := m.networkMap, m.mapSelected, m.networkCIDR, m.hostNames
 		cmd := m.doRestart()
 		m.cur, m.otherJobs = cur, other
 		m.pending, m.confirmTool, m.sshPrompt = pending, confirm, ssh
 		m.notice, m.selMoved = notice, selMoved
+		m.networkMap, m.mapSelected, m.networkCIDR, m.hostNames = mapOpen, mapSel, cidr, names
 		if m.viewing {
 			m.refreshViewport()
 		}

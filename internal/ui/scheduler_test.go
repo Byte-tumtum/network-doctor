@@ -241,6 +241,33 @@ func TestWatchPreservesOpenUIState(t *testing.T) {
 				t.Error("watch tick reset selMoved, re-yanking the cursor to the first failure")
 			}
 		}},
+		{"network map", func(m *model) {
+			m.width = 100
+			m.networkMap, m.mapSelected, m.networkCIDR = true, 1, "192.168.12.0/24"
+			m.hostNames = map[string]string{"192.168.12.1": "pihole"}
+			m.cur.name, m.cur.status = lanDiscoveryName, JobDone
+			m.cur.lines = []string{
+				"Host: 192.168.12.1 (isp-cpe-4471.example)\tStatus: Up",
+				"Host: 192.168.12.50 ()\tStatus: Up",
+			}
+		}, func(t *testing.T, m model) {
+			if !m.networkMap || m.mapSelected != 1 || m.networkCIDR != "192.168.12.0/24" {
+				t.Errorf("map state = open:%v sel:%d cidr:%q, want it preserved", m.networkMap, m.mapSelected, m.networkCIDR)
+			}
+			want := []string{"192.168.12.1 (pihole)", "192.168.12.50"}
+			if got := m.networkHosts(); !reflect.DeepEqual(got, want) {
+				t.Errorf("networkHosts = %v, want %v", got, want)
+			}
+			if view := m.View(); !strings.Contains(view, "192.168.12.0/24") || !strings.Contains(view, "pihole") {
+				t.Errorf("watch tick stopped rendering the map:\n%s", view)
+			}
+		}},
+		{"no network map", func(m *model) {}, func(t *testing.T, m model) {
+			if m.networkMap || m.mapSelected != 0 || m.networkCIDR != "" || len(m.hostNames) != 0 {
+				t.Errorf("map state = open:%v sel:%d cidr:%q names:%v, want all zero",
+					m.networkMap, m.mapSelected, m.networkCIDR, m.hostNames)
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newModel(mustTarget(t, "github.com:443"), false)
