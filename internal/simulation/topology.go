@@ -277,7 +277,7 @@ func (t *Topology) validateRoutes(nodes map[string]*Node) error {
 		if err := validateGateway(via); err != nil {
 			return fmt.Errorf("topology.routes[%d].via: %w", i, err)
 		}
-		segment, onLink := nodeSegmentForAddress(node, via)
+		_, onLink := nodeSegmentForAddress(node, via)
 		if !onLink {
 			return fmt.Errorf("topology.routes[%d]: gateway %s is not on a directly connected subnet for node %q", i, via, route.Node)
 		}
@@ -308,7 +308,6 @@ func (t *Topology) validateRoutes(nodes map[string]*Node) error {
 		if route.Default {
 			defaults[route.Node+"\x00"+route.Family] = append(defaults[route.Node+"\x00"+route.Family], *route)
 		}
-		_ = segment
 	}
 	for key, routes := range defaults {
 		sort.Slice(routes, func(i, j int) bool { return routes[i].Metric < routes[j].Metric })

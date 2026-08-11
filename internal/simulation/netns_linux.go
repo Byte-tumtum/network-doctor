@@ -360,12 +360,11 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 		Addresses:        np.node.addresses(),
 		Evidence:         filepath.Join(e.work, np.node.Name+"-evidence.jsonl"),
 		TrustDir:         e.work,
-		ForwardIPv4:      np.node.Role == "router",
+		ForwardIPv4:      np.node.Role == "router" && np.node.forwardsFamily("ipv4"),
 		ForwardIPv6:      np.node.Role == "router" && np.node.forwardsFamily("ipv6"),
 		EnableIPv6:       np.node.hasFamily("ipv6"),
 		ForwardingStatus: filepath.Join(e.work, np.node.Name+"-forwarding"),
 	}
-	cfg.ForwardIPv4 = np.node.Role == "router" && np.node.forwardsFamily("ipv4")
 	path := filepath.Join(e.work, np.node.Name+".json")
 	blob, err := json.Marshal(cfg)
 	if err != nil {
