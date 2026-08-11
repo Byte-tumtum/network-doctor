@@ -194,6 +194,14 @@ Some semantics are easy to get wrong even after reading a scenario:
   an immediate refusal. `direction: inbound` silently discards arrival at the
   destination, so the sender waits for its timeout. Use inbound drops for a
   black-holed remote resolver or service.
+- A `pmtu_blackhole` narrows one router interface and drops the ICMP
+  fragmentation-needed replies that router would send about it. Both halves are
+  required and neither is useful alone: narrowing a hop that still reports the
+  smaller MTU is discovered and worked around, and narrowing an endpoint makes
+  the local kernel refuse the send instead of losing the packet silently. It is
+  rejected on a node that is not a router for that reason. Both endpoints must
+  keep the default MTU, so the narrow hop has to be transit between two
+  routers; `pmtu-blackhole.yaml` is the worked example.
 - Public-looking aliases, including documentation-prefix IPv6 addresses, exist
   only in the private namespace. They do not create host or public routes.
 - `socks5` resolves on the client before CONNECT; `socks5h` sends the hostname

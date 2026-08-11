@@ -50,7 +50,7 @@ import (
 var requiredTools = []string{"ip", "nsenter"}
 
 // optionalTools are needed only by the fault types that use them.
-var optionalTools = map[string]string{"tc": FaultNetem, "nft": FaultDrop}
+var optionalTools = map[string]string{"tc": FaultNetem, "nft": FaultDrop + " and " + FaultPMTUBlackhole}
 
 // DefaultBackend returns the backend for this platform. With dry set, Prepare
 // prints the commands it would run to log instead of running them, and creates
@@ -848,6 +848,27 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		iface := np.interfaceForSegment(f.Segment)
 		return [][]string{in("ip", "link", "set", iface.iface, "down")},
 			fmt.Sprintf("%s link to %s is down", np.node.Name, f.Segment), nil
+	case FaultPMTUBlackhole:
+		iface := np.interfaceForSegment(f.Segment)
+		steps := [][]string{in("ip", "link", "set", iface.iface, "mtu", strconv.Itoa(f.MTU))}
+		key := f.Node + "/" + pmtuChain
+		if !e.tables[key] {
+			steps = append(steps,
+				in("nft", "add", "table", "inet", nftTable),
+				in("nft", "add", "chain", "inet", nftTable, pmtuChain, "{ type filter hook output priority 0; }"))
+			e.tables[key] = true
+		}
+		// Output, not forward: the only packets suppressed are the PMTU errors
+		// this router itself generates about the narrowed hop. ICMP it merely
+		// forwards, and every other type it originates, still flow — a black
+		// hole is one missing signal, not a dead control plane.
+		steps = append(steps,
+			in("nft", "add", "rule", "inet", nftTable, pmtuChain,
+				"icmp", "type", "destination-unreachable", "icmp", "code", "frag-needed", "drop"),
+			in("nft", "add", "rule", "inet", nftTable, pmtuChain,
+				"icmpv6", "type", "packet-too-big", "drop"))
+		return steps, fmt.Sprintf("%s carries %s at a %d-byte MTU and swallows its own fragmentation-needed replies",
+			np.node.Name, f.Segment, f.MTU), nil
 	}
 	return nil, "", fmt.Errorf("unknown fault type %q", f.Type)
 }
@@ -856,6 +877,11 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 // ever inside a simulated node's namespace — the host ruleset is unreachable
 // from the director's user namespace in the first place.
 const nftTable = "netdocsim"
+
+// pmtuChain holds the PMTU black hole's suppression rules. Its own chain, so
+// the hook it needs — locally originated traffic only — cannot be confused with
+// the drop fault's chains.
+const pmtuChain = "pmtu"
 
 // tcDuration renders a Go duration the way tc wants it.
 func tcDuration(d time.Duration) string {

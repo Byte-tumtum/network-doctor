@@ -199,6 +199,25 @@ func TestRunCleansUpAfterPartialSetupFailure(t *testing.T) {
 	}
 }
 
+// A fault is several commands, so it can fail with some of them already
+// applied — a narrowed interface and no firewall rule, say. The environment
+// still has to come down: nothing that half-applied is worth keeping.
+func TestRunCleansUpAfterFaultInjectionFailure(t *testing.T) {
+	env := &fakeEnv{faultErr: errors.New("nft not built into this kernel")}
+	b := &fakeBackend{caps: supported(), env: env}
+	rep := Run(context.Background(), testScenario(t), b, Options{Netdoc: "netdoc"})
+
+	if env.cleanups != 1 {
+		t.Errorf("cleanups = %d, want 1: a half-injected fault still owns resources", env.cleanups)
+	}
+	if env.execs != 0 {
+		t.Error("no test should run against a topology whose faults did not all apply")
+	}
+	if rep.Result != ResultError || !strings.Contains(rep.Error, "nft not built") {
+		t.Errorf("result = %s, error = %q", rep.Result, rep.Error)
+	}
+}
+
 func TestRunCleansUpWhenPrepareBuiltNothing(t *testing.T) {
 	env := &fakeEnv{}
 	b := &fakeBackend{caps: supported(), env: env, prepareErr: errors.New("nope")}

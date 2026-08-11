@@ -270,6 +270,65 @@ func TestFaultDefaults(t *testing.T) {
 	}
 }
 
+// dualStackRoutedScenario gives the router a transit interface carrying IPv6,
+// which is the only case where the MTU floor a scenario may ask for changes.
+var dualStackRoutedScenario = strings.NewReplacer(
+	"{name: upstream, subnet: 10.77.2.0/24}", `{name: upstream, ipv4: 10.77.2.0/24, ipv6: "fd00:2::/64"}`,
+	"{segment: upstream, address: 10.77.2.1/24}", `{segment: upstream, ipv4: 10.77.2.1/24, ipv6: "fd00:2::1/64"}`,
+).Replace(routedScenario)
+
+// A PMTU black hole is two conditions at once, and each half of the schema
+// guards one of them: a hop that actually narrows, on a node that actually
+// forwards. Everything rejected here would produce a network that looks
+// impaired without being a black hole.
+func TestPMTUBlackholeValidation(t *testing.T) {
+	fault := func(fields string) string {
+		return routedScenario + "\nfaults: [{type: pmtu_blackhole, " + fields + "}]\n"
+	}
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"endpoint is not a hop", fault("node: client, segment: client-lan, mtu: 1400"), "must be a router"},
+		{"no such segment", fault("node: gateway, segment: nowhere, mtu: 1400"), "no interface on segment"},
+		{"mtu below the IPv4 floor", fault("node: gateway, segment: upstream, mtu: 500"), "out of range"},
+		{"mtu narrows nothing", fault("node: gateway, segment: upstream, mtu: 1500"), "out of range"},
+		{"mtu missing entirely", fault("node: gateway, segment: upstream"), "out of range"},
+		{
+			"mtu would strip IPv6 off the link",
+			dualStackRoutedScenario + "\nfaults: [{type: pmtu_blackhole, node: gateway, segment: upstream, mtu: 576}]\n",
+			"disable IPv6",
+		},
+		{"route options are not accepted", fault("node: gateway, segment: upstream, mtu: 1400, via: 10.77.2.1"), "node, segment and mtu only"},
+		{"traffic selectors are not accepted", fault("node: gateway, segment: upstream, mtu: 1400, protocol: tcp"), "node, segment and mtu only"},
+		{"mtu belongs to no other fault", routedScenario + "\nfaults: [{type: link_down, node: gateway, segment: upstream, mtu: 1400}]\n", "does not accept mtu"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseScenario(strings.NewReader(tc.yaml))
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestPMTUBlackholeAccepted(t *testing.T) {
+	// 1280 is the IPv6 floor, so a dual-stack transit hop keeps both families;
+	// only the packet size changes.
+	s, err := ParseScenario(strings.NewReader(dualStackRoutedScenario +
+		"\nfaults: [{type: pmtu_blackhole, node: gateway, segment: upstream, mtu: 1280}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Faults[0].MTU != 1280 {
+		t.Errorf("mtu = %d, want 1280", s.Faults[0].MTU)
+	}
+}
+
 func TestProxyDefaultsAndUsesValidatedNodeAddress(t *testing.T) {
 	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
 		"address: 10.77.0.1, resolver: 10.77.0.1, services: [{name: proxy, type: socks5}]}", 1)

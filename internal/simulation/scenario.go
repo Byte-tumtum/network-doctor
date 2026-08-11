@@ -187,6 +187,28 @@ const (
 	FaultReplaceDefaultRoute = "replace_default_route"
 	// FaultLinkDown administratively lowers one logical node interface.
 	FaultLinkDown = "link_down"
+	// FaultPMTUBlackhole narrows one router interface and drops the ICMP
+	// fragmentation-needed replies that router would send about it, which is
+	// the pair of conditions a path-MTU black hole is made of. Narrowing alone
+	// is not one: a router that reports the smaller MTU is discovered and
+	// worked around, and narrowing an endpoint instead makes the local kernel
+	// refuse the send. Both endpoints must keep believing the path is wide,
+	// and the hop that knows better must stay silent.
+	FaultPMTUBlackhole = "pmtu_blackhole"
+)
+
+// PMTU black hole bounds.
+const (
+	// minBlackholeMTU is the smallest IPv4 datagram every host must accept, so
+	// a narrower hop models nothing real.
+	minBlackholeMTU = 576
+	// maxBlackholeMTU is one below the Ethernet default the endpoints keep, so
+	// a fault that narrows nothing is rejected instead of silently passing.
+	maxBlackholeMTU = 1499
+	// minIPv6MTU is the floor IPv6 requires of a link. Below it the kernel
+	// stops carrying IPv6 on the interface entirely, which is a dead segment
+	// rather than a black hole.
+	minIPv6MTU = 1280
 )
 
 // FaultDrop directions.
@@ -226,6 +248,10 @@ type Fault struct {
 	// Seed makes tc netem's pseudo-random sequence reproducible. Zero asks tc
 	// for its default; campaign compilation always supplies a non-zero seed.
 	Seed uint32 `yaml:"seed,omitempty"`
+	// MTU is the size FaultPMTUBlackhole narrows the named interface to. The
+	// endpoints are left alone, so they keep offering full-size packets to a
+	// hop that can no longer carry them.
+	MTU int `yaml:"mtu,omitempty"`
 	// Service names the simulator DNS service a scheduled_dns fault drives. The
 	// node is derived from it; a scenario never names one for this fault type.
 	Service string `yaml:"service,omitempty"`
@@ -732,6 +758,9 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 	if len(f.Events) > 0 && f.Type != FaultScheduledNetem && f.Type != FaultScheduledDNS && f.Type != FaultScheduledLink {
 		return fmt.Errorf("%s does not accept events", f.Type)
 	}
+	if f.MTU != 0 && f.Type != FaultPMTUBlackhole {
+		return fmt.Errorf("%s does not accept mtu", f.Type)
+	}
 	if f.Family != "" && f.Family != "ipv4" && f.Family != "ipv6" {
 		return fmt.Errorf("unknown family %q (ipv4 or ipv6)", f.Family)
 	}
@@ -847,6 +876,27 @@ func (f *Fault) validate(topology *Topology, nodes map[string]bool) error {
 		}
 		if _, ok := node.interfaceOn(f.Segment); !ok {
 			return fmt.Errorf("node %q has no interface on segment %q", f.Node, f.Segment)
+		}
+	case FaultPMTUBlackhole:
+		if f.Via != "" || f.Metric != 0 || f.Family != "" || f.To != "" || f.Protocol != "" ||
+			f.Port != 0 || f.Direction != "" || f.Delay != "" || f.Jitter != "" || f.Loss != "" {
+			return errors.New("pmtu_blackhole takes node, segment and mtu only")
+		}
+		// A black hole is a transit condition. On a node that does not forward,
+		// a narrowed interface only makes the local kernel refuse oversized
+		// sends, which is the opposite of the silence being modeled.
+		if node.Role != "router" {
+			return fmt.Errorf("node %q has role %q; a pmtu_blackhole hop must be a router", f.Node, node.Role)
+		}
+		iface, ok := node.interfaceOn(f.Segment)
+		if !ok {
+			return fmt.Errorf("node %q has no interface on segment %q", f.Node, f.Segment)
+		}
+		if f.MTU < minBlackholeMTU || f.MTU > maxBlackholeMTU {
+			return fmt.Errorf("mtu %d is out of range (%d-%d)", f.MTU, minBlackholeMTU, maxBlackholeMTU)
+		}
+		if iface.IPv6 != "" && f.MTU < minIPv6MTU {
+			return fmt.Errorf("mtu %d would disable IPv6 on segment %q; use at least %d", f.MTU, f.Segment, minIPv6MTU)
 		}
 	case FaultScheduledNetem, FaultScheduledLink:
 		if f.Via != "" || f.Metric != 0 || f.Family != "" || f.Delay != "" || f.Jitter != "" || f.Loss != "" {

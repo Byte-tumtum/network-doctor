@@ -955,6 +955,141 @@ func TestHealthyRoutedNetworkScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// The PMTU black hole is only a black hole if size is the only thing that
+// decides whether a packet survives. This asserts that from netdoc's own
+// output: the same client, the same two routers and the same destination, with
+// small exchanges completing and full-size ones vanishing into a timeout.
+//
+// It also guards the probe end of the pair. path_mtu reads the socket's send
+// queue rather than trusting a completed Write, which is the only way the stall
+// is visible on Linux, and reconciliation turns that row plus the TLS timeout
+// into a network verdict instead of blaming the certificate.
+func TestPMTUBlackholeScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "pmtu-blackhole")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests: %+v; suggestions: %+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+	}
+	if len(rep.Tests) != 2 {
+		t.Fatalf("tests = %d, want 2", len(rep.Tests))
+	}
+	bulk, small := rep.Tests[0], rep.Tests[1]
+
+	// Small packets cross the narrowed hop in both directions: the name
+	// resolves, the handshake completes, and a whole HTTP exchange finishes.
+	// Without these the scenario would only prove the path is broken.
+	for _, c := range []struct {
+		test TestOutcome
+		id   diagnostic.ProbeID
+	}{
+		{bulk, diagnostic.ProbeDNS},
+		{bulk, diagnostic.ProbeTargetTCP},
+		{small, diagnostic.ProbeTargetTCP},
+		{small, diagnostic.ProbeHTTP},
+	} {
+		if got := diagnosisCheck(c.test, string(c.id)); got.Status != "PASS" {
+			t.Errorf("%s in %q = %+v, want PASS: small packets must still cross the black hole", c.id, c.test.Name, got)
+		}
+	}
+
+	// The one full-size exchange netdoc does judge: the server's TLS flight is
+	// larger than the hop carries and no router will say so, so it times out
+	// rather than failing on anything about the certificate.
+	tls := diagnosisCheck(bulk, string(diagnostic.ProbeTLS))
+	if tls.Status != "FAIL" || tls.Cause != diagnostic.TLSCauseTimeout {
+		t.Errorf("tls = %+v, want FAIL with cause %q — a size-selective stall, not a certificate problem",
+			tls, diagnostic.TLSCauseTimeout)
+	}
+	if !strings.Contains(tls.Fix, "Path MTU") {
+		t.Errorf("tls fix = %q, want it to send the reader to the Path MTU row", tls.Fix)
+	}
+
+	// The row the whole fault exists to exercise. The bulk write is black-holed
+	// exactly like the TLS flight: the client's kernel takes all 24 KiB and the
+	// peer acknowledges none of it. Both tests see it, because the black hole
+	// is a property of the path and not of the port being checked.
+	for _, out := range []TestOutcome{bulk, small} {
+		got := diagnosisCheck(out, string(diagnostic.ProbePMTU))
+		if got.Status != "WARN" {
+			t.Errorf("path_mtu in %q = %+v, want WARN: 24 KiB written and none acknowledged", out.Name, got)
+		}
+		if !strings.Contains(got.Detail, "none of it acknowledged") {
+			t.Errorf("path_mtu detail in %q = %q, want the unacknowledged payload named", out.Name, got.Detail)
+		}
+		// Acknowledgement is the measurement; a completed Write is what the old
+		// inference mistook for it, and would put this row back at PASS.
+		if strings.Contains(got.Detail, "drained past the measured") {
+			t.Errorf("path_mtu detail in %q = %q, want the send-queue reading, not the send-buffer inference",
+				out.Name, got.Detail)
+		}
+		if got.Fix == "" {
+			t.Errorf("path_mtu in %q carries no fix hint", out.Name)
+		}
+	}
+
+	// Reconciliation is where the evidence becomes an answer: a stalled bulk
+	// write plus an independent protocol timeout is a path verdict, and the
+	// generic "the TLS handshake fails" service answer must not win instead.
+	if bulk.ActualVerdict != "network" {
+		t.Errorf("verdict = %q, want network from the correlated path-MTU rule", bulk.ActualVerdict)
+	}
+	if !strings.Contains(bulk.Diagnosis.Summary, "path MTU black hole") {
+		t.Errorf("summary = %q, want it to name the path MTU black hole", bulk.Diagnosis.Summary)
+	}
+	if strings.Contains(bulk.Diagnosis.Summary, "bad/expired cert") {
+		t.Errorf("summary = %q, want the path answer rather than the service one", bulk.Diagnosis.Summary)
+	}
+	assertCleanedUp(t, rep)
+	assertHostMTUAndFirewallUntouched(t)
+}
+
+// The fault narrows an interface and installs firewall rules, both of which
+// exist only inside namespaces the simulator owns and both of which die with
+// them. Nothing restores them, because nothing on this host was changed.
+func assertHostMTUAndFirewallUntouched(t *testing.T) {
+	t.Helper()
+	out, err := exec.Command("ip", "-o", "link", "show").Output()
+	if err != nil {
+		t.Skip("cannot list host links:", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, " mtu 576 ") {
+			t.Errorf("a host interface is at the scenario's black-hole MTU: %s", line)
+		}
+	}
+	// nft may be absent or refuse an unprivileged read; either way the host
+	// ruleset was never reachable from the simulator's user namespace.
+	if ruleset, err := exec.Command("nft", "list", "ruleset").Output(); err == nil {
+		if strings.Contains(string(ruleset), nftTable) {
+			t.Errorf("the simulator's %s table is present in the host ruleset", nftTable)
+		}
+	}
+}
+
+// Two runs of the same black hole must reach the same diagnosis. A stall that
+// is really a race would show up here as a status that moves between runs.
+func TestPMTUBlackholeScenarioIsDeterministic(t *testing.T) {
+	requireBackend(t)
+	first, second := runScenario(t, "pmtu-blackhole"), runScenario(t, "pmtu-blackhole")
+	if first.Result != ResultPass || second.Result != ResultPass {
+		t.Fatalf("results = %s, %s (errors %q, %q)", first.Result, second.Result, first.Error, second.Error)
+	}
+	statuses := func(rep Report) map[string]string {
+		out := map[string]string{}
+		for _, test := range rep.Tests {
+			for _, check := range test.Diagnosis.Checks {
+				out[test.Name+"/"+check.ID] = check.Status
+			}
+		}
+		return out
+	}
+	if a, b := statuses(first), statuses(second); !reflect.DeepEqual(a, b) {
+		t.Errorf("diagnosis differed between runs:\n%v\n%v", a, b)
+	}
+	assertCleanedUp(t, first)
+	assertCleanedUp(t, second)
+}
+
 func TestGatewayUnreachableScenario(t *testing.T) {
 	requireBackend(t)
 	rep := runScenario(t, "gateway-unreachable")

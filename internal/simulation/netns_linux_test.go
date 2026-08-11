@@ -160,6 +160,47 @@ func TestNetemFaultArgvIsGeneratedAndSeeded(t *testing.T) {
 	}
 }
 
+// The black hole is two commands that have to arrive together: narrowing the
+// hop without suppressing the report produces ordinary PMTU discovery, and
+// suppressing without narrowing produces nothing at all. The suppression must
+// also be narrow — the output hook, one ICMP code per family — or the fault
+// stops being a black hole and becomes a dead control plane.
+func TestPMTUBlackholeFaultArgv(t *testing.T) {
+	logical := &Interface{Segment: "transit"}
+	np := &nodeProc{pid: 42, node: &Node{Name: "edge"}, ifaces: []*interfaceProc{{logical: logical, iface: "neabc1230"}}}
+	env := &netnsEnv{tables: map[string]bool{}}
+	steps, summary, err := env.faultSteps(Fault{Type: FaultPMTUBlackhole, Node: "edge", Segment: "transit", MTU: 576}, np)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(steps[0], " ")
+	if !strings.Contains(got, "ip link set neabc1230 mtu 576") {
+		t.Errorf("first step %q does not narrow the interface", got)
+	}
+	all := ""
+	for _, step := range steps {
+		all += strings.Join(step, " ") + "\n"
+	}
+	for _, want := range []string{
+		"hook output priority 0",
+		"icmp type destination-unreachable icmp code frag-needed drop",
+		"icmpv6 type packet-too-big drop",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("steps do not contain %q:\n%s", want, all)
+		}
+	}
+	// Anything broader would drop traffic the fault is not modelling.
+	for _, unwanted := range []string{"hook forward", "hook postrouting", "meta l4proto icmp drop"} {
+		if strings.Contains(all, unwanted) {
+			t.Errorf("steps contain over-broad rule %q:\n%s", unwanted, all)
+		}
+	}
+	if !strings.Contains(summary, "576") {
+		t.Errorf("summary = %q, want it to name the MTU", summary)
+	}
+}
+
 // The version gate decides whether seeded loss and jitter scenarios can run at
 // all, and it reads a string from another project, so pin the shapes it sees.
 func TestParseNetemSeedSupport(t *testing.T) {
