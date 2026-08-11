@@ -97,9 +97,8 @@ func TestObservedTruthUsesIndependentFamilyReachability(t *testing.T) {
 	report.Topology = append(report.Topology, NodeInfo{Name: "router", Role: "router"})
 	report.Evidence.FamilyReachability = append(report.Evidence.FamilyReachability,
 		FamilyReachabilityEvidence{Node: "router", Family: "ipv4", State: FamilyStateUnreachable})
-	report.Evidence.Reachability = append(report.Evidence.Reachability,
-		ReachabilityEvidence{From: "client", To: "target.test:443", Reachable: false},
-		ReachabilityEvidence{From: "client", To: "IPv4 internet endpoints", Family: "ipv4", Reachable: false})
+	report.Evidence.ControlledTargets = append(report.Evidence.ControlledTargets,
+		ControlledTargetEvidence{From: "client", To: "10.77.0.1:443", Reachable: false})
 	if got := collectObservedTruth(huntManifest(), report).IPv4; got != "reachable" {
 		t.Fatalf("non-family observation changed client IPv4 truth to %q", got)
 	}
@@ -523,7 +522,7 @@ func preferredPathReport() Report {
 				{Node: "preferred-gateway", IPv4Forwarding: true},
 				{Node: "alternate-gateway", IPv4Forwarding: true},
 			},
-			Reachability: []ReachabilityEvidence{
+			ControlledTargets: []ControlledTargetEvidence{
 				{From: "client", To: "9.9.9.9:80", Via: []string{"alternate-lan", "10.79.3.1"}, Reachable: reachable},
 			},
 			FamilyReachability: []FamilyReachabilityEvidence{
@@ -586,7 +585,7 @@ func TestPreferredPathMutationObservedFromIndependentPathConsequence(t *testing.
 			report.Evidence.Routes = report.Evidence.Routes[:1]
 			report.Evidence.FamilyReachability = nil
 		},
-		"alternate transport unavailable": func(report *Report) { report.Evidence.Reachability[0].Reachable = false },
+		"alternate transport unavailable": func(report *Report) { report.Evidence.ControlledTargets[0].Reachable = false },
 		"wrong family": func(report *Report) {
 			report.Evidence.Routes[0].Family = "ipv6"
 			report.Evidence.FamilyReachability[0].Family = "ipv6"

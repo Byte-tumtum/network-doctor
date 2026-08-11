@@ -29,8 +29,9 @@ type Evidence struct {
 	Links            []LinkEvidence            `json:"links"`
 	Routes           []RouteEvidence           `json:"routes"`
 	Routers          []RouterEvidence          `json:"routers"`
-	Reachability     []ReachabilityEvidence    `json:"reachability"`
-	// FamilyReachability is measured, never derived. See its type comment.
+	// ControlledTargets and FamilyReachability are both measured, never
+	// derived. See their type comments.
+	ControlledTargets  []ControlledTargetEvidence   `json:"controlled_targets"`
 	FamilyReachability []FamilyReachabilityEvidence `json:"family_reachability"`
 }
 
@@ -94,10 +95,16 @@ type RouterEvidence struct {
 	IPv6Forwarding bool   `json:"ipv6_forwarding"`
 }
 
-type ReachabilityEvidence struct {
+// ControlledTargetEvidence is the simulator's own TCP dial of one literal
+// address and port that a simulator fixture serves, taken from inside a node's
+// namespace. To is always an address:port the scenario owns, which is what
+// keeps a diagnosis out: netdoc's target may be a hostname or anything on the
+// public internet, and its target_tcp verdict is a claim about a run, not a
+// dial the simulator performed. The single producer is the node holder, which
+// never sees netdoc's report.
+type ControlledTargetEvidence struct {
 	From      string   `json:"from"`
 	To        string   `json:"to"`
-	Family    string   `json:"family,omitempty"`
 	Via       []string `json:"via"`
 	Reachable bool     `json:"reachable"`
 }
@@ -117,7 +124,7 @@ const (
 // controlled endpoints of this address family complete?
 //
 // It is a state rather than a bool because there are three outcomes, and it is
-// its own type rather than a ReachabilityEvidence so that the only way to fill
+// its own type rather than a ControlledTargetEvidence so that the only way to fill
 // it in is to dial. The single producer is the node holder, which never sees
 // netdoc's report; anything derived from a diagnosis, a scenario expectation or
 // a fault record belongs somewhere else. Absence of a record for a family is
@@ -500,7 +507,7 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	out.Links = []LinkEvidence{}
 	out.Routes = []RouteEvidence{}
 	out.Routers = []RouterEvidence{}
-	out.Reachability = []ReachabilityEvidence{}
+	out.ControlledTargets = []ControlledTargetEvidence{}
 	out.FamilyReachability = []FamilyReachabilityEvidence{}
 	return out
 }

@@ -107,8 +107,8 @@ evidence can contradict netdoc — which is the point of having it. It is a
 point-in-time observation of the state the run finished in, so under a timed
 fault it describes that instant, not the whole run.
 
-It lands in `family_reachability`, separately from the reachability records
-below, and carries one of three states per family: `reachable`, `unreachable`,
+It lands in `family_reachability`, separately from the controlled-target
+records below, and carries one of three states per family: `reachable`, `unreachable`,
 or `unavailable`. A family the client carries no address for is `unavailable` —
 nothing was dialed, so no target or path is named, and untested is not the same
 as unreachable. Both families always get a record, so a family with no record
@@ -118,10 +118,16 @@ keeps the two sides distinguishable in a report.
 
 Multipath scenarios also probe literal test targets when the address and TCP
 service are both simulator-owned, providing an independent alternate-path
-control. Those records use the kernel-selected route and remain independent of
-`target_tcp`; single-path, hostname, and arbitrary external targets are not
-simulator reachability evidence. Route selection alone still does not prove
-reachability.
+control. Those records land in `controlled_targets`, use the kernel-selected
+route, and are dials the simulator performed itself; single-path, hostname, and
+arbitrary external targets are not simulator reachability evidence, and
+netdoc's `target_tcp` verdict is never one of these records. Route selection
+alone still does not prove reachability.
+
+Both are evidence in the one direction that keeps the simulator honest:
+observations independent of the diagnosis establish truth, and the diagnosis is
+graded against that truth. Nothing derived from netdoc's report is stored as
+simulator evidence, which is why no evidence field carries a diagnosis verdict.
 
 ## Probe endpoint drift
 

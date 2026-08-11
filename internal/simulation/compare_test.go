@@ -277,7 +277,8 @@ func TestWriteJSONIsValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"scenario": "s"`, `"result": "ERROR"`, `"id": "abc123"`,
-		`"dns": []`, `"socks_requests": []`, `"tls": []`, `"links": []`, `"routes": []`, `"routers": []`, `"reachability": []`} {
+		`"dns": []`, `"socks_requests": []`, `"tls": []`, `"links": []`, `"routes": []`, `"routers": []`,
+		`"controlled_targets": []`, `"family_reachability": []`} {
 		if !strings.Contains(sb.String(), want) {
 			t.Errorf("json is missing %s:\n%s", want, sb.String())
 		}
@@ -287,10 +288,10 @@ func TestWriteJSONIsValid(t *testing.T) {
 func TestReportRendersStructuredRouteEvidence(t *testing.T) {
 	reachable := true
 	rep := Report{Scenario: "routed", ID: "abc123", Backend: "fake", Evidence: Evidence{
-		Links:        []LinkEvidence{{Node: "client", Segment: "client-lan", Address: "10.77.1.10/24", Up: true}},
-		Routes:       []RouteEvidence{{Node: "client", Destination: "10.77.2.20", Via: "10.77.1.1", Segment: "client-lan", Metric: 50, Selected: true, GatewayReachable: &reachable}},
-		Routers:      []RouterEvidence{{Node: "gateway", IPv4Forwarding: true}},
-		Reachability: []ReachabilityEvidence{{From: "client", To: "target", Via: []string{"client-lan", "gateway", "upstream"}, Reachable: true}},
+		Links:             []LinkEvidence{{Node: "client", Segment: "client-lan", Address: "10.77.1.10/24", Up: true}},
+		Routes:            []RouteEvidence{{Node: "client", Destination: "10.77.2.20", Via: "10.77.1.1", Segment: "client-lan", Metric: 50, Selected: true, GatewayReachable: &reachable}},
+		Routers:           []RouterEvidence{{Node: "gateway", IPv4Forwarding: true}},
+		ControlledTargets: []ControlledTargetEvidence{{From: "client", To: "10.77.0.1:80", Via: []string{"client-lan", "gateway", "upstream"}, Reachable: true}},
 	}}
 	rep.finish()
 	var text strings.Builder

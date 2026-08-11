@@ -1108,15 +1108,15 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 		}
 		return rep
 	}
-	targetObservation := func(t *testing.T, report Report) ReachabilityEvidence {
+	targetObservation := func(t *testing.T, report Report) ControlledTargetEvidence {
 		t.Helper()
-		for _, item := range report.Evidence.Reachability {
-			if item.From == "client" && item.To == "9.9.9.9:80" && item.Family == "" {
+		for _, item := range report.Evidence.ControlledTargets {
+			if item.From == "client" && item.To == "9.9.9.9:80" {
 				return item
 			}
 		}
-		t.Fatalf("controlled alternate-target observation absent: %+v", report.Evidence.Reachability)
-		return ReachabilityEvidence{}
+		t.Fatalf("controlled alternate-target observation absent: %+v", report.Evidence.ControlledTargets)
+		return ControlledTargetEvidence{}
 	}
 
 	base := loadHuntBase(t, "two-path-healthy")

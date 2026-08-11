@@ -149,7 +149,7 @@ func TestRunPassesOnlyGeneratedTLSRootEnvironment(t *testing.T) {
 }
 
 func (e *fakeEnv) Evidence(context.Context) (Evidence, error) {
-	if e.evidence.Reachability != nil {
+	if e.evidence.FamilyReachability != nil || e.evidence.ControlledTargets != nil {
 		return e.evidence, nil
 	}
 	return aggregateEvidence(nil), nil
@@ -394,60 +394,67 @@ func TestNewIDIsWideAndSafeEnoughToNeverCollide(t *testing.T) {
 	}
 }
 
-// observedFamilies is what the environment recorded on its own, before any
-// diagnosis was consulted. The two families deliberately disagree so a
-// collector that copied netdoc's verdict could not accidentally match.
-func observedFamilies() []ReachabilityEvidence {
-	return []ReachabilityEvidence{
-		{From: "client", To: "IPv4 internet endpoints", Family: "ipv4", Via: []string{"client-lan", "10.78.1.1"}, Reachable: true},
-		{From: "client", To: "IPv6 internet endpoints", Family: "ipv6", Via: []string{"client-lan", "2001:db8:77:1::1"}, Reachable: false},
+// observedEvidence is what the environment recorded on its own, before any
+// diagnosis was consulted. The two families deliberately disagree with each
+// other, and the controlled-target dial deliberately disagrees with the failing
+// diagnoses below, so a collector that copied netdoc's verdict could not
+// accidentally match.
+func observedEvidence() Evidence {
+	out := aggregateEvidence(nil)
+	out.FamilyReachability = []FamilyReachabilityEvidence{
+		{Node: "client", Family: "ipv4", Target: "IPv4 internet endpoints",
+			Via: []string{"client-lan", "10.78.1.1"}, State: FamilyStateReachable},
+		{Node: "client", Family: "ipv6", Target: "IPv6 internet endpoints",
+			Via: []string{"client-lan", "2001:db8:77:1::1"}, State: FamilyStateUnreachable},
 	}
+	out.ControlledTargets = []ControlledTargetEvidence{
+		{From: "client", To: "10.77.0.1:80", Via: []string{"client-lan", "10.78.1.1"}, Reachable: true},
+	}
+	return out
 }
 
-// TestReachabilityEvidenceIgnoresDiagnosticFamilies pins the invariant this
-// whole pass exists for: simulator reachability truth must be able to disagree
-// with netdoc. The report is rebuilt with every family verdict netdoc could
-// have produced — including the exact opposite of the truth, and a check with
-// no families at all — over one fixed set of observations. The observations may
-// not move.
-func TestReachabilityEvidenceIgnoresDiagnosticFamilies(t *testing.T) {
-	for _, diagnosis := range []string{
-		`{"checks":[{"id":"internet_tcp","status":"FAIL"}],"verdict":"broken"}`,
-		`{"checks":[{"id":"internet_tcp","status":"PASS","address_families":{"ipv4":"reachable","ipv6":"reachable"}}],"verdict":"ok"}`,
-		`{"checks":[{"id":"internet_tcp","status":"FAIL","address_families":{"ipv4":"unreachable","ipv6":"unreachable"}}],"verdict":"broken"}`,
-		`{"checks":[{"id":"internet_tcp","status":"WARN","address_families":{"ipv4":"unreachable","ipv6":"reachable"}}],"verdict":"degraded"}`,
-	} {
-		env := &fakeEnv{stdout: diagnosis, evidence: Evidence{Reachability: observedFamilies()}}
-		rep := Run(context.Background(), testScenario(t), &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
-		if got, want := rep.Evidence.Reachability, observedFamilies(); !reflect.DeepEqual(got, want) {
-			t.Errorf("diagnosis %s changed the observation:\n got %+v\nwant %+v", diagnosis, got, want)
-		}
+// TestRunKeepsEvidenceExactlyAsObserved is the simulator's truth boundary in a
+// single assertion: netdoc's report is the subject being evaluated, never a
+// source of evidence, so the finished report's evidence must be the
+// environment's own observations and nothing else. Every family verdict netdoc
+// can produce is tried — including the exact opposite of the observations, a
+// check with no families, a target verdict of every status, and no parsable
+// report at all. None of them may add, drop, or edit a record. Comparing the
+// whole Evidence rather than one field is deliberate: a future field fed from a
+// diagnosis fails here without anyone remembering to extend the test.
+func TestRunKeepsEvidenceExactlyAsObserved(t *testing.T) {
+	targetReport := `{"checks":[{"id":"target_tcp","status":"STATUS"}],"verdict":"ok","summary":"s","ok":true}`
+	cases := []struct{ name, diagnosis string }{
+		{"no families", `{"checks":[{"id":"internet_tcp","status":"FAIL"}],"verdict":"broken"}`},
+		{"both reachable", `{"checks":[{"id":"internet_tcp","status":"PASS","address_families":{"ipv4":"reachable","ipv6":"reachable"}}],"verdict":"ok"}`},
+		{"both unreachable", `{"checks":[{"id":"internet_tcp","status":"FAIL","address_families":{"ipv4":"unreachable","ipv6":"unreachable"}}],"verdict":"broken"}`},
+		{"inverted families", `{"checks":[{"id":"internet_tcp","status":"WARN","address_families":{"ipv4":"unreachable","ipv6":"reachable"}}],"verdict":"degraded"}`},
+		{"unparsable report", "not a report"},
 	}
-}
-
-// TestReachabilityEvidenceIgnoresTargetlessDiagnosis guards the other half of
-// the boundary: with no target to reach, the diagnosis contributes nothing at
-// all, so a run whose netdoc report is missing outright keeps the same truth.
-func TestReachabilityEvidenceIgnoresTargetlessDiagnosis(t *testing.T) {
-	scenario := testScenario(t)
-	scenario.Tests[0].Target = ""
-	env := &fakeEnv{stdout: okReport, evidence: Evidence{Reachability: observedFamilies()}}
-	rep := Run(context.Background(), scenario, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
-	if got, want := rep.Evidence.Reachability, observedFamilies(); !reflect.DeepEqual(got, want) {
-		t.Errorf("reachability = %+v, want %+v", got, want)
-	}
-}
-
-func TestRunDoesNotCopyTargetDiagnosisIntoReachabilityEvidence(t *testing.T) {
-	const report = `{"checks":[{"id":"target_tcp","status":"STATUS"}],"verdict":"ok","summary":"s","ok":true}`
 	for _, status := range []string{"PASS", "WARN", "FAIL", "N/A"} {
-		t.Run(status, func(t *testing.T) {
-			env := &fakeEnv{stdout: strings.Replace(report, "STATUS", status, 1)}
+		cases = append(cases, struct{ name, diagnosis string }{"target " + status, strings.Replace(targetReport, "STATUS", status, 1)})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &fakeEnv{stdout: tc.diagnosis, evidence: observedEvidence()}
 			rep := Run(context.Background(), testScenario(t), &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
-			if len(rep.Evidence.Reachability) != 0 {
-				t.Errorf("target_tcp %s created simulator reachability evidence: %+v", status, rep.Evidence.Reachability)
+			if got, want := rep.Evidence, observedEvidence(); !reflect.DeepEqual(got, want) {
+				t.Errorf("diagnosis changed the observations:\n got %+v\nwant %+v", got, want)
 			}
 		})
+	}
+}
+
+// TestRunKeepsEvidenceWithoutATarget guards the other half of the boundary:
+// with no target to reach there is nothing for a diagnosis to contribute, and
+// the observations still stand on their own.
+func TestRunKeepsEvidenceWithoutATarget(t *testing.T) {
+	scenario := testScenario(t)
+	scenario.Tests[0].Target = ""
+	env := &fakeEnv{stdout: okReport, evidence: observedEvidence()}
+	rep := Run(context.Background(), scenario, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if got, want := rep.Evidence, observedEvidence(); !reflect.DeepEqual(got, want) {
+		t.Errorf("evidence = %+v, want %+v", got, want)
 	}
 }
 

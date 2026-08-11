@@ -403,7 +403,7 @@ func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bo
 			if alternate.Destination != "default" || alternate.Family != mutation.Family ||
 				alternate.Via == selected.Via || alternate.Segment == selected.Segment || alternate.Metric <= selected.Metric ||
 				!gatewayReachable(report, mutation.TargetNode, alternate) ||
-				!reachabilityMatches(report, mutation.TargetNode, []string{alternate.Segment, alternate.Via}, true) {
+				!controlledTargetMatches(report, mutation.TargetNode, []string{alternate.Segment, alternate.Via}, true) {
 				continue
 			}
 			for _, gateway := range report.Topology {
@@ -454,9 +454,9 @@ func routerForwardsIPv4(report *Report, node string) bool {
 	return false
 }
 
-func reachabilityMatches(report *Report, from string, via []string, reachable bool) bool {
-	for _, item := range report.Evidence.Reachability {
-		if item.From == from && item.Family == "" && item.Reachable == reachable && slices.Equal(item.Via, via) {
+func controlledTargetMatches(report *Report, from string, via []string, reachable bool) bool {
+	for _, item := range report.Evidence.ControlledTargets {
+		if item.From == from && item.Reachable == reachable && slices.Equal(item.Via, via) {
 			return true
 		}
 	}

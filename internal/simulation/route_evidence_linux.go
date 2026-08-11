@@ -232,7 +232,7 @@ func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out 
 		if err != nil {
 			return fmt.Errorf("observe controlled target %s from %s: %w", target.Raw, test.Node, err)
 		}
-		out.Reachability = append(out.Reachability, ReachabilityEvidence{
+		out.ControlledTargets = append(out.ControlledTargets, ControlledTargetEvidence{
 			From: test.Node, To: netip.AddrPortFrom(netip.MustParseAddr(addr), uint16(target.Port)).String(),
 			Via: selectedDestinationPath(out.Routes, test.Node, addr), Reachable: reachable,
 		})
