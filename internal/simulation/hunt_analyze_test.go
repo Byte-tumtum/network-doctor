@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,14 @@ func boolPointer(value bool) *bool { return &value }
 // An empty state means the measurement was never taken, which is a different
 // report from one that recorded the family as unavailable.
 func familyTruthReport(ipv4, ipv6 string) *Report {
-	report := &Report{Topology: []NodeInfo{{Name: "client", Role: "client"}}}
+	return withObservedFamilies(&Report{}, ipv4, ipv6)
+}
+
+// withObservedFamilies attaches the holder-side measurements to a report that
+// already describes a finished run, so two otherwise identical cases can differ
+// by nothing except what the simulator observed.
+func withObservedFamilies(report *Report, ipv4, ipv6 string) *Report {
+	report.Topology = append(report.Topology, NodeInfo{Name: "client", Role: "client"})
 	for _, item := range []FamilyReachabilityEvidence{
 		{Node: "client", Family: "ipv4", State: ipv4},
 		{Node: "client", Family: "ipv6", State: ipv6},
@@ -595,6 +603,16 @@ func TestTruthFingerprintIncludesFamilyReachability(t *testing.T) {
 	if truthFingerprint(unavailable) == truthFingerprint(unreachable) {
 		t.Fatal("unavailable and unreachable IPv6 produced the same fingerprint")
 	}
+
+	// Truth identity follows what was observed, not the order the holder wrote
+	// its two records in. Without this, one run's fingerprint would depend on
+	// probe completion order and every equivalence class would split at random.
+	forward := familyTruthReport(FamilyStateUnreachable, FamilyStateReachable)
+	reversed := familyTruthReport(FamilyStateUnreachable, FamilyStateReachable)
+	slices.Reverse(reversed.Evidence.FamilyReachability)
+	if a, b := collectObservedTruth(huntManifest(), forward), collectObservedTruth(huntManifest(), reversed); truthFingerprint(a) != truthFingerprint(b) {
+		t.Fatalf("family record order changed the truth fingerprint:\n%+v\n%+v", a, b)
+	}
 }
 
 func TestObservedTruthProxyIgnoresGreetingResult(t *testing.T) {
@@ -1063,6 +1081,48 @@ func TestTruthInstabilityRequiresEquivalentTruthAndMutations(t *testing.T) {
 				huntCaseResult(8, dropAndLoss, huntDNSReport("ANSWER", "FAIL")),
 			},
 			truths: 1, diagnoses: 2, wantDivergent: 0,
+		},
+		{
+			// Family reachability is a real component of observed truth, so two
+			// runs that saw different families working are not two samples of
+			// one network. Grouping them would report a netdoc that correctly
+			// followed the network as unstable.
+			name: "a different observed IPv4 family is not an equivalence class",
+			cases: []HuntCaseResult{
+				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateReachable)),
+				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateUnreachable, FamilyStateReachable)),
+			},
+			truths: 2, diagnoses: 2, wantDivergent: 0,
+		},
+		{
+			name: "a different observed IPv6 family is not an equivalence class",
+			cases: []HuntCaseResult{
+				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateReachable)),
+				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateReachable, FamilyStateUnreachable)),
+			},
+			truths: 2, diagnoses: 2, wantDivergent: 0,
+		},
+		{
+			// A family the client never had and a family whose path is broken
+			// are different networks, so the grouping key has to keep them apart
+			// even though both are "not working".
+			name: "an unavailable family is not an unreachable one",
+			cases: []HuntCaseResult{
+				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateUnavailable)),
+				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateReachable, FamilyStateUnreachable)),
+			},
+			truths: 2, diagnoses: 2, wantDivergent: 0,
+		},
+		{
+			// The converse: populated family truth must not split cases that
+			// observed the same families, or instability would stop being
+			// detectable on any dual-stack run.
+			name: "the same observed families still group",
+			cases: []HuntCaseResult{
+				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateUnavailable)),
+				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateReachable, FamilyStateUnavailable)),
+			},
+			truths: 1, diagnoses: 2, wantDivergent: 1,
 		},
 		{
 			name:   "a single observation cannot be unstable",

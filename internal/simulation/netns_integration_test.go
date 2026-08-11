@@ -1399,11 +1399,14 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 				t.Errorf("independent reachability after %s = IPv4 %q, IPv6 %q; want %q, %q",
 					tc.id, ipv4.State, ipv6.State, want4, want6)
 			}
+			// Checked for every mutation, not only the family ones: a mutation
+			// that leaves both families working must not invent a family outage
+			// in observed truth either.
+			truth := collectObservedTruth(GeneratedCaseManifest{}, &rep)
+			if truth.IPv4 != want4 || truth.IPv6 != want6 {
+				t.Fatalf("truth after %s = IPv4 %q, IPv6 %q; want %q, %q", tc.id, truth.IPv4, truth.IPv6, want4, want6)
+			}
 			if strings.HasPrefix(tc.id, "family.") {
-				truth := collectObservedTruth(GeneratedCaseManifest{}, &rep)
-				if truth.IPv4 != want4 || truth.IPv6 != want6 {
-					t.Fatalf("truth after %s = IPv4 %q, IPv6 %q; want %q, %q", tc.id, truth.IPv4, truth.IPv6, want4, want6)
-				}
 				equivalent := truth
 				equivalent.IPv4, equivalent.IPv6 = baselineTruth.IPv4, baselineTruth.IPv6
 				if !reflect.DeepEqual(equivalent, baselineTruth) {
