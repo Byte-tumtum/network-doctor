@@ -425,6 +425,122 @@ func TestInternetProbeBlackHoledIPv4WithWorkingIPv6(t *testing.T) {
 	}
 }
 
+// dialedNetworks runs the egress probe against a dial stub that always
+// succeeds and reports which address families it was actually asked to dial.
+// Success everywhere is the point: what the probe declines to attempt is then
+// the only thing separating the cases.
+func dialedNetworks(t *testing.T, ops *netops, fail map[string]bool) (ProbeResult, string) {
+	t.Helper()
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	ops.interfaces = func() ([]net.Interface, error) { return nil, nil }
+	ops.dialContext = func(_ context.Context, network, _ string) (net.Conn, error) {
+		mu.Lock()
+		seen[network] = true
+		mu.Unlock()
+		if fail[network] {
+			return nil, errors.New("no route to host")
+		}
+		return fakeConn{}, nil
+	}
+	r := ops.internetProbe(context.Background(), nil)
+	// TCP only: the probe also dials UDP to learn the source address of a
+	// failed path, which is not an egress attempt against an endpoint.
+	networks := make([]string, 0, len(seen))
+	for network := range seen {
+		if strings.HasPrefix(network, "tcp") {
+			networks = append(networks, network)
+		}
+	}
+	sort.Strings(networks)
+	return r, fmt.Sprint(networks)
+}
+
+// --iface binds probe traffic to one interface's addresses, so an interface
+// holding no address of a family cannot test that family at all. Dialing it
+// anyway only proves the bind is impossible, and reporting that as
+// FamilyUnreachable accuses the network of an outage nobody measured. The
+// incompatible family has to be dropped before the dial, the way the QUIC and
+// encrypted-DNS rows already drop theirs.
+func TestInternetProbeSkipsFamiliesTheSelectedSourceCannotDial(t *testing.T) {
+	v4, v6 := net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10")
+	for _, tc := range []struct {
+		name     string
+		sources  *SourceAddresses
+		want4    string
+		want6    string
+		wantDial string
+	}{
+		{name: "unrestricted source tests both families", sources: nil,
+			want4: FamilyReachable, want6: FamilyReachable, wantDial: "[tcp4 tcp6]"},
+		{name: "dual-stack interface tests both families", sources: &SourceAddresses{IPv4: v4, IPv6: v6, Iface: "eth0"},
+			want4: FamilyReachable, want6: FamilyReachable, wantDial: "[tcp4 tcp6]"},
+		{name: "IPv4-only interface never dials IPv6", sources: &SourceAddresses{IPv4: v4, Iface: "eth0"},
+			want4: FamilyReachable, want6: "", wantDial: "[tcp4]"},
+		{name: "IPv6-only interface never dials IPv4", sources: &SourceAddresses{IPv6: v6, Iface: "eth0"},
+			want4: "", want6: FamilyReachable, wantDial: "[tcp6]"},
+		// An exact local IP sets only its own family, so it reaches this path
+		// through the same struct an interface name does.
+		{name: "IPv4 literal source never dials IPv6", sources: &SourceAddresses{IPv4: v4},
+			want4: FamilyReachable, want6: "", wantDial: "[tcp4]"},
+		{name: "IPv6 literal source never dials IPv4", sources: &SourceAddresses{IPv6: v6},
+			want4: "", want6: FamilyReachable, wantDial: "[tcp6]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, dialed := dialedNetworks(t, &netops{sources: tc.sources}, nil)
+			if dialed != tc.wantDial {
+				t.Errorf("dialed %s, want %s — an incompatible family must not be attempted", dialed, tc.wantDial)
+			}
+			if r.Status != StatusPass {
+				t.Errorf("status = %s, want PASS: %s", r.Status, r.Detail)
+			}
+			if r.Families == nil || r.Families.IPv4 != tc.want4 || r.Families.IPv6 != tc.want6 {
+				t.Fatalf("families = %+v, want IPv4 %q IPv6 %q", r.Families, tc.want4, tc.want6)
+			}
+			// "no IPv6 egress" is a claim about the network. A family that was
+			// never dialed has earned no such claim.
+			for family, state := range map[string]string{"IPv4": tc.want4, "IPv6": tc.want6} {
+				if state == "" && strings.Contains(r.Detail, "no "+family+" egress") {
+					t.Errorf("detail = %q, must not report %s egress it never tested", r.Detail, family)
+				}
+			}
+		})
+	}
+}
+
+// The other half of the invariant: a family the selected source can dial is
+// judged exactly as before, and only the families actually attempted appear in
+// the failure text.
+func TestInternetProbeStillFailsFamiliesTheSelectedSourceCanDial(t *testing.T) {
+	v4, v6 := net.ParseIP("192.0.2.10"), net.ParseIP("2001:db8::10")
+
+	var routed net.IP
+	ops := &netops{sources: &SourceAddresses{IPv4: v4, Iface: "eth0"},
+		routeCause: func(destination net.IP) string { routed = destination; return RouteCauseNoDefaultRoute }}
+	r, dialed := dialedNetworks(t, ops, map[string]bool{"tcp4": true})
+	if r.Status != StatusFail || r.Cause != RouteCauseNoDefaultRoute || !routed.Equal(net.ParseIP("1.1.1.1")) {
+		t.Errorf("IPv4-only interface with dead IPv4 = %+v, routeCause saw %v, want the unchanged FAIL", r, routed)
+	}
+	if r.Families == nil || r.Families.IPv4 != FamilyUnreachable || r.Families.IPv6 != "" {
+		t.Errorf("families = %+v, want IPv4 unreachable and IPv6 untested", r.Families)
+	}
+	if dialed != "[tcp4]" || strings.Contains(r.Detail, "2606:4700:4700::1111") {
+		t.Errorf("dialed %s, detail = %q — the failure must name only endpoints it tried", dialed, r.Detail)
+	}
+
+	// A dual-stack selection has both families available, so one of them going
+	// down is a real partial outage and must keep saying so.
+	partial := &netops{sources: &SourceAddresses{IPv4: v4, IPv6: v6, Iface: "eth0"}}
+	r, dialed = dialedNetworks(t, partial, map[string]bool{"tcp6": true})
+	if r.Status != StatusWarn || r.Cause != FamilyCauseIPv6Unreachable || r.Families == nil ||
+		r.Families.IPv4 != FamilyReachable || r.Families.IPv6 != FamilyUnreachable {
+		t.Errorf("dual-stack with dead IPv6 = %+v, families %+v, want the unchanged black-hole WARN", r, r.Families)
+	}
+	if dialed != "[tcp4 tcp6]" || !strings.Contains(r.Detail, "no IPv6 egress") {
+		t.Errorf("dialed %s, detail = %q — an available family that fails is still unreachable", dialed, r.Detail)
+	}
+}
+
 func TestDialIPsConstrainsAddressFamily(t *testing.T) {
 	var networks []string
 	var mu sync.Mutex

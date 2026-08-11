@@ -354,9 +354,12 @@ type reportCheck struct {
 	Attempts   []reportAttempt `json:"attempts,omitempty"`
 }
 
+// A family the selected --iface source has no address for was never dialed, so
+// its state is empty and the key is omitted rather than serialized as "": an
+// absent family reads as untested, which is what it is.
 type reportFamilies struct {
-	IPv4 string `json:"ipv4"`
-	IPv6 string `json:"ipv6"`
+	IPv4 string `json:"ipv4,omitempty"`
+	IPv6 string `json:"ipv6,omitempty"`
 }
 
 type reportPortal struct {

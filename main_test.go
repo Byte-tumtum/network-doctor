@@ -727,6 +727,16 @@ func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing
 	if !bytes.Contains(blob, []byte(`"address_families":{"ipv4":"reachable","ipv6":"unreachable"}`)) {
 		t.Errorf("JSON missing address families: %s", blob)
 	}
+	results[diagnostic.ProbeInternet] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Families: &diagnostic.FamilyConnectivity{
+		IPv4: diagnostic.FamilyReachable,
+	}}
+	availableOnly, err := json.Marshal(buildReport(nil, probes, results, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(availableOnly, []byte(`"address_families":{"ipv4":"reachable"}`)) || bytes.Contains(availableOnly, []byte(`"ipv6"`)) {
+		t.Errorf("JSON did not omit the untested family: %s", availableOnly)
+	}
 }
 
 func TestBuildReportKeepsEncryptedResolverWarningFunctional(t *testing.T) {

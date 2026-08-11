@@ -815,6 +815,7 @@ func (o *netops) ssidProbe(ctx context.Context, deps map[ProbeID]ProbeResult) Pr
 func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 	var r ProbeResult
 	type famResult struct {
+		ips      []net.IP
 		conn     net.Conn
 		sel      net.IP
 		attempts []Attempt
@@ -824,16 +825,25 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// family only spends its own share of the probe deadline, and IPv4 and
 	// IPv6 egress are diagnosed separately.
 	var v4, v6 famResult
+	// --iface binds every dial to that interface's address of the destination's
+	// family, so a family it has no address for cannot be dialed at all. Drop it
+	// here rather than learn it from a bind error: an impossible attempt proves
+	// nothing about the network, and calling it unreachable reports an outage in
+	// a family nobody tested.
+	v4.ips, v6.ips = o.compatibleSourceIPs(internetEndpoints4), o.compatibleSourceIPs(internetEndpoints6)
+	if len(v4.ips) == 0 && len(v6.ips) == 0 {
+		return ProbeResult{Status: StatusNA, Detail: "the selected interface has no address family available for direct egress"}
+	}
 	// portalCode stays 0 when the check is stubbed out or never answered; only
 	// a real status code is evidence either way.
 	var portalCode int
 	var portalURL string
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, internetEndpoints4, 443)
+		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, v4.ips, 443)
 	})
 	wg.Go(func() {
-		v6.conn, v6.sel, v6.attempts, v6.rtt = o.dialIPs(ctx, internetEndpoints6, 443)
+		v6.conn, v6.sel, v6.attempts, v6.rtt = o.dialIPs(ctx, v6.ips, 443)
 	})
 	if o.portalCheck != nil {
 		// Runs alongside the dials rather than after them: it costs nothing
@@ -845,13 +855,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		})
 	}
 	wg.Wait()
-	r.Families = &FamilyConnectivity{IPv4: FamilyUnreachable, IPv6: FamilyUnreachable}
-	if v4.conn != nil {
-		r.Families.IPv4 = FamilyReachable
-	}
-	if v6.conn != nil {
-		r.Families.IPv6 = FamilyReachable
-	}
+	r.Families = &FamilyConnectivity{IPv4: familyState(v4.ips, v4.conn), IPv6: familyState(v6.ips, v6.conn)}
 
 	// IPv4 headlines the result unless it lost and IPv6 won — not a value
 	// judgment, just a stable order for the Detail string and warnings.
@@ -861,7 +865,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	}
 	if prim.conn == nil {
 		r.Attempts = append(v4.attempts, v6.attempts...)
-		all := append(append([]net.IP{}, internetEndpoints4...), internetEndpoints6...)
+		all := append(append([]net.IP{}, v4.ips...), v6.ips...)
 		r.Detail = "no direct TCP egress to " + joinIPs(all) + " (port 443)"
 		src, iface := o.pathIdentity(ctx, nil, all[0], 443)
 		r.Status, r.Source, r.Iface = StatusFail, src, iface
@@ -900,9 +904,12 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	}
 	r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, prim.sel, src, iface
 	r.Detail = fmt.Sprintf("%s egress via %s in %dms (src %s %s)", primName, prim.sel, Ms(prim.rtt), src, iface)
-	if sec.conn != nil {
+	switch {
+	case sec.conn != nil:
 		r.Detail += fmt.Sprintf("; %s egress via %s in %dms", secName, sec.sel, Ms(sec.rtt))
-	} else {
+	case len(sec.ips) == 0:
+		r.Detail += "; " + secName + " not tested (the selected interface has no " + secName + " address)"
+	default:
 		r.Detail += "; no " + secName + " egress"
 	}
 	// Warnings judge only the winning family: a network without the other
@@ -1979,6 +1986,21 @@ func (o *netops) compatibleSourceIPs(ips []net.IP) []net.IP {
 		}
 	}
 	return out
+}
+
+// familyState reports what the direct-egress dial proved about one address
+// family. No eligible endpoint means the selected source has no address of that
+// family, so nothing was dialed and there is nothing to report: the state stays
+// empty rather than claiming an outage in a family that was never tested.
+func familyState(ips []net.IP, conn net.Conn) string {
+	switch {
+	case len(ips) == 0:
+		return ""
+	case conn != nil:
+		return FamilyReachable
+	default:
+		return FamilyUnreachable
+	}
 }
 
 // splitAttemptFamilies partitions attempts into the winner's address family
