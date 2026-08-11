@@ -65,13 +65,15 @@ jobs:
       # every other package's test binary.
       - if: runner.os == 'Linux'
         run: go test -race -tags integration ./internal/diagnostic ./internal/simulation
-      # Smoke-fuzz the two parsers fed by input we do not control — terminal
-      # output and encrypted-DNS responses — so regressions don't rely on
-      # contributors remembering to fuzz locally.
+      # Smoke-fuzz the parsers fed by input we do not control — terminal output,
+      # target arguments, and encrypted-DNS responses — so regressions don't
+      # rely on contributors remembering to fuzz locally.
       - if: runner.os == 'Linux'
         run: go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
       - if: runner.os == 'Linux'
         run: go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic
+      - if: runner.os == 'Linux'
+        run: go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic
   lint:
     runs-on: ubuntu-latest
     steps:

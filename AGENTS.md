@@ -12,7 +12,7 @@ Keep OS behavior in build-tagged or platform-suffixed files; pass `GOOS` into te
 
 Real-socket tests must keep `integration` build tag, stay loopback-only. Ordinary tests deterministic + rootless.
 
-After changing `internal/textsafe`, fuzz sanitizer: `go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe`. After changing the encrypted-DNS response verifier, fuzz it: `go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic`. `internal/ui/jobs_test.go` uses `GO_HELPER` subprocesses to verify process-group cancellation.
+After changing `internal/textsafe`, fuzz sanitizer: `go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe`. After changing target parsing or the encrypted-DNS response verifier, fuzz it: `go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic` or `go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic`. `internal/ui/jobs_test.go` uses `GO_HELPER` subprocesses to verify process-group cancellation.
 
 ## Cross-Platform Guidelines
 
