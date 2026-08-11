@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"encoding/json"
+	mathrand "math/rand"
 	"reflect"
 	"regexp"
 	"strings"
@@ -21,6 +22,8 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 	want := []string{
 		"netem.loss", "netem.latency", "netem.jitter", "timeline.netem_spike",
 		"dns.servfail", "dns.drop", "timeline.dns_outage", "service.tcp_reset",
+		"service.tls_expired", "proxy.connect_refused", "quic.udp_443_block",
+		"encrypted_dns.doh_invalid", "http.status_503",
 		"family.ipv4_drop", "family.ipv6_drop", "link.transient_down",
 		"routing.preferred_path_failure",
 	}
@@ -31,6 +34,182 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 		hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network")) ||
 		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy")) {
 		t.Error("a curated base claims a working alternate route it does not have")
+	}
+}
+
+func TestProbeFamilyMutationGenerators(t *testing.T) {
+	tests := []struct {
+		id, base, inapplicable, removeService string
+		check                                 func(*testing.T, GeneratedMutation, *Scenario)
+	}{
+		{"service.tls_expired", "tls-valid", "tls-expired-certificate", "", func(t *testing.T, m GeneratedMutation, s *Scenario) {
+			svc := namedService(t, s, m.Service)
+			if m.Node != "target" || svc.Type != ServiceTLS || svc.Certificate.Mode != TLSCertificateExpired || svc.Port != 9443 {
+				t.Errorf("TLS mutation = %+v, service = %+v", m, svc)
+			}
+		}},
+		{"proxy.connect_refused", "socks5h-remote-dns-succeeds", "healthy", "", func(t *testing.T, m GeneratedMutation, s *Scenario) {
+			if m.Node != "proxy" || m.TargetNode != "destination" || m.Service != "socks-proxy" || m.TargetPort != 443 {
+				t.Errorf("proxy mutation = %+v", m)
+			}
+			for _, service := range s.Topology.node(m.TargetNode).Services {
+				if service.Type == ServiceTCP && service.Port == m.TargetPort {
+					t.Errorf("proxy CONNECT destination still listens: %+v", service)
+				}
+			}
+		}},
+		{"quic.udp_443_block", "healthy", "quic-udp-443-blocked", "", func(t *testing.T, m GeneratedMutation, s *Scenario) {
+			fault := s.Faults[len(s.Faults)-1]
+			if m.Node != "internet" || m.Service != quicProbeService || fault.Type != FaultDrop ||
+				fault.Direction != DirectionInbound || fault.Protocol != "udp" || fault.Port != 443 {
+				t.Errorf("QUIC mutation = %+v, fault = %+v", m, fault)
+			}
+		}},
+		{"encrypted_dns.doh_invalid", "healthy", "healthy", encryptedDNSProbeService, func(t *testing.T, m GeneratedMutation, s *Scenario) {
+			svc := namedService(t, s, m.Service)
+			if m.Node != "internet" || svc.Type != ServiceEncryptedDNS || svc.DoHResponse != DoHResponseInvalid ||
+				svc.Port != 443 || svc.Certificate.Mode != TLSCertificateValid {
+				t.Errorf("DoH mutation = %+v, service = %+v", m, svc)
+			}
+		}},
+		{"http.status_503", "healthy", "http-error", "", func(t *testing.T, m GeneratedMutation, s *Scenario) {
+			target, ok := findHTTPTestTarget(s)
+			if !ok {
+				t.Fatal("mutated HTTP target disappeared")
+			}
+			svc := s.Topology.node(target.node).Services[target.service]
+			if m.Node != "server" || m.TargetPort != 80 || m.Status != 503 || svc.Type != ServiceHTTP || svc.Status != 503 || svc.Port != 80 {
+				t.Errorf("HTTP mutation = %+v, service = %+v", m, svc)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			base := loadHuntBase(t, tc.base)
+			before, err := json.Marshal(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := cloneScenario(base)
+			canonicalScenarioInput(control)
+			if err := control.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			op := huntOperator(t, tc.id)
+			if !op.applicable(control) {
+				t.Fatal("operator is not applicable to its control")
+			}
+			first, err := op.generate(newTestRNG(), control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := op.generate(newTestRNG(), control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(first, second) {
+				t.Fatalf("generator is not deterministic: %+v != %+v", first, second)
+			}
+			first.ID = tc.id
+			mutated := cloneScenario(control)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, first); err != nil {
+				t.Fatal(err)
+			}
+			if err := mutated.Validate(); err != nil {
+				t.Fatalf("mutated scenario is invalid: %v", err)
+			}
+			if after, _ := json.Marshal(base); string(after) != string(before) {
+				t.Fatal("generator or application modified the source scenario")
+			}
+			assertUnrelatedTopology(t, control, mutated)
+			tc.check(t, first, mutated)
+
+			inapplicable := loadHuntBase(t, tc.inapplicable)
+			if tc.removeService != "" {
+				removeNamedService(inapplicable, tc.removeService)
+			}
+			if op.applicable(inapplicable) {
+				t.Fatal("operator emitted a bogus mutation for an inapplicable scenario")
+			}
+		})
+	}
+}
+
+func TestTLSExpiryRequiresMatchingValidCertificate(t *testing.T) {
+	s := loadHuntBase(t, "tls-valid")
+	named := namedService(t, s, "tls-target")
+	named.Certificate.DNSNames = []string{"different-target.test"}
+	for ni := range s.Topology.Nodes {
+		for si := range s.Topology.Nodes[ni].Services {
+			if s.Topology.Nodes[ni].Services[si].Name == named.Name {
+				s.Topology.Nodes[ni].Services[si] = named
+			}
+		}
+	}
+	if hasValidTLSTestTarget(s) {
+		t.Fatal("TLS expiry applies to a certificate that already fails hostname validation")
+	}
+}
+
+func huntOperator(t testing.TB, id string) mutationOperator {
+	t.Helper()
+	for _, op := range huntMutationRegistry {
+		if op.id == id {
+			return op
+		}
+	}
+	t.Fatalf("unknown hunt operator %q", id)
+	return mutationOperator{}
+}
+
+func newTestRNG() *mathrand.Rand { return mathrand.New(mathrand.NewSource(12345)) }
+
+func namedService(t testing.TB, s *Scenario, name string) Service {
+	t.Helper()
+	for _, node := range s.Topology.Nodes {
+		for _, service := range node.Services {
+			if service.Name == name {
+				return service
+			}
+		}
+	}
+	t.Fatalf("service %q not found", name)
+	return Service{}
+}
+
+func removeNamedService(s *Scenario, name string) {
+	for ni := range s.Topology.Nodes {
+		services := s.Topology.Nodes[ni].Services[:0]
+		for _, service := range s.Topology.Nodes[ni].Services {
+			if service.Name != name {
+				services = append(services, service)
+			}
+		}
+		s.Topology.Nodes[ni].Services = services
+	}
+}
+
+func assertUnrelatedTopology(t testing.TB, before, after *Scenario) {
+	t.Helper()
+	if !reflect.DeepEqual(before.Topology.Segments, after.Topology.Segments) {
+		t.Fatalf("mutation changed segments: %+v != %+v", before.Topology.Segments, after.Topology.Segments)
+	}
+	if !reflect.DeepEqual(before.Topology.Routes, after.Topology.Routes) {
+		t.Fatalf("mutation changed routes: %+v != %+v", before.Topology.Routes, after.Topology.Routes)
+	}
+	if !reflect.DeepEqual(before.Tests, after.Tests) {
+		t.Fatalf("mutation changed tests: %+v != %+v", before.Tests, after.Tests)
+	}
+	if len(before.Topology.Nodes) != len(after.Topology.Nodes) {
+		t.Fatal("mutation changed node count")
+	}
+	for i := range before.Topology.Nodes {
+		a, b := before.Topology.Nodes[i], after.Topology.Nodes[i]
+		a.Services, b.Services = nil, nil
+		if !reflect.DeepEqual(a, b) {
+			t.Fatalf("mutation changed unrelated node topology: %+v != %+v", a, b)
+		}
 	}
 }
 
@@ -54,6 +233,25 @@ func TestHuntCaseGenerationIsIndependentAndDeterministic(t *testing.T) {
 	}
 	if direct.Manifest.CaseSeed != DeriveHuntCaseSeed(seed, "healthy-routed-network", 17) {
 		t.Error("manifest did not carry the independently derived seed")
+	}
+}
+
+func TestHuntGeneratorVersion2Reproduction(t *testing.T) {
+	generated, err := GenerateHuntCase("healthy-routed-network", loadHuntBase(t, "healthy-routed-network"), 12345, 76, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := GeneratedCaseManifest{
+		GeneratorVersion: "v2", BaseScenario: "healthy-routed-network", HuntSeed: 12345, Case: 76,
+		CaseSeed: -5803233938164469489,
+		Mutations: []GeneratedMutation{{
+			ID: "timeline.dns_outage", Description: "delay, then silence resolver routed-resolver for 758 ms before recovery",
+			Service: "routed-resolver", StartMS: 150, DurationMS: 758,
+		}},
+		CaseFingerprint: "8581a988c9575ea8",
+	}
+	if !reflect.DeepEqual(generated.Manifest, want) {
+		t.Fatalf("v2 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
 	}
 }
 
@@ -198,7 +396,7 @@ func TestGeneratedMutationFieldsAreDisplaySafe(t *testing.T) {
 				if !identifier.MatchString(mutation.ID) {
 					t.Errorf("unsafe mutation ID %q", mutation.ID)
 				}
-				for label, value := range map[string]string{"node": mutation.Node, "segment": mutation.Segment, "service": mutation.Service} {
+				for label, value := range map[string]string{"node": mutation.Node, "target_node": mutation.TargetNode, "segment": mutation.Segment, "service": mutation.Service} {
 					if value != "" && !isSafeName(value) {
 						t.Errorf("unsafe %s %q", label, value)
 					}

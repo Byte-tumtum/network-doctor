@@ -74,7 +74,7 @@ func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []
 	config := &tls.Config{Certificates: []tls.Certificate{material.certificate}, MinVersion: tls.VersionTLS12}
 	server := &encryptedDNSServer{caPath: caPath, conns: make(map[net.Conn]struct{})}
 	server.doh = &http.Server{
-		Handler:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, zone) }),
+		Handler:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, zone, svc.DoHResponse) }),
 		TLSConfig: config,
 		// A probe that connects to prove TCP works and hangs up without a
 		// ClientHello is the direct-egress check doing its job, not an error.
@@ -115,7 +115,7 @@ func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []
 // serveDoH answers the one request shape netdoc's probe makes. Anything else is
 // a 404: the fixture proves that a real RFC 8484 exchange completed, so it must
 // not answer a request the probe is not supposed to be sending.
-func serveDoH(w http.ResponseWriter, r *http.Request, zone map[string][]netip.Addr) {
+func serveDoH(w http.ResponseWriter, r *http.Request, zone map[string][]netip.Addr, responseMode string) {
 	if r.URL.Path != encryptedDNSPath || r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -131,6 +131,10 @@ func serveDoH(w http.ResponseWriter, r *http.Request, zone map[string][]netip.Ad
 		return
 	}
 	w.Header().Set("Content-Type", encryptedDNSMediaType)
+	if responseMode == DoHResponseInvalid {
+		_, _ = w.Write([]byte("not dns"))
+		return
+	}
 	_, _ = w.Write(reply)
 }
 

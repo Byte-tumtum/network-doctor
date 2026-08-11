@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"gopkg.in/yaml.v3"
 )
 
 const proxyProbeName = "connectivitycheck.gstatic.com"
@@ -789,7 +790,7 @@ func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
 
 	// A generated timed resolver case must rediscover the existing structured
 	// resampling opportunity; assert the code, never the human wording.
-	known := run("--case", "14")
+	known := run("--case", "76")
 	if len(known.Cases) != 1 || !hasHuntSuggestion(known.Suggestions, SuggestTransientNotResampled) {
 		t.Fatalf("known hunt gap not rediscovered: %+v", known.Suggestions)
 	}
@@ -797,6 +798,154 @@ func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
 	hostAfter := captureHostNetworkState(t)
 	if hostBefore != hostAfter {
 		t.Errorf("host routes, interfaces, or forwarding changed across hunt\nbefore:\n%s\nafter:\n%s", hostBefore, hostAfter)
+	}
+}
+
+func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(t *testing.T, scenario *Scenario) Report {
+		t.Helper()
+		definition := cloneScenario(scenario)
+		canonicalScenarioInput(definition)
+		blob, err := yaml.Marshal(definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "mutation.yaml")
+		if err := os.WriteFile(path, blob, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc, "-timeout", timedTimeout)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("run mutation: %v", err)
+		}
+		var rep Report
+		if err := json.Unmarshal(out, &rep); err != nil {
+			t.Fatalf("mutation report is not JSON: %v: %s", err, out)
+		}
+		if rep.Error != "" {
+			t.Fatalf("mutated run failed: %s", rep.Error)
+		}
+		return rep
+	}
+	tests := []struct {
+		id, base string
+		killed   bool
+		check    func(*testing.T, Report, Report)
+	}{
+		{"service.tls_expired", "tls-valid", true, func(t *testing.T, control, rep Report) {
+			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" ||
+				!hasTLSEvidence(control, TLSCertificateValid, "secure-target.test", "secure-target.test", true, "passed") {
+				t.Errorf("valid TLS control = %+v, evidence = %+v", tls, control.Evidence.TLS)
+			}
+			out := rep.Tests[0]
+			if tls := diagnosisCheck(out, string(diagnostic.ProbeTLS)); tls.Status != "FAIL" || tls.Cause != diagnostic.TLSCauseCertificateExpired {
+				t.Errorf("TLS mutation diagnosis = %+v", tls)
+			}
+			if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("TLS mutation also broke TCP: %+v", tcp)
+			}
+			if !hasTLSEvidence(rep, TLSCertificateExpired, "secure-target.test", "secure-target.test", true, "client_rejected_certificate") {
+				t.Errorf("no expired certificate rejection evidence: %+v", rep.Evidence.TLS)
+			}
+		}},
+		{"proxy.connect_refused", "socks5h-remote-dns-succeeds", true, func(t *testing.T, control, rep Report) {
+			if proxy := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeProxy)); proxy.Status != "PASS" ||
+				!hasSOCKSEvidence(control, "connect", "domain", "connected") {
+				t.Errorf("working proxy control = %+v, evidence = %+v", proxy, control.Evidence.SOCKSRequests)
+			}
+			proxy := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeProxy))
+			if proxy.Status != "FAIL" || !strings.Contains(proxy.Detail, "refused CONNECT") ||
+				!hasSOCKSEvidence(rep, "greeting", "", "accepted") {
+				t.Errorf("reachable proxy refusal = %+v, evidence = %+v", proxy, rep.Evidence.SOCKSRequests)
+			}
+			connected := false
+			refused := false
+			for _, request := range rep.Evidence.SOCKSRequests {
+				connected = connected || request.Event == "connect" && request.Result == "connected"
+				refused = refused || request.Event == "connect" && request.Result == "connection_refused"
+			}
+			if connected {
+				t.Error("mutated proxy completed CONNECT")
+			}
+			if !refused {
+				t.Errorf("proxy did not record destination refusal: %+v", rep.Evidence.SOCKSRequests)
+			}
+		}},
+		{"quic.udp_443_block", "healthy", true, func(t *testing.T, control, rep Report) {
+			if quic := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeQUIC)); quic.Status != "PASS" {
+				t.Errorf("working QUIC control = %+v", quic)
+			}
+			out := rep.Tests[0]
+			quic := diagnosisCheck(out, string(diagnostic.ProbeQUIC))
+			if quic.Status != "FAIL" || quic.Cause != diagnostic.QUICCauseTimeout ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" ||
+				diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "PASS" ||
+				diagnosisCheck(out, string(diagnostic.ProbeDNS)).Status != "PASS" {
+				t.Errorf("UDP-only QUIC failure = %+v", out)
+			}
+		}},
+		{"encrypted_dns.doh_invalid", "healthy", false, func(t *testing.T, control, rep Report) {
+			baseline := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeDNSEncrypted))
+			if baseline.Status != "PASS" || !strings.Contains(baseline.Detail, "DoH and DoT both completed") {
+				t.Errorf("working encrypted-DNS control = %+v", baseline)
+			}
+			check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeDNSEncrypted))
+			if check.Status != "PASS" || !strings.Contains(check.Detail, "DoT completed") ||
+				!strings.Contains(check.Detail, "DoH unavailable") || !strings.Contains(check.Detail, "too short for a DNS header") {
+				t.Errorf("DoH-invalid/DoT-valid diagnosis = %+v", check)
+			}
+		}},
+		{"http.status_503", "healthy", false, func(t *testing.T, control, rep Report) {
+			if baseline := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); baseline.Status != "PASS" || baseline.Detail != "HTTP 200 (responded)" {
+				t.Errorf("working HTTP control = %+v", baseline)
+			}
+			out := rep.Tests[0]
+			http := diagnosisCheck(out, string(diagnostic.ProbeHTTP))
+			if http.Status != "PASS" || http.Detail != "HTTP 503 (responded)" ||
+				diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "PASS" || out.ActualVerdict != diagnostic.VerdictOK {
+				t.Errorf("HTTP 503 diagnosis = %+v", out)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			base := loadHuntBase(t, tc.base)
+			control := cloneScenario(base)
+			canonicalScenarioInput(control)
+			if err := control.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			controlReport := run(t, control)
+			if controlReport.Result != ResultPass {
+				t.Fatalf("control result = %s, suggestions = %+v", controlReport.Result, controlReport.Suggestions)
+			}
+			op := huntOperator(t, tc.id)
+			mutation, err := op.generate(newTestRNG(), control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = tc.id
+			mutated := cloneScenario(control)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			mutated.Name = "test-" + strings.NewReplacer(".", "-", "_", "-").Replace(tc.id)
+			if err := mutated.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			rep := run(t, mutated)
+			if killed := rep.Result != ResultPass; killed != tc.killed {
+				t.Errorf("mutation killed = %t, want %t; result = %s, suggestions = %+v", killed, tc.killed, rep.Result, rep.Suggestions)
+			}
+			tc.check(t, controlReport, rep)
+			assertCleanedUp(t, controlReport)
+			assertCleanedUp(t, rep)
+		})
 	}
 }
 

@@ -8,19 +8,20 @@ import (
 	"errors"
 	"fmt"
 	mathrand "math/rand"
-	"net"
+	"net/http"
 	"net/netip"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 const (
 	// HuntGeneratorVersion is part of every manifest and seed domain. A future
 	// algorithm change must increment it instead of silently changing old cases.
-	HuntGeneratorVersion = "v1"
-	huntSeedDomain       = "netdoc-sim-hunt-v1"
+	HuntGeneratorVersion = "v2"
+	huntSeedDomain       = "netdoc-sim-hunt-v2"
 	HuntMaxFaults        = 3
 	HuntMaxCases         = 500
 	HuntMaxCaseNumber    = 999999
@@ -45,6 +46,7 @@ type GeneratedMutation struct {
 	ID          string  `json:"id"`
 	Description string  `json:"description"`
 	Node        string  `json:"node,omitempty"`
+	TargetNode  string  `json:"target_node,omitempty"`
 	Segment     string  `json:"segment,omitempty"`
 	Service     string  `json:"service,omitempty"`
 	Family      string  `json:"family,omitempty"`
@@ -55,6 +57,7 @@ type GeneratedMutation struct {
 	DurationMS  int64   `json:"duration_ms,omitempty"`
 	NetemSeed   uint32  `json:"netem_seed,omitempty"`
 	TargetPort  int     `json:"target_port,omitempty"`
+	Status      int     `json:"status,omitempty"`
 }
 
 // GeneratedCaseManifest is the stable, display-safe reproduction artifact.
@@ -95,6 +98,11 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "dns.drop", description: "resolver drops responses", conflictTags: []string{"resolver-state"}, applicable: hasNamedResolver, generate: generateDNSDrop},
 	{id: "timeline.dns_outage", description: "temporary resolver outage", conflictTags: []string{"resolver-state", "timeline"}, applicable: hasNamedResolver, generate: generateDNSOutage},
 	{id: "service.tcp_reset", description: "target accepts then resets TCP", conflictTags: []string{"target-service"}, applicable: hasHTTPTestTarget, generate: generateTCPReset},
+	{id: "service.tls_expired", description: "target presents an expired TLS certificate", conflictTags: []string{"target-service"}, applicable: hasValidTLSTestTarget, generate: generateTLSExpired},
+	{id: "proxy.connect_refused", description: "proxy refuses its CONNECT destination", conflictTags: []string{"proxy-state"}, applicable: hasSOCKS5TestProxy, generate: generateProxyCONNECTRefused},
+	{id: "quic.udp_443_block", description: "QUIC UDP/443 is blocked while TCP/443 remains reachable", conflictTags: []string{"quic-state"}, applicable: hasWorkingQUICFixture, generate: generateQUICUDP443Block},
+	{id: "encrypted_dns.doh_invalid", description: "DoH returns a protocol-invalid DNS message", conflictTags: []string{"encrypted-dns-state"}, applicable: hasWorkingDoHFixture, generate: generateInvalidDoHResponse},
+	{id: "http.status_503", description: "HTTP target returns status 503", conflictTags: []string{"target-service"}, applicable: hasSuccessfulHTTPTestTarget, generate: generateHTTP503},
 	{id: "family.ipv4_drop", description: "IPv4 path fails while IPv6 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv4Drop},
 	{id: "family.ipv6_drop", description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
 	{id: "link.transient_down", description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
@@ -373,25 +381,24 @@ type httpTarget struct {
 
 func findHTTPTestTarget(s *Scenario) (httpTarget, bool) {
 	for _, test := range s.Tests {
-		host, portRaw, err := net.SplitHostPort(test.Target)
+		target, err := diagnostic.ParseTarget(test.Target)
 		if err != nil {
 			continue
 		}
-		port, err := strconv.Atoi(portRaw)
-		if err != nil {
+		if target.Proto != diagnostic.ProtoHTTP {
 			continue
 		}
-		address := host
-		if net.ParseIP(host) == nil {
-			address = dnsAddress(s, host)
+		address := target.Host
+		if target.IP == nil {
+			address = dnsAddress(s, target.Host)
 		}
 		for ni, node := range s.Topology.Nodes {
 			if address == "" || !nodeOwnsAddress(node, address) {
 				continue
 			}
 			for si, service := range node.Services {
-				if service.Type == ServiceHTTP && service.Port == port {
-					return httpTarget{node: s.Topology.Nodes[ni].Name, service: si, port: port}, true
+				if service.Type == ServiceHTTP && service.Port == target.Port {
+					return httpTarget{node: s.Topology.Nodes[ni].Name, service: si, port: target.Port}, true
 				}
 			}
 		}
@@ -422,6 +429,147 @@ func dnsAddress(s *Scenario, name string) string {
 }
 
 func hasHTTPTestTarget(s *Scenario) bool { _, ok := findHTTPTestTarget(s); return ok }
+
+func hasSuccessfulHTTPTestTarget(s *Scenario) bool {
+	target, ok := findHTTPTestTarget(s)
+	return ok && s.Topology.node(target.node).Services[target.service].Status/100 == 2
+}
+
+type serviceTarget struct{ node, service string }
+
+func findValidTLSTestTarget(s *Scenario) (serviceTarget, bool) {
+	for _, test := range s.Tests {
+		if test.Trust == nil {
+			continue
+		}
+		target, err := diagnostic.ParseTarget(test.Target)
+		if err != nil || target.Proto != diagnostic.ProtoTLSHTTP {
+			continue
+		}
+		address := target.Host
+		if target.IP == nil {
+			address = dnsAddress(s, target.Host)
+		}
+		for _, node := range s.Topology.Nodes {
+			if address == "" || !nodeOwnsAddress(node, address) {
+				continue
+			}
+			for _, service := range node.Services {
+				if service.Name == test.Trust.Service && service.Type == ServiceTLS && service.Port == target.Port &&
+					service.Certificate != nil && service.Certificate.Mode == TLSCertificateValid &&
+					target.IP == nil && certificateCoversHost(service.Certificate, target.Host) {
+					return serviceTarget{node.Name, service.Name}, true
+				}
+			}
+		}
+	}
+	return serviceTarget{}, false
+}
+
+func hasValidTLSTestTarget(s *Scenario) bool { _, ok := findValidTLSTestTarget(s); return ok }
+
+type proxyTarget struct{ node, service, targetNode string }
+
+const proxyCONNECTTarget = "connectivitycheck.gstatic.com"
+
+func findSOCKS5TestProxy(s *Scenario) (proxyTarget, bool) {
+	for _, test := range s.Tests {
+		if test.Proxy == nil || test.Proxy.Scheme != "socks5h" {
+			continue
+		}
+		for _, node := range s.Topology.Nodes {
+			if node.Name != test.Proxy.Node {
+				continue
+			}
+			for _, service := range node.Services {
+				if service.Type != ServiceSOCKS5 || service.Port != test.Proxy.Port {
+					continue
+				}
+				address := ""
+				for _, resolver := range node.Services {
+					if resolver.Type != ServiceDNS {
+						continue
+					}
+					for name, candidate := range resolver.Zone {
+						if dnsKey(name) == dnsKey(proxyCONNECTTarget) {
+							address = candidate
+						}
+					}
+				}
+				for _, destination := range s.Topology.Nodes {
+					if !nodeOwnsAddress(destination, address) {
+						continue
+					}
+					for _, target := range destination.Services {
+						if target.Type == ServiceTCP && target.Port == 443 {
+							return proxyTarget{node.Name, service.Name, destination.Name}, true
+						}
+					}
+				}
+			}
+		}
+	}
+	return proxyTarget{}, false
+}
+
+func hasSOCKS5TestProxy(s *Scenario) bool { _, ok := findSOCKS5TestProxy(s); return ok }
+
+func certificateCoversHost(certificate *TLSCertificate, host string) bool {
+	for _, name := range certificate.DNSNames {
+		if dnsKey(name) == dnsKey(host) {
+			return true
+		}
+	}
+	return false
+}
+
+func findProbeFixture(s *Scenario, serviceType, name, certificateHost string) (serviceTarget, bool) {
+	for _, node := range s.Topology.Nodes {
+		for _, service := range node.Services {
+			if service.Type == serviceType && service.Name == name && service.Port == 443 &&
+				service.Certificate != nil && service.Certificate.Mode == TLSCertificateValid &&
+				certificateCoversHost(service.Certificate, certificateHost) {
+				return serviceTarget{node.Name, service.Name}, true
+			}
+		}
+	}
+	return serviceTarget{}, false
+}
+
+func hasWorkingQUICFixture(s *Scenario) bool {
+	target, ok := findProbeFixture(s, ServiceQUIC, quicProbeService, proxyCONNECTTarget)
+	if !ok {
+		return false
+	}
+	if !nodeOwnsAddress(*s.Topology.node(target.node), dnsAddress(s, proxyCONNECTTarget)) {
+		return false
+	}
+	for _, fault := range s.Faults {
+		if fault.Type == FaultDrop && fault.Node == target.node && fault.Direction == DirectionInbound &&
+			fault.Protocol == "udp" && fault.Port == 443 {
+			return false
+		}
+	}
+	return true
+}
+
+func hasWorkingDoHFixture(s *Scenario) bool {
+	target, ok := findProbeFixture(s, ServiceEncryptedDNS, encryptedDNSProbeService, "cloudflare-dns.com")
+	if !ok {
+		return false
+	}
+	for _, node := range s.Topology.Nodes {
+		if node.Name != target.node {
+			continue
+		}
+		for _, service := range node.Services {
+			if service.Name == target.service {
+				return service.DoHResponse == ""
+			}
+		}
+	}
+	return false
+}
 
 func hasWorkingAlternatePath(s *Scenario) bool {
 	defaults := 0
@@ -506,6 +654,36 @@ func generateTCPReset(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) 
 	target, _ := findHTTPTestTarget(s)
 	return GeneratedMutation{Node: target.node, TargetPort: target.port,
 		Description: fmt.Sprintf("replace %s TCP port %d with an accept-then-reset service", target.node, target.port)}, nil
+}
+
+func generateTLSExpired(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, _ := findValidTLSTestTarget(s)
+	return GeneratedMutation{Node: target.node, Service: target.service,
+		Description: "make TLS service " + target.service + " present an expired certificate"}, nil
+}
+
+func generateProxyCONNECTRefused(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, _ := findSOCKS5TestProxy(s)
+	return GeneratedMutation{Node: target.node, TargetNode: target.targetNode, Service: target.service, TargetPort: 443,
+		Description: "make proxy " + target.service + " return CONNECT refused for " + target.targetNode + " TCP/443"}, nil
+}
+
+func generateQUICUDP443Block(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, _ := findProbeFixture(s, ServiceQUIC, quicProbeService, proxyCONNECTTarget)
+	return GeneratedMutation{Node: target.node, Service: target.service, TargetPort: 443,
+		Description: "silently drop inbound QUIC UDP/443 at " + target.node + " while preserving TCP/443"}, nil
+}
+
+func generateInvalidDoHResponse(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, _ := findProbeFixture(s, ServiceEncryptedDNS, encryptedDNSProbeService, "cloudflare-dns.com")
+	return GeneratedMutation{Node: target.node, Service: target.service,
+		Description: "make DoH service " + target.service + " return protocol-invalid DNS bytes while preserving DoT"}, nil
+}
+
+func generateHTTP503(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, _ := findHTTPTestTarget(s)
+	return GeneratedMutation{Node: target.node, TargetPort: target.port, Status: http.StatusServiceUnavailable,
+		Description: fmt.Sprintf("make %s HTTP port %d return status 503", target.node, target.port)}, nil
 }
 
 func generateIPv4Drop(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
@@ -619,6 +797,59 @@ func applyGeneratedMutation(s *Scenario, m GeneratedMutation) error {
 			}
 		}
 		return errors.New("HTTP target disappeared")
+	case "service.tls_expired":
+		for ni := range s.Topology.Nodes {
+			for si := range s.Topology.Nodes[ni].Services {
+				service := &s.Topology.Nodes[ni].Services[si]
+				if s.Topology.Nodes[ni].Name == m.Node && service.Name == m.Service && service.Type == ServiceTLS &&
+					service.Certificate != nil && service.Certificate.Mode == TLSCertificateValid {
+					service.Certificate.Mode = TLSCertificateExpired
+					return nil
+				}
+			}
+		}
+		return errors.New("valid TLS target disappeared")
+	case "proxy.connect_refused":
+		for ni := range s.Topology.Nodes {
+			if s.Topology.Nodes[ni].Name != m.TargetNode {
+				continue
+			}
+			for si, service := range s.Topology.Nodes[ni].Services {
+				if service.Type == ServiceTCP && service.Port == m.TargetPort {
+					s.Topology.Nodes[ni].Services = append(s.Topology.Nodes[ni].Services[:si], s.Topology.Nodes[ni].Services[si+1:]...)
+					return nil
+				}
+			}
+		}
+		return errors.New("proxy CONNECT destination disappeared")
+	case "quic.udp_443_block":
+		s.Faults = append(s.Faults, Fault{Type: FaultDrop, Node: m.Node, Direction: DirectionInbound,
+			Protocol: "udp", Port: m.TargetPort})
+	case "encrypted_dns.doh_invalid":
+		for ni := range s.Topology.Nodes {
+			for si := range s.Topology.Nodes[ni].Services {
+				service := &s.Topology.Nodes[ni].Services[si]
+				if s.Topology.Nodes[ni].Name == m.Node && service.Name == m.Service && service.Type == ServiceEncryptedDNS && service.DoHResponse == "" {
+					service.DoHResponse = DoHResponseInvalid
+					return nil
+				}
+			}
+		}
+		return errors.New("working DoH fixture disappeared")
+	case "http.status_503":
+		for ni := range s.Topology.Nodes {
+			if s.Topology.Nodes[ni].Name != m.Node {
+				continue
+			}
+			for si := range s.Topology.Nodes[ni].Services {
+				service := &s.Topology.Nodes[ni].Services[si]
+				if service.Type == ServiceHTTP && service.Port == m.TargetPort && service.Status/100 == 2 {
+					service.Status = m.Status
+					return nil
+				}
+			}
+		}
+		return errors.New("successful HTTP target disappeared")
 	case "family.ipv4_drop", "family.ipv6_drop":
 		s.Faults = append(s.Faults, Fault{Type: FaultDrop, Node: m.Node, Family: m.Family, Direction: DirectionOutbound})
 	case "link.transient_down":
