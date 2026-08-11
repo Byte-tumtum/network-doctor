@@ -399,15 +399,292 @@ func TestDNSVerifierMatchesQuestionCaseInsensitively(t *testing.T) {
 	}
 }
 
+// dnsRR encodes one resource record: an owner name, a type, class IN, a TTL,
+// and RDATA behind its own length.
+func dnsRR(name []byte, rrtype uint16, rdata []byte) []byte {
+	rr := append(bytes.Clone(name), 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.BigEndian.PutUint16(rr[len(name):], rrtype)
+	binary.BigEndian.PutUint16(rr[len(name)+2:], dnsClassIN)
+	binary.BigEndian.PutUint32(rr[len(name)+4:], 60)
+	rr = binary.BigEndian.AppendUint16(rr, uint16(len(rdata)))
+	return append(rr, rdata...)
+}
+
+// dnsVerifierSeeds is the corpus the response-verifier fuzz target starts from:
+// the answers a healthy resolver sends, and the shapes a hostile or broken peer
+// can send instead. Each case is assembled from the protocol rather than pasted
+// in as a blob, so a reader can see which rule it aims at.
+//
+// Name compression and resource records reach verify only as opaque bytes: it
+// parses no names beyond the byte-for-byte question echo and no answer section
+// at all, because a correlated NODATA response already proves the resolver
+// answered. Those families are seeded anyway, so mutation starts from realistic
+// record shapes instead of inventing them from noise.
+func dnsVerifierSeeds(tb testing.TB, q dnsQuery) [][]byte {
+	tb.Helper()
+	valid := dnsResponseFor(q.wire)
+	// body is the first byte after the echoed question; the QTYPE and QCLASS
+	// the response has to match sit in the four bytes before it.
+	body := dnsHeaderLen + len(q.question)
+	const ok = dnsFlagResponse | dnsFlagRD | 0x0080 // QR, RD, RA
+
+	// respond assembles a response that echoes this query's question, with the
+	// given header flags, section counts, and trailing section bytes.
+	respond := func(flags uint16, counts [4]uint16, tail []byte) []byte {
+		msg := binary.BigEndian.AppendUint16(make([]byte, 0, body+len(tail)), q.id)
+		msg = binary.BigEndian.AppendUint16(msg, flags)
+		for _, c := range counts {
+			msg = binary.BigEndian.AppendUint16(msg, c)
+		}
+		return append(append(msg, q.question...), tail...)
+	}
+	// header is a response with no question section at all.
+	header := func(flags uint16, counts [4]uint16) []byte {
+		return bytes.Clone(respond(flags, counts, nil)[:dnsHeaderLen])
+	}
+	// edit is the valid response with one field overwritten.
+	edit := func(mutate func([]byte)) []byte {
+		msg := bytes.Clone(valid)
+		mutate(msg)
+		return msg
+	}
+	cut := func(n int) []byte { return bytes.Clone(valid[:n]) }
+	setU16 := func(msg []byte, off int, v uint16) { binary.BigEndian.PutUint16(msg[off:], v) }
+
+	question := func(name string) []byte {
+		encoded, err := dnsQuestion(name)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		return encoded
+	}
+	// A name on its own is the question minus QTYPE and QCLASS.
+	owner := func(name string) []byte { return question(name)[:len(question(name))-4] }
+	pointer := []byte{0xc0, dnsHeaderLen} // compression pointer to the question
+	address := []byte{192, 0, 2, 77}
+	answer := dnsRR(pointer, dnsTypeA, address)
+	// A response to a different name, carrying this query's transaction id.
+	otherName := dnsResponseFor(append(bytes.Clone(q.wire[:dnsHeaderLen]), question("example.test")...))
+
+	return [][]byte{
+		// 1. Valid answers: what the row exists to recognize.
+		valid,                                   // one A record
+		respond(ok, [4]uint16{1, 0, 0, 0}, nil), // NOERROR/NODATA
+		respond(ok, [4]uint16{1, 2, 0, 0}, append(bytes.Clone(answer), answer...)), // duplicate answers
+		respond(ok, [4]uint16{1, 1, 1, 1}, bytes.Join([][]byte{ // extra authority + additional
+			answer,
+			dnsRR(owner("gstatic.com"), 2, owner("ns1.gstatic.com")),
+			dnsRR(pointer, 28, bytes.Repeat([]byte{0x20}, 16)),
+		}, nil)),
+		respond(ok|dnsRcodeNXDom, [4]uint16{1, 0, 1, 0}, dnsRR(owner("com"), 6, bytes.Repeat([]byte{0}, 22))),
+
+		// 2. Degenerate input: nothing to parse.
+		{},
+		{0x00},
+		{0xc0, 0x0c},
+		cut(dnsHeaderLen - 1), // one byte short of a header
+
+		// 3. Truncation at each structural boundary of a valid response.
+		cut(dnsHeaderLen),     // header only, but QDCOUNT says 1
+		cut(dnsHeaderLen + 3), // mid-QNAME
+		cut(body - 5),         // QNAME unterminated
+		cut(body - 4),         // name complete, no QTYPE
+		cut(body - 1),         // mid-QCLASS
+		cut(body),             // question complete, ANCOUNT says 1
+		cut(body + 6),         // mid resource-record header
+		cut(len(valid) - 2),   // mid-RDATA
+
+		// 4. Malformed names and labels in the echoed question.
+		edit(func(m []byte) { m[dnsHeaderLen] = 64 }),                            // label over the 63-byte limit
+		edit(func(m []byte) { m[dnsHeaderLen] = 0xff }),                          // impossible label length
+		edit(func(m []byte) { m[dnsHeaderLen], m[dnsHeaderLen+1] = 0xc0, 0x0c }), // pointer to itself
+		edit(func(m []byte) { m[dnsHeaderLen], m[dnsHeaderLen+1] = 0xc0, 0xff }), // pointer past the message
+		edit(func(m []byte) { m[body-5] = 1 }),                                   // terminator replaced by a label
+		append(cut(dnsHeaderLen), 63),                                            // label longer than the message
+
+		// 5. Header states that are not an answer to a standard query.
+		respond(dnsFlagRD, [4]uint16{1, 0, 0, 0}, nil),                 // QR clear: a query, not a response
+		respond(ok|0x0800, [4]uint16{1, 0, 0, 0}, nil),                 // OPCODE 1 (IQUERY)
+		respond(ok|dnsOpcodeMask, [4]uint16{1, 0, 0, 0}, nil),          // OPCODE 15
+		respond(ok|dnsFlagTC, [4]uint16{1, 1, 0, 0}, answer),           // TC: the answer did not fit
+		respond(ok|dnsRcodeServFail, [4]uint16{1, 0, 0, 0}, nil),       // SERVFAIL
+		respond(ok|dnsRcodeNXDom, [4]uint16{1, 0, 0, 0}, nil),          // NXDOMAIN
+		respond(ok|dnsRcodeRefused, [4]uint16{1, 0, 0, 0}, nil),        // REFUSED
+		respond(ok|7, [4]uint16{1, 0, 0, 0}, nil),                      // rcode 7: not a standard-query error
+		respond(ok|0x000f, [4]uint16{1, 0, 0, 0}, nil),                 // rcode 15
+		header(ok|dnsRcodeFormErr, [4]uint16{0, 0, 0, 0}),              // legal questionless FORMERR
+		header(ok|dnsRcodeNotImp, [4]uint16{0, 0, 0, 0}),               // legal questionless NOTIMP
+		header(ok|dnsRcodeFormErr, [4]uint16{0, 1, 0, 0}),              // questionless FORMERR that claims an answer
+		header(ok|dnsRcodeServFail, [4]uint16{0, 0, 0, 0}),             // no question, and no excuse for dropping it
+		header(ok, [4]uint16{0, 0, 0, 0}),                              // NOERROR with nothing in it
+		respond(ok, [4]uint16{0xffff, 0xffff, 0xffff, 0xffff}, answer), // every count lies
+		respond(ok, [4]uint16{1, 0xffff, 0, 0}, nil),                   // ANCOUNT lies, no records follow
+
+		// 6. Correlation failures: valid DNS, wrong conversation.
+		edit(func(m []byte) { setU16(m, 0, ^q.id) }), // mismatched transaction id
+		otherName, // right id, different question name
+		edit(func(m []byte) { setU16(m, body-4, 28) }), // right name, QTYPE AAAA
+		edit(func(m []byte) { setU16(m, body-2, 3) }),  // right name and type, class CH
+		header(ok, [4]uint16{1, 0, 0, 0}),              // claims a question, sends none
+		respond(ok, [4]uint16{2, 0, 0, 0}, q.question), // two questions where one was asked
+
+		// 7. Structurally valid, semantically surprising.
+		respond(ok, [4]uint16{1, 1, 0, 0}, dnsRR(pointer, 0xffff, []byte{0})),                                   // unknown RR type
+		respond(ok, [4]uint16{1, 1, 0, 0}, dnsRR(owner("elsewhere.example"), dnsTypeA, address)),                // answer for another name
+		respond(ok, [4]uint16{1, 1, 0, 0}, dnsRR(owner(strings.Repeat("a", 63)+".example"), dnsTypeA, address)), // longest legal label
+		// RDLENGTH claims 64KB behind four bytes of RDATA.
+		respond(ok, [4]uint16{1, 1, 0, 0}, append(bytes.Clone(dnsRR(pointer, dnsTypeA, address)[:len(pointer)+8]), 0xff, 0xff, 192, 0, 2, 1)),
+	}
+}
+
+// dnsVerifierOracle restates the correlation contract verify owns, written from
+// the rules rather than from verify's code: which responses a peer must send for
+// its bytes to count as an answer to this exact query, and the rcode such an
+// answer carries. Everything else is a message some other party could have
+// produced, and must not reach the caller as a resolver response.
+func dnsVerifierOracle(q dnsQuery, msg []byte) (rcode uint16, correlated bool) {
+	if len(msg) < dnsHeaderLen {
+		return 0, false
+	}
+	var field [6]uint16
+	for i := range field {
+		field[i] = binary.BigEndian.Uint16(msg[2*i:])
+	}
+	id, flags, counts := field[0], field[1], field[2:]
+	rcode = flags & dnsRcodeMask
+	switch {
+	case id != q.id, // some other conversation
+		flags&dnsFlagResponse == 0, // a query, not an answer
+		flags&dnsOpcodeMask != 0,   // not the standard query that was sent
+		flags&dnsFlagTC != 0:       // the answer did not fit, so this is not it
+		return rcode, false
+	}
+	switch counts[0] {
+	case 0:
+		// Only a server that could not parse or implement the query may omit
+		// the question, and only in an otherwise empty header.
+		if (rcode != dnsRcodeFormErr && rcode != dnsRcodeNotImp) || len(msg) != dnsHeaderLen ||
+			counts[1] != 0 || counts[2] != 0 || counts[3] != 0 {
+			return rcode, false
+		}
+	case 1:
+		if len(msg) < dnsHeaderLen+len(q.question) {
+			return rcode, false
+		}
+		if !dnsNameFoldEqual(msg[dnsHeaderLen:dnsHeaderLen+len(q.question)], q.question) {
+			return rcode, false
+		}
+	default:
+		return rcode, false
+	}
+	return rcode, true
+}
+
+// dnsNameFoldEqual is DNS's own case rule — RFC 4343, ASCII letters and nothing
+// else — spelled out so the oracle does not borrow the comparison it checks.
+func dnsNameFoldEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// FuzzEncryptedDNSResponseVerifier drives arbitrary hostile bytes through the
+// boundary that separates "something answered on port 443" from "encrypted DNS
+// works". Everything upstream of verify — TLS, HTTP status, media type, DoT
+// framing — proves only that a peer spoke; verify is the sole reason the row
+// cannot be passed by a captive portal, an interceptor, or a stale packet.
+//
+// The query side is fixed and valid, the response side is whatever the fuzzer
+// produces. Not panicking is the floor: every input is classified by an
+// independent oracle, and verify has to agree with it about acceptance, about
+// the rcode carried back, and about the difference between a malformed message
+// and a valid response reporting an error.
 func FuzzEncryptedDNSResponseVerifier(f *testing.F) {
 	query, err := newDNSQuery(probeHost)
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(dnsResponseFor(query.wire))
-	f.Add([]byte{0xc0, 0x0c})
+	// newDNSQuery randomizes the transaction id, and a corpus entry recorded
+	// against a random id would not reproduce on the next run. Pinning one keeps
+	// found crashes replayable; withID is what DoH already does in production.
+	query = query.withID(0x4a3b)
+
+	// A verifier that rejected everything would satisfy every invariant below,
+	// so anchor the two ends before fuzzing.
+	if err := query.verify(dnsResponseFor(query.wire)); err != nil {
+		f.Fatalf("verify rejected the answer a healthy resolver sends: %v", err)
+	}
+	if err := query.verify(nil); err == nil {
+		f.Fatal("verify accepted an empty response")
+	}
+	for _, seed := range dnsVerifierSeeds(f, query) {
+		f.Add(seed)
+	}
+
 	f.Fuzz(func(t *testing.T, msg []byte) {
-		_ = query.verify(msg)
+		before := bytes.Clone(msg)
+		err := query.verify(msg)
+		if !bytes.Equal(msg, before) {
+			t.Fatalf("verify rewrote the caller's response buffer: % x -> % x", before, msg)
+		}
+
+		rcode, correlated := dnsVerifierOracle(query, msg)
+		var responseErr *dnsResponseError
+		switch {
+		case !correlated:
+			// Malformed or uncorrelated: a plain error, never a resolver verdict.
+			if err == nil || errors.As(err, &responseErr) {
+				t.Fatalf("verify returned %v for a response that does not answer this query: % x", err, msg)
+			}
+		case rcode == dnsRcodeSuccess || rcode == dnsRcodeNXDom:
+			if err != nil {
+				t.Fatalf("verify rejected a correlated rcode %d response: %v (% x)", rcode, err, msg)
+			}
+		case rcode <= dnsRcodeYXDomain: // FORMERR, SERVFAIL, NOTIMP, REFUSED, YXDOMAIN
+			if !errors.As(err, &responseErr) || responseErr.rcode != rcode {
+				t.Fatalf("verify returned %v for a correlated rcode %d response, want that rcode reported: % x", err, rcode, msg)
+			}
+		default: // 7-15 are not standard-query errors
+			if err == nil || errors.As(err, &responseErr) {
+				t.Fatalf("verify returned %v for non-query rcode %d: % x", err, rcode, msg)
+			}
+		}
+		// The row's PASS/WARN/FAIL split reads verify's error through this, so a
+		// parser error must never arrive as a degraded resolver.
+		if answered := resolverAnswered(transportOutcome{err: err}); answered != (correlated && rcode <= dnsRcodeYXDomain) {
+			t.Fatalf("resolverAnswered = %t for correlated=%t rcode=%d: % x", answered, correlated, rcode, msg)
+		}
+
+		if err != nil && !errors.As(err, &responseErr) {
+			return
+		}
+		// Whatever was accepted, acceptance has to be bound to this query's
+		// transaction id and to the question that was actually asked.
+		wrongID := bytes.Clone(msg)
+		binary.BigEndian.PutUint16(wrongID[0:2], ^query.id)
+		if err := query.verify(wrongID); err == nil || errors.As(err, &responseErr) {
+			t.Fatalf("verify accepted a response after its transaction id changed: %v (% x)", err, wrongID)
+		}
+		if len(msg) > dnsHeaderLen {
+			wrongName := bytes.Clone(msg)
+			wrongName[dnsHeaderLen] = 0xff // not a label length, not a case fold of one
+			if err := query.verify(wrongName); err == nil || errors.As(err, &responseErr) {
+				t.Fatalf("verify accepted a response after its question changed: %v (% x)", err, wrongName)
+			}
+		}
 	})
 }
 
