@@ -746,6 +746,177 @@ func TestPMTUProbeDeclinesUnmeasurableSendBuffer(t *testing.T) {
 	}
 }
 
+// resetWriteConn takes half the payload and then reports the peer's reset, the
+// way a real socket does when the far end goes away mid-write.
+type resetWriteConn struct{ fakeConn }
+
+func (resetWriteConn) Write(b []byte) (int, error) {
+	return len(b) / 2, fmt.Errorf("wrapped write: %w", syscall.ECONNRESET)
+}
+func (resetWriteConn) SetWriteDeadline(time.Time) error { return nil }
+
+// Where a platform can account for its send queue, the verdict comes from what
+// the peer acknowledged and never from the write returning. The distinction is
+// the whole probe on Linux, where a socket reporting an 8 KiB send buffer still
+// swallows a 24 KiB write with nothing on the wire.
+func TestPMTUProbeClassifiesByAcknowledgement(t *testing.T) {
+	// A far end that drains the pipe, so every case below gets the same
+	// complete, successful Write and can only be told apart by the queue.
+	tests := []struct {
+		name   string
+		queued func(net.Conn) (int, error)
+		status Status
+		detail string
+		fix    bool
+	}{
+		{
+			// The regression: the old logic saw a 24 KiB write accepted past an
+			// 8 KiB send buffer and called it PASS. Nothing was acknowledged.
+			name:   "write accepted but nothing acknowledged",
+			queued: func(net.Conn) (int, error) { return pmtuPayloadSize, nil },
+			status: StatusWarn,
+			detail: "24 KiB written, none of it acknowledged within",
+			fix:    true,
+		},
+		{
+			name:   "payload acknowledged",
+			queued: func(net.Conn) (int, error) { return 0, nil },
+			status: StatusPass,
+			detail: "24 KiB of the 24 KiB payload acknowledged by the peer",
+		},
+		{
+			// Forward progress is forward progress: a full-size segment landed,
+			// so the path carries them even with a tail still in flight.
+			name:   "still draining at the deadline",
+			queued: func(net.Conn) (int, error) { return pmtuPayloadSize - 4096, nil },
+			status: StatusPass,
+			detail: "4 KiB of the 24 KiB payload acknowledged by the peer",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			go func() { _, _ = io.Copy(io.Discard, server) }()
+			ops := &netops{
+				dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+				// The doubled value Linux hands back for a 4 KiB request, and
+				// comfortably less than the payload: the old inference had
+				// everything it wanted and still got this wrong.
+				sendBuffer: func(net.Conn) (int, error) { return 2 * pmtuSendBuffer, nil },
+				tcpMSS:     func(net.Conn) (int, error) { return 1448, nil },
+				queued:     tc.queued,
+			}
+			deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+			ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
+			defer cancel()
+
+			r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps)
+			if r.Status != tc.status || !strings.Contains(r.Detail, tc.detail) {
+				t.Errorf("pmtu = %+v, want %v containing %q", r, tc.status, tc.detail)
+			}
+			if (r.Fix != "") != tc.fix {
+				t.Errorf("pmtu fix = %q, want present: %v", r.Fix, tc.fix)
+			}
+			// The row reports what it measured. Naming the black hole outright
+			// is reconciliation's job, once an independent probe agrees.
+			if tc.status == StatusWarn && !strings.Contains(r.Detail, "consistent with a path-MTU black hole") {
+				t.Errorf("pmtu detail = %q, want hedged black-hole wording", r.Detail)
+			}
+		})
+	}
+}
+
+// A healthy path acknowledges nothing at the instant Write returns — the bytes
+// are still in flight. The probe has to wait out that latency instead of
+// reading the queue once and calling a working link a black hole.
+func TestPMTUProbeWaitsForAcknowledgement(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+	var samples int
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+		sendBuffer:  func(net.Conn) (int, error) { return 2 * pmtuSendBuffer, nil },
+		queued: func(net.Conn) (int, error) {
+			// Nothing acknowledged for the first few samples, then the ACKs land.
+			if samples++; samples <= 3 {
+				return pmtuPayloadSize, nil
+			}
+			return 0, nil
+		},
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
+	defer cancel()
+
+	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps); r.Status != StatusPass {
+		t.Errorf("delayed acknowledgement = %+v, want PASS", r)
+	}
+	if samples < 4 {
+		t.Errorf("queue sampled %d times, want the probe to keep watching until the ACKs arrive", samples)
+	}
+}
+
+// A reset purges the send queue, so an empty queue after one reads as a fully
+// acknowledged payload. Inconclusive has to win over that.
+func TestPMTUProbeReportsResetOverDrainedQueue(t *testing.T) {
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return resetWriteConn{}, nil },
+		sendBuffer:  func(net.Conn) (int, error) { return 2 * pmtuSendBuffer, nil },
+		queued:      func(net.Conn) (int, error) { return 0, nil },
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+
+	r := ops.pmtuProbe(443, ProtoTLSHTTP)(context.Background(), deps)
+	if r.Status != StatusNA || !strings.Contains(r.Detail, "the peer dropped the connection") {
+		t.Errorf("reset mid-write = %+v, want N/A naming the dropped connection", r)
+	}
+}
+
+// Windows has no send-queue query, so it keeps the send-buffer inference — and
+// says so, because that inference cannot see a black hole on a kernel that
+// buffers past the size it reports.
+func TestPMTUProbeFallsBackWithoutQueueAccounting(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+		sendBuffer:  func(net.Conn) (int, error) { return pmtuSendBuffer, nil },
+		queued:      func(net.Conn) (int, error) { return 0, errors.New("no TCP send-queue accounting on windows") },
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
+	defer cancel()
+
+	r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps)
+	if r.Status != StatusPass || !strings.Contains(r.Detail, "cannot read the TCP send queue") {
+		t.Errorf("pmtu without queue accounting = %+v, want PASS disclosing the limitation", r)
+	}
+}
+
+// The send buffer only has to be smaller than the payload where it is the
+// measurement. With a readable send queue its size is beside the point, and
+// bailing out on it would cost the platforms that can actually answer.
+func TestPMTUProbeIgnoresSendBufferSizeWithQueueAccounting(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+		sendBuffer:  func(net.Conn) (int, error) { return 4 * pmtuPayloadSize, nil },
+		queued:      func(net.Conn) (int, error) { return pmtuPayloadSize, nil },
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
+	defer cancel()
+
+	if r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps); r.Status != StatusWarn {
+		t.Errorf("oversized send buffer with queue accounting = %+v, want WARN from the queue reading", r)
+	}
+}
+
 // The payload is sized exactly, and only a TLS target gets the record header
 // that keeps an OpenSSL server reading long enough to acknowledge it.
 func TestPMTUPayloadShape(t *testing.T) {

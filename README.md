@@ -160,7 +160,7 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 | **DNS (public 8.8.8.8)** | A direct query to Google Public DNS provides a second opinion | N/A when outbound DNS is unavailable; disagreement is Warn, not Fail; `--public-dns` changes the resolver or removes the row |
 | **DNS (encrypted DoH/DoT)** | A correlated DNS response arrives over DoH **or** over DoT | `NOERROR` or `NXDOMAIN` passes; a standard-query resolver error warns without claiming the transport is blocked; it never falls back to port 53 |
 | **TCP** | A TCP connect to the target port succeeds | races A/AAAA records Happy-Eyeballs style (RFC 8305), pins the winner |
-| **Path MTU** | a 24 KiB write drains beyond the measured kernel send buffer | finds evidence consistent with an MTU/PMTU black hole — never a Fail, see below |
+| **Path MTU** | the peer acknowledges some of a 24 KiB write | finds evidence consistent with an MTU/PMTU black hole — never a Fail, see below |
 | **TLS** | The TLS handshake (SNI + cert verification) succeeds | certificate time, hostname, issuer, protocol, timeout, early-close, and TCP failures receive stable JSON causes |
 | **HTTP** | Port 80 returns any HTTP response (incl. 3xx/4xx/5xx) | Independent HEAD after DNS, redirects off, proxy off |
 | **HTTPS** | The selected TLS port returns any HTTP response | HEAD against the TLS-validated IP, redirects off, proxy off |
@@ -170,13 +170,15 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 
 A path MTU smaller than the local interface's, on a path that also filters the ICMP that would say so, is the classic tunnel/VPN/PPPoE mystery: TCP connects, then the connection dies the moment either side sends a real packet. `ping` and `curl` can't tell you that, and confirming it normally means raw sockets and the DF flag.
 
-The **Path MTU** row looks for it from an ordinary socket. The TCP handshake is the control: SYN/SYN-ACK are small enough to cross a narrowed link, so a completed connect already proves that small packets arrive. The probe asks the kernel for a 4 KiB send buffer, reads back the effective size the OS actually installed, and writes 24 KiB. A write that advances beyond that measured buffer could not have remained entirely queued locally, so:
+The **Path MTU** row looks for it from an ordinary socket. The TCP handshake is the control: SYN/SYN-ACK are small enough to cross a narrowed link, so a completed connect already proves that small packets arrive. The probe then writes 24 KiB and asks the kernel how much of it the peer has acknowledged. Acknowledgement is the only proof of forward progress an ordinary socket can offer, and it is a strict one: TCP fills segments from the front of the payload, so nothing can be acknowledged unless a full-size packet crossed.
 
-- the write drains beyond the effective send buffer → bulk TCP data moved, **Pass**, with the connection's TCP MSS when the OS exposes it,
-- the write stalls without draining that buffer → **Warn**, naming the evidence and an MSS/MTU experiment,
+- some of the payload is acknowledged → full-size packets cross, **Pass**, with the connection's TCP MSS when the OS exposes it,
+- the whole payload is written and none of it is acknowledged before the deadline → **Warn**, naming the evidence and an MSS/MTU experiment,
 - the peer hangs up first → **N/A**: inconclusive, and it will not guess.
 
-It deliberately never Fails: a peer that accepts the connection and then stops accepting data can stall the write the same way. A normal TCP socket also cannot discover the exact path MTU when ICMP feedback is filtered. The row therefore reports the bytes written, the effective send-buffer size, the TCP MSS when available, and the local interface MTU as context—never as a measured path MTU. Only when both this write and a protocol exchange time out does the overall verdict identify a probable network-path problem; certificate and other immediate protocol failures remain service failures.
+A completed write is deliberately not the test. Linux treats the send-buffer size as an accounting hint rather than a ceiling, so a socket reporting an 8 KiB send buffer will still swallow a 24 KiB write whole without a byte reaching the wire — which is exactly what a black hole looks like from userspace. Linux and macOS therefore read the socket's outstanding send queue directly. Windows exposes no equivalent query, so it falls back to inferring delivery from the send buffer and says so in the row: on that platform the row can miss a black hole, though the TLS/HTTP timeouts beside it still show up.
+
+It deliberately never Fails: a peer that accepts the connection and then stops accepting data can stall the write the same way. A normal TCP socket also cannot discover the exact path MTU when ICMP feedback is filtered. The row therefore reports the bytes written and acknowledged, the TCP MSS when available, and the local interface MTU as context—never as a measured path MTU. Only when both this write and a protocol exchange time out does the overall verdict identify a probable network-path problem; certificate and other immediate protocol failures remain service failures.
 
 The 24 KiB payload is inert, self-labelling filler; TLS targets get a record header in front so the TLS server reads the payload instead of resetting on the first byte. This is the only probe that sends bulk data — under `--watch` that is 24 KiB per pass, once every 5 seconds.
 

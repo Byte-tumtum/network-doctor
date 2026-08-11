@@ -291,11 +291,15 @@ type netops struct {
 	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
 	quicHandshake  func(context.Context, net.Conn, *tls.Config) (quicState, error)
 	sendBuffer     func(net.Conn) (int, error)
-	tcpMSS         func(net.Conn) (int, error)
-	dialTLS        func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
-	tlsRootCAs     *x509.CertPool
-	ssid           func(ctx context.Context, iface string) string
-	proxyFromEnv   func(*http.Request) (*url.URL, error)
+	// queued reports the bytes a socket has written but not had acknowledged.
+	// It fails on platforms with no such query, and on anything that is not a
+	// real socket, which is how the PMTU probe picks its inference.
+	queued       func(net.Conn) (int, error)
+	tcpMSS       func(net.Conn) (int, error)
+	dialTLS      func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error)
+	tlsRootCAs   *x509.CertPool
+	ssid         func(ctx context.Context, iface string) string
+	proxyFromEnv func(*http.Request) (*url.URL, error)
 	// portalCheck returns the status code portalProbeURL answered with and an
 	// optional validated HTTP(S) redirect URL.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
@@ -328,6 +332,7 @@ var defaultOps = &netops{
 	dialContext:   new(net.Dialer).DialContext,
 	quicHandshake: handshakeQUIC,
 	sendBuffer:    socketSendBuffer,
+	queued:        socketQueued,
 	tcpMSS:        socketMSS,
 	dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 		d := tls.Dialer{NetDialer: new(net.Dialer), Config: cfg}
@@ -1694,12 +1699,17 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 // The TCP handshake is the small-packet control: SYN/SYN-ACK are small enough to
 // cross a narrowed link, so a completed connect already proves small packets
 // arrive. The evidence is what happens to a write that requires multiple
-// ordinary TCP segments. Unacknowledged data consumes send-buffer space, so
-// the probe shrinks that buffer to a few KiB, reads back the size the kernel
-// actually installed, and pushes a payload through. If the write advances past
-// that measured buffer, data had to leave the queue. If it stalls before doing
-// so, the result is consistent with a black hole but is not proof on its own: a
-// peer can also stop accepting data.
+// ordinary TCP segments: the probe pushes a payload through and then asks the
+// kernel how much of it the peer has acknowledged. Acknowledged bytes are the
+// only proof of forward progress an ordinary socket can offer, because a
+// full-size segment that is acknowledged is a full-size segment that crossed.
+//
+// A completed Write proves nothing. Linux treats SO_SNDBUF as an accounting
+// hint, not a ceiling, and will absorb a 24 KiB write into a socket reporting
+// an 8 KiB send buffer without a byte reaching the wire — which is exactly what
+// a path-MTU black hole looks like from userspace. Only socketQueued separates
+// the two, so the send buffer survives here as detail and as the fallback for
+// platforms that cannot account for their send queue.
 //
 // There is deliberately no small-write control: a small Write returns out of the
 // send buffer whether or not the bytes ever leave the machine, so it is not
@@ -1755,16 +1765,29 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 		if measureBuffer == nil {
 			measureBuffer = socketSendBuffer
 		}
-		sendBuffer, err := measureBuffer(conn)
-		if err != nil || sendBuffer <= 0 {
-			r.Status = StatusNA
-			r.Detail = "cannot read the effective TCP send buffer; a completed write would only prove local buffering"
-			return r
+		measureQueued := o.queued
+		if measureQueued == nil {
+			measureQueued = socketQueued
 		}
-		if sendBuffer >= pmtuPayloadSize {
-			r.Status = StatusNA
-			r.Detail = fmt.Sprintf("effective TCP send buffer is %s, large enough to hold the whole probe locally", kib(sendBuffer))
-			return r
+		// One reading before the payload decides which inference the rest of the
+		// probe gets to make. A platform that can account for its send queue
+		// does not care how big the send buffer is; one that cannot has nothing
+		// but the send buffer, and then the buffer has to be smaller than the
+		// payload for a stalled write to mean anything.
+		_, queueErr := measureQueued(conn)
+
+		sendBuffer, err := measureBuffer(conn)
+		if queueErr != nil {
+			if err != nil || sendBuffer <= 0 {
+				r.Status = StatusNA
+				r.Detail = "cannot read the effective TCP send buffer; a completed write would only prove local buffering"
+				return r
+			}
+			if sendBuffer >= pmtuPayloadSize {
+				r.Status = StatusNA
+				r.Detail = fmt.Sprintf("effective TCP send buffer is %s, large enough to hold the whole probe locally", kib(sendBuffer))
+				return r
+			}
 		}
 		mss := 0
 		measureMSS := o.tcpMSS
@@ -1774,7 +1797,8 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 		if measured, measureErr := measureMSS(conn); measureErr == nil && measured > 0 {
 			mss = measured
 		}
-		if err := conn.SetWriteDeadline(time.Now().Add(wait)); err != nil {
+		deadline := time.Now().Add(wait)
+		if err := conn.SetWriteDeadline(deadline); err != nil {
 			r.Status = StatusNA
 			r.Detail = "cannot bound the bulk write: " + err.Error()
 			return r
@@ -1782,25 +1806,81 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 		n, err := conn.Write(pmtuPayload(proto))
 
 		mtu := o.mtuFor(dep.Iface)
+		blackHole := "; the TCP handshake succeeded" + mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU") +
+			" — consistent with a path-MTU black hole"
+		delivered, queueErr := awaitAcknowledged(measureQueued, conn, n, deadline)
 		switch {
-		case err == nil:
-			r.Status = StatusPass
-			r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s", kib(n), kib(sendBuffer), mssNote(mss))
-		case n > sendBuffer:
-			// Past the measured send buffer means data left the local queue;
-			// whatever stopped the write after that is not a total bulk stall.
-			r.Status = StatusPass
-			r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s before the write stopped (%v)", kib(n), kib(sendBuffer), mssNote(mss), err)
-		case timeoutError(err):
-			r.Status = StatusWarn
-			r.Detail = fmt.Sprintf("stalled after %s of %s without draining the measured %s TCP send buffer%s; the TCP handshake succeeded%s — consistent with a path-MTU black hole",
-				kib(n), kib(pmtuPayloadSize), kib(sendBuffer), mssNote(mss), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))
-			r.Fix = pmtuFix(runtime.GOOS)
-		default:
+		case queueErr != nil:
+			// No send-queue accounting here, so fall back to the send buffer:
+			// a write that advanced past it had to have drained some of it.
+			// This over-reports Pass on any kernel that accepts more than the
+			// buffer it reports, which is why it is the fallback and not the
+			// measurement.
+			const blind = " (this platform cannot read the TCP send queue, so delivery is inferred from the send buffer and a black hole can still read as a pass)"
+			switch {
+			case err == nil:
+				r.Status = StatusPass
+				r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s", kib(n), kib(sendBuffer), mssNote(mss)) + blind
+			case n > sendBuffer:
+				r.Status = StatusPass
+				r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s before the write stopped (%v)", kib(n), kib(sendBuffer), mssNote(mss), err) + blind
+			case timeoutError(err):
+				r.Status = StatusWarn
+				r.Detail = fmt.Sprintf("stalled after %s of %s without draining the measured %s TCP send buffer%s; the TCP handshake succeeded%s — consistent with a path-MTU black hole",
+					kib(n), kib(pmtuPayloadSize), kib(sendBuffer), mssNote(mss), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))
+				r.Fix = pmtuFix(runtime.GOOS)
+			default:
+				r.Status = StatusNA
+				r.Detail = fmt.Sprintf("inconclusive — the peer dropped the connection after %s: %v", kib(n), err)
+			}
+		case err != nil && !timeoutError(err):
+			// Ahead of the acknowledgement check on purpose: a reset purges the
+			// send queue, so a dropped connection reads as a fully drained one.
 			r.Status = StatusNA
 			r.Detail = fmt.Sprintf("inconclusive — the peer dropped the connection after %s: %v", kib(n), err)
+		case delivered > 0:
+			// Acknowledgement is cumulative and TCP fills segments from the front
+			// of the payload, so the peer cannot have acknowledged any of a
+			// 24 KiB write without its leading full-size segment crossing. A
+			// small tail that arrives out of order is only SACKed, which does
+			// not move this counter.
+			r.Status = StatusPass
+			r.Detail = fmt.Sprintf("%s of the %s payload acknowledged by the peer%s", kib(delivered), kib(pmtuPayloadSize), mssNote(mss))
+		default:
+			r.Status = StatusWarn
+			r.Detail = fmt.Sprintf("%s written, none of it acknowledged within %v%s%s", kib(n), wait, mssNote(mss), blackHole)
+			r.Fix = pmtuFix(runtime.GOOS)
 		}
 		return r
+	}
+}
+
+// pmtuQueueSample paces the drain watch. It is a polling interval, not a
+// threshold: the answer does not depend on it, only how soon a healthy path is
+// let off the deadline.
+const pmtuQueueSample = 50 * time.Millisecond
+
+// awaitAcknowledged reports how much of the payload the peer has acknowledged,
+// watching the local send queue until some of it drains or the deadline passes.
+//
+// Sampling rather than reading once is what keeps the answer honest on a path
+// with real latency: Write returns the moment the kernel accepts the bytes, so
+// immediately afterwards nothing is acknowledged yet even on a healthy link.
+// Once Write has returned nothing more enters the queue, so every later sample
+// is monotone and the first sign of progress settles it. A black hole never
+// produces one — its segments are all too big to cross, so nothing is ever
+// acknowledged and the loop runs out the deadline it was already going to
+// spend.
+func awaitAcknowledged(measure func(net.Conn) (int, error), conn net.Conn, written int, deadline time.Time) (int, error) {
+	for {
+		queued, err := measure(conn)
+		if err != nil {
+			return 0, err
+		}
+		if delivered := written - queued; delivered > 0 || !time.Now().Before(deadline) {
+			return delivered, nil
+		}
+		time.Sleep(pmtuQueueSample)
 	}
 }
 

@@ -19,6 +19,15 @@ func socketMSS(conn net.Conn) (int, error) {
 }
 
 func socketOption(conn net.Conn, level, option int) (int, error) {
+	return socketValue(conn, func(fd uintptr) (int, error) {
+		return unix.GetsockoptInt(int(fd), level, option)
+	})
+}
+
+// socketValue runs read against the connection's descriptor while the runtime
+// holds it open. Getsockopt is not the only question worth asking of a socket:
+// the send queue is an ioctl on Linux and a socket option on Darwin.
+func socketValue(conn net.Conn, read func(fd uintptr) (int, error)) (int, error) {
 	sc, ok := conn.(syscall.Conn)
 	if !ok {
 		return 0, fmt.Errorf("connection does not expose its socket")
@@ -30,7 +39,7 @@ func socketOption(conn net.Conn, level, option int) (int, error) {
 	var value int
 	var sockErr error
 	if err := raw.Control(func(fd uintptr) {
-		value, sockErr = unix.GetsockoptInt(int(fd), level, option)
+		value, sockErr = read(fd)
 	}); err != nil {
 		return 0, err
 	}

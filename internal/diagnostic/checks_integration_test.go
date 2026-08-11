@@ -147,6 +147,84 @@ func TestPMTUProbeLoopbackSilentPeerDoesNotWarn(t *testing.T) {
 	}
 }
 
+// socketQueued is the reading the whole probe now rests on, so check it against
+// a real kernel rather than a stub: zero on an idle socket, non-zero while a
+// peer refuses to drain, and an error on anything that is not a socket.
+//
+// The falling edge is not asserted here. Draining through the deliberately tiny
+// receive window this test needs takes tens of seconds, and
+// TestPMTUProbeLoopbackSilentPeerDoesNotWarn already covers it end to end: that
+// test can only reach PASS if the queue drops back to zero.
+func TestSocketQueuedTracksRealSendQueue(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// A small receive buffer is what makes the backlog appear: the peer
+		// cannot quietly absorb the payload the way a default-sized one would.
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetReadBuffer(1 << 10)
+		}
+		accepted <- conn
+	}()
+
+	client, err := net.Dial("tcp4", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	server := <-accepted
+	defer server.Close()
+
+	if queued, err := socketQueued(client); err != nil {
+		t.Skipf("no send-queue accounting on this platform: %v", err)
+	} else if queued != 0 {
+		t.Errorf("idle socket has %d bytes queued, want 0", queued)
+	}
+
+	// Far more than the peer's pinned receive window, so some of it has to
+	// stay put. Closing the client at test exit releases the writer.
+	go func() {
+		_ = client.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		_, _ = client.Write(make([]byte, 1<<20))
+	}()
+	if queued := pollQueued(t, client, func(n int) bool { return n > 0 }); queued == 0 {
+		t.Fatal("send queue never rose while the peer refused to read")
+	}
+
+	// net.Pipe has no descriptor, which is how the probe knows to fall back.
+	pipe, other := net.Pipe()
+	defer pipe.Close()
+	defer other.Close()
+	if _, err := socketQueued(pipe); err == nil {
+		t.Error("socketQueued on a non-socket returned no error")
+	}
+}
+
+// pollQueued watches the send queue until want holds or the test runs out of
+// patience, and reports the last reading either way.
+func pollQueued(t *testing.T, conn net.Conn, want func(int) bool) int {
+	t.Helper()
+	var queued int
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		n, err := socketQueued(conn)
+		if err != nil {
+			t.Fatalf("socketQueued: %v", err)
+		}
+		if queued = n; want(n) {
+			return n
+		}
+	}
+	return queued
+}
+
 // SourceIP resolves both of the forms -iface accepts, without this test
 // knowing what the loopback interface is called (lo, lo0, "Loopback
 // Pseudo-Interface 1", ...).
