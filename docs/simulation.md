@@ -100,6 +100,22 @@ not from repeating the YAML. Generated device names are mapped back to logical
 segment names in reports. IPv4 and IPv6 can share one logical interface, while
 family-specific routes and reachability remain separate evidence.
 
+Per-family internet reachability is observed the same way: after the probes,
+the node holder tries controlled endpoints from inside its own namespace until
+one answers. It reads no diagnosis, verdict, or scenario expectation, so this
+evidence can contradict netdoc — which is the point of having it. It is a
+point-in-time observation of the state the run finished in, so under a timed
+fault it describes that instant, not the whole run. A family the client carries
+no address for is not dialed and produces no record at all: untested is not the
+same as unreachable.
+
+Multipath scenarios also probe literal test targets when the address and TCP
+service are both simulator-owned, providing an independent alternate-path
+control. Those records use the kernel-selected route and remain independent of
+`target_tcp`; single-path, hostname, and arbitrary external targets are not
+simulator reachability evidence. Route selection alone still does not prove
+reachability.
+
 ## Probe endpoint drift
 
 **Check this section before changing fixed probe endpoints in
@@ -109,7 +125,9 @@ The simulation has no internet. Scenarios claim netdoc's compiled-in public
 addresses as node aliases and serve its fixed probe names from simulator DNS.
 If an internet, captive-portal, default public-DNS, or probe-host constant
 changes, update the corresponding `aliases`, DNS records, and expectations
-under `internal/simulation/scenarios/`.
+under `internal/simulation/scenarios/`, and the internet endpoint list in
+`internal/simulation/runner.go` that the simulator dials for its own
+reachability evidence.
 
 `healthy` is the canary. It expects the fixed internet, public-DNS, and
 encrypted-DNS probes to pass; endpoint drift makes it fail with a
@@ -165,6 +183,10 @@ The original `topology.subnet`, node `address`, and node `gateway` fields are
 single-segment compatibility shorthand. Routed scenarios use named `segments`,
 node `interfaces`, and validated `routes`; see
 [`healthy-routed-network.yaml`](../internal/simulation/scenarios/healthy-routed-network.yaml).
+[`two-path-healthy.yaml`](../internal/simulation/scenarios/two-path-healthy.yaml)
+is the focused hunt control for two IPv4 defaults: ordinary traffic selects the
+lower-metric preferred router, while a controlled literal target independently
+proves the higher-metric alternate path.
 Dual-stack scenarios use `ipv4` and `ipv6` on the same segment and interface;
 see
 [`dual-stack-healthy.yaml`](../internal/simulation/scenarios/dual-stack-healthy.yaml).
@@ -309,6 +331,27 @@ mutations, and a case fingerprint. Findings use semantic diagnosis
 fingerprints, excluding prose and incidental timing, paths, process ids, and
 kernel names. Keep the seed, case, generator version, and reproduction command
 with any failure report.
+
+A generated mutation records intent; it is not automatically observed truth.
+`observed_faults` contains a mutation only when service, event, kernel-fault, or
+independent reachability evidence from the executed simulation supports it.
+Persistent netem mutations require matching kernel qdisc state on the intended
+logical node and segment. Timed DNS, netem, and link mutations require the
+specific impairment event to have applied successfully; initialization,
+restoration, failed, and skipped events do not qualify. These timed entries
+prove successful simulator state changes, not that netdoc sampled the affected
+window or observed an end-to-end consequence.
+
+Hunt analysis compares final family truth with the final client diagnosis only
+on stable paths. Unknown or unavailable families, persistent netem, and actual
+timed path impairments are not treated as a final-state diagnosis oracle.
+
+`routing.preferred_path_failure` uses `two-path-healthy`. It lowers the
+preferred router's upstream interface, beyond the client-visible gateway, so
+the lower-metric client route remains selected. Observation requires the
+selected preferred family path to be unreachable and the controlled target on
+the distinct higher-metric alternate path to remain reachable; successful
+link-down application alone is insufficient.
 
 ## Triage and nightly automation
 

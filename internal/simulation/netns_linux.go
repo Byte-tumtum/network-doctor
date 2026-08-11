@@ -520,6 +520,19 @@ func (l *safeLog) String() string {
 // await waits for one line from the holder. A holder that died instead of
 // answering reports its own stderr, which is where a bind failure shows up.
 func (np *nodeProc) await(ctx context.Context, want string) error {
+	got, err := np.reply(ctx, want)
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("holder said %q, want %q: %s", got, want, strings.TrimSpace(np.logs.String()))
+	}
+	return nil
+}
+
+// reply reads one line from the holder. want names what the director asked for
+// and appears only in the error a dead holder produces.
+func (np *nodeProc) reply(ctx context.Context, want string) (string, error) {
 	type line struct {
 		s   string
 		err error
@@ -531,16 +544,12 @@ func (np *nodeProc) await(ctx context.Context, want string) error {
 	}()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return "", ctx.Err()
 	case got := <-ch:
-		switch {
-		case got.s == want:
-			return nil
-		case got.err != nil:
-			return fmt.Errorf("holder exited before %q: %s", want, strings.TrimSpace(np.logs.String()))
-		default:
-			return fmt.Errorf("holder said %q, want %q: %s", got.s, want, strings.TrimSpace(np.logs.String()))
+		if got.err != nil {
+			return "", fmt.Errorf("holder exited before %q: %s", want, strings.TrimSpace(np.logs.String()))
 		}
+		return got.s, nil
 	}
 }
 
@@ -603,7 +612,8 @@ func (e *netnsEnv) ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo
 				return out, fmt.Errorf("fault %s on %s: %w", f.Type, f.Node, err)
 			}
 		}
-		info := FaultInfo{Type: f.Type, Node: f.Node, Family: f.Family, Summary: summary, Command: steps[len(steps)-1], Seed: f.Seed}
+		info := FaultInfo{Type: f.Type, Node: f.Node, Family: f.Family, Protocol: f.Protocol, Port: f.Port,
+			Direction: f.Direction, Summary: summary, Command: steps[len(steps)-1], Seed: f.Seed}
 		if f.Type == FaultNetem {
 			info.Latency, _ = time.ParseDuration(f.Delay)
 			info.Jitter, _ = time.ParseDuration(f.Jitter)
@@ -668,7 +678,11 @@ func (e *netnsEnv) ApplyTimedEvent(ctx context.Context, event TimedEvent) (strin
 		if res.Err != nil || res.ExitCode != 0 {
 			return "", execResultError(res)
 		}
-		return "kernel link up=" + strconv.FormatBool(parseLinkUp(string(res.Stdout))), nil
+		up := parseLinkUp(string(res.Stdout))
+		if up != (event.State == LinkStateUp) {
+			return "", fmt.Errorf("kernel link state did not become %s", event.State)
+		}
+		return "kernel link up=" + strconv.FormatBool(up), nil
 	}
 	return "", fmt.Errorf("unknown scheduled event type %q", event.Type)
 }
@@ -720,6 +734,37 @@ func (np *nodeProc) setDNSOutcome(ctx context.Context, service, outcome string, 
 		return err
 	}
 	return np.await(ctx, holderDNSApplied)
+}
+
+// probeTCP asks the node holder to open one TCP connection from inside its own
+// namespace. The holder is simulator-owned and never sees netdoc's report, so
+// what it answers is an observation of the simulated network rather than a
+// restatement of the diagnosis.
+func (np *nodeProc) probeTCP(ctx context.Context, address string, port int, timeout time.Duration) (bool, error) {
+	if np.stdin == nil || np.stdout == nil {
+		return false, errors.New("node holder is not running")
+	}
+	np.mu.Lock()
+	defer np.mu.Unlock()
+	if np.stopped {
+		return false, errors.New("node holder has already stopped")
+	}
+	request := strings.Join([]string{holderProbeCommand, address, strconv.Itoa(port),
+		strconv.FormatInt(timeout.Milliseconds(), 10)}, " ")
+	if _, err := io.WriteString(np.stdin, request+"\n"); err != nil {
+		return false, err
+	}
+	got, err := np.reply(ctx, holderProbeResult)
+	if err != nil {
+		return false, err
+	}
+	switch got {
+	case holderProbeResult + " " + holderProbeReached:
+		return true, nil
+	case holderProbeResult + " " + holderProbeFailed:
+		return false, nil
+	}
+	return false, fmt.Errorf("holder answered %q to a reachability probe", got)
 }
 
 func (np *nodeProc) checkEvidence(ctx context.Context) error {

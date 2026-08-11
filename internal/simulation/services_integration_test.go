@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -159,4 +160,49 @@ func answersQuery(response, query []byte) bool {
 	return bytes.Equal(response[:2], query[:2]) &&
 		response[2]&0x80 != 0 &&
 		bytes.Equal(response[dnsHeaderLen:len(query)], query[dnsHeaderLen:])
+}
+
+// TestHolderProbeReplyObservesRealSockets covers the holder end of the
+// simulator's independent reachability observation over loopback: a listening
+// port answers reachable, a closed one answers unreachable, and neither answer
+// comes from anything netdoc reported.
+func TestHolderProbeReplyObservesRealSockets(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	open := ln.Addr().(*net.TCPAddr).Port
+
+	closed, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	shut := closed.Addr().(*net.TCPAddr).Port
+	closed.Close()
+
+	for _, tc := range []struct {
+		name string
+		port int
+		want string
+	}{
+		{"listening port", open, "probe-result reachable"},
+		{"closed port", shut, "probe-result unreachable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := fmt.Sprintf("probe 127.0.0.1 %d 2000", tc.port)
+			if got := holderCommandReply(line, nil); got != tc.want {
+				t.Errorf("%q = %q, want %q", line, got, tc.want)
+			}
+		})
+	}
 }

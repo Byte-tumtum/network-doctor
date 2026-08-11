@@ -3,6 +3,7 @@ package simulation
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,7 @@ type fakeEnv struct {
 	signal        string
 	sawCancelled  bool
 	cleanupErrors []string
+	evidence      Evidence
 	// faultErr fails fault injection, the way a host missing a tc feature does.
 	faultErr error
 
@@ -146,7 +148,12 @@ func TestRunPassesOnlyGeneratedTLSRootEnvironment(t *testing.T) {
 	}
 }
 
-func (e *fakeEnv) Evidence(context.Context) (Evidence, error) { return aggregateEvidence(nil), nil }
+func (e *fakeEnv) Evidence(context.Context) (Evidence, error) {
+	if e.evidence.Reachability != nil {
+		return e.evidence, nil
+	}
+	return aggregateEvidence(nil), nil
+}
 
 func (e *fakeEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
 	e.mu.Lock()
@@ -384,5 +391,140 @@ func TestNewIDIsWideAndSafeEnoughToNeverCollide(t *testing.T) {
 			t.Fatalf("NewID repeated %q within %d draws", id, draws)
 		}
 		seen[id] = true
+	}
+}
+
+// observedFamilies is what the environment recorded on its own, before any
+// diagnosis was consulted. The two families deliberately disagree so a
+// collector that copied netdoc's verdict could not accidentally match.
+func observedFamilies() []ReachabilityEvidence {
+	return []ReachabilityEvidence{
+		{From: "client", To: "IPv4 internet endpoints", Family: "ipv4", Via: []string{"client-lan", "10.78.1.1"}, Reachable: true},
+		{From: "client", To: "IPv6 internet endpoints", Family: "ipv6", Via: []string{"client-lan", "2001:db8:77:1::1"}, Reachable: false},
+	}
+}
+
+// TestReachabilityEvidenceIgnoresDiagnosticFamilies pins the invariant this
+// whole pass exists for: simulator reachability truth must be able to disagree
+// with netdoc. The report is rebuilt with every family verdict netdoc could
+// have produced — including the exact opposite of the truth, and a check with
+// no families at all — over one fixed set of observations. The observations may
+// not move.
+func TestReachabilityEvidenceIgnoresDiagnosticFamilies(t *testing.T) {
+	for _, diagnosis := range []string{
+		`{"checks":[{"id":"internet_tcp","status":"FAIL"}],"verdict":"broken"}`,
+		`{"checks":[{"id":"internet_tcp","status":"PASS","address_families":{"ipv4":"reachable","ipv6":"reachable"}}],"verdict":"ok"}`,
+		`{"checks":[{"id":"internet_tcp","status":"FAIL","address_families":{"ipv4":"unreachable","ipv6":"unreachable"}}],"verdict":"broken"}`,
+		`{"checks":[{"id":"internet_tcp","status":"WARN","address_families":{"ipv4":"unreachable","ipv6":"reachable"}}],"verdict":"degraded"}`,
+	} {
+		env := &fakeEnv{stdout: diagnosis, evidence: Evidence{Reachability: observedFamilies()}}
+		rep := Run(context.Background(), testScenario(t), &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+		if got, want := rep.Evidence.Reachability, observedFamilies(); !reflect.DeepEqual(got, want) {
+			t.Errorf("diagnosis %s changed the observation:\n got %+v\nwant %+v", diagnosis, got, want)
+		}
+	}
+}
+
+// TestReachabilityEvidenceIgnoresTargetlessDiagnosis guards the other half of
+// the boundary: with no target to reach, the diagnosis contributes nothing at
+// all, so a run whose netdoc report is missing outright keeps the same truth.
+func TestReachabilityEvidenceIgnoresTargetlessDiagnosis(t *testing.T) {
+	scenario := testScenario(t)
+	scenario.Tests[0].Target = ""
+	env := &fakeEnv{stdout: okReport, evidence: Evidence{Reachability: observedFamilies()}}
+	rep := Run(context.Background(), scenario, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if got, want := rep.Evidence.Reachability, observedFamilies(); !reflect.DeepEqual(got, want) {
+		t.Errorf("reachability = %+v, want %+v", got, want)
+	}
+}
+
+func TestRunDoesNotCopyTargetDiagnosisIntoReachabilityEvidence(t *testing.T) {
+	const report = `{"checks":[{"id":"target_tcp","status":"STATUS"}],"verdict":"ok","summary":"s","ok":true}`
+	for _, status := range []string{"PASS", "WARN", "FAIL", "N/A"} {
+		t.Run(status, func(t *testing.T) {
+			env := &fakeEnv{stdout: strings.Replace(report, "STATUS", status, 1)}
+			rep := Run(context.Background(), testScenario(t), &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+			if len(rep.Evidence.Reachability) != 0 {
+				t.Errorf("target_tcp %s created simulator reachability evidence: %+v", status, rep.Evidence.Reachability)
+			}
+		})
+	}
+}
+
+// TestInternetFamilyProbesFollowNodeAddresses covers eligibility: which
+// families the simulator will dial at all. A family the node has no address
+// for is not probed and therefore has no observation to report — which is what
+// keeps a single-stack topology from reading as an outage in the family it
+// never had.
+func TestInternetFamilyProbesFollowNodeAddresses(t *testing.T) {
+	v4 := Interface{Segment: "lan", IPv4: "10.78.1.10/24"}
+	v6 := Interface{Segment: "lan", IPv6: "2001:db8:77:1::10/64"}
+	dual := Interface{Segment: "lan", IPv4: "10.78.1.10/24", IPv6: "2001:db8:77:1::10/64"}
+	// The legacy "address" spelling is folded into IPv4 by topology validation,
+	// so a node that reaches the collector never carries it unresolved.
+	for _, tc := range []struct {
+		name string
+		node Node
+		want []string
+	}{
+		{"dual stack", Node{Interfaces: []Interface{dual}}, []string{"ipv4", "ipv6"}},
+		{"split interfaces", Node{Interfaces: []Interface{v4, v6}}, []string{"ipv4", "ipv6"}},
+		{"IPv4 only", Node{Interfaces: []Interface{v4}}, []string{"ipv4"}},
+		{"IPv6 only", Node{Interfaces: []Interface{v6}}, []string{"ipv6"}},
+		{"no addresses", Node{}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, probe := range internetFamilyProbes(&tc.node) {
+				got = append(got, probe.family)
+				if len(probe.endpoints) == 0 {
+					t.Errorf("family %s has no endpoint to dial", probe.family)
+				}
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("probed families = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestInternetFamilyProbesMatchTheEndpointsNetdocDials keeps the simulator's
+// controlled endpoints and the addresses the probe under test connects to from
+// drifting apart. A scenario aliases these onto a simulator-owned node.
+func TestInternetFamilyProbesMatchTheEndpointsNetdocDials(t *testing.T) {
+	node := Node{Interfaces: []Interface{{Segment: "lan", IPv4: "10.78.1.10/24", IPv6: "2001:db8:77:1::10/64"}}}
+	want := map[string][]string{
+		"ipv4": {"1.1.1.1", "8.8.8.8"},
+		"ipv6": {"2606:4700:4700::1111", "2001:4860:4860::8888"},
+	}
+	for _, probe := range internetFamilyProbes(&node) {
+		if !reflect.DeepEqual(probe.endpoints, want[probe.family]) {
+			t.Errorf("%s endpoints = %v, want %v", probe.family, probe.endpoints, want[probe.family])
+		}
+	}
+	if internetProbePort != 443 {
+		t.Errorf("probe port = %d, want 443", internetProbePort)
+	}
+}
+
+// TestHolderProbeReplyRejectsUnusableRequests keeps the holder from dialing
+// anything the director did not spell out exactly: no names, no zones, no
+// unbounded wait. Reachability is only ever observed against a literal address.
+func TestHolderProbeReplyRejectsUnusableRequests(t *testing.T) {
+	for _, line := range []string{
+		"probe",
+		"probe 1.1.1.1 443",
+		"probe 1.1.1.1 443 2000 extra",
+		"probe one.one.one.one 443 2000",
+		"probe fe80::1%eth0 443 2000",
+		"probe 1.1.1.1 0 2000",
+		"probe 1.1.1.1 70000 2000",
+		"probe 1.1.1.1 443 0",
+		"probe 1.1.1.1 443 -1",
+		"probe 1.1.1.1 443 soon",
+	} {
+		if got := holderCommandReply(line, nil); got != "probe-result error" {
+			t.Errorf("%q answered %q, want a rejection", line, got)
+		}
 	}
 }

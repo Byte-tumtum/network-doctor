@@ -1,0 +1,79 @@
+name: two-path-healthy
+description: >-
+  The client has two independently routed IPv4 defaults. The lower-metric
+  preferred path carries ordinary Internet traffic; a controlled literal
+  target proves the higher-metric alternate path before hunts fail the
+  preferred router beyond the client-visible gateway.
+
+topology:
+  segments:
+    - {name: preferred-lan, subnet: 10.79.1.0/24}
+    - {name: preferred-upstream, subnet: 10.79.2.0/24}
+    - {name: alternate-lan, subnet: 10.79.3.0/24}
+    - {name: alternate-upstream, subnet: 10.79.4.0/24}
+  nodes:
+    - name: client
+      role: client
+      resolver: 10.79.2.20
+      interfaces:
+        - {segment: preferred-lan, address: 10.79.1.10/24}
+        - {segment: alternate-lan, address: 10.79.3.10/24}
+    - name: preferred-gateway
+      role: router
+      interfaces:
+        - {segment: preferred-lan, address: 10.79.1.1/24}
+        - {segment: preferred-upstream, address: 10.79.2.1/24}
+    - name: alternate-gateway
+      role: router
+      interfaces:
+        - {segment: alternate-lan, address: 10.79.3.1/24}
+        - {segment: alternate-upstream, address: 10.79.4.1/24}
+    - name: target
+      interfaces:
+        - {segment: preferred-upstream, address: 10.79.2.20/24}
+        - {segment: alternate-upstream, address: 10.79.4.20/24}
+      aliases: [1.1.1.1, 8.8.8.8, 9.9.9.9]
+      services:
+        - name: routed-resolver
+          type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.79.2.20
+        - {name: routed-http, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.79.2.20}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+  routes:
+    - {node: client, destination: default, via: 10.79.1.1, metric: 50}
+    - {node: client, destination: default, via: 10.79.3.1, metric: 100}
+    - {node: client, destination: 9.9.9.9/32, via: 10.79.3.1}
+    - {node: preferred-gateway, destination: 1.1.1.1/32, via: 10.79.2.20}
+    - {node: preferred-gateway, destination: 8.8.8.8/32, via: 10.79.2.20}
+    - {node: alternate-gateway, destination: 1.1.1.1/32, via: 10.79.4.20}
+    - {node: alternate-gateway, destination: 8.8.8.8/32, via: 10.79.4.20}
+    - {node: alternate-gateway, destination: 9.9.9.9/32, via: 10.79.4.20}
+    - {node: target, destination: 10.79.1.0/24, via: 10.79.2.1}
+    - {node: target, destination: 10.79.3.0/24, via: 10.79.4.1}
+
+tests:
+  - name: preferred default reaches controlled Internet
+    node: client
+    expect:
+      verdict: ok
+      checks:
+        - {id: iface, status: PASS}
+        - {id: internet_tcp, status: PASS}
+        - {id: dns, status: PASS}
+        - {id: dns_public, status: PASS}
+  - name: alternate route reaches controlled target
+    node: client
+    target: http://9.9.9.9:80
+    expect:
+      verdict: ok
+      checks:
+        - {id: iface, status: PASS}
+        - {id: internet_tcp, status: PASS}
+        - {id: dns, status: N/A}
+        - {id: dns_public, status: N/A}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+
+expect: {verdict: ok}

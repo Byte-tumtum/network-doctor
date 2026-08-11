@@ -147,6 +147,18 @@ func TestBindAddressesFallsBackToWildcard(t *testing.T) {
 	}
 }
 
+func TestServiceStateEvidenceAggregation(t *testing.T) {
+	got := aggregateEvidence([]evidenceEvent{
+		{Kind: evidenceServiceState, Node: "target", ServiceType: ServiceHTTP, ServicePort: 80, ServiceStatus: 503},
+		{Kind: evidenceServiceState, Node: "internet", Service: encryptedDNSProbeService,
+			ServiceType: ServiceEncryptedDNS, ServicePort: 443, ServiceMode: DoHResponseInvalid},
+	})
+	if len(got.ServiceStates) != 2 || got.ServiceStates[0].Node != "internet" ||
+		got.ServiceStates[0].Mode != DoHResponseInvalid || got.ServiceStates[1].Status != 503 {
+		t.Fatalf("service states = %+v", got.ServiceStates)
+	}
+}
+
 func TestDNSScheduleIsPerFamilyAndBounded(t *testing.T) {
 	s := newDNSState(&DNSFault{
 		A:    []string{DNSOutcomeAnswer, DNSOutcomeSERVFAIL},

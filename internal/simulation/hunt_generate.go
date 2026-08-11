@@ -29,7 +29,7 @@ const (
 
 // Sorted: validHuntBase binary-searches this list.
 var huntBaseNames = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
-	"socks5h-remote-dns-succeeds", "tls-valid"}
+	"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy"}
 
 // HuntBaseNames returns the deliberately small set of known-good controls the
 // first generator is allowed to mutate.
@@ -323,6 +323,11 @@ func nodeOwnsAddress(node Node, raw string) bool {
 			if got, err := netip.ParseAddr(address); err == nil && got == want {
 				return true
 			}
+		}
+	}
+	for _, candidate := range node.Aliases {
+		if got, err := netip.ParseAddr(candidate); err == nil && got == want {
+			return true
 		}
 	}
 	return false
@@ -718,7 +723,7 @@ func generatePreferredPathFailure(_ *mathrand.Rand, s *Scenario) (GeneratedMutat
 		}
 		for _, iface := range node.Interfaces {
 			if iface.Segment != preferredSegment {
-				return GeneratedMutation{Node: node.Name, Segment: iface.Segment,
+				return GeneratedMutation{Node: node.Name, TargetNode: client, Segment: iface.Segment, Family: "ipv4",
 					Description: fmt.Sprintf("disable preferred router %s upstream %s while retaining the alternate default", node.Name, iface.Segment)}, nil
 			}
 		}

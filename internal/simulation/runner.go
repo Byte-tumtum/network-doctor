@@ -160,7 +160,6 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	if err != nil {
 		rep.Error = "collecting evidence failed: " + textsafe.Clean(err.Error())
 	} else {
-		rep.addReachabilityEvidence()
 		rep.addPacketObservations()
 		rep.placeEvidenceOnTimeline(t0)
 	}
@@ -209,66 +208,8 @@ func (r *Report) addPacketObservations() {
 	}
 }
 
-func (r *Report) addReachabilityEvidence() {
-	for _, test := range r.Tests {
-		if test.Diagnosis == nil {
-			continue
-		}
-		var internet *DiagnosisCheck
-		for _, check := range test.Diagnosis.Checks {
-			if check.ID == string(diagnostic.ProbeInternet) {
-				copy := check
-				internet = &copy
-				break
-			}
-		}
-		if internet != nil && internet.Families != nil {
-			for _, item := range []struct{ family, state, target string }{
-				{"ipv4", internet.Families.IPv4, "IPv4 internet endpoints"},
-				{"ipv6", internet.Families.IPv6, "IPv6 internet endpoints"},
-			} {
-				r.Evidence.Reachability = append(r.Evidence.Reachability, ReachabilityEvidence{
-					From: test.Node, To: item.target, Family: item.family,
-					Via: r.selectedPath(test.Node, item.family), Reachable: item.state == diagnostic.FamilyReachable,
-				})
-			}
-		}
-		if test.Target == "" {
-			continue
-		}
-		status := ""
-		for _, check := range test.Diagnosis.Checks {
-			if check.ID == string(diagnostic.ProbeTargetTCP) {
-				status = check.Status
-				break
-			}
-		}
-		if status == "" {
-			continue
-		}
-		destination := test.Target
-		via := []string{}
-		if test.SourceSegment != "" {
-			via = append(via, test.SourceSegment)
-		} else {
-			for _, route := range r.Evidence.Routes {
-				if route.Node == test.Node && route.Selected {
-					via = append(via, route.Segment)
-					if route.Via != "" {
-						via = append(via, route.Via)
-					}
-					break
-				}
-			}
-		}
-		r.Evidence.Reachability = append(r.Evidence.Reachability, ReachabilityEvidence{
-			From: test.Node, To: destination, Via: via, Reachable: status == "PASS" || status == "WARN",
-		})
-	}
-}
-
-func (r *Report) selectedPath(node, family string) []string {
-	for _, route := range r.Evidence.Routes {
+func selectedPath(routes []RouteEvidence, node, family string) []string {
+	for _, route := range routes {
 		if route.Node == node && route.Selected && route.Family == family {
 			via := []string{route.Segment}
 			if route.Via != "" {
@@ -278,6 +219,45 @@ func (r *Report) selectedPath(node, family string) []string {
 		}
 	}
 	return nil
+}
+
+// internetEndpoints4 and internetEndpoints6 mirror the fixed addresses
+// diagnostic.internetProbe dials. Scenarios alias them onto a simulator-owned
+// node, so the simulator can dial them itself without leaving the namespace.
+var (
+	internetEndpoints4 = []string{"1.1.1.1", "8.8.8.8"}
+	internetEndpoints6 = []string{"2606:4700:4700::1111", "2001:4860:4860::8888"}
+)
+
+// internetProbePort is the port both netdoc and the simulator connect to on
+// those endpoints.
+const internetProbePort = 443
+
+// familyProbe is one address family the simulator tries to reach the controlled
+// Internet endpoints in, on its own, from inside a node.
+type familyProbe struct {
+	family    string
+	target    string
+	endpoints []string
+}
+
+// internetFamilyProbes lists the families worth observing from this node. A
+// family the node carries no address for is absent from the list rather than
+// present and unreachable: there is nothing to test, and a topology that never
+// had IPv6 is not a topology whose IPv6 went down. Presence alone decides
+// eligibility — whether the path works is settled by dialing it, not by
+// reading the topology.
+func internetFamilyProbes(n *Node) []familyProbe {
+	var out []familyProbe
+	for _, probe := range []familyProbe{
+		{family: "ipv4", target: "IPv4 internet endpoints", endpoints: internetEndpoints4},
+		{family: "ipv6", target: "IPv6 internet endpoints", endpoints: internetEndpoints6},
+	} {
+		if n.hasFamily(probe.family) {
+			out = append(out, probe)
+		}
+	}
+	return out
 }
 
 // runTest runs netdoc inside a node and compares the diagnosis. Repeats reuse

@@ -19,6 +19,11 @@ func loadHuntBase(t testing.TB, name string) *Scenario {
 }
 
 func TestHuntMutationRegistryOrder(t *testing.T) {
+	wantBases := []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
+		"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy"}
+	if got := HuntBaseNames(); !reflect.DeepEqual(got, wantBases) {
+		t.Fatalf("hunt bases = %v, want sorted %v", got, wantBases)
+	}
 	want := []string{
 		"netem.loss", "netem.latency", "netem.jitter", "timeline.netem_spike",
 		"dns.servfail", "dns.drop", "timeline.dns_outage", "service.tcp_reset",
@@ -34,10 +39,54 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registry = %v, want %v", got, want)
 	}
+	if !hasWorkingAlternatePath(loadHuntBase(t, "two-path-healthy")) {
+		t.Error("the multipath hunt base does not satisfy preferred-path applicability")
+	}
 	if hasWorkingAlternatePath(loadHuntBase(t, "healthy")) ||
 		hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network")) ||
 		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy")) {
 		t.Error("a curated base claims a working alternate route it does not have")
+	}
+}
+
+func TestPreferredPathFailureGeneratorTargetsPreferredRouterUpstream(t *testing.T) {
+	base := loadHuntBase(t, "two-path-healthy")
+	op := huntOperator(t, "routing.preferred_path_failure")
+	if !op.applicable(base) {
+		t.Fatal("production applicability rejected the healthy multipath base")
+	}
+	mutation, err := op.generate(newTestRNG(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation.ID = op.id
+	if mutation.Node != "preferred-gateway" || mutation.TargetNode != "client" ||
+		mutation.Segment != "preferred-upstream" || mutation.Family != "ipv4" {
+		t.Fatalf("generated mutation = %+v", mutation)
+	}
+	mutated := cloneScenario(base)
+	canonicalScenarioInput(mutated)
+	if err := applyGeneratedMutation(mutated, mutation); err != nil {
+		t.Fatal(err)
+	}
+	if got := mutated.Faults[len(mutated.Faults)-1]; got.Type != FaultLinkDown ||
+		got.Node != mutation.Node || got.Segment != mutation.Segment {
+		t.Fatalf("applied fault = %+v", got)
+	}
+	if hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network")) ||
+		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy")) {
+		t.Fatal("single-path controls became applicable")
+	}
+}
+
+func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
+	base := loadHuntBase(t, "two-path-healthy")
+	generated, err := GenerateHuntCase("two-path-healthy", base, 20260811, 38, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "routing.preferred_path_failure" {
+		t.Fatalf("generated mutations = %+v", generated.Manifest.Mutations)
 	}
 }
 
@@ -283,13 +332,9 @@ func TestGeneratedHuntCasesValidateAndStayBounded(t *testing.T) {
 			}
 		}
 	}
-	// Preferred-route failure is deliberately dormant until a known-good
-	// multi-path base exists. Every operator applicable to today's controls must
-	// appear in this large deterministic sample.
+	// Every operator applicable to today's controls must appear in this large
+	// deterministic sample.
 	for _, op := range huntMutationRegistry {
-		if op.id == "routing.preferred_path_failure" {
-			continue
-		}
 		if !seen[op.id] {
 			t.Errorf("operator %s was never generated", op.id)
 		}

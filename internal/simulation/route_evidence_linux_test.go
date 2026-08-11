@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestKernelInterfaceNamesAreBoundedAndCollisionFree(t *testing.T) {
@@ -104,6 +105,36 @@ func TestParseNetemStats(t *testing.T) {
 	for _, bad := range [][]byte{nil, []byte("qdisc netem 1: root\n(dropped nope, overlimits 0)\n"), make([]byte, maxTCOutput+1)} {
 		if _, _, err := parseNetemStats(bad); err == nil {
 			t.Errorf("accepted malformed tc output %q", bad)
+		}
+	}
+}
+
+func TestParseNetemConditionReadsKernelParameters(t *testing.T) {
+	raw := []byte("qdisc netem 8001: root refcnt 2 limit 1000 delay 250ms 40ms loss 17% seed 123\n" +
+		" Sent 400 bytes 10 pkt (dropped 3, overlimits 0 requeues 0)\n")
+	got, err := parseNetemCondition(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := PacketConditionEvidence{Active: true, DroppedPackets: 3, Latency: 250 * time.Millisecond,
+		Jitter: 40 * time.Millisecond, LossPercent: 17, Seed: 123}
+	if got != want {
+		t.Fatalf("condition = %+v, want %+v", got, want)
+	}
+	auto := []byte("qdisc netem 8001: root limit 1000 delay 250ms seed 638910992574949572\n")
+	if got, err := parseNetemCondition(auto); err != nil || got.Latency != 250*time.Millisecond || got.Seed != 0 {
+		t.Fatalf("automatic tc seed condition = %+v, err=%v", got, err)
+	}
+	for _, bad := range []string{
+		"qdisc netem 8001: root limit 1000 delay",
+		"qdisc netem 8001: root limit 1000 delay nope",
+		"qdisc netem 8001: root limit 1000 loss",
+		"qdisc netem 8001: root limit 1000 loss nope",
+		"qdisc netem 8001: root limit 1000 seed",
+		"qdisc netem 8001: root limit 1000 seed nope",
+	} {
+		if _, err := parseNetemCondition([]byte(bad)); err == nil {
+			t.Errorf("malformed netem parameters accepted: %q", bad)
 		}
 	}
 }

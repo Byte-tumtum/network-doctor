@@ -83,6 +83,9 @@ type FaultInfo struct {
 	Type        string        `json:"type"`
 	Node        string        `json:"node"`
 	Family      string        `json:"family,omitempty"`
+	Protocol    string        `json:"protocol,omitempty"`
+	Port        int           `json:"port,omitempty"`
+	Direction   string        `json:"direction,omitempty"`
 	Summary     string        `json:"summary"`
 	Command     []string      `json:"command"`
 	Latency     time.Duration `json:"latency_ms,omitempty"`
@@ -140,6 +143,9 @@ func (r *Report) finish() {
 	}
 	if r.Evidence.TLS == nil {
 		r.Evidence.TLS = []TLSEvidence{}
+	}
+	if r.Evidence.ServiceStates == nil {
+		r.Evidence.ServiceStates = []ServiceStateEvidence{}
 	}
 	if r.Evidence.TCPResets == nil {
 		r.Evidence.TCPResets = []TCPResetEvidence{}

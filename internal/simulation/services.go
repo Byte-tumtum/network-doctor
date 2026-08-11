@@ -36,6 +36,11 @@ const (
 	holderDNSError      = "dns-error"
 	holderEvidenceCheck = "evidence-check"
 	holderEvidenceReady = "evidence-ready"
+	holderProbeCommand  = "probe"
+	holderProbeResult   = "probe-result"
+	holderProbeReached  = "reachable"
+	holderProbeFailed   = "unreachable"
+	holderProbeError    = "error"
 )
 
 // nodeConfig is what the director hands a holder.
@@ -67,6 +72,16 @@ func startServices(ctx context.Context, services []Service, addresses []string, 
 		c, state, err := startService(ctx, svc, addresses, resolver, trustDir, recorder)
 		if err != nil {
 			return nil, nil, errors.Join(fmt.Errorf("%s/%d: %w", svc.Type, svc.Port, err), closeServices(open))
+		}
+		if svc.Type == ServiceHTTP || svc.Type == ServiceTLS || svc.Type == ServiceEncryptedDNS {
+			mode := svc.DoHResponse
+			if svc.Type == ServiceTLS {
+				mode = svc.Certificate.Mode
+			}
+			if err := recorder.record(evidenceEvent{Kind: evidenceServiceState, Service: svc.Name,
+				ServiceType: svc.Type, ServicePort: svc.Port, ServiceMode: mode, ServiceStatus: svc.Status}); err != nil {
+				return nil, nil, errors.Join(err, closeServices(append(open, c...)))
+			}
 		}
 		if state != nil && svc.Name != "" {
 			states[svc.Name] = state
@@ -759,6 +774,9 @@ func holderCommandReply(line string, dns map[string]*dnsState) string {
 		return holderEvidenceReady
 	}
 	fields := strings.Fields(line)
+	if len(fields) > 0 && fields[0] == holderProbeCommand {
+		return holderProbeReply(fields)
+	}
 	if len(fields) != 4 || fields[0] != holderDNSCommand {
 		return ""
 	}
@@ -774,6 +792,37 @@ func holderCommandReply(line string, dns map[string]*dnsState) string {
 		return holderDNSError + " " + err.Error()
 	}
 	return holderDNSApplied
+}
+
+// holderProbeReply answers "probe <address> <port> <timeout-ms>" by opening one
+// TCP connection from inside this node's namespace. This is the simulator's own
+// observation of the path: it is made by simulator code, to a simulator-owned
+// endpoint, and it reads nothing netdoc reported — so it is free to contradict
+// the diagnosis. Only a literal address is accepted, so an observation can
+// never depend on the node's resolver.
+func holderProbeReply(fields []string) string {
+	if len(fields) != 4 {
+		return holderProbeResult + " " + holderProbeError
+	}
+	addr, err := netip.ParseAddr(fields[1])
+	if err != nil || addr.Zone() != "" {
+		return holderProbeResult + " " + holderProbeError
+	}
+	port, err := strconv.ParseUint(fields[2], 10, 16)
+	if err != nil || port == 0 {
+		return holderProbeResult + " " + holderProbeError
+	}
+	ms, err := strconv.ParseInt(fields[3], 10, 32)
+	if err != nil || ms <= 0 {
+		return holderProbeResult + " " + holderProbeError
+	}
+	dialer := net.Dialer{Timeout: time.Duration(ms) * time.Millisecond}
+	conn, err := dialer.Dial("tcp", netip.AddrPortFrom(addr, uint16(port)).String())
+	if err != nil {
+		return holderProbeResult + " " + holderProbeFailed
+	}
+	conn.Close()
+	return holderProbeResult + " " + holderProbeReached
 }
 
 var errNoStart = errors.New("director closed the connection before the network was configured")

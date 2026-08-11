@@ -11,6 +11,7 @@
 package simulation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -134,6 +135,13 @@ func TestHealthyScenario(t *testing.T) {
 	}
 	if rep.Tests[0].FalsePositives != 0 {
 		t.Errorf("netdoc flagged %d things in a healthy network", rep.Tests[0].FalsePositives)
+	}
+	// This topology is IPv4 only. The simulator observes the family the client
+	// actually carries and stays silent about the one it does not have: an
+	// absent family is untested, which is not an observed IPv6 outage.
+	assertObservedFamily(t, rep, "ipv4", true)
+	if _, count := familyReachability(rep, "client", "ipv6"); count != 0 {
+		t.Errorf("single-stack topology produced %d IPv6 observations: %+v", count, rep.Evidence.Reachability)
 	}
 	assertCleanedUp(t, rep)
 }
@@ -801,7 +809,7 @@ func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
 	}
 }
 
-func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
+func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 	requireBackend(t)
 	netdoc, sim := buildBinaries(t)
 	run := func(t *testing.T, scenario *Scenario) Report {
@@ -836,6 +844,19 @@ func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
 		killed   bool
 		check    func(*testing.T, Report, Report)
 	}{
+		{"service.tcp_reset", "healthy", true, func(t *testing.T, control, rep Report) {
+			if http := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); http.Status != "PASS" {
+				t.Errorf("working HTTP control = %+v", http)
+			}
+			accepted, reset := false, false
+			for _, event := range rep.Evidence.TCPResets {
+				accepted = accepted || event.Event == "accepted" && event.Count > 0
+				reset = reset || event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0
+			}
+			if !accepted || !reset {
+				t.Errorf("generated TCP reset evidence = %+v", rep.Evidence.TCPResets)
+			}
+		}},
 		{"service.tls_expired", "tls-valid", true, func(t *testing.T, control, rep Report) {
 			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" ||
 				!hasTLSEvidence(control, TLSCertificateValid, "secure-target.test", "secure-target.test", true, "passed") {
@@ -911,6 +932,7 @@ func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
 			}
 		}},
 	}
+	controls := map[string]Report{}
 	for _, tc := range tests {
 		t.Run(tc.id, func(t *testing.T) {
 			base := loadHuntBase(t, tc.base)
@@ -919,9 +941,14 @@ func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
 			if err := control.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			controlReport := run(t, control)
-			if controlReport.Result != ResultPass {
-				t.Fatalf("control result = %s, suggestions = %+v", controlReport.Result, controlReport.Suggestions)
+			controlReport, ok := controls[tc.base]
+			if !ok {
+				controlReport = run(t, control)
+				if controlReport.Result != ResultPass {
+					t.Fatalf("control result = %s, suggestions = %+v", controlReport.Result, controlReport.Suggestions)
+				}
+				assertCleanedUp(t, controlReport)
+				controls[tc.base] = controlReport
 			}
 			op := huntOperator(t, tc.id)
 			mutation, err := op.generate(newTestRNG(), control)
@@ -929,6 +956,11 @@ func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			mutation.ID = tc.id
+			manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
+			controlTruth := collectObservedTruth(manifest, &controlReport)
+			if len(controlTruth.ObservedFaults) != 0 || mutationObserved(mutation, &controlReport, controlTruth) {
+				t.Fatalf("unmutated control observed %s: %+v", tc.id, controlTruth)
+			}
 			mutated := cloneScenario(control)
 			canonicalScenarioInput(mutated)
 			if err := applyGeneratedMutation(mutated, mutation); err != nil {
@@ -942,11 +974,394 @@ func TestProbeFamilyMutationsReachDiagnostics(t *testing.T) {
 			if killed := rep.Result != ResultPass; killed != tc.killed {
 				t.Errorf("mutation killed = %t, want %t; result = %s, suggestions = %+v", killed, tc.killed, rep.Result, rep.Suggestions)
 			}
+			truth := collectObservedTruth(manifest, &rep)
+			if !reflect.DeepEqual(truth.ObservedFaults, []string{tc.id}) || !mutationObserved(mutation, &rep, truth) {
+				t.Errorf("%s observation = faults %v, observed %t", tc.id, truth.ObservedFaults,
+					mutationObserved(mutation, &rep, truth))
+			}
+			withoutObservation := truth
+			withoutObservation.ObservedFaults = []string{}
+			if truthFingerprint(truth) == truthFingerprint(withoutObservation) {
+				t.Errorf("%s observation did not change truth fingerprint", tc.id)
+			}
 			tc.check(t, controlReport, rep)
-			assertCleanedUp(t, controlReport)
 			assertCleanedUp(t, rep)
 		})
 	}
+}
+
+func TestHuntNetemDNSTimelineAndLinkMutationsAreObserved(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(t *testing.T, scenario *Scenario) Report {
+		t.Helper()
+		definition := cloneScenario(scenario)
+		canonicalScenarioInput(definition)
+		blob, err := yaml.Marshal(definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "mutation.yaml")
+		if err := os.WriteFile(path, blob, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc, "-timeout", timedTimeout)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("run mutation: %v", err)
+		}
+		var rep Report
+		if err := json.Unmarshal(out, &rep); err != nil {
+			t.Fatalf("mutation report is not JSON: %v: %s", err, out)
+		}
+		if rep.Error != "" || !rep.Cleanup.Done {
+			t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
+		}
+		return rep
+	}
+
+	base := loadHuntBase(t, "healthy-routed-network")
+	control := cloneScenario(base)
+	canonicalScenarioInput(control)
+	if err := control.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	controlReport := run(t, control)
+	for _, id := range []string{
+		"netem.loss", "netem.latency", "netem.jitter", "timeline.netem_spike",
+		"dns.servfail", "dns.drop", "timeline.dns_outage", "link.transient_down",
+	} {
+		t.Run(id, func(t *testing.T) {
+			if id == "netem.loss" || id == "netem.jitter" || id == "timeline.netem_spike" {
+				requireNetemSeed(t)
+			}
+			op := huntOperator(t, id)
+			if !op.applicable(control) {
+				t.Fatal("production applicability predicate rejected healthy-routed-network")
+			}
+			mutation, err := op.generate(newTestRNG(), control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = op.id
+			manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
+			controlTruth := collectObservedTruth(manifest, &controlReport)
+			if len(controlTruth.ObservedFaults) != 0 || mutationObserved(mutation, &controlReport, controlTruth) {
+				t.Fatalf("unmutated control observed %s: %+v", id, controlTruth)
+			}
+
+			mutated := cloneScenario(control)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			mutated.Name = "test-" + strings.NewReplacer(".", "-", "_", "-").Replace(id)
+			if err := mutated.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			rep := run(t, mutated)
+			truth := collectObservedTruth(manifest, &rep)
+			if !reflect.DeepEqual(truth.ObservedFaults, []string{id}) || !mutationObserved(mutation, &rep, truth) {
+				t.Fatalf("%s observation = faults %v, observed %t; faults=%+v timeline=%+v packet=%+v",
+					id, truth.ObservedFaults, mutationObserved(mutation, &rep, truth), rep.Faults, rep.Timeline,
+					rep.Evidence.PacketConditions)
+			}
+			withoutObservation := truth
+			withoutObservation.ObservedFaults = []string{}
+			if truthFingerprint(truth) == truthFingerprint(withoutObservation) {
+				t.Fatal("observed mutation did not change truth fingerprint")
+			}
+			t.Logf("%s generated=%+v faults=%+v timeline=%+v packet=%+v mutationObserved=true",
+				id, mutation, rep.Faults, rep.Timeline, rep.Evidence.PacketConditions)
+		})
+	}
+	assertCleanedUp(t, controlReport)
+}
+
+func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	run := func(t *testing.T, scenario *Scenario) Report {
+		t.Helper()
+		definition := cloneScenario(scenario)
+		canonicalScenarioInput(definition)
+		blob, err := yaml.Marshal(definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "preferred-path.yaml")
+		if err := os.WriteFile(path, blob, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("run preferred path: %v", err)
+		}
+		var rep Report
+		if err := json.Unmarshal(out, &rep); err != nil {
+			t.Fatalf("preferred-path report is not JSON: %v: %s", err, out)
+		}
+		if rep.Error != "" || !rep.Cleanup.Done {
+			t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
+		}
+		return rep
+	}
+	targetObservation := func(t *testing.T, report Report) ReachabilityEvidence {
+		t.Helper()
+		for _, item := range report.Evidence.Reachability {
+			if item.From == "client" && item.To == "9.9.9.9:80" && item.Family == "" {
+				return item
+			}
+		}
+		t.Fatalf("controlled alternate-target observation absent: %+v", report.Evidence.Reachability)
+		return ReachabilityEvidence{}
+	}
+
+	base := loadHuntBase(t, "two-path-healthy")
+	op := huntOperator(t, "routing.preferred_path_failure")
+	if !op.applicable(base) {
+		t.Fatal("production applicability rejected two-path-healthy")
+	}
+	mutation, err := op.generate(newTestRNG(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation.ID = op.id
+	manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
+
+	baseline := run(t, base)
+	if baseline.Result != ResultPass {
+		t.Fatalf("baseline result = %s; tests=%+v suggestions=%+v", baseline.Result, baseline.Tests, baseline.Suggestions)
+	}
+	baseline4, count := familyReachability(baseline, "client", "ipv4")
+	if count != 1 || !baseline4.Reachable || !reflect.DeepEqual(baseline4.Via, []string{"preferred-lan", "10.79.1.1"}) {
+		t.Fatalf("baseline preferred reachability = %+v count=%d", baseline4, count)
+	}
+	if alternate := targetObservation(t, baseline); !alternate.Reachable ||
+		!reflect.DeepEqual(alternate.Via, []string{"alternate-lan", "10.79.3.1"}) {
+		t.Fatalf("baseline alternate reachability = %+v", alternate)
+	}
+	baselineTruth := collectObservedTruth(manifest, &baseline)
+	if baselineTruth.IPv4 != "reachable" || len(baselineTruth.ObservedFaults) != 0 ||
+		mutationObserved(mutation, &baseline, baselineTruth) {
+		t.Fatalf("healthy baseline observed routing failure: %+v", baselineTruth)
+	}
+
+	mutated := cloneScenario(base)
+	canonicalScenarioInput(mutated)
+	if err := applyGeneratedMutation(mutated, mutation); err != nil {
+		t.Fatal(err)
+	}
+	mutated.Name = "test-routing-preferred-path-failure"
+	if err := mutated.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	rep := run(t, mutated)
+	mutated4, count := familyReachability(rep, "client", "ipv4")
+	if count != 1 || mutated4.Reachable || !reflect.DeepEqual(mutated4.Via, baseline4.Via) {
+		t.Fatalf("mutated preferred reachability = %+v count=%d; baseline=%+v", mutated4, count, baseline4)
+	}
+	if alternate := targetObservation(t, rep); !alternate.Reachable ||
+		!reflect.DeepEqual(alternate.Via, []string{"alternate-lan", "10.79.3.1"}) {
+		t.Fatalf("mutated alternate reachability = %+v", alternate)
+	}
+	if !hasSelectedRoute(rep, "client", "1.1.1.1", "10.79.1.1", "preferred-lan", nil) ||
+		!hasLink(rep, "preferred-gateway", "preferred-upstream", false) {
+		t.Fatalf("preferred route was not retained over the failed path: routes=%+v links=%+v", rep.Evidence.Routes, rep.Evidence.Links)
+	}
+	truth := collectObservedTruth(manifest, &rep)
+	if truth.IPv4 != "unreachable" || !reflect.DeepEqual(truth.ObservedFaults, []string{mutation.ID}) ||
+		!mutationObserved(mutation, &rep, truth) {
+		t.Fatalf("routing consequence was not independently observed: truth=%+v mutation=%+v", truth, mutation)
+	}
+	if truthFingerprint(truth) == truthFingerprint(baselineTruth) {
+		t.Fatal("routing consequence did not change truth fingerprint")
+	}
+	check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
+	findings := familyMismatchFindings(analyzeHuntCase(manifest, &rep, truth))
+	t.Logf("mutation=%+v baseline IPv4=%t via=%v mutated IPv4=%t via=%v diagnosis=%s/%s families=%+v mismatch_findings=%+v",
+		mutation, baseline4.Reachable, baseline4.Via, mutated4.Reachable, mutated4.Via,
+		check.Status, check.Cause, check.Families, findings)
+	assertCleanedUp(t, baseline)
+	assertCleanedUp(t, rep)
+}
+
+func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	base := loadHuntBase(t, "dual-stack-healthy")
+	control := cloneScenario(base)
+	canonicalScenarioInput(control)
+	if err := control.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	run := func(t *testing.T, scenario *Scenario) Report {
+		t.Helper()
+		definition := cloneScenario(scenario)
+		canonicalScenarioInput(definition)
+		blob, err := yaml.Marshal(definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "mutation.yaml")
+		if err := os.WriteFile(path, blob, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc)
+		out, err := cmd.Output()
+		var exit *exec.ExitError
+		if err != nil && !asExitError(err, &exit) {
+			t.Fatalf("run mutation: %v", err)
+		}
+		var rep Report
+		if err := json.Unmarshal(out, &rep); err != nil {
+			t.Fatalf("mutation report is not JSON: %v: %s", err, out)
+		}
+		if rep.Error != "" || !rep.Cleanup.Done {
+			t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
+		}
+		return rep
+	}
+	observed := func(t *testing.T, rep Report, family string) ReachabilityEvidence {
+		t.Helper()
+		item, count := familyReachability(rep, "client", family)
+		if count != 1 {
+			t.Fatalf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.Reachability)
+		}
+		if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.From != "client" || item.To != want || len(item.Via) == 0 {
+			t.Fatalf("%s observation = %+v, want client to %q over a selected path", family, item, want)
+		}
+		return item
+	}
+
+	baseline := run(t, control)
+	baseline4, baseline6 := observed(t, baseline, "ipv4"), observed(t, baseline, "ipv6")
+	if !baseline4.Reachable || !baseline6.Reachable {
+		t.Fatalf("dual-stack baseline = IPv4 %t, IPv6 %t; want both reachable", baseline4.Reachable, baseline6.Reachable)
+	}
+	baselineTruth := collectObservedTruth(GeneratedCaseManifest{}, &baseline)
+	baselineFingerprint := truthFingerprint(baselineTruth)
+	if baselineTruth.IPv4 != "reachable" || baselineTruth.IPv6 != "reachable" {
+		t.Fatalf("dual-stack baseline truth = IPv4 %q, IPv6 %q; want both reachable", baselineTruth.IPv4, baselineTruth.IPv6)
+	}
+	if len(baselineTruth.ObservedFaults) != 0 {
+		t.Fatalf("unmutated baseline observed faults = %v, want none", baselineTruth.ObservedFaults)
+	}
+	if findings := familyMismatchFindings(analyzeHuntCase(GeneratedCaseManifest{}, &baseline, baselineTruth)); len(findings) != 0 {
+		t.Fatalf("healthy dual-stack baseline produced a family mismatch: %+v", findings)
+	}
+	t.Logf("baseline truth IPv4=%s IPv6=%s fingerprint=%s", baselineTruth.IPv4, baselineTruth.IPv6, baselineFingerprint)
+
+	for _, tc := range []struct {
+		id         string
+		ipv4, ipv6 bool
+	}{
+		{id: "family.ipv4_drop", ipv4: false, ipv6: true},
+		{id: "family.ipv6_drop", ipv4: true, ipv6: false},
+		{id: "quic.udp_443_block", ipv4: true, ipv6: true},
+		{id: "encrypted_dns.doh_invalid", ipv4: true, ipv6: true},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			if !baseline4.Reachable || !baseline6.Reachable {
+				t.Fatal("mutation has no reachable dual-stack baseline")
+			}
+			op := huntOperator(t, tc.id)
+			if !op.applicable(control) {
+				t.Fatal("production applicability predicate rejected the dual-stack baseline")
+			}
+			mutation, err := op.generate(newTestRNG(), control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = op.id
+			if mutation.ID != tc.id {
+				t.Fatalf("generated mutation ID = %q, want %q", mutation.ID, tc.id)
+			}
+			if strings.HasPrefix(tc.id, "family.") {
+				baselineWithManifest := collectObservedTruth(GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}, &baseline)
+				if len(baselineWithManifest.ObservedFaults) != 0 || mutationObserved(mutation, &baseline, baselineWithManifest) {
+					t.Fatalf("%s counted as observed against reachable baseline truth: %+v", tc.id, baselineWithManifest)
+				}
+			}
+			mutated := cloneScenario(control)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			mutated.Name = "evidence-" + strings.ReplaceAll(tc.id, ".", "-")
+			if err := mutated.Validate(); err != nil {
+				t.Fatal(err)
+			}
+
+			rep := run(t, mutated)
+			ipv4, ipv6 := observed(t, rep, "ipv4"), observed(t, rep, "ipv6")
+			if ipv4.Reachable != tc.ipv4 || ipv6.Reachable != tc.ipv6 {
+				t.Errorf("independent reachability after %s = IPv4 %t, IPv6 %t; want %t, %t",
+					tc.id, ipv4.Reachable, ipv6.Reachable, tc.ipv4, tc.ipv6)
+			}
+			if strings.HasPrefix(tc.id, "family.") {
+				truth := collectObservedTruth(GeneratedCaseManifest{}, &rep)
+				want4, want6 := map[bool]string{true: "reachable", false: "unreachable"}[tc.ipv4],
+					map[bool]string{true: "reachable", false: "unreachable"}[tc.ipv6]
+				if truth.IPv4 != want4 || truth.IPv6 != want6 {
+					t.Fatalf("truth after %s = IPv4 %q, IPv6 %q; want %q, %q", tc.id, truth.IPv4, truth.IPv6, want4, want6)
+				}
+				equivalent := truth
+				equivalent.IPv4, equivalent.IPv6 = baselineTruth.IPv4, baselineTruth.IPv6
+				if !reflect.DeepEqual(equivalent, baselineTruth) {
+					t.Fatalf("%s changed non-family truth:\nbaseline %+v\nmutated  %+v", tc.id, baselineTruth, truth)
+				}
+				if truthFingerprint(truth) == baselineFingerprint {
+					t.Errorf("%s changed family truth without changing its truth fingerprint", tc.id)
+				}
+				observedTruth := collectObservedTruth(GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}, &rep)
+				if !reflect.DeepEqual(observedTruth.ObservedFaults, []string{tc.id}) || !mutationObserved(mutation, &rep, observedTruth) {
+					t.Fatalf("%s was not observed from independent family truth: %+v", tc.id, observedTruth)
+				}
+				manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
+				check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
+				if check.Families == nil || check.Families.IPv4 != want4 || check.Families.IPv6 != want6 {
+					t.Fatalf("%s diagnosis families = %+v, want IPv4=%s IPv6=%s", tc.id, check.Families, want4, want6)
+				}
+				if findings := familyMismatchFindings(analyzeHuntCase(manifest, &rep, observedTruth)); len(findings) != 0 {
+					t.Fatalf("%s produced a mismatch despite agreeing diagnosis: %+v", tc.id, findings)
+				}
+
+				wrong := rep
+				wrong.Tests = append([]TestOutcome(nil), rep.Tests...)
+				diagnosis := *wrong.Tests[0].Diagnosis
+				diagnosis.Checks = append([]DiagnosisCheck(nil), diagnosis.Checks...)
+				for i := range diagnosis.Checks {
+					if diagnosis.Checks[i].ID != string(diagnostic.ProbeInternet) {
+						continue
+					}
+					families := *diagnosis.Checks[i].Families
+					if tc.id == "family.ipv4_drop" {
+						families.IPv4 = "reachable"
+					} else {
+						families.IPv6 = "reachable"
+					}
+					diagnosis.Checks[i].Families = &families
+				}
+				wrong.Tests[0].Diagnosis = &diagnosis
+				wrongTruth := collectObservedTruth(manifest, &wrong)
+				if !reflect.DeepEqual(wrongTruth, observedTruth) || !mutationObserved(mutation, &wrong, wrongTruth) {
+					t.Fatalf("substituted diagnosis changed simulator truth or mutation observation:\ntruth %+v\nwrong %+v", observedTruth, wrongTruth)
+				}
+				findings := familyMismatchFindings(analyzeHuntCase(manifest, &wrong, wrongTruth))
+				if len(findings) != 1 || findings[0].Category != FindingFalseNegative || findings[0].Family != mutation.Family {
+					t.Fatalf("%s wrong diagnosis findings = %+v", tc.id, findings)
+				}
+				t.Logf("%s truth IPv4=%s IPv6=%s fingerprint=%s mutationObserved=true diagnosis=agree wrong-diagnosis=%s-miss",
+					tc.id, truth.IPv4, truth.IPv6, truthFingerprint(truth), mutation.Family)
+			}
+			assertCleanedUp(t, rep)
+		})
+	}
+	assertCleanedUp(t, baseline)
 }
 
 func hasHuntSuggestion(suggestions []HuntSuggestion, code string) bool {
@@ -1342,6 +1757,38 @@ func TestIPv6WorksIPv4BrokenScenario(t *testing.T) {
 	}
 }
 
+// TestFamilyReachabilityIgnoresScenarioExpectations proves the observation is
+// not read back out of the oracle it is meant to police. The IPv6 fault stays
+// injected and the IPv6 expectation is inverted to claim the family works. The
+// comparison must notice the lie, and the simulator's own observation, made by
+// dialing the controlled endpoints from inside the client namespace, must not
+// move with it.
+func TestFamilyReachabilityIgnoresScenarioExpectations(t *testing.T) {
+	requireBackend(t)
+	raw, err := library.ReadFile("scenarios/ipv4-works-ipv6-broken.yaml")
+	if err != nil {
+		t.Fatalf("read base scenario: %v", err)
+	}
+	const truthful = "ipv4: reachable, ipv6: unreachable"
+	if !bytes.Contains(raw, []byte(truthful)) {
+		t.Fatalf("base scenario no longer expects %q", truthful)
+	}
+	lying := bytes.Replace(raw, []byte(truthful), []byte("ipv4: reachable, ipv6: reachable"), 1)
+	path := filepath.Join(t.TempDir(), "lying-expectation.yaml")
+	if err := os.WriteFile(path, lying, 0o600); err != nil {
+		t.Fatalf("write scenario: %v", err)
+	}
+	rep := runScenario(t, path)
+	if rep.Error != "" || !rep.Cleanup.Done {
+		t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
+	}
+	if rep.Result == ResultPass {
+		t.Errorf("an expectation that contradicts the injected fault was graded a pass: %+v", rep.Tests)
+	}
+	assertObservedFamily(t, rep, "ipv4", true)
+	assertObservedFamily(t, rep, "ipv6", false)
+}
+
 func assertDualStackScenario(t *testing.T, rep Report, ipv4, ipv6, cause string) {
 	t.Helper()
 	if rep.Result != ResultPass {
@@ -1361,10 +1808,8 @@ func assertDualStackScenario(t *testing.T, rep Report, ipv4, ipv6, cause string)
 	if !hasDNSQueryType(rep, dnsName, "A") || !hasDNSQueryType(rep, dnsName, "AAAA") {
 		t.Errorf("A/AAAA query evidence = %+v", rep.Evidence.DNS)
 	}
-	if !hasReachabilityFamily(rep, "ipv4", ipv4 == diagnostic.FamilyReachable) ||
-		!hasReachabilityFamily(rep, "ipv6", ipv6 == diagnostic.FamilyReachable) {
-		t.Errorf("family reachability = %+v", rep.Evidence.Reachability)
-	}
+	assertObservedFamily(t, rep, "ipv4", ipv4 == diagnostic.FamilyReachable)
+	assertObservedFamily(t, rep, "ipv6", ipv6 == diagnostic.FamilyReachable)
 	if rep.Tests[0].FalsePositives != 0 || rep.Tests[0].FalseNegatives != 0 {
 		t.Errorf("comparison fp=%d fn=%d", rep.Tests[0].FalsePositives, rep.Tests[0].FalseNegatives)
 	}
@@ -1533,13 +1978,40 @@ func hasDNSQueryType(rep Report, name, queryType string) bool {
 	return false
 }
 
-func hasReachabilityFamily(rep Report, family string, reachable bool) bool {
+// familyReachability returns what the simulator independently observed for one
+// address family from one node, and how many such observations it made. Exactly
+// one is the contract: a family is either eligible and observed once, or absent
+// from the topology and not observed at all.
+func familyReachability(rep Report, node, family string) (ReachabilityEvidence, int) {
+	var found ReachabilityEvidence
+	count := 0
 	for _, item := range rep.Evidence.Reachability {
-		if item.Family == family && item.Reachable == reachable {
-			return true
+		if item.From == node && item.Family == family {
+			found, count = item, count+1
 		}
 	}
-	return false
+	return found, count
+}
+
+// assertObservedFamily checks the simulator's own observation, which is
+// collected by dialing the controlled endpoints from inside the client
+// namespace and never reads netdoc's verdict.
+func assertObservedFamily(t *testing.T, rep Report, family string, reachable bool) {
+	t.Helper()
+	item, count := familyReachability(rep, "client", family)
+	if count != 1 {
+		t.Errorf("%s observations = %d, want exactly 1: %+v", family, count, rep.Evidence.Reachability)
+		return
+	}
+	if item.Reachable != reachable {
+		t.Errorf("simulator observed %s reachable=%t, want %t: %+v", family, item.Reachable, reachable, item)
+	}
+	if want := map[string]string{"ipv4": "IPv4 internet endpoints", "ipv6": "IPv6 internet endpoints"}[family]; item.To != want {
+		t.Errorf("%s observation names %q, want %q", family, item.To, want)
+	}
+	if len(item.Via) == 0 {
+		t.Errorf("%s observation records no selected path: %+v", family, item)
+	}
 }
 
 func hasSelectedRoute(rep Report, node, destination, via, segment string, gateway *bool) bool {

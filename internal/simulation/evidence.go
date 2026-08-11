@@ -21,6 +21,7 @@ type Evidence struct {
 	DNSQueries       []DNSQueryEvidence        `json:"dns_queries"`
 	SOCKSRequests    []SOCKSEvidence           `json:"socks_requests"`
 	TLS              []TLSEvidence             `json:"tls"`
+	ServiceStates    []ServiceStateEvidence    `json:"service_states"`
 	TCPResets        []TCPResetEvidence        `json:"tcp_resets"`
 	PacketConditions []PacketConditionEvidence `json:"packet_conditions"`
 	Links            []LinkEvidence            `json:"links"`
@@ -148,6 +149,20 @@ type TLSEvidence struct {
 	Count                int       `json:"count"`
 }
 
+// ServiceStateEvidence records the mode of a successfully started controlled
+// service. It is emitted by the node holder, not copied into the report from a
+// hunt manifest or diagnosis.
+type ServiceStateEvidence struct {
+	Node    string `json:"node"`
+	Service string `json:"service,omitempty"`
+	Type    string `json:"type"`
+	Port    int    `json:"port"`
+	Mode    string `json:"mode,omitempty"`
+	Status  int    `json:"status,omitempty"`
+}
+
+const evidenceServiceState = "service_state"
+
 type evidenceEvent struct {
 	Kind             string `json:"kind"`
 	Node             string `json:"node"`
@@ -176,6 +191,10 @@ type evidenceEvent struct {
 	NotBefore            time.Time `json:"not_before,omitempty"`
 	NotAfter             time.Time `json:"not_after,omitempty"`
 	CertificatePresented bool      `json:"certificate_presented,omitempty"`
+	ServiceType          string    `json:"service_type,omitempty"`
+	ServicePort          int       `json:"service_port,omitempty"`
+	ServiceMode          string    `json:"service_mode,omitempty"`
+	ServiceStatus        int       `json:"service_status,omitempty"`
 }
 
 // evidenceRecorder serializes events from concurrent service goroutines into
@@ -326,6 +345,10 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		out.TLS = append(out.TLS, item)
 	}
 	for _, event := range events {
+		if event.Kind == evidenceServiceState {
+			out.ServiceStates = append(out.ServiceStates, ServiceStateEvidence{Node: event.Node, Service: event.Service,
+				Type: event.ServiceType, Port: event.ServicePort, Mode: event.ServiceMode, Status: event.ServiceStatus})
+		}
 		if event.Kind == ServiceDNS && event.Sequence > 0 {
 			out.DNSQueries = append(out.DNSQueries, DNSQueryEvidence{Node: event.Node, Service: event.Service,
 				Source: event.Source, Name: event.Name, QueryType: event.QueryType, Sequence: event.Sequence,
@@ -350,6 +373,11 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 		return a.Node+a.Service+a.CertificateMode+a.RequestedServer+strings.Join(a.CertificateDNS, "\x00")+a.Result <
 			b.Node+b.Service+b.CertificateMode+b.RequestedServer+strings.Join(b.CertificateDNS, "\x00")+b.Result
 	})
+	sort.Slice(out.ServiceStates, func(i, j int) bool {
+		a, b := out.ServiceStates[i], out.ServiceStates[j]
+		return strings.Join([]string{a.Node, a.Service, a.Type, strconv.Itoa(a.Port), a.Mode, strconv.Itoa(a.Status)}, "\x00") <
+			strings.Join([]string{b.Node, b.Service, b.Type, strconv.Itoa(b.Port), b.Mode, strconv.Itoa(b.Status)}, "\x00")
+	})
 	sort.Slice(out.DNSQueries, func(i, j int) bool {
 		a, b := out.DNSQueries[i], out.DNSQueries[j]
 		if a.Node+a.Service+a.Name+a.QueryType != b.Node+b.Service+b.Name+b.QueryType {
@@ -369,6 +397,9 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	}
 	if out.TLS == nil {
 		out.TLS = []TLSEvidence{}
+	}
+	if out.ServiceStates == nil {
+		out.ServiceStates = []ServiceStateEvidence{}
 	}
 	if out.DNSQueries == nil {
 		out.DNSQueries = []DNSQueryEvidence{}

@@ -80,25 +80,16 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		if res.Err != nil || res.ExitCode != 0 {
 			return Evidence{}, fmt.Errorf("inspect netem %s/%s: %w", fault.Node, fault.Segment, execResultError(res))
 		}
-		active, dropped, parseErr := parseNetemStats(res.Stdout)
+		condition, parseErr := parseNetemCondition(res.Stdout)
 		if parseErr != nil {
 			return Evidence{}, fmt.Errorf("parse netem %s/%s: %w", fault.Node, fault.Segment, parseErr)
 		}
-		condition := PacketConditionEvidence{Node: fault.Node, Segment: fault.Segment, Seed: fault.Seed,
-			Active: active, DroppedPackets: dropped}
-		if fault.Type == FaultScheduledNetem {
-			// A scheduled fault has no single state; the last event is the one
-			// the run finished in, and the timeline carries the rest.
-			last := fault.Events[len(fault.Events)-1]
-			condition.Latency, _ = time.ParseDuration(last.Latency)
-			condition.Jitter, _ = time.ParseDuration(last.Jitter)
-			condition.LossPercent = last.LossPercent
-		} else {
-			condition.Latency, _ = time.ParseDuration(fault.Delay)
-			condition.Jitter, _ = time.ParseDuration(fault.Jitter)
-			if raw, ok := strings.CutSuffix(fault.Loss, "%"); ok {
-				condition.LossPercent, _ = strconv.ParseFloat(raw, 64)
-			}
+		condition.Node, condition.Segment = fault.Node, fault.Segment
+		if fault.Seed == 0 {
+			// tc reports an internal 64-bit seed even when none was requested.
+			// Zero preserves the evidence contract: Seed is the configured,
+			// reproducible netem seed, not tc's private default.
+			condition.Seed = 0
 		}
 		out.PacketConditions = append(out.PacketConditions, condition)
 	}
@@ -131,18 +122,138 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 		}
 	}
 	sort.Slice(out.Links, func(i, j int) bool {
-		return out.Links[i].Node+out.Links[i].Segment < out.Links[j].Node+out.Links[j].Segment
+		return out.Links[i].Node+"\x00"+out.Links[i].Segment < out.Links[j].Node+"\x00"+out.Links[j].Segment
 	})
 	sort.Slice(out.Routers, func(i, j int) bool { return out.Routers[i].Node < out.Routers[j].Node })
 	sort.Slice(out.PacketConditions, func(i, j int) bool {
-		return out.PacketConditions[i].Node+out.PacketConditions[i].Segment < out.PacketConditions[j].Node+out.PacketConditions[j].Segment
+		return out.PacketConditions[i].Node+"\x00"+out.PacketConditions[i].Segment <
+			out.PacketConditions[j].Node+"\x00"+out.PacketConditions[j].Segment
 	})
 	sort.Slice(out.Routes, func(i, j int) bool {
 		a, b := out.Routes[i], out.Routes[j]
-		return a.Node+a.Destination+a.Via+strconv.Itoa(a.Metric)+strconv.FormatBool(a.Selected) <
-			b.Node+b.Destination+b.Via+strconv.Itoa(b.Metric)+strconv.FormatBool(b.Selected)
+		return strings.Join([]string{a.Node, a.Destination, a.Family, a.Via, a.Segment, strconv.Itoa(a.Metric),
+			strconv.FormatBool(a.Selected), a.Source}, "\x00") <
+			strings.Join([]string{b.Node, b.Destination, b.Family, b.Via, b.Segment, strconv.Itoa(b.Metric),
+				strconv.FormatBool(b.Selected), b.Source}, "\x00")
 	})
+	if err := e.observeInternetReachability(ctx, &out); err != nil {
+		return Evidence{}, err
+	}
+	if err := e.observeControlledTargetReachability(ctx, &out); err != nil {
+		return Evidence{}, err
+	}
 	return out, nil
+}
+
+// internetObservationTimeout bounds one simulator-owned connection attempt. A
+// black-holed path spends the whole budget, so the ceiling for a run is this
+// times the endpoints of every family of every test node.
+const internetObservationTimeout = 2 * time.Second
+
+// observeInternetReachability dials the controlled Internet endpoints from
+// inside each node netdoc was run in, and records what it found. It runs after
+// the tests, so it is a point-in-time observation of the state the run finished
+// in — the same instant the route and neighbor evidence above describes.
+//
+// Nothing here reads a diagnosis, a verdict or a scenario expectation. That is
+// the point: this evidence has to be able to contradict netdoc.
+func (e *netnsEnv) observeInternetReachability(ctx context.Context, out *Evidence) error {
+	seen := map[string]bool{}
+	for _, test := range e.scenario.Tests {
+		if seen[test.Node] {
+			continue
+		}
+		seen[test.Node] = true
+		np := e.byName[test.Node]
+		if np == nil {
+			continue
+		}
+		for _, probe := range internetFamilyProbes(np.node) {
+			reachable, err := e.observeFamily(ctx, np, probe.endpoints)
+			if err != nil {
+				return fmt.Errorf("observe %s reachability from %s: %w", probe.family, test.Node, err)
+			}
+			out.Reachability = append(out.Reachability, ReachabilityEvidence{
+				From: test.Node, To: probe.target, Family: probe.family,
+				Via: selectedPath(out.Routes, test.Node, probe.family), Reachable: reachable,
+			})
+		}
+	}
+	return nil
+}
+
+// observeControlledTargetReachability proves a multipath scenario's alternate
+// path using a literal target owned by a simulator TCP fixture. Single-path,
+// hostname and arbitrary external targets remain diagnosis concerns.
+func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out *Evidence) error {
+	if !hasWorkingAlternatePath(e.scenario) {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, test := range e.scenario.Tests {
+		target, err := diagnostic.ParseTarget(test.Target)
+		if err != nil || target.IP == nil || !e.controlledTCPPort(target.IP.String(), target.Port) {
+			continue
+		}
+		addr := target.IP.String()
+		key := test.Node + "\x00" + addr + "\x00" + strconv.Itoa(target.Port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		reachable, err := e.byName[test.Node].probeTCP(ctx, addr, target.Port, internetObservationTimeout)
+		if err != nil {
+			return fmt.Errorf("observe controlled target %s from %s: %w", target.Raw, test.Node, err)
+		}
+		out.Reachability = append(out.Reachability, ReachabilityEvidence{
+			From: test.Node, To: netip.AddrPortFrom(netip.MustParseAddr(addr), uint16(target.Port)).String(),
+			Via: selectedDestinationPath(out.Routes, test.Node, addr), Reachable: reachable,
+		})
+	}
+	return nil
+}
+
+func (e *netnsEnv) controlledTCPPort(address string, port int) bool {
+	for _, node := range e.scenario.Topology.Nodes {
+		if !nodeOwnsAddress(node, address) {
+			continue
+		}
+		for _, service := range node.Services {
+			if service.Port == port && service.Type != ServiceQUIC {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectedDestinationPath(routes []RouteEvidence, node, destination string) []string {
+	for _, route := range routes {
+		if route.Node == node && route.Destination == destination && route.Selected {
+			path := []string{route.Segment}
+			if route.Via != "" {
+				path = append(path, route.Via)
+			}
+			return path
+		}
+	}
+	return nil
+}
+
+// observeFamily reaches a family when any one controlled endpoint answers,
+// which is the same bar netdoc's happy-eyeballs dial clears — reached
+// independently, by connecting, not by reading what netdoc concluded.
+func (e *netnsEnv) observeFamily(ctx context.Context, np *nodeProc, endpoints []string) (bool, error) {
+	for _, endpoint := range endpoints {
+		reachable, err := np.probeTCP(ctx, endpoint, internetProbePort, internetObservationTimeout)
+		if err != nil {
+			return false, err
+		}
+		if reachable {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func parseNetemStats(raw []byte) (bool, uint64, error) {
@@ -172,6 +283,60 @@ func parseNetemStats(raw []byte) (bool, uint64, error) {
 		return false, 0, fmt.Errorf("tc dropped counter: %w", err)
 	}
 	return true, dropped, nil
+}
+
+func parseNetemCondition(raw []byte) (PacketConditionEvidence, error) {
+	active, dropped, err := parseNetemStats(raw)
+	condition := PacketConditionEvidence{Active: active, DroppedPackets: dropped}
+	if err != nil || !active {
+		return condition, err
+	}
+	fields := strings.Fields(netemParameters(raw))
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "delay":
+			if i+1 >= len(fields) {
+				return PacketConditionEvidence{}, errors.New("tc netem delay is missing a value")
+			}
+			condition.Latency, err = time.ParseDuration(fields[i+1])
+			if err != nil {
+				return PacketConditionEvidence{}, fmt.Errorf("tc netem delay: %w", err)
+			}
+			if i+2 < len(fields) {
+				if jitter, parseErr := time.ParseDuration(fields[i+2]); parseErr == nil {
+					condition.Jitter = jitter
+				}
+			}
+		case "loss":
+			value := i + 1
+			if value < len(fields) && fields[value] == "random" {
+				value++
+			}
+			if value >= len(fields) {
+				return PacketConditionEvidence{}, errors.New("tc netem loss is missing a value")
+			}
+			rawLoss, ok := strings.CutSuffix(fields[value], "%")
+			if !ok {
+				return PacketConditionEvidence{}, fmt.Errorf("tc netem loss %q is malformed", fields[value])
+			}
+			condition.LossPercent, err = strconv.ParseFloat(rawLoss, 64)
+			if err != nil {
+				return PacketConditionEvidence{}, fmt.Errorf("tc netem loss: %w", err)
+			}
+		case "seed":
+			if i+1 >= len(fields) {
+				return PacketConditionEvidence{}, errors.New("tc netem seed is missing a value")
+			}
+			seed, parseErr := strconv.ParseUint(fields[i+1], 10, 64)
+			if parseErr != nil {
+				return PacketConditionEvidence{}, fmt.Errorf("tc netem seed: %w", parseErr)
+			}
+			if seed <= uint64(^uint32(0)) {
+				condition.Seed = uint32(seed)
+			}
+		}
+	}
+	return condition, nil
 }
 
 func selectedRouteMetric(routes []Route, node, destination, via string) int {
@@ -304,10 +469,9 @@ func (e *netnsEnv) evidenceDestinations() map[string][]string {
 		if byNode[test.Node] == nil {
 			byNode[test.Node] = make(map[string]bool)
 		}
-		byNode[test.Node]["1.1.1.1"] = true
-		byNode[test.Node]["8.8.8.8"] = true
-		byNode[test.Node]["2606:4700:4700::1111"] = true
-		byNode[test.Node]["2001:4860:4860::8888"] = true
+		for _, endpoint := range append(append([]string{}, internetEndpoints4...), internetEndpoints6...) {
+			byNode[test.Node][endpoint] = true
+		}
 		if test.Target == "" {
 			continue
 		}

@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 )
 
 type HuntSeverity string
@@ -36,6 +39,8 @@ const (
 
 // ObservedTruth is deliberately coarse. It records only simulator evidence,
 // not conclusions inferred from the mutation request or copied from netdoc.
+// IPv4 and IPv6 describe point-in-time reachability when final evidence was
+// collected, after the diagnostic run and fault scheduler had stopped.
 type ObservedTruth struct {
 	DNS            string   `json:"dns"`
 	IPv4           string   `json:"ipv4"`
@@ -118,6 +123,8 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 		truth.ObservedFaults = []string{}
 		return truth
 	}
+	truth.IPv4 = observedFamilyTruth(report, "ipv4")
+	truth.IPv6 = observedFamilyTruth(report, "ipv6")
 	answered, dnsFailed := false, false
 	for _, query := range report.Evidence.DNSQueries {
 		switch query.ActualOutcome {
@@ -169,8 +176,11 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 			}
 		}
 	}
-	if len(report.Evidence.TCPResets) > 0 {
-		truth.TCP = "reset"
+	for _, event := range report.Evidence.TCPResets {
+		if event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0 {
+			truth.TCP = "reset"
+			break
+		}
 	}
 	linkDown, linkRecovered := false, false
 	for _, event := range report.Timeline {
@@ -223,42 +233,250 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 	return truth
 }
 
+func observedFamilyTruth(report *Report, family string) string {
+	client := observedClient(report)
+	if client == "" {
+		return "unknown"
+	}
+	count, reachable := 0, false
+	for _, observation := range report.Evidence.Reachability {
+		if observation.From == client && observation.Family == family {
+			count++
+			reachable = observation.Reachable
+		}
+	}
+	switch count {
+	case 0:
+		return "unavailable"
+	case 1:
+		if reachable {
+			return "reachable"
+		}
+		return "unreachable"
+	default:
+		return "unknown"
+	}
+}
+
+func observedClient(report *Report) string {
+	client := ""
+	for _, node := range report.Topology {
+		if node.Role != "client" {
+			continue
+		}
+		if client != "" {
+			return ""
+		}
+		client = node.Name
+	}
+	return client
+}
+
 func mutationObserved(mutation GeneratedMutation, report *Report, truth ObservedTruth) bool {
 	switch mutation.ID {
 	case "netem.loss", "netem.latency", "netem.jitter":
-		for _, fault := range report.Faults {
-			if fault.Type == FaultNetem && fault.Node == mutation.Node {
+		for _, condition := range report.Evidence.PacketConditions {
+			if condition.Node != mutation.Node || condition.Segment != mutation.Segment || !condition.Active {
+				continue
+			}
+			latency := time.Duration(mutation.LatencyMS) * time.Millisecond
+			jitter := time.Duration(mutation.JitterMS) * time.Millisecond
+			if condition.Latency == latency && condition.Jitter == jitter &&
+				condition.LossPercent == mutation.LossPercent && condition.Seed == mutation.NetemSeed {
 				return true
 			}
 		}
 	case "timeline.netem_spike":
-		return timelineApplied(report, FaultScheduledNetem, mutation.Node, "")
-	case "dns.servfail", "dns.drop", "timeline.dns_outage":
-		return timelineApplied(report, FaultScheduledDNS, "", mutation.Service)
+		return timelineApplied(report, func(event TimedEvent) bool {
+			return event.Type == FaultScheduledNetem && event.Node == mutation.Node && event.Segment == mutation.Segment &&
+				event.Offset == time.Duration(mutation.StartMS)*time.Millisecond &&
+				event.Latency == time.Duration(mutation.LatencyMS)*time.Millisecond &&
+				event.Jitter == time.Duration(mutation.JitterMS)*time.Millisecond &&
+				event.LossPercent == mutation.LossPercent && event.NetemSeed == mutation.NetemSeed
+		})
+	case "dns.servfail", "dns.drop":
+		outcome := DNSOutcomeSERVFAIL
+		if mutation.ID == "dns.drop" {
+			outcome = DNSOutcomeDrop
+		}
+		return timelineApplied(report, func(event TimedEvent) bool {
+			return event.Type == FaultScheduledDNS && event.Service == mutation.Service && event.Offset == 0 && event.Outcome == outcome
+		})
+	case "timeline.dns_outage":
+		return timelineApplied(report, func(event TimedEvent) bool {
+			return event.Type == FaultScheduledDNS && event.Service == mutation.Service &&
+				event.Offset == time.Duration(mutation.StartMS)*time.Millisecond && event.Outcome == DNSOutcomeDrop
+		})
 	case "service.tcp_reset":
-		return truth.TCP == "reset"
-	case "family.ipv4_drop", "family.ipv6_drop":
-		for _, fault := range report.Faults {
-			if fault.Type == FaultDrop && fault.Family == mutation.Family {
+		for _, event := range report.Evidence.TCPResets {
+			if event.Node == mutation.Node && event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0 {
 				return true
 			}
 		}
-	case "link.transient_down":
-		return timelineApplied(report, FaultScheduledLink, mutation.Node, "")
-	case "routing.preferred_path_failure":
-		for _, fault := range report.Faults {
-			if fault.Type == FaultLinkDown && fault.Node == mutation.Node {
+	case "service.tls_expired":
+		for _, state := range report.Evidence.ServiceStates {
+			if state.Node == mutation.Node && state.Service == mutation.Service && state.Type == ServiceTLS &&
+				state.Mode == TLSCertificateExpired {
 				return true
+			}
+		}
+	case "proxy.connect_refused":
+		for _, request := range report.Evidence.SOCKSRequests {
+			if request.Node == mutation.Node && request.Service == mutation.Service && request.Event == "connect" &&
+				request.Destination == proxyCONNECTTarget && request.Port == mutation.TargetPort &&
+				request.Result == "connection_refused" && request.Count > 0 {
+				return true
+			}
+		}
+	case "quic.udp_443_block":
+		for _, fault := range report.Faults {
+			if fault.Type == FaultDrop && fault.Node == mutation.Node && fault.Protocol == "udp" &&
+				fault.Port == mutation.TargetPort && fault.Direction == DirectionInbound {
+				return true
+			}
+		}
+	case "encrypted_dns.doh_invalid":
+		for _, state := range report.Evidence.ServiceStates {
+			if state.Node == mutation.Node && state.Service == mutation.Service && state.Type == ServiceEncryptedDNS &&
+				state.Mode == DoHResponseInvalid {
+				return true
+			}
+		}
+	case "http.status_503":
+		for _, state := range report.Evidence.ServiceStates {
+			if state.Node == mutation.Node && state.Type == ServiceHTTP && state.Port == mutation.TargetPort &&
+				state.Status == mutation.Status {
+				return true
+			}
+		}
+	case "family.ipv4_drop":
+		return truth.IPv4 == "unreachable"
+	case "family.ipv6_drop":
+		return truth.IPv6 == "unreachable"
+	case "link.transient_down":
+		return timelineApplied(report, func(event TimedEvent) bool {
+			return event.Type == FaultScheduledLink && event.Node == mutation.Node && event.Segment == mutation.Segment &&
+				event.Offset == 0 && event.State == LinkStateDown
+		})
+	case "routing.preferred_path_failure":
+		return preferredPathFailureObserved(mutation, report)
+	}
+	return false
+}
+
+func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bool {
+	if mutation.TargetNode == "" || mutation.Family != "ipv4" {
+		return false
+	}
+	var selected *RouteEvidence
+	for i := range report.Evidence.Routes {
+		route := &report.Evidence.Routes[i]
+		if route.Node == mutation.TargetNode && route.Selected && route.Family == mutation.Family &&
+			(route.Destination == "1.1.1.1" || route.Destination == "8.8.8.8") {
+			selected = route
+			break
+		}
+	}
+	if selected == nil || !nodeInterfaceOwns(report, mutation.Node, selected.Segment, selected.Via) ||
+		!linkState(report, mutation.Node, mutation.Segment, false) ||
+		!linkState(report, mutation.Node, selected.Segment, true) ||
+		!routerForwardsIPv4(report, mutation.Node) ||
+		!reachabilityMatches(report, mutation.TargetNode, mutation.Family,
+			[]string{selected.Segment, selected.Via}, false) {
+		return false
+	}
+
+	for _, node := range report.Topology {
+		if node.Name != mutation.TargetNode {
+			continue
+		}
+		for _, alternate := range node.Routes {
+			if alternate.Destination != "default" || alternate.Family != mutation.Family ||
+				alternate.Via == selected.Via || alternate.Segment == selected.Segment || alternate.Metric <= selected.Metric ||
+				!gatewayReachable(report, mutation.TargetNode, alternate) ||
+				!reachabilityMatches(report, mutation.TargetNode, "", []string{alternate.Segment, alternate.Via}, true) {
+				continue
+			}
+			for _, gateway := range report.Topology {
+				if gateway.Role == "router" && nodeInterfaceOwns(report, gateway.Name, alternate.Segment, alternate.Via) &&
+					routerForwardsIPv4(report, gateway.Name) && routerHasOtherLiveLink(report, gateway.Name, alternate.Segment) {
+					return true
+				}
 			}
 		}
 	}
 	return false
 }
 
-func timelineApplied(report *Report, kind, node, service string) bool {
+func nodeInterfaceOwns(report *Report, node, segment, address string) bool {
+	for _, item := range report.Topology {
+		if item.Name != node {
+			continue
+		}
+		for _, iface := range item.Interfaces {
+			if iface.Segment != segment {
+				continue
+			}
+			for _, raw := range []string{iface.Address, iface.IPv4} {
+				if prefix, err := netip.ParsePrefix(raw); err == nil && prefix.Addr().String() == address {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func linkState(report *Report, node, segment string, up bool) bool {
+	for _, link := range report.Evidence.Links {
+		if link.Node == node && link.Segment == segment && link.Up == up {
+			return true
+		}
+	}
+	return false
+}
+
+func routerForwardsIPv4(report *Report, node string) bool {
+	for _, router := range report.Evidence.Routers {
+		if router.Node == node {
+			return router.IPv4Forwarding
+		}
+	}
+	return false
+}
+
+func reachabilityMatches(report *Report, from, family string, via []string, reachable bool) bool {
+	for _, item := range report.Evidence.Reachability {
+		if item.From == from && item.Family == family && item.Reachable == reachable && slices.Equal(item.Via, via) {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayReachable(report *Report, node string, route RouteInfo) bool {
+	for _, item := range report.Evidence.Routes {
+		if item.Node == node && item.Destination == "default" && item.Family == route.Family &&
+			item.Via == route.Via && item.Segment == route.Segment && item.Metric == route.Metric &&
+			item.GatewayReachable != nil && *item.GatewayReachable {
+			return true
+		}
+	}
+	return false
+}
+
+func routerHasOtherLiveLink(report *Report, node, clientSegment string) bool {
+	for _, link := range report.Evidence.Links {
+		if link.Node == node && link.Segment != clientSegment && link.Up {
+			return true
+		}
+	}
+	return false
+}
+
+func timelineApplied(report *Report, match func(TimedEvent) bool) bool {
 	for _, event := range report.Timeline {
-		if event.Result == EventApplied && event.Event.Type == kind &&
-			(node == "" || event.Event.Node == node) && (service == "" || event.Event.Service == service) {
+		if event.Result == EventApplied && match(event.Event) {
 			return true
 		}
 	}
@@ -330,6 +548,9 @@ func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth Obser
 			}
 		}
 	}
+	for _, finding := range familyDiagnosisFindings(report, truth) {
+		add(finding)
+	}
 	if truth.TCP == "reset" && !diagnosisClassifiedReset(report) {
 		add(HuntCaseFinding{Category: FindingCoverageGap, Severity: SeverityLow, Code: "tcp_reset_not_distinguished",
 			Probe: protocolProbe(report), Expected: "connection_reset",
@@ -351,6 +572,93 @@ func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth Obser
 		return findings[i].Fingerprint < findings[j].Fingerprint
 	})
 	return findings
+}
+
+func familyDiagnosisFindings(report *Report, truth ObservedTruth) []HuntCaseFinding {
+	if !familyTruthComparable(report) {
+		return nil
+	}
+	client := observedClient(report)
+	if client == "" {
+		return nil
+	}
+	// Final evidence is closest in time to the last netdoc run. Earlier runs can
+	// legitimately describe an older state in multi-test timeline scenarios.
+	var diagnosis *Diagnosis
+	for i := len(report.Tests) - 1; i >= 0; i-- {
+		if report.Tests[i].Node == client {
+			diagnosis = report.Tests[i].Diagnosis
+			break
+		}
+	}
+	if diagnosis == nil {
+		return nil
+	}
+	var families *DiagnosisFamilies
+	if check := checkByID(diagnosis, "internet_tcp"); check != nil {
+		families = check.Families
+	}
+	diagnosed := func(family string) string {
+		if families == nil {
+			return ""
+		}
+		if family == "ipv4" {
+			return families.IPv4
+		}
+		return families.IPv6
+	}
+	var findings []HuntCaseFinding
+	for _, family := range []struct {
+		name, truth string
+	}{{"ipv4", truth.IPv4}, {"ipv6", truth.IPv6}} {
+		actual := diagnosed(family.name)
+		category := ""
+		switch {
+		case family.truth == "unreachable" && actual != "unreachable":
+			category = FindingFalseNegative
+		case family.truth == "reachable" && actual == "unreachable":
+			category = FindingDiagnosticContradiction
+		}
+		if category == "" {
+			continue
+		}
+		if actual == "" {
+			actual = "unreported"
+		}
+		findings = append(findings, HuntCaseFinding{Category: category, Severity: SeverityHigh,
+			Code: "family_reachability_mismatch", Probe: "internet_tcp", Family: family.name,
+			Expected: family.truth, Actual: actual,
+			Summary:  fmt.Sprintf("Final simulator truth says %s is %s, but Network Doctor reported %s.", family.name, family.truth, actual),
+			Evidence: fmt.Sprintf("simulator final %s=%s; internet_tcp address_families.%s=%s", family.name, family.truth, family.name, actual)})
+	}
+	return findings
+}
+
+func familyTruthComparable(report *Report) bool {
+	// Separate samples can disagree under packet impairment or after a timed
+	// path transition without either observer being wrong. Final-state truth is
+	// not a temporal oracle, so leave those cases to the timeline analysis.
+	for _, fault := range report.Faults {
+		if fault.Type == FaultNetem {
+			return false
+		}
+	}
+	for _, event := range report.Timeline {
+		if event.Result != EventApplied {
+			continue
+		}
+		switch event.Event.Type {
+		case FaultScheduledNetem:
+			if event.Event.Latency > 0 || event.Event.Jitter > 0 || event.Event.LossPercent > 0 {
+				return false
+			}
+		case FaultScheduledLink:
+			if event.Event.State == LinkStateDown {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // dnsFailureDuring reports whether a resolver was still refusing netdoc's
