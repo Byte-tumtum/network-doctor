@@ -405,7 +405,7 @@ go vet ./...
 CGO_ENABLED=0 go build ./...
 go test ./...
 go test -tags integration ./internal/diagnostic ./internal/simulation
-go test -tags netns_integration ./internal/simulation
+go test -tags netns_integration -count=1 -v ./internal/simulation
 go test -race ./...
 go test -race -tags integration ./internal/diagnostic ./internal/simulation
 go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
@@ -424,7 +424,9 @@ GOOS=windows go build ./...
 
 Race, fuzz, and network-namespace checks run only on Linux in CI. The
 `netns_integration` tests skip themselves on a host without unprivileged user
-namespaces; they never need root.
+namespaces; they never need root. That gate keeps `-v` because a skipped run and
+a real one both print just `ok` otherwise, and `-count=1` because a cached
+result would not have exercised any namespace at all.
 
 ## Testing Network Doctor against broken networks
 

@@ -2,7 +2,7 @@
 
 // Opt-in (-tags netns_integration) tests that build real network namespaces.
 //
-//	go test -tags netns_integration ./internal/simulation
+//	go test -tags netns_integration -count=1 -v ./internal/simulation
 //
 // No root needed: the simulator runs in an unprivileged user namespace. The
 // tests skip themselves on a host where that is unavailable, and nothing they

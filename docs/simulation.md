@@ -364,10 +364,11 @@ go test -tags integration ./internal/diagnostic ./internal/simulation
 ```
 
 The end-to-end suite builds real namespaces and skips when the backend is not
-available:
+available. `-v` is what makes that skip and its reason visible, and `-count=1`
+keeps a cached result from standing in for a run:
 
 ```sh
-go test -tags netns_integration ./internal/simulation
+go test -tags netns_integration -count=1 -v ./internal/simulation
 ```
 
 Set `NETDOC_SIM_REQUIRE_NETNS=1` only on a machine or CI job that is required to
