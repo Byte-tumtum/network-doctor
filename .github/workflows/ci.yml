@@ -59,6 +59,12 @@ jobs:
       # The job runner does concurrent subprocess cancellation; gate it.
       - if: runner.os == 'Linux'
         run: go test -race ./...
+      # The loopback socket tests run servers and probes in parallel goroutines,
+      # so they are worth racing too. Separate invocation: the tag changes the
+      # build, and applying it to ./... would compile integration files into
+      # every other package's test binary.
+      - if: runner.os == 'Linux'
+        run: go test -race -tags integration ./internal/diagnostic ./internal/simulation
       # Smoke-fuzz the output sanitizer so regressions don't rely on
       # contributors remembering to fuzz locally.
       - if: runner.os == 'Linux'
