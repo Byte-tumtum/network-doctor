@@ -38,9 +38,14 @@ type DiagnosisAttempt struct {
 	Error string `json:"error,omitempty"`
 }
 
+// DiagnosisFamilies carries netdoc's per-family egress verdicts. A family is
+// present only when netdoc actually dialed it, so a key netdoc omitted — a
+// family the selected source has no address for — must stay omitted when the
+// simulator re-encodes this into its own report. Serializing the empty string
+// would invent a verdict for a family nobody tested.
 type DiagnosisFamilies struct {
-	IPv4 string `json:"ipv4"`
-	IPv6 string `json:"ipv6"`
+	IPv4 string `json:"ipv4,omitempty"`
+	IPv6 string `json:"ipv6,omitempty"`
 }
 
 // Check outcomes, in the order the report prints them.

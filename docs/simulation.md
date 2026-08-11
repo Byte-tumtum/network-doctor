@@ -267,6 +267,12 @@ or address-family state. They never match English diagnosis text. A test may
 override the scenario-level expectation when several network phases are
 exercised in one file.
 
+Naming `ipv4` or `ipv6` on an expected check asserts that netdoc published that
+family's verdict, so a run that omitted the family fails the expectation rather
+than passing it by default. Leave the field out for families the scenario makes
+no claim about — netdoc omits a family it never dialed, and the report keeps it
+omitted rather than reporting an empty verdict.
+
 Unknown YAML keys, probe ids, statuses, causes, node references, addresses, and
 unsupported combinations fail validation before setup:
 

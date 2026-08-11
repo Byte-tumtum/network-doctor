@@ -1,6 +1,8 @@
 package simulation
 
 import (
+	"bytes"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -366,5 +368,70 @@ func TestReportRendersStructuredProxyEvidence(t *testing.T) {
 		if !strings.Contains(jsonText.String(), want) {
 			t.Errorf("JSON missing %s:\n%s", want, jsonText.String())
 		}
+	}
+}
+
+// A family netdoc never dialed carries no verdict. The simulator decodes that
+// absence, so it has to re-encode it as absence too: writing "ipv6": "" into
+// the run report would hand every downstream reader an empty verdict where
+// netdoc deliberately published none, and "" is one careless comparison away
+// from reading as a failed family.
+func TestUntestedAddressFamilyStaysAbsentThroughTheSimulatorReport(t *testing.T) {
+	const netdocJSON = `{"verdict":"ok","checks":[` +
+		`{"id":"internet_tcp","status":"PASS","address_families":{"ipv4":"reachable"}}]}`
+	var d Diagnosis
+	if err := json.Unmarshal([]byte(netdocJSON), &d); err != nil {
+		t.Fatal(err)
+	}
+	families := d.Checks[0].Families
+	if families == nil || families.IPv4 != "reachable" || families.IPv6 != "" {
+		t.Fatalf("decoded families = %+v, want IPv4 reachable and IPv6 untested", families)
+	}
+	blob, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(blob, []byte(`"address_families":{"ipv4":"reachable"}`)) || bytes.Contains(blob, []byte(`"ipv6"`)) {
+		t.Errorf("re-encoded %s, want the untested family omitted the way netdoc omits it", blob)
+	}
+}
+
+// The other half: absence must not become a free pass. A scenario that names a
+// family is asserting netdoc produced that verdict, so a missing one is a
+// mismatch — the simulator only stays quiet about families it never claimed.
+func TestCompareTreatsAddressFamiliesAsPresentOnlyWhenClaimed(t *testing.T) {
+	families := func(v4, v6 string) DiagnosisCheck {
+		c := check("internet_tcp", "PASS")
+		c.Families = &DiagnosisFamilies{IPv4: v4, IPv6: v6}
+		return c
+	}
+	for _, tc := range []struct {
+		name        string
+		actual      DiagnosisCheck
+		expect      ExpectedCheck
+		wantOutcome string
+	}{
+		{"dual stack matches both claims", families("reachable", "reachable"),
+			ExpectedCheck{ID: "internet_tcp", Status: "PASS", IPv4: "reachable", IPv6: "reachable"}, OutcomeMatched},
+		{"unclaimed families are not compared", families("reachable", ""),
+			ExpectedCheck{ID: "internet_tcp", Status: "PASS"}, OutcomeMatched},
+		{"an untested family still satisfies the claim it was not asked to make", families("reachable", ""),
+			ExpectedCheck{ID: "internet_tcp", Status: "PASS", IPv4: "reachable"}, OutcomeMatched},
+		{"a claimed family that never arrived is a mismatch", families("reachable", ""),
+			ExpectedCheck{ID: "internet_tcp", Status: "PASS", IPv6: "reachable"}, OutcomeWrongFamily},
+		// The bug this whole item exists to prevent: an untested family must
+		// never satisfy an expectation of unreachable.
+		{"an untested family is not an unreachable one", families("reachable", ""),
+			ExpectedCheck{ID: "internet_tcp", Status: "PASS", IPv6: "unreachable"}, OutcomeWrongFamily},
+		{"a genuinely dead family is still unreachable", families("reachable", "unreachable"),
+			ExpectedCheck{ID: "internet_tcp", Status: "PASS", IPv6: "unreachable"}, OutcomeMatched},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := TestOutcome{Name: "t", Diagnosis: diag("ok", tc.actual)}
+			o.compare(Expect{Verdict: "ok", Checks: []ExpectedCheck{tc.expect}}, 4*time.Second)
+			if len(o.Checks) != 1 || o.Checks[0].Outcome != tc.wantOutcome {
+				t.Fatalf("outcome = %+v, want %s", o.Checks, tc.wantOutcome)
+			}
+		})
 	}
 }
