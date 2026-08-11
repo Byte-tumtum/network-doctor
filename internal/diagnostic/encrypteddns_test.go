@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -355,6 +356,33 @@ func TestDNSVerifierClassifiesValidReachabilityResponsesWithoutAnswers(t *testin
 		var responseErr *dnsResponseError
 		if err := query.verify(response); err == nil || errors.As(err, &responseErr) {
 			t.Errorf("non-query rcode %d = %v, want an invalid protocol response", rcode, err)
+		}
+	}
+}
+
+// Error() formats an rcode straight out of a 7-entry name table, but the field
+// holds any 4-bit wire value. An unfamiliar code must read back, not panic.
+func TestDNSResponseErrorFormatsEveryRcode(t *testing.T) {
+	known := map[uint16]string{
+		dnsRcodeSuccess:  "resolver answered NOERROR (rcode 0)",
+		dnsRcodeFormErr:  "resolver answered FORMERR (rcode 1)",
+		dnsRcodeServFail: "resolver answered SERVFAIL (rcode 2)",
+		dnsRcodeNXDom:    "resolver answered NXDOMAIN (rcode 3)",
+		dnsRcodeNotImp:   "resolver answered NOTIMP (rcode 4)",
+		dnsRcodeRefused:  "resolver answered REFUSED (rcode 5)",
+		dnsRcodeYXDomain: "resolver answered YXDOMAIN (rcode 6)",
+	}
+	for rcode, want := range known {
+		if got := (&dnsResponseError{rcode: rcode}).Error(); got != want {
+			t.Errorf("rcode %d = %q, want %q", rcode, got, want)
+		}
+	}
+	// 7 (YXRRSET) and 9 (NOTAUTH) are real assigned codes; 15 is the largest
+	// value the 4-bit header field can carry.
+	for _, rcode := range []uint16{7, 9, 15, ^uint16(0)} {
+		want := fmt.Sprintf("resolver answered an unknown response code (rcode %d)", rcode)
+		if got := (&dnsResponseError{rcode: rcode}).Error(); got != want {
+			t.Errorf("rcode %d = %q, want %q", rcode, got, want)
 		}
 	}
 }

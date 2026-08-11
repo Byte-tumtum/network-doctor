@@ -221,6 +221,9 @@ type dnsResponseError struct{ rcode uint16 }
 
 func (e *dnsResponseError) Error() string {
 	names := [...]string{"NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP", "REFUSED", "YXDOMAIN"}
+	if int(e.rcode) >= len(names) {
+		return fmt.Sprintf("resolver answered an unknown response code (rcode %d)", e.rcode)
+	}
 	return fmt.Sprintf("resolver answered %s (rcode %d)", names[e.rcode], e.rcode)
 }
 
