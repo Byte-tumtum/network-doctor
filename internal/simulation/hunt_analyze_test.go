@@ -1275,3 +1275,48 @@ func TestRunRecordsWholeProcessOutcomes(t *testing.T) {
 		})
 	}
 }
+
+// TestAnalyzeEmitsExecutionFindingCategories pins the categories that describe
+// how a run failed rather than what the network was. The oracle tests cover the
+// evidence-backed categories; together they leave no category that analysis
+// cannot actually emit.
+func TestAnalyzeEmitsExecutionFindingCategories(t *testing.T) {
+	manifest := huntManifest(GeneratedMutation{ID: "dns.drop", Service: "r"})
+	done := CleanupInfo{Done: true}
+	for _, tc := range []struct {
+		name   string
+		report *Report
+		want   string
+	}{
+		{"run failed", &Report{Error: "netns setup failed", Cleanup: done}, FindingSimulatorFailure},
+		{"cleanup failed", &Report{Cleanup: CleanupInfo{Errors: []string{"left bridge"}}}, FindingCleanupFailure},
+		{"scheduled fault failed", &Report{Cleanup: done,
+			Timeline: []FaultEventEvidence{{Result: EventFailed, Error: "tc busy"}}}, FindingSimulatorFailure},
+		{"process deadline", &Report{Cleanup: done,
+			Tests: []TestOutcome{{ProcessOutcome: ProcessTimedOut}}}, FindingNetdocHang},
+		{"process signaled", &Report{Cleanup: done,
+			Tests: []TestOutcome{{ProcessOutcome: ProcessSignaled, Signal: "segmentation fault"}}}, FindingNetdocCrash},
+		{"process cancelled", &Report{Cleanup: done,
+			Tests: []TestOutcome{{ProcessOutcome: ProcessCancelled}}}, FindingSimulatorFailure},
+		{"exec error", &Report{Cleanup: done,
+			Tests: []TestOutcome{{ProcessOutcome: ProcessExecError, Error: "netdoc not found"}}}, FindingUnexpectedRuntimeError},
+		{"invalid report", &Report{Cleanup: done,
+			Tests: []TestOutcome{{ProcessOutcome: ProcessExited, Error: "bad json"}}}, FindingUnexpectedRuntimeError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			findings := analyzeHuntCase(manifest, tc.report, collectObservedTruth(manifest, tc.report))
+			if len(findings) != 1 || findings[0].Category != tc.want {
+				t.Fatalf("findings = %+v, want one %s", findings, tc.want)
+			}
+		})
+	}
+}
+
+// TestHuntReportsGeneratorDefect covers the one category analysis never emits:
+// the hunt loop reports it when case generation itself fails.
+func TestHuntReportsGeneratorDefect(t *testing.T) {
+	result := RunHunt(context.Background(), "no-such-base", nil, nil, HuntOptions{Cases: 1, DryRun: true})
+	if result.Result != HuntResultError || result.ErrorKind != FindingGeneratorDefect {
+		t.Fatalf("result = %s, kind = %s, err = %s", result.Result, result.ErrorKind, result.Error)
+	}
+}

@@ -22,14 +22,21 @@ const (
 	SeverityInfo     HuntSeverity = "info"
 )
 
+// Finding categories name what kind of disagreement a case produced. Every
+// value here is emitted by a path in this package; a category the oracle cannot
+// establish from independent evidence is not a category, and there is
+// deliberately no catch-all. "Network Doctor claimed a fault the network did
+// not have" belongs to FindingDiagnosticContradiction, where the finding still
+// names which dimension disagreed, and a probe that spent its deadline is
+// either the correct diagnosis of an injected fault, a whole-process hang
+// (FindingNetdocHang), or harness failure (FindingSimulatorFailure) — never a
+// kind of its own.
 const (
-	FindingFalsePositive           = "comparison_false_positive"
 	FindingFalseNegative           = "comparison_false_negative"
 	FindingDiagnosticInstability   = "diagnostic_instability"
 	FindingDiagnosticContradiction = "diagnostic_contradiction"
 	FindingCoverageGap             = "coverage_gap"
 	FindingUnexpectedRuntimeError  = "unexpected_runtime_error"
-	FindingProbeTimeout            = "probe_timeout"
 	FindingNetdocCrash             = "netdoc_crash"
 	FindingNetdocHang              = "netdoc_hang"
 	FindingCleanupFailure          = "cleanup_failure"
