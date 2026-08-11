@@ -456,19 +456,3 @@ func (i Interface) addressForFamily(family string) (netip.Prefix, bool) {
 func prefixesOverlap(a, b netip.Prefix) bool {
 	return a.Contains(b.Addr()) || b.Contains(a.Addr())
 }
-
-func (t *Topology) routeForNode(node, destination string) []Route {
-	var out []Route
-	for _, route := range t.Routes {
-		if route.Node == node && route.Destination == destination {
-			out = append(out, route)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Metric != out[j].Metric {
-			return out[i].Metric < out[j].Metric
-		}
-		return strings.Compare(out[i].Via, out[j].Via) < 0
-	})
-	return out
-}

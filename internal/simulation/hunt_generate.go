@@ -109,15 +109,6 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "routing.preferred_path_failure", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWorkingAlternatePath, generate: generatePreferredPathFailure},
 }
 
-// HuntMutationIDs exposes the ordered stable registry for tests and tools.
-func HuntMutationIDs() []string {
-	out := make([]string, len(huntMutationRegistry))
-	for i := range huntMutationRegistry {
-		out[i] = huntMutationRegistry[i].id
-	}
-	return out
-}
-
 // DeriveHuntCaseSeed makes case N independent of every earlier PRNG stream.
 func DeriveHuntCaseSeed(seed int64, base string, caseNumber int) int64 {
 	h := sha256.New()

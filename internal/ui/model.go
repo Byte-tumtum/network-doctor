@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -234,32 +233,6 @@ var (
 		JobDone: passStyle, JobFailed: failStyle, JobTimedOut: failStyle, JobCanceled: skipStyle,
 	}
 )
-
-// NewWithSource constructs the terminal application with probe dials pinned to
-// source; a nil source leaves them unpinned. histFile is where target history
-// persists across sessions; "" keeps it in-memory only.
-// It keeps the default second-opinion resolver; NewWithSources takes a
-// configured one.
-func NewWithSource(t *diagnostic.Target, source net.IP, toolbox, watch bool, histFile, version string) tea.Model {
-	var sources *diagnostic.SourceAddresses
-	if source != nil {
-		sources = &diagnostic.SourceAddresses{}
-		if source.To4() != nil {
-			sources.IPv4 = source
-		} else {
-			sources.IPv6 = source
-		}
-	}
-	return NewWithSources(t, sources, toolbox, watch, histFile, version, diagnostic.DefaultPublicDNS)
-}
-
-// NewWithSources constructs the terminal application with separate selected
-// IPv4 and IPv6 source addresses; nil leaves dials unpinned. publicDNS is the
-// second-opinion resolver IP, or "" to leave that check out — the value is
-// retained so re-runs and target switches keep honoring it.
-func NewWithSources(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string) tea.Model {
-	return NewWithSelection(t, sources, toolbox, watch, histFile, version, publicDNS, diagnostic.ProbeSelection{})
-}
 
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.

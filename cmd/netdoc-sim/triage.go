@@ -297,16 +297,8 @@ func file(ctx context.Context, gh ghFunc, finding *simulation.TriageFinding, rev
 		return fmt.Errorf("create: %w", err)
 	}
 	finding.Issue = simulation.TriageIssue{Status: simulation.IssueStatusCreated,
-		URL: strings.TrimSpace(lastLine(string(created)))}
+		URL: strings.TrimSpace(string(created))}
 	return nil
-}
-
-func lastLine(out string) string {
-	lines := strings.Fields(strings.TrimSpace(out))
-	if len(lines) == 0 {
-		return ""
-	}
-	return lines[len(lines)-1]
 }
 
 func realGH(ctx context.Context, args ...string) ([]byte, error) {

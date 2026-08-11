@@ -29,8 +29,6 @@ import (
 // picks its exit code from it.
 type stubBackend struct{ supported bool }
 
-func (b stubBackend) Name() string { return "stub" }
-
 func (b stubBackend) Capabilities(context.Context) simulation.Capabilities {
 	return simulation.Capabilities{Backend: "stub", Supported: b.supported,
 		Reason: "stub backend: this host cannot simulate"}

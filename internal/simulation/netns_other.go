@@ -15,8 +15,6 @@ func DefaultBackend(bool, io.Writer) Backend { return unsupportedBackend{} }
 
 type unsupportedBackend struct{}
 
-func (unsupportedBackend) Name() string { return "unsupported" }
-
 func (unsupportedBackend) Capabilities(context.Context) Capabilities {
 	return Capabilities{
 		Backend: "unsupported",

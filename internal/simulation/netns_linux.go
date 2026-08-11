@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,11 +64,9 @@ type netnsBackend struct {
 	log io.Writer
 }
 
-func (b *netnsBackend) Name() string { return "linux-netns" }
-
 func (b *netnsBackend) Capabilities(ctx context.Context) Capabilities {
 	c := Capabilities{
-		Backend: b.Name(),
+		Backend: "linux-netns",
 		Privileged: []string{
 			"create a user namespace mapping your uid to root inside it (no host privileges are gained)",
 			"create network and mount namespaces, a bridge, and veth pairs inside them",
@@ -84,7 +82,7 @@ func (b *netnsBackend) Capabilities(ctx context.Context) Capabilities {
 			c.Missing = append(c.Missing, tool+" (required; from "+toolPackage(tool)+")")
 		}
 	}
-	for _, tool := range sortedKeys(optionalTools) {
+	for _, tool := range slices.Sorted(maps.Keys(optionalTools)) {
 		if _, err := exec.LookPath(tool); err != nil {
 			c.Missing = append(c.Missing, tool+" (only needed for "+optionalTools[tool]+" faults; from "+toolPackage(tool)+")")
 		}
@@ -108,15 +106,6 @@ func toolPackage(tool string) string {
 		return "nftables"
 	}
 	return "util-linux"
-}
-
-func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // linkTagLen is how much of a run id fits in a kernel link name.

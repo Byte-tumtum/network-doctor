@@ -48,9 +48,9 @@ func TestRoutedTopologyValidationAndCanonicalization(t *testing.T) {
 	if got := s.Topology.Nodes[0].Gateway; got != "10.77.1.1" {
 		t.Errorf("preferred gateway = %q", got)
 	}
-	routes := s.Topology.routeForNode("client", "default")
-	if len(routes) != 1 || routes[0].Metric != 100 {
-		t.Errorf("routes = %+v", routes)
+	routes := s.Topology.Routes
+	if len(routes) != 2 || routes[0].Node != "client" || routes[0].Destination != "default" || routes[0].Metric != 100 {
+		t.Errorf("normalized routes = %+v", routes)
 	}
 }
 
@@ -100,7 +100,8 @@ func TestRoutedTopologyRejects(t *testing.T) {
 
 func TestConflictingDefaultsNeedDistinctMetrics(t *testing.T) {
 	insert := "    - {node: client, destination: default, via: 10.77.1.254, metric: 100}\n"
-	raw := strings.Replace(routedScenario, "    - {node: target, destination:", insert+"    - {node: target, destination:", 1)
+	first := "    - {node: client, destination: default, via: 10.77.1.1, metric: 100}\n"
+	raw := strings.Replace(routedScenario, first, insert+first, 1)
 	if _, err := ParseScenario(strings.NewReader(raw)); err == nil || !strings.Contains(err.Error(), "conflicting routes") {
 		t.Fatalf("same metric defaults error = %v", err)
 	}
@@ -109,9 +110,13 @@ func TestConflictingDefaultsNeedDistinctMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes := s.Topology.routeForNode("client", "default")
-	if len(routes) != 2 || routes[0].Metric != 100 || routes[1].Metric != 200 {
-		t.Errorf("metric order = %+v", routes)
+	routes := s.Topology.Routes
+	if len(routes) != 3 || routes[0].Node != "client" || routes[0].Destination != "default" || routes[0].Metric != 200 ||
+		routes[1].Node != "client" || routes[1].Destination != "default" || routes[1].Metric != 100 {
+		t.Errorf("normalized routes = %+v", routes)
+	}
+	if got := s.Topology.Nodes[0].Gateway; got != "10.77.1.1" {
+		t.Errorf("preferred gateway = %q, want lower-metric route via 10.77.1.1", got)
 	}
 }
 
@@ -184,10 +189,11 @@ func TestDualStackTopologyValidation(t *testing.T) {
 	if iface.IPv4 != "10.88.1.10/24" || iface.IPv6 != "fd88:1::10/64" || iface.Address != "" {
 		t.Errorf("dual interface = %+v", iface)
 	}
-	if routes := s.Topology.routeForNode("client", "default"); len(routes) != 1 || routes[0].Family != "ipv4" {
+	routes := s.Topology.Routes
+	if len(routes) != 2 || routes[0].Node != "client" || routes[0].Destination != "default" || routes[0].Family != "ipv4" {
 		t.Errorf("IPv4 default = %+v", routes)
 	}
-	if routes := s.Topology.routeForNode("client", "::/0"); len(routes) != 1 || routes[0].Family != "ipv6" {
+	if len(routes) != 2 || routes[1].Node != "client" || routes[1].Destination != "::/0" || routes[1].Family != "ipv6" {
 		t.Errorf("IPv6 default = %+v", routes)
 	}
 }

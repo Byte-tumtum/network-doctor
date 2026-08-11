@@ -1127,7 +1127,10 @@ func TestEncryptedDNSDiagnosisOutcomeTruthTable(t *testing.T) {
 }
 
 func TestEncryptedDNSRowIsAnIndependentInterfaceBranch(t *testing.T) {
-	for _, probes := range [][]Probe{BuildProbesFrom(nil, nil), BuildProbesFrom(mustTarget(t, "github.com"), nil)} {
+	for _, probes := range [][]Probe{
+		BuildProbesFromSources(nil, nil, DefaultPublicDNS),
+		BuildProbesFromSources(mustTarget(t, "github.com"), nil, DefaultPublicDNS),
+	} {
 		var found bool
 		for _, p := range probes {
 			if p.ID != ProbeDNSEncrypted {

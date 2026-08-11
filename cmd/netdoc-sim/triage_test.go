@@ -159,6 +159,7 @@ func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 		t.Fatalf("findings = %+v", report.Findings)
 	}
 	if report.Findings[0].Issue.Status != simulation.IssueStatusCreated ||
+		report.Findings[0].Issue.URL != "https://github.test/heymaikol/network-doctor/issues/1" ||
 		report.Findings[1].Issue.Status != simulation.IssueStatusNotFiled {
 		t.Fatalf("issues = %+v, %+v", report.Findings[0].Issue, report.Findings[1].Issue)
 	}

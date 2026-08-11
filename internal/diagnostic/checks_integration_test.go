@@ -225,10 +225,10 @@ func pollQueued(t *testing.T, conn net.Conn, want func(int) bool) int {
 	return queued
 }
 
-// SourceIP resolves both of the forms -iface accepts, without this test
+// ResolveSource resolves both of the forms -iface accepts, without this test
 // knowing what the loopback interface is called (lo, lo0, "Loopback
 // Pseudo-Interface 1", ...).
-func TestSourceIPResolvesLoopbackInterface(t *testing.T) {
+func TestResolveSourceResolvesLoopbackInterface(t *testing.T) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		t.Fatalf("interfaces: %v", err)
@@ -238,7 +238,7 @@ func TestSourceIPResolvesLoopbackInterface(t *testing.T) {
 		if ifaces[i].Flags&net.FlagLoopback == 0 {
 			continue
 		}
-		if addrs, err := ifaces[i].Addrs(); err == nil && preferredSourceIP(addrs) != nil {
+		if addrs, err := ifaces[i].Addrs(); err == nil && sourceAddresses(addrs) != nil {
 			name = ifaces[i].Name
 			break
 		}
@@ -247,19 +247,16 @@ func TestSourceIPResolvesLoopbackInterface(t *testing.T) {
 		t.Skip("no loopback interface with a usable address")
 	}
 
-	ip, err := SourceIP(name)
-	if err != nil {
-		t.Fatalf("SourceIP(%q): %v", name, err)
-	}
-	if !ip.IsLoopback() {
-		t.Errorf("SourceIP(%q) = %v, want a loopback address", name, ip)
-	}
-	// The interface name rides along for the drill-down tools whose binding
-	// option takes a name; the exact-IP form has no name to report.
 	sources, err := ResolveSource(name)
 	if err != nil {
 		t.Fatalf("ResolveSource(%q): %v", name, err)
 	}
+	ip := sources.primary()
+	if !ip.IsLoopback() {
+		t.Errorf("ResolveSource(%q).primary() = %v, want a loopback address", name, ip)
+	}
+	// The interface name rides along for the drill-down tools whose binding
+	// option takes a name; the exact-IP form has no name to report.
 	if sources.Iface != name {
 		t.Errorf("ResolveSource(%q).Iface = %q, want %q", name, sources.Iface, name)
 	}
@@ -280,19 +277,19 @@ func TestSourceIPResolvesLoopbackInterface(t *testing.T) {
 	}
 
 	// The exact-IP form has to accept what the name form just handed back.
-	again, err := SourceIP(ip.String())
+	again, err := ResolveSource(ip.String())
 	if err != nil {
-		t.Fatalf("SourceIP(%q): %v", ip, err)
+		t.Fatalf("ResolveSource(%q): %v", ip, err)
 	}
-	if !again.Equal(ip) {
-		t.Errorf("SourceIP(%q) = %v, want %v", ip, again, ip)
+	if !again.primary().Equal(ip) {
+		t.Errorf("ResolveSource(%q).primary() = %v, want %v", ip, again.primary(), ip)
 	}
 
 	// TEST-NET-1 is reserved for documentation, so it is never a local address.
-	if _, err := SourceIP("192.0.2.1"); err == nil {
+	if _, err := ResolveSource("192.0.2.1"); err == nil {
 		t.Error("an unassigned IP should be rejected")
 	}
-	if _, err := SourceIP("netdoc-no-such-interface"); err == nil {
+	if _, err := ResolveSource("netdoc-no-such-interface"); err == nil {
 		t.Error("an unknown interface name should be rejected")
 	}
 }
@@ -308,7 +305,7 @@ func TestResolverDialsFromSourceLoopback(t *testing.T) {
 	// The address the hook is handed comes from resolv.conf and varies per
 	// machine; send every query to the stub instead. What is under test is the
 	// dialer the source produced, not which server the host would have picked.
-	dial := dialContextFrom(net.ParseIP("127.0.0.1"))
+	dial := dialContextFromSources(sourceAddresses([]net.Addr{&net.IPAddr{IP: net.ParseIP("127.0.0.1")}}))
 	ips, server, err := lookupIPWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return dial(ctx, network, stub.addr())
 	})
@@ -335,7 +332,7 @@ func TestPublicResolverDialsFromSourceLoopback(t *testing.T) {
 		mu      sync.Mutex
 		targets []string
 	)
-	dial := dialContextFrom(net.ParseIP("127.0.0.1"))
+	dial := dialContextFromSources(sourceAddresses([]net.Addr{&net.IPAddr{IP: net.ParseIP("127.0.0.1")}}))
 	ips, err := lookupIPPublicWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, addr string) (net.Conn, error) {
 		mu.Lock()
 		targets = append(targets, addr)

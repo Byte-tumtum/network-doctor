@@ -382,16 +382,6 @@ func ResolveSource(iface string) (*SourceAddresses, error) {
 	return nil, fmt.Errorf("interface %q has no usable IP address", iface)
 }
 
-// SourceIP retains the original single-address API for callers that explicitly
-// want its IPv4-first behavior. --iface uses ResolveSource so it keeps both.
-func SourceIP(iface string) (net.IP, error) {
-	sources, err := ResolveSource(iface)
-	if err != nil {
-		return nil, err
-	}
-	return sources.primary(), nil
-}
-
 func ipFromAddr(addr net.Addr) net.IP {
 	switch a := addr.(type) {
 	case *net.IPNet:
@@ -420,13 +410,6 @@ func sourceAddresses(addrs []net.Addr) *SourceAddresses {
 		return nil
 	}
 	return &sources
-}
-
-func preferredSourceIP(addrs []net.Addr) net.IP {
-	if sources := sourceAddresses(addrs); sources != nil {
-		return sources.primary()
-	}
-	return nil
 }
 
 func (s SourceAddresses) primary() net.IP {
@@ -476,14 +459,6 @@ func opsFromSources(sources *SourceAddresses) *netops {
 		return portalCheckWithDial(ctx, o.dialContext)
 	}
 	return &o
-}
-
-func dialContextFrom(source net.IP) func(context.Context, string, string) (net.Conn, error) {
-	return dialContextFromSources(sourceAddresses([]net.Addr{&net.IPAddr{IP: source}}))
-}
-
-func dialerFrom(source net.IP, network string) *net.Dialer {
-	return dialerFromSource(source, network, dialContextFrom(source))
 }
 
 func dialerFromSource(source net.IP, network string, resolverDial func(context.Context, string, string) (net.Conn, error)) *net.Dialer {
@@ -659,28 +634,10 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 	return resp.StatusCode, "", nil
 }
 
-// BuildProbesFrom constructs the DAG for the given target (nil = generic mode)
-// with every network dial — resolver and HTTP transport included — bound to
-// source. A nil source leaves the dials unpinned.
-//
-// It wraps every Run so results leave the probe already sanitized: this is the
-// one place external bytes cross into text we print, so callers render
-// ProbeResult strings as-is and a new probe can't reintroduce terminal
-// injection by forgetting to Clean at the source. It is also the one place
-// both runners (RunAll and the ui scheduler) share, so timing lives here too.
-// It keeps the default second-opinion resolver; BuildProbesFromSources is the
-// entry point that takes a configured one.
-func BuildProbesFrom(t *Target, source net.IP) []Probe {
-	if source == nil {
-		return BuildProbesFromSources(t, nil, DefaultPublicDNS)
-	}
-	return BuildProbesFromSources(t, sourceAddresses([]net.Addr{&net.IPAddr{IP: source}}), DefaultPublicDNS)
-}
-
-// BuildProbesFromSources is BuildProbesFrom with separate selected-interface
-// addresses for IPv4 and IPv6, and with the second-opinion resolver named
-// explicitly: publicDNS is a bare IP, or "" to leave that probe out of the DAG
-// altogether — a skipped row would still have had to dial to be skipped.
+// BuildProbesFromSources constructs the DAG with separate selected-interface
+// addresses for IPv4 and IPv6. publicDNS is a bare IP, or "" to leave that
+// probe out of the DAG altogether — a skipped row would still have had to dial
+// to be skipped.
 func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS string) []Probe {
 	o := defaultOps
 	if sources != nil {

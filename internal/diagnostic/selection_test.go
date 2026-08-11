@@ -37,7 +37,7 @@ func TestProbeSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probes := BuildProbesFrom(target, nil)
+	probes := BuildProbesFromSources(target, nil, DefaultPublicDNS)
 	tests := []struct {
 		name       string
 		selection  ProbeSelection
@@ -142,7 +142,7 @@ func TestProbeSelectionGraphClosureAndPruning(t *testing.T) {
 }
 
 func TestEmptyProbeSelectionPreservesBuiltDAG(t *testing.T) {
-	probes := BuildProbesFrom(mustTarget(t, "example.com"), nil)
+	probes := BuildProbesFromSources(mustTarget(t, "example.com"), nil, DefaultPublicDNS)
 	got := (ProbeSelection{}).Apply(probes)
 	if len(got) != len(probes) {
 		t.Fatalf("probe count = %d, want %d", len(got), len(probes))
@@ -268,7 +268,7 @@ func TestDiagnoseSelectedSubsetDoesNotClaimOmittedChecksPassed(t *testing.T) {
 
 func TestDiagnoseUnfilteredCompatibility(t *testing.T) {
 	target := mustTarget(t, "example.com")
-	targetProbes := BuildProbesFrom(target, nil)
+	targetProbes := BuildProbesFromSources(target, nil, DefaultPublicDNS)
 	targetOrder := selectedIDs(targetProbes)
 	targetResults := make(map[ProbeID]ProbeResult, len(targetOrder))
 	for _, id := range targetOrder {
@@ -283,7 +283,7 @@ func TestDiagnoseUnfilteredCompatibility(t *testing.T) {
 		t.Fatalf("full target precedence = %q/%q", got, verdict)
 	}
 
-	genericProbes := BuildProbesFrom(nil, nil)
+	genericProbes := BuildProbesFromSources(nil, nil, DefaultPublicDNS)
 	genericOrder := selectedIDs(genericProbes)
 	genericResults := make(map[ProbeID]ProbeResult, len(genericOrder))
 	for _, id := range genericOrder {

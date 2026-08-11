@@ -55,15 +55,15 @@ func TestJoinIPs(t *testing.T) {
 	}
 }
 
-func TestPreferredSourceIP(t *testing.T) {
+func TestSourceAddressesPrimary(t *testing.T) {
 	addrs := []net.Addr{
 		&net.IPNet{IP: net.ParseIP("2001:db8::2")},
 		&net.IPNet{IP: net.ParseIP("192.0.2.2")},
 	}
-	if got := preferredSourceIP(addrs); !got.Equal(net.ParseIP("192.0.2.2")) {
+	if got := sourceAddresses(addrs).primary(); !got.Equal(net.ParseIP("192.0.2.2")) {
 		t.Errorf("preferred source = %v, want IPv4 address", got)
 	}
-	if got := preferredSourceIP(addrs[:1]); !got.Equal(net.ParseIP("2001:db8::2")) {
+	if got := sourceAddresses(addrs[:1]).primary(); !got.Equal(net.ParseIP("2001:db8::2")) {
 		t.Errorf("IPv6-only source = %v, want 2001:db8::2", got)
 	}
 }
@@ -154,10 +154,10 @@ func TestIfaceProbeAcceptsDualSourcesAndExactSecondaryAddress(t *testing.T) {
 
 func TestDialerFromUsesNetworkAddressType(t *testing.T) {
 	source := net.ParseIP("192.0.2.2")
-	if _, ok := dialerFrom(source, "tcp").LocalAddr.(*net.TCPAddr); !ok {
+	if _, ok := dialerFromSource(source, "tcp", nil).LocalAddr.(*net.TCPAddr); !ok {
 		t.Error("TCP dialer LocalAddr is not *net.TCPAddr")
 	}
-	if _, ok := dialerFrom(source, "udp").LocalAddr.(*net.UDPAddr); !ok {
+	if _, ok := dialerFromSource(source, "udp", nil).LocalAddr.(*net.UDPAddr); !ok {
 		t.Error("UDP dialer LocalAddr is not *net.UDPAddr")
 	}
 }

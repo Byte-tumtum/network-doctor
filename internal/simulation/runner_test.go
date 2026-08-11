@@ -21,8 +21,6 @@ type fakeBackend struct {
 	prepareEnvOnErr bool
 }
 
-func (b *fakeBackend) Name() string { return "fake" }
-
 func (b *fakeBackend) Capabilities(context.Context) Capabilities { return b.caps }
 
 func (b *fakeBackend) Prepare(context.Context, *Scenario, string) (Env, error) {
@@ -192,6 +190,9 @@ func TestRunCleansUpAfterPartialSetupFailure(t *testing.T) {
 	}
 	if rep.Result != ResultError || !strings.Contains(rep.Error, "veth wedged") {
 		t.Errorf("result = %s, error = %q", rep.Result, rep.Error)
+	}
+	if rep.Backend != "fake" {
+		t.Errorf("backend = %q, want capability backend fake", rep.Backend)
 	}
 	// The topology that did get built is still worth reporting.
 	if len(rep.Topology) != 1 {

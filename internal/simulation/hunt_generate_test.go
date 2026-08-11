@@ -27,7 +27,11 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 		"family.ipv4_drop", "family.ipv6_drop", "link.transient_down",
 		"routing.preferred_path_failure",
 	}
-	if got := HuntMutationIDs(); !reflect.DeepEqual(got, want) {
+	got := make([]string, len(huntMutationRegistry))
+	for i := range huntMutationRegistry {
+		got[i] = huntMutationRegistry[i].id
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registry = %v, want %v", got, want)
 	}
 	if hasWorkingAlternatePath(loadHuntBase(t, "healthy")) ||
@@ -282,12 +286,12 @@ func TestGeneratedHuntCasesValidateAndStayBounded(t *testing.T) {
 	// Preferred-route failure is deliberately dormant until a known-good
 	// multi-path base exists. Every operator applicable to today's controls must
 	// appear in this large deterministic sample.
-	for _, id := range HuntMutationIDs() {
-		if id == "routing.preferred_path_failure" {
+	for _, op := range huntMutationRegistry {
+		if op.id == "routing.preferred_path_failure" {
 			continue
 		}
-		if !seen[id] {
-			t.Errorf("operator %s was never generated", id)
+		if !seen[op.id] {
+			t.Errorf("operator %s was never generated", op.id)
 		}
 	}
 }

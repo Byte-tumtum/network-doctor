@@ -16,8 +16,6 @@ var ErrUnsupported = errors.New("simulation backend unsupported on this platform
 // network namespaces; the interface exists so a container, libvirt or
 // platform-native backend can be added without the runner noticing.
 type Backend interface {
-	// Name is the short backend id used in reports.
-	Name() string
 	// Capabilities reports whether this host can run a simulation, and which
 	// privileged operations a run performs. Cheap and side-effect free.
 	Capabilities(ctx context.Context) Capabilities

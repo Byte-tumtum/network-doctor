@@ -67,7 +67,7 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	opts = opts.withDefaults()
 	rep = &Report{
 		Scenario: s.Name, Description: s.Description, ID: NewID(),
-		Backend: b.Name(), StartedAt: time.Now(),
+		StartedAt: time.Now(),
 	}
 	start := time.Now()
 	defer func() {
@@ -78,7 +78,9 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 		rep.finish()
 	}()
 
-	if caps := b.Capabilities(ctx); !caps.Supported {
+	caps := b.Capabilities(ctx)
+	rep.Backend = caps.Backend
+	if !caps.Supported {
 		rep.Error = caps.Reason
 		return rep
 	}

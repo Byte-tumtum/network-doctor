@@ -1,4 +1,4 @@
-// Shape checks for the probe DAG that BuildProbesFrom returns per protocol.
+// Shape checks for the probe DAG that BuildProbesFromSources returns per protocol.
 
 package diagnostic
 
@@ -46,8 +46,8 @@ func TestBuildProbesShape(t *testing.T) {
 		if c.target != "" {
 			tg = mustTarget(t, c.target)
 		}
-		if got := len(BuildProbesFrom(tg, nil)); got != c.want {
-			t.Errorf("BuildProbesFrom(%q) = %d probes, want %d", c.target, got, c.want)
+		if got := len(BuildProbesFromSources(tg, nil, DefaultPublicDNS)); got != c.want {
+			t.Errorf("BuildProbesFromSources(%q) = %d probes, want %d", c.target, got, c.want)
 		}
 	}
 }
@@ -125,7 +125,7 @@ func TestDisabledPublicDNSNeverQueriesTheResolver(t *testing.T) {
 }
 
 func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
-	probes := BuildProbesFrom(nil, nil)
+	probes := BuildProbesFromSources(nil, nil, DefaultPublicDNS)
 	deps := make(map[ProbeID][]ProbeID, len(probes))
 	for _, p := range probes {
 		deps[p.ID] = p.Deps
@@ -142,7 +142,7 @@ func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
 }
 
 func TestQUICProbeIsConcurrentSiblingAfterInternetTCP(t *testing.T) {
-	probes := BuildProbesFrom(nil, nil)
+	probes := BuildProbesFromSources(nil, nil, DefaultPublicDNS)
 	for i, probe := range probes {
 		if probe.ID != ProbeQUIC {
 			continue
@@ -159,7 +159,7 @@ func TestQUICProbeIsConcurrentSiblingAfterInternetTCP(t *testing.T) {
 }
 
 func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
-	https := BuildProbesFrom(mustTarget(t, "https://example.com"), nil)
+	https := BuildProbesFromSources(mustTarget(t, "https://example.com"), nil, DefaultPublicDNS)
 	want := []struct {
 		id   ProbeID
 		name string
@@ -179,7 +179,7 @@ func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
 		}
 	}
 
-	http := BuildProbesFrom(mustTarget(t, "http://example.com"), nil)
+	http := BuildProbesFromSources(mustTarget(t, "http://example.com"), nil, DefaultPublicDNS)
 	got := http[len(http)-1]
 	if got.ID != ProbeHTTP || got.Name != "HTTP example.com" || len(got.Deps) != 1 || got.Deps[0] != ProbeTargetTCP {
 		t.Errorf("plain HTTP application probe = %+v, want HTTP depending on target TCP", got)
