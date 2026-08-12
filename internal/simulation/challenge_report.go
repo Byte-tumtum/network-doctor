@@ -76,6 +76,9 @@ func (r *ChallengeResult) WriteText(w io.Writer) {
 
 	fmt.Fprintln(w, "\nNetwork Doctor")
 	writeContestant(w, r.NetworkDoctor)
+	if r.NetworkDoctor.Note != "" {
+		fmt.Fprintf(w, "  %s\n", textsafe.Clean(r.NetworkDoctor.Note))
+	}
 
 	fmt.Fprintf(w, "\nResult\n  %s\n", challengeResultLine(r.Result))
 	fmt.Fprintf(w, "\nHuman investigation: %s\nNetwork Doctor run:  %s\n",
@@ -107,6 +110,8 @@ func writeContestant(w io.Writer, contestant ChallengeContestant) {
 		} else {
 			fmt.Fprintf(w, "  %s\n  ✗ incorrect\n", contestant.Label)
 		}
+	case ChallengeUnrecognized:
+		fmt.Fprintln(w, "  no verdict for this condition\n  ✗ not recognized")
 	case ChallengeGaveUp:
 		fmt.Fprintln(w, "  gave up")
 	default:
@@ -149,7 +154,10 @@ func shareMark(score string) string {
 	switch score {
 	case ChallengeCorrect:
 		return "✓"
-	case ChallengeIncorrect:
+	case ChallengeIncorrect, ChallengeUnrecognized:
+		// One mark for both losses. "not recognized" would tell a reader of the
+		// share block that the fault is one netdoc has no words for, which
+		// narrows the answer for whoever plays the id next.
 		return "✗"
 	case ChallengeGaveUp:
 		return "— (gave up)"

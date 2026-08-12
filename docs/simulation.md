@@ -443,8 +443,8 @@ answers are graded against the same independently observed truth.
 ```sh
 ./netdoc-sim challenge                       # draw one and play it
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V1-8F42C1          # replay someone else's
-./netdoc-sim challenge -id V1-8F42C1 -answer dns_failure -json
+./netdoc-sim challenge -id V2-8F42C1          # replay someone else's
+./netdoc-sim challenge -id V2-8F42C1 -answer dns_failure -json
 ```
 
 One command runs the whole session: it builds the network, opens a shell in the
@@ -457,17 +457,72 @@ handed different networks.
 
 ### Challenge ids
 
-A challenge id is `V1-8F42C1`: a generator version and six hex digits. It
+A challenge id is `V2-8F42C1`: a generator version and six hex digits. It
 resolves with no state on disk and no network, so the same id is the same
-puzzle on anyone's machine. A bare `8F42C1` is accepted and always means `V1`.
+puzzle on anyone's machine. A bare `8F42C1` is accepted and always means `V1`,
+which was the only form the first release printed.
 
 The version is part of the id because it has to be. What an id means depends on
 this file's selection rules, on the hunt generator behind them, and on the base
 scenario YAML they draw from — so a change to any of the three would repoint
 every id already shared. Such a change adds an entry to `challengeGenerators`
 instead, leaving old ids resolving through the rules they were minted under.
-`TestChallengeIDsResolveToTheSameCaseForever` pins one id per family and fails
-if the chain moves under them.
+`TestChallengeIDsResolveToTheSameCaseForever` pins ids of both versions and
+fails if the chain moves under them.
+
+`V2` exists because the contract below admitted `netem.loss`, a condition V1 had
+excluded. `V1` ids keep resolving through `challengeV1Mutations`, the frozen
+list of conditions V1 was published with, so an id someone shared before the
+change still sets the puzzle they played.
+
+### The challenge contract
+
+Challenge Mode asks one question: can the simulator produce a real, verified
+network fault that Network Doctor fails to diagnose? That only means anything if
+the set of possible challenges is decided without reference to what Network
+Doctor can already do. The pipeline is one-directional and never loops back:
+
+```text
+simulator injects a fault
+        ↓
+independent evidence proves it reached live traffic
+        ↓
+observed truth names the real condition
+        ↓
+Network Doctor produces its diagnosis
+        ↓
+the judge compares the diagnosis with the truth
+```
+
+A hunt mutation becomes challengeable when it passes four tests, listed in
+full next to `challengeConditions` in `internal/simulation/challenge.go`:
+
+1. **independently observable** — the executed run left evidence, read off the
+   wire or off the kernel, that the fault met live traffic. `mutationObserved`
+   is that check; a condition may narrow it further with its own `requires`, and
+   may never widen it.
+2. **deterministic and replayable** — the same id sets the same puzzle, and the
+   condition holds for the whole run or not at all.
+3. **the same network for both contestants** — a person in the shell and the
+   netdoc process must be able to see the same thing.
+4. **inside the diagnostic scope** — the condition is a fault of the network
+   itself rather than of an application the network delivered correctly.
+
+"Network Doctor already recognizes it" is deliberately not on that list, and
+nothing in the generation path can reach `challengeRecognition` or a diagnosis.
+A condition netdoc has no vocabulary for is still eligible; it is a loss for
+netdoc, not a challenge that could never be set. `netem.loss` is the current
+example: the simulator can prove the shaper discarded packets, while netdoc's
+cause vocabulary carries no impairment verdict at all.
+
+Excluded mutations, and which of the four tests each one fails: every timed
+family and `netem.latency`/`netem.jitter` (1 or 2 — a scheduled fault would be
+over while the person investigated, and delay leaves no counter of its own);
+`http.status_503` and `encrypted_dns.doh_invalid` (4 — the network carried the
+request and carried the answer back, and the `http-error` control pins down that
+netdoc reports that as working on purpose); `proxy.connect_refused` and
+`quic.udp_443_block` (3 — only the netdoc process is handed the proxy, and a
+filtered UDP port is indistinguishable from a silent one in the shell).
 
 ### What is shared with the hunt, and what is not
 
@@ -477,19 +532,18 @@ the case is materialized by `GenerateHuntCase` with a maximum of one mutation.
 Truth comes from `collectObservedTruth`, so a mutation counts only when the
 executed run left independent evidence for it — the same `observed_faults` rule
 the hunt uses. Recognition of a condition the hunt oracle already grades reuses
-that oracle's `recognized` half rather than restating it.
+that oracle's `recognized` half rather than restating it, and the shared wire
+predicates in `hunt_oracle.go` are the one place either side reads evidence.
 
-What is challenge-specific is the answer vocabulary, the reviewed subset of
-mutations that make fair human puzzles, the difficulty metadata, and the
-matchup. `internal/simulation/challenge.go` is authoritative for all four.
-
-A hunt mutation is not automatically a challenge. `challengeFamilies` lists the
-eligible ones and says next to each excluded family why it is out: timed faults
-(the two contestants would face different networks), netem impairment and HTTP
-error statuses (netdoc reports no failure there by design, so grading it would
-invent a contract), the proxy fault (only the netdoc process is handed the
-proxy), and the QUIC block (ordinary tools leave a person nothing to reason
-from).
+What is challenge-specific is the answer vocabulary, the eligibility contract
+above, the difficulty metadata, and the matchup.
+`internal/simulation/challenge.go` is authoritative for all four, and keeps them
+in two tables that never read each other: `challengeConditions` is what the
+simulator can prove, `challengeRecognition` is what netdoc's report has to say.
+Protocol meaning stays where it belongs — TCP reset is recognized by netdoc's
+own `connection_reset` cause and nothing looser, because a generic "the run
+failed somehow" comparison would score netdoc correct for naming a different
+fault with a different fix.
 
 ### Scoring
 
@@ -498,18 +552,36 @@ matchup is derived from the two scores. There is no partial credit and no
 scoring on prose: the human picks from a fixed menu, and netdoc is read through
 its own cause vocabulary, structured per-family verdicts and verdict class.
 
+Network Doctor's score is one of three:
+
+| score | meaning |
+| --- | --- |
+| `correct` | its own report states the condition the simulator observed. Netdoc wins the round unless the human also named it, which is a draw. |
+| `incorrect` | it has a verdict for this condition and produced a different one. |
+| `unrecognized` | its vocabulary has no verdict that could state this condition, so no report it could have written would have won. |
+
+`incorrect` and `unrecognized` both lose the round; they are separate because
+the difference is the whole point of the contract. A challenger who names the
+condition beats netdoc in either case — **"Network Doctor did not recognize this
+fault" is a challenger victory, not a reason the challenge could not be set.**
+
 A challenge is scoreable only when the run completed and cleaned up, netdoc
 produced a diagnosis for the primary test, and the answer is established
 independently. For an injected fault that means the mutation is in
-`observed_faults`. For a challenge that injected nothing it means the simulator
-positively measured health along every dimension a challenge is able to break:
-a reachable family at the client node and no unreachable one, every controlled
-target reached, every selected gateway answering, no failing DNS answers, no
-reset connections, no expired certificate a client refused, and no downed
-link. An empty mutation
-list is not evidence of anything, and neither is netdoc's verdict — the healthy
-oracle reads neither. Anything else is `no_result`, for both contestants at
-once.
+`observed_faults`, and that the condition's own `requires` is satisfied where it
+demands more — `netem.loss` wants the qdisc's kernel drop counter, because a
+shaper installed with exactly the requested parameters still impaired nobody if
+it matched no traffic. For a challenge that injected nothing it means the
+simulator positively measured health along every dimension a challenge is able
+to break: a reachable family at the client node and no unreachable one, every
+controlled target reached, every selected gateway answering, no failing DNS
+answers, no reset connections, no expired certificate a client refused, no
+downed link, and no shaper counting drops. An empty mutation list is not
+evidence of anything, the mutation manifest is not evidence of anything, and
+neither is netdoc's verdict — the healthy oracle reads none of them. Anything
+else is `no_result`, for both contestants at once. A mutation that failed to
+take effect therefore cannot beat Network Doctor: with no independent evidence
+there is no truth to grade against, and the round is void rather than won.
 
 The fault also has to sit where the player was pointed. A base with more than
 one client test can have the generator place a service fault on a target the

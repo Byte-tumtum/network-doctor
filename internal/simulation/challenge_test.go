@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,14 +16,16 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
-// challengeIDs walks a deterministic spread of ids. Tests that only need "a
-// challenge of family X" search it rather than pinning constants, so ordinary
-// changes to the mutation registry do not break them. The ids that must never
-// move are pinned once, in TestChallengeIDsResolveToTheSameCaseForever.
+// challengeIDs walks a deterministic spread of ids at the version this build
+// mints, so these tests follow the current generator rather than a frozen one.
+// Tests that only need "a challenge of condition X" search it rather than
+// pinning constants, so ordinary changes to the mutation registry do not break
+// them. The ids that must never move are pinned once, in
+// TestChallengeIDsResolveToTheSameCaseForever.
 func challengeIDs(count int) []string {
 	out := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		out = append(out, fmt.Sprintf("%06X", i*7919%0xFFFFFF))
+		out = append(out, fmt.Sprintf("%s-%06X", ChallengeIDVersion, i*7919%0xFFFFFF))
 	}
 	return out
 }
@@ -36,11 +39,11 @@ func challengeWithMutation(t *testing.T, mutation string) *Challenge {
 		if err != nil {
 			t.Fatalf("build challenge %s: %v", id, err)
 		}
-		if challenge.family.mutation == mutation {
+		if challenge.condition.mutation == mutation {
 			return challenge
 		}
 	}
-	t.Fatalf("no challenge generated the %q family in the sampled ids", mutation)
+	t.Fatalf("no challenge generated the %q condition in the sampled ids", mutation)
 	return nil
 }
 
@@ -68,6 +71,18 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 		{"V1-01B112", "dual-stack-healthy", 715611, "service.tcp_reset", "easy", "059f3d44d5c36606"},
 		{"V1-04977A", "dual-stack-healthy", 476967, "family.ipv4_drop", "medium", "3faa09b3c67c5370"},
 		{"V1-04B669", "dual-stack-healthy", 538431, "family.ipv6_drop", "hard", "2e5c19bb54c29117"},
+		// V2 added netem.loss, which V1 must never start selecting — the two
+		// blocks below are one table on purpose, so a change that repoints either
+		// version fails in the same place.
+		{"V2-000000", "dual-stack-healthy", 167361, "family.ipv6_drop", "hard", "2e5c19bb54c29117"},
+		{"V2-001EEF", "two-path-ipv6-healthy", 272552, "dns.drop", "easy", "5e1e565d238fb948"},
+		{"V2-003DDE", "dual-stack-healthy", 765464, "family.ipv4_drop", "medium", "3faa09b3c67c5370"},
+		{"V2-007BBC", "two-path-ipv6-healthy", -1, "", "easy", "08824fd8c8781c79"},
+		{"V2-009AAB", "dual-stack-healthy", 678197, "netem.loss", "medium", "fd4ebcf823a96a62"},
+		{"V2-00D889", "two-path-healthy", 548214, "routing.preferred_path_failure", "hard", "7bd2f4bbb737c782"},
+		{"V2-00F778", "tls-valid", 342609, "dns.servfail", "easy", "ebe836dc0861aa5b"},
+		{"V2-017334", "dual-stack-healthy", 589641, "service.tcp_reset", "easy", "059f3d44d5c36606"},
+		{"V2-04F447", "tls-valid", 992337, "service.tls_expired", "medium", "46d2b0f2b4af38d5"},
 	} {
 		t.Run(tt.id, func(t *testing.T) {
 			challenge, err := BuildChallenge(tt.id)
@@ -92,8 +107,17 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 	}
 	// The version an id carries is the version it is resolved by, whatever this
 	// build happens to mint.
-	if _, ok := challengeGenerators["V1"]; !ok {
-		t.Fatal("V1 ids have been published; this build can no longer resolve them")
+	for _, version := range []string{"V1", "V2"} {
+		if _, ok := challengeGenerators[version]; !ok {
+			t.Fatalf("%s ids have been published; this build can no longer resolve them", version)
+		}
+	}
+	// V1 is frozen at the conditions it was published with. Its list may only
+	// shrink relative to what a later version selects, never grow.
+	for _, mutation := range challengeV1Mutations {
+		if _, ok := challengeConditionFor(mutation); !ok {
+			t.Fatalf("V1 ids select %s, which is no longer a challenge condition", mutation)
+		}
 	}
 }
 
@@ -108,7 +132,7 @@ func TestChallengeIDReproducesTheSameCase(t *testing.T) {
 			t.Fatalf("rebuild %s: %v", id, err)
 		}
 		if first.Base != second.Base || first.Case != second.Case || first.Seed != second.Seed ||
-			first.Difficulty != second.Difficulty || first.family.answer != second.family.answer {
+			first.Difficulty != second.Difficulty || first.condition.answer != second.condition.answer {
 			t.Fatalf("challenge %s is not reproducible: %+v vs %+v", id, first, second)
 		}
 		if first.Manifest.CaseFingerprint != second.Manifest.CaseFingerprint {
@@ -142,7 +166,7 @@ func TestChallengeIDsVaryAndStayChallengeCapable(t *testing.T) {
 				id, len(challenge.Manifest.Mutations))
 		}
 		if len(challenge.Manifest.Mutations) == 1 {
-			if _, ok := challengeFamilyFor(challenge.Manifest.Mutations[0].ID); !ok {
+			if _, ok := challengeConditionFor(challenge.Manifest.Mutations[0].ID); !ok {
 				t.Fatalf("challenge %s generated %q, which is not challenge-capable",
 					id, challenge.Manifest.Mutations[0].ID)
 			}
@@ -151,7 +175,7 @@ func TestChallengeIDsVaryAndStayChallengeCapable(t *testing.T) {
 			t.Fatalf("challenge %s has no client node", id)
 		}
 		cases[challenge.Base+"/"+fmt.Sprint(challenge.Case)]++
-		answers[challenge.family.answer]++
+		answers[challenge.condition.answer]++
 	}
 	if len(cases) < 100 {
 		t.Fatalf("200 ids produced only %d distinct cases", len(cases))
@@ -170,14 +194,14 @@ func TestChallengeFaultsSitOnTheTargetThePlayerIsPointedAt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build %s: %v", id, err)
 		}
-		if challenge.family.briefed == nil || len(challenge.Manifest.Mutations) != 1 {
+		if challenge.condition.briefed == nil || len(challenge.Manifest.Mutations) != 1 {
 			continue
 		}
 		base, err := LibraryScenario(challenge.Base)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !challenge.family.briefed(base, challenge.Manifest.Mutations[0]) {
+		if !challenge.condition.briefed(base, challenge.Manifest.Mutations[0]) {
 			t.Fatalf("challenge %s puts %s on a target the briefing (%s → %q) never names",
 				id, challenge.Manifest.Mutations[0].ID, challenge.Node, challenge.Target)
 		}
@@ -207,13 +231,13 @@ func TestChallengeFaultsSitOnTheTargetThePlayerIsPointedAt(t *testing.T) {
 	}
 }
 
-func TestChallengeDifficultyComesFromTheFamily(t *testing.T) {
-	for _, family := range challengeFamilies {
-		if family.mutation == "" {
+func TestChallengeDifficultyComesFromTheCondition(t *testing.T) {
+	for _, condition := range challengeConditions {
+		if condition.mutation == "" {
 			continue
 		}
-		if family.difficulty == "" {
-			t.Fatalf("family %s has no reviewed difficulty", family.mutation)
+		if condition.difficulty == "" {
+			t.Fatalf("condition %s has no reviewed difficulty", condition.mutation)
 		}
 	}
 	for _, id := range challengeIDs(60) {
@@ -221,9 +245,9 @@ func TestChallengeDifficultyComesFromTheFamily(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build %s: %v", id, err)
 		}
-		if challenge.family.mutation != "" && challenge.Difficulty != challenge.family.difficulty {
-			t.Fatalf("challenge %s says %s, family %s is %s", id, challenge.Difficulty,
-				challenge.family.mutation, challenge.family.difficulty)
+		if challenge.condition.mutation != "" && challenge.Difficulty != challenge.condition.difficulty {
+			t.Fatalf("challenge %s says %s, condition %s is %s", id, challenge.Difficulty,
+				challenge.condition.mutation, challenge.condition.difficulty)
 		}
 	}
 }
@@ -238,7 +262,7 @@ func TestChallengeBriefingHidesTheAnswer(t *testing.T) {
 		challenge.WriteBriefing(&out)
 		text := strings.ToLower(out.String())
 		forbidden := []string{challenge.Base, fmt.Sprint(challenge.Seed), challenge.Manifest.CaseFingerprint,
-			string(challenge.family.answer), strings.ToLower(challenge.family.explanation)}
+			string(challenge.condition.answer), strings.ToLower(challenge.condition.explanation)}
 		for _, mutation := range challenge.Manifest.Mutations {
 			forbidden = append(forbidden, mutation.ID, strings.ToLower(mutation.Description))
 		}
@@ -258,8 +282,8 @@ func TestChallengeBriefingHidesTheAnswer(t *testing.T) {
 
 func TestChallengeAnswerMenuIsWiderThanTheGeneratableFaults(t *testing.T) {
 	generatable := map[ChallengeAnswer]bool{}
-	for _, family := range challengeFamilies {
-		generatable[family.answer] = true
+	for _, condition := range challengeConditions {
+		generatable[condition.answer] = true
 	}
 	if len(ChallengeAnswerMenu) <= len(generatable) {
 		t.Fatalf("the menu (%d) must offer more answers than a challenge can inject (%d), or it is the answer key",
@@ -274,7 +298,7 @@ func TestChallengeAnswerMenuIsWiderThanTheGeneratableFaults(t *testing.T) {
 	}
 	for answer := range generatable {
 		if !seen[answer] {
-			t.Fatalf("family answer %s is not offered in the menu", answer)
+			t.Fatalf("condition answer %s is not offered in the menu", answer)
 		}
 	}
 }
@@ -302,8 +326,8 @@ func resetChallengeReport(t *testing.T, challenge *Challenge, cause string) *Rep
 func TestChallengeScoringMatchup(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")
 	right, wrong := AnswerReset, AnswerDNSFailure
-	if challenge.family.answer != right {
-		t.Fatalf("tcp_reset family answers %s", challenge.family.answer)
+	if challenge.condition.answer != right {
+		t.Fatalf("tcp_reset condition answers %s", challenge.condition.answer)
 	}
 	for _, tt := range []struct {
 		name     string
@@ -369,7 +393,7 @@ func TestChallengeWithoutObservedFaultIsNotScored(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")
 	report := resetChallengeReport(t, challenge, "connection_reset")
 	report.Evidence.TCPResets = nil
-	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.family.answer})
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.condition.answer})
 	if result.Truth.Scoreable || result.Truth.Answer != "" {
 		t.Fatalf("truth = %+v, want unscoreable with no answer", result.Truth)
 	}
@@ -390,7 +414,7 @@ func TestChallengeFaultObservedElsewhereIsNotScored(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")
 	report := resetChallengeReport(t, challenge, "connection_reset")
 	report.Evidence.TCPResets[0].Node = "some-other-node"
-	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.family.answer})
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.condition.answer})
 	if result.Truth.Scoreable {
 		t.Fatalf("a reset on another node scored the challenge: %+v", result.Truth)
 	}
@@ -400,7 +424,7 @@ func TestChallengeWithoutADiagnosisIsNotScored(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")
 	report := resetChallengeReport(t, challenge, "connection_reset")
 	report.Tests[0].Diagnosis = nil
-	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.family.answer})
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.condition.answer})
 	if result.Truth.Scoreable || result.Result != ChallengeNoResult {
 		t.Fatalf("no diagnosis must be no matchup: %+v", result)
 	}
@@ -423,7 +447,7 @@ func TestChallengeSimulatorFailureIsNotScored(t *testing.T) {
 				report = resetChallengeReport(t, challenge, "connection_reset")
 				tt.mutate(report)
 			}
-			result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.family.answer})
+			result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: challenge.condition.answer})
 			if result.Truth.Scoreable || result.Result != ChallengeNoResult {
 				t.Fatalf("result = %+v, want no result", result)
 			}
@@ -463,7 +487,7 @@ func TestHealthyChallengeNeedsMeasuredHealth(t *testing.T) {
 		mutate func(*Report)
 	}{
 		{"nothing measured", func(r *Report) { r.Evidence.FamilyReachability = nil }},
-		{"a family was unreachable", func(r *Report) {
+		{"a condition was unreachable", func(r *Report) {
 			r.Evidence.FamilyReachability[0].State = FamilyStateUnreachable
 		}},
 		{"a link was down", func(r *Report) {
@@ -503,12 +527,12 @@ func TestHealthyChallengeNeedsMeasuredHealth(t *testing.T) {
 }
 
 // Every fault a challenge can inject has to be a fault the healthy oracle would
-// have caught, or "healthy" means "we did not look" for that family. The
+// have caught, or "healthy" means "we did not look" for that condition. The
 // mapping is spelled out in healthyObserved's comment; this keeps it honest by
 // requiring a rejecting check to exist for each one.
-func TestHealthyChallengeCoversEveryFamily(t *testing.T) {
+func TestHealthyChallengeCoversEveryCondition(t *testing.T) {
 	challenge := challengeWithMutation(t, "")
-	// Each entry is the evidence the named family leaves behind, dropped into an
+	// Each entry is the evidence the named condition leaves behind, dropped into an
 	// otherwise-healthy report. It must stop the healthy verdict.
 	contradictions := map[string]func(*Report){
 		"dns.servfail": func(r *Report) {
@@ -537,17 +561,21 @@ func TestHealthyChallengeCoversEveryFamily(t *testing.T) {
 			r.Evidence.ControlledTargets = []ControlledTargetEvidence{
 				{From: challenge.Node, To: "controlled.test", Family: "ipv4", Reachable: false}}
 		},
+		"netem.loss": func(r *Report) {
+			r.Evidence.PacketConditions = []PacketConditionEvidence{{Node: "gateway", Segment: "upstream",
+				LossPercent: 12, Active: true, DroppedPackets: 7}}
+		},
 	}
-	for _, family := range challengeFamilies {
-		if family.mutation == "" {
+	for _, condition := range challengeConditions {
+		if condition.mutation == "" {
 			continue
 		}
-		contradict, ok := contradictions[family.mutation]
+		contradict, ok := contradictions[condition.mutation]
 		if !ok {
 			t.Fatalf("%s can be injected, but nothing here proves the healthy oracle would notice it",
-				family.mutation)
+				condition.mutation)
 		}
-		t.Run(family.mutation, func(t *testing.T) {
+		t.Run(condition.mutation, func(t *testing.T) {
 			report := &Report{
 				Cleanup:  CleanupInfo{Done: true},
 				Topology: []NodeInfo{{Name: challenge.Node, Role: "client"}},
@@ -562,13 +590,13 @@ func TestHealthyChallengeCoversEveryFamily(t *testing.T) {
 			result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerHealthy})
 			if result.Truth.Scoreable {
 				t.Fatalf("evidence of %s left a healthy challenge scoreable as healthy: %+v",
-					family.mutation, result.Truth)
+					condition.mutation, result.Truth)
 			}
 		})
 	}
 }
 
-// The recognition half of every family, as a table. Network Doctor is graded on
+// The recognition half of every condition, as a table. Network Doctor is graded on
 // what its own report says about the network, never on a Challenge-only
 // expected label — for the three conditions the hunt oracle already grades, the
 // rule here is that oracle's, reused rather than restated.
@@ -610,27 +638,301 @@ func TestChallengeRecognizesNetdocsOwnVocabulary(t *testing.T) {
 			[]*Diagnosis{fail("route", "preferred_route_failed")},
 			[]*Diagnosis{healthy, fail("route", "gateway_unreachable"), fail("route", "no_default_route")}},
 	} {
-		family, ok := challengeFamilyFor(tt.mutation)
+		condition, ok := challengeConditionFor(tt.mutation)
 		if !ok {
-			t.Fatalf("%s is no longer a challenge family; drop it here too", tt.mutation)
+			t.Fatalf("%s is no longer a challenge condition; drop it here too", tt.mutation)
+		}
+		recognized, known := challengeRecognition[condition.answer]
+		if !known {
+			t.Fatalf("%s answers %s, which no longer has a recognition rule; drop it here too",
+				tt.mutation, condition.answer)
 		}
 		t.Run(tt.mutation, func(t *testing.T) {
 			for _, d := range tt.recognize {
-				if !family.recognized(d) {
-					t.Errorf("%s was not recognized as %s: %+v", tt.mutation, family.answer, d.Checks)
+				if !recognized(d) {
+					t.Errorf("%s was not recognized as %s: %+v", tt.mutation, condition.answer, d.Checks)
 				}
 			}
 			for _, d := range tt.reject {
-				if family.recognized(d) {
+				if recognized(d) {
 					t.Errorf("%s was scored correct on a diagnosis that does not name it: %+v", tt.mutation, d.Checks)
 				}
 			}
 		})
 	}
-	// The healthy family is the same question asked of a whole report.
-	healthyFamily := healthyChallengeFamily()
-	if !healthyFamily.recognized(healthy) || healthyFamily.recognized(fail("dns", "dns_timeout")) {
-		t.Fatal("the healthy family does not follow netdoc's own verdict")
+	// The healthy condition is the same question asked of a whole report.
+	recognizedHealthy := challengeRecognition[AnswerHealthy]
+	if !recognizedHealthy(healthy) || recognizedHealthy(fail("dns", "dns_timeout")) {
+		t.Fatal("the healthy condition does not follow netdoc's own verdict")
+	}
+}
+
+// ---- the challenge contract ----
+//
+// The seven tests below are the architecture, not one regression each. Together
+// they say: what the simulator can prove decides which challenges exist, what
+// netdoc says decides only who wins, and nothing may cross between the two.
+
+// lossChallengeReport is a report for a netem.loss challenge. The packet
+// condition carries the shaper's own kernel drop counter, which is what makes
+// the impairment observed; verdict is the `ok` netdoc really returns for the
+// `packet-loss` control scenario.
+func lossChallengeReport(t *testing.T, challenge *Challenge) *Report {
+	t.Helper()
+	m := challenge.Manifest.Mutations[0]
+	return &Report{
+		Cleanup:  CleanupInfo{Done: true},
+		Topology: []NodeInfo{{Name: challenge.Node, Role: "client"}},
+		Tests: []TestOutcome{{Node: challenge.Node, Duration: 3 * time.Second, Diagnosis: &Diagnosis{
+			Checks:  []DiagnosisCheck{{ID: "internet_tcp", Status: "PASS"}, {ID: "dns", Status: "PASS"}},
+			Summary: "every check passed", Verdict: diagnostic.VerdictOK, OK: true}}},
+		Evidence: Evidence{
+			PacketConditions: []PacketConditionEvidence{{Node: m.Node, Segment: m.Segment,
+				Latency: msDuration(m.LatencyMS), Jitter: msDuration(m.JitterMS),
+				LossPercent: m.LossPercent, Seed: m.NetemSeed, Active: true, DroppedPackets: 9}},
+			FamilyReachability: []FamilyReachabilityEvidence{
+				{Node: challenge.Node, Family: "ipv4", State: FamilyStateReachable},
+			},
+		},
+	}
+}
+
+// 1. The TCP reset gap, end to end. The simulator proves the target reset the
+// connection; netdoc's real answer for a reset HTTP target is a bare `http`
+// failure with no cause, because ConnectionCauseReset is only ever reached from
+// the SSH and SMTP banner probes. The challenger takes the round.
+func TestChallengeTCPResetGapIsAChallengerWin(t *testing.T) {
+	challenge := challengeWithMutation(t, "service.tcp_reset")
+	report := resetChallengeReport(t, challenge, "")
+	report.Tests[0].Diagnosis.Summary = "No HTTP response from the target — application-layer or proxy block."
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerReset})
+
+	if !result.Truth.Scoreable || result.Truth.Answer != AnswerReset {
+		t.Fatalf("an observed reset did not become gradeable truth: %+v", result.Truth)
+	}
+	if !slices.Contains(result.Truth.ObservedFaults, "service.tcp_reset") {
+		t.Fatalf("truth does not rest on the observed reset: %+v", result.Truth.ObservedFaults)
+	}
+	// Incorrect rather than unrecognized: netdoc does have the word, on the
+	// banner probes, and did not reach for it here.
+	if result.NetworkDoctor.Score != ChallengeIncorrect {
+		t.Fatalf("netdoc scored %s on a reset it did not classify", result.NetworkDoctor.Score)
+	}
+	if result.Result != ChallengeHumanWins {
+		t.Fatalf("result = %s, want %s", result.Result, ChallengeHumanWins)
+	}
+}
+
+// 2. The other direction. A condition netdoc does state in its own vocabulary
+// is netdoc's round, and the contract has to keep working there or it has only
+// been rigged the other way.
+func TestChallengeRecognizedConditionIsANetdocWin(t *testing.T) {
+	challenge := challengeWithMutation(t, "family.ipv4_drop")
+	report := &Report{
+		Cleanup:  CleanupInfo{Done: true},
+		Topology: []NodeInfo{{Name: challenge.Node, Role: "client"}},
+		Tests: []TestOutcome{{Node: challenge.Node, Diagnosis: &Diagnosis{Verdict: "network",
+			Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+				Cause: diagnostic.FamilyCauseIPv4Unreachable}}}}},
+		Evidence: Evidence{FamilyReachability: []FamilyReachabilityEvidence{
+			{Node: challenge.Node, Family: "ipv4", State: FamilyStateUnreachable},
+			{Node: challenge.Node, Family: "ipv6", State: FamilyStateReachable},
+		}},
+	}
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerDNSFailure})
+	if result.NetworkDoctor.Score != ChallengeCorrect || result.Result != ChallengeNetdocWins {
+		t.Fatalf("netdoc named the condition and did not win: %s / %s",
+			result.NetworkDoctor.Score, result.Result)
+	}
+}
+
+// 3. Eligibility does not need a diagnosis mapping to exist. netem.loss is a
+// real condition the simulator can prove and netdoc's cause vocabulary has no
+// verdict for at all — it is generated anyway, and netdoc loses it as
+// unrecognized rather than as a wrong answer.
+func TestChallengeAdmitsAConditionNetdocCannotState(t *testing.T) {
+	challenge := challengeWithMutation(t, "netem.loss")
+	if _, known := challengeRecognition[challenge.condition.answer]; known {
+		t.Fatalf("%s now has a recognition rule; this test needs a condition that has none",
+			challenge.condition.mutation)
+	}
+	result := ScoreChallenge(challenge, lossChallengeReport(t, challenge),
+		ChallengeSubmission{Answer: AnswerPacketLoss})
+	if !result.Truth.Scoreable || result.Truth.Answer != AnswerPacketLoss {
+		t.Fatalf("observed packet loss did not become gradeable truth: %+v", result.Truth)
+	}
+	if result.NetworkDoctor.Score != ChallengeUnrecognized {
+		t.Fatalf("netdoc scored %s on a condition it has no verdict for", result.NetworkDoctor.Score)
+	}
+	if result.NetworkDoctor.Note == "" {
+		t.Fatal("an unrecognized condition has to say that is what happened")
+	}
+	if result.Result != ChallengeHumanWins {
+		t.Fatalf("result = %s, want %s", result.Result, ChallengeHumanWins)
+	}
+	// A clean netdoc report is not evidence of anything either way. The score
+	// above came from the recognition table being empty for this answer, and it
+	// must not move when netdoc says more.
+	loud := lossChallengeReport(t, challenge)
+	loud.Tests[0].Diagnosis = &Diagnosis{Verdict: "network", Checks: []DiagnosisCheck{
+		{ID: "internet_tcp", Status: "WARN", Cause: "", Detail: "high latency (900ms)"}}}
+	if ScoreChallenge(challenge, loud, ChallengeSubmission{Answer: AnswerPacketLoss}).NetworkDoctor.Score !=
+		ChallengeUnrecognized {
+		t.Fatal("a noisier report changed an unrecognized condition's score")
+	}
+}
+
+// 4. A mutation that was generated, applied, and read back off the kernel with
+// exactly the parameters that were asked for still proves nothing. Only the
+// drop counter says traffic met it, and without that there is no challenger
+// victory to take.
+func TestChallengeConfiguredButUnmetFaultCannotWin(t *testing.T) {
+	challenge := challengeWithMutation(t, "netem.loss")
+	report := lossChallengeReport(t, challenge)
+	// The shaper is installed and active with the manifest's own parameters.
+	// The only thing missing is a packet.
+	report.Evidence.PacketConditions[0].DroppedPackets = 0
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerPacketLoss})
+	if result.Truth.Scoreable {
+		t.Fatalf("a shaper that dropped nothing was scored as an observed fault: %+v", result.Truth)
+	}
+	if result.Result != ChallengeNoResult || result.Human.Score != ChallengeUnscoreable {
+		t.Fatalf("result = %s, human = %s; a configured fault must not beat netdoc",
+			result.Result, result.Human.Score)
+	}
+	if result.NetworkDoctor.Score != ChallengeUnscoreable {
+		t.Fatalf("netdoc scored %s on a challenge with no established truth", result.NetworkDoctor.Score)
+	}
+	// The manifest still says exactly what was asked for. Truth read it for the
+	// mutation id to demand evidence of, and for nothing else.
+	if result.Truth.Injected == "" {
+		t.Fatal("the reveal should still say what the generator asked for")
+	}
+}
+
+// 5. No evidence at all is inconclusive, not a win. This is the case a
+// challenger would most like to be scored generously on: they named the
+// condition, and the simulator simply cannot say whether it happened.
+func TestChallengeWithoutEvidenceIsInconclusiveNotAWin(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		mutation string
+		strip    func(*Report)
+		report   func(*testing.T, *Challenge) *Report
+	}{
+		{"no packet conditions were collected", "netem.loss",
+			func(r *Report) { r.Evidence.PacketConditions = nil }, lossChallengeReport},
+		{"no reset was recorded", "service.tcp_reset",
+			func(r *Report) { r.Evidence.TCPResets = nil },
+			func(t *testing.T, c *Challenge) *Report { return resetChallengeReport(t, c, "") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			challenge := challengeWithMutation(t, tt.mutation)
+			report := tt.report(t, challenge)
+			tt.strip(report)
+			result := ScoreChallenge(challenge, report,
+				ChallengeSubmission{Answer: challenge.condition.answer})
+			if result.Result != ChallengeNoResult {
+				t.Fatalf("result = %s, want %s", result.Result, ChallengeNoResult)
+			}
+			if result.Human.Score == ChallengeCorrect {
+				t.Fatal("a challenger was credited for naming a condition nothing established")
+			}
+			if result.Truth.Reason == "" {
+				t.Fatal("an inconclusive challenge has to say why")
+			}
+		})
+	}
+}
+
+// 6. A netdoc loss is worth nothing if it cannot be handed to somebody else.
+// The id is the whole reproduction contract, so rebuilding from the result's
+// own identity fields has to produce the same case and the same verdict.
+func TestChallengeLossReplaysFromItsOwnIdentity(t *testing.T) {
+	for _, mutation := range []string{"service.tcp_reset", "netem.loss"} {
+		t.Run(mutation, func(t *testing.T) {
+			challenge := challengeWithMutation(t, mutation)
+			build := func(c *Challenge) *ChallengeResult {
+				report := lossChallengeReport(t, c)
+				if mutation == "service.tcp_reset" {
+					report = resetChallengeReport(t, c, "")
+				}
+				return ScoreChallenge(c, report, ChallengeSubmission{Answer: c.condition.answer,
+					Elapsed: 42 * time.Second})
+			}
+			first := build(challenge)
+			if first.Result != ChallengeHumanWins {
+				t.Fatalf("this case is not a netdoc loss: %s", first.Result)
+			}
+
+			// Everything a replay is given: the id in the result, and the command
+			// the result prints. Nothing else is carried over.
+			if first.Replay != "netdoc-sim challenge -id "+first.ChallengeID {
+				t.Fatalf("replay line = %q", first.Replay)
+			}
+			replayed, err := BuildChallenge(first.ChallengeID)
+			if err != nil {
+				t.Fatalf("replay %s: %v", first.ChallengeID, err)
+			}
+			if replayed.Base != challenge.Base || replayed.Case != challenge.Case ||
+				replayed.Manifest.CaseFingerprint != first.CaseFingerprint {
+				t.Fatalf("replay resolved to %s/%d/%s, want %s/%d/%s", replayed.Base, replayed.Case,
+					replayed.Manifest.CaseFingerprint, challenge.Base, challenge.Case, first.CaseFingerprint)
+			}
+			second := build(replayed)
+			first.Timing, second.Timing = ChallengeTiming{}, ChallengeTiming{}
+			if !reflectEqualJSON(t, first, second) {
+				t.Fatal("a replayed loss did not reproduce the same result")
+			}
+		})
+	}
+}
+
+// 7. The selection-bias regression. Challenge Mode's universe is defined by
+// what the simulator can prove, so it must be strictly wider than the set of
+// conditions Network Doctor already has a rule for. If these two sets ever
+// coincide again, the game has quietly gone back to grading netdoc on questions
+// written from its own answer sheet.
+func TestChallengeEligibilityIsNotTheRecognizedSet(t *testing.T) {
+	var unrecognized []string
+	for _, condition := range challengeConditions {
+		if _, known := challengeRecognition[condition.answer]; !known {
+			unrecognized = append(unrecognized, condition.mutation)
+		}
+	}
+	if len(unrecognized) == 0 {
+		t.Fatal("every challengeable condition has a netdoc recognition rule, so challenge" +
+			" eligibility is once again the set of faults netdoc already handles")
+	}
+	// Every recognition rule must belong to a condition that can be set, or the
+	// table has grown a half nothing grades against.
+	answers := map[ChallengeAnswer]bool{}
+	for _, condition := range challengeConditions {
+		answers[condition.answer] = true
+	}
+	for answer := range challengeRecognition {
+		if !answers[answer] {
+			t.Errorf("recognition rule for %s grades a condition no challenge can set", answer)
+		}
+	}
+
+	// And the wider set is reachable, not just declared: generation really
+	// resolves ids to a condition with no recognition rule.
+	generated := map[string]bool{}
+	for _, id := range challengeIDs(400) {
+		challenge, err := BuildChallenge(id)
+		if err != nil {
+			t.Fatalf("build %s: %v", id, err)
+		}
+		if _, known := challengeRecognition[challenge.condition.answer]; !known {
+			generated[challenge.condition.mutation] = true
+		}
+	}
+	for _, mutation := range unrecognized {
+		if !generated[mutation] {
+			t.Errorf("%s is eligible but no sampled id generates it, so the wider universe is"+
+				" declared and not reachable", mutation)
+		}
 	}
 }
 
@@ -773,7 +1075,7 @@ func TestNormalizeChallengeID(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{"", "8F42C", "8F42C11", "8G42C1", "../../etc", "8F 42C1",
-		"V2-8F42C1", "V1-", "-8F42C1", "V1-8F42C1-extra"} {
+		"V9-8F42C1", "V1-", "-8F42C1", "V1-8F42C1-extra"} {
 		if _, err := NormalizeChallengeID(raw); err == nil {
 			t.Fatalf("NormalizeChallengeID(%q) was accepted", raw)
 		}

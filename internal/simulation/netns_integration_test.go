@@ -2457,30 +2457,32 @@ func runChallenge(t *testing.T, sim, netdoc string, extra ...string) ChallengeRe
 	return result
 }
 
-// Every challenge-capable family has to reach a scoreable truth through the
+// Every challengeable condition has to reach a scoreable truth through the
 // real namespace backend, or the game would tell players "no result" for a
-// fault the simulator did inject.
-func TestChallengeFamiliesAreScoreableEndToEnd(t *testing.T) {
+// fault the simulator did inject. This is also where the contract's first test
+// is exercised for real: the evidence each condition rests on is read back off
+// the live kernel, not assembled in a fixture.
+func TestChallengeConditionsAreScoreableEndToEnd(t *testing.T) {
 	requireBackend(t)
 	netdoc, sim := buildBinaries(t)
-	for _, family := range challengeFamilies {
-		name := family.mutation
+	for _, condition := range challengeConditions {
+		name := condition.mutation
 		if name == "" {
 			name = "healthy"
 		}
 		t.Run(name, func(t *testing.T) {
-			challenge := challengeWithMutation(t, family.mutation)
-			result := runChallenge(t, sim, netdoc, "-id", challenge.ID, "-answer", string(family.answer))
+			challenge := challengeWithMutation(t, condition.mutation)
+			result := runChallenge(t, sim, netdoc, "-id", challenge.ID, "-answer", string(condition.answer))
 			if !result.Truth.Scoreable {
 				t.Fatalf("challenge %s is not scoreable: %s", challenge.ID, result.Truth.Reason)
 			}
-			if result.Truth.Answer != family.answer {
-				t.Fatalf("truth = %s, want %s", result.Truth.Answer, family.answer)
+			if result.Truth.Answer != condition.answer {
+				t.Fatalf("truth = %s, want %s", result.Truth.Answer, condition.answer)
 			}
-			if family.mutation != "" && !slices.Contains(result.Truth.ObservedFaults, family.mutation) {
-				t.Fatalf("truth was scored without observing %s: %v", family.mutation, result.Truth.ObservedFaults)
+			if condition.mutation != "" && !slices.Contains(result.Truth.ObservedFaults, condition.mutation) {
+				t.Fatalf("truth was scored without observing %s: %v", condition.mutation, result.Truth.ObservedFaults)
 			}
-			if family.mutation == "" && len(result.Truth.ObservedFaults) != 0 {
+			if condition.mutation == "" && len(result.Truth.ObservedFaults) != 0 {
 				t.Fatalf("a healthy challenge observed faults: %v", result.Truth.ObservedFaults)
 			}
 			if result.Human.Score != ChallengeCorrect {
@@ -2491,6 +2493,13 @@ func TestChallengeFamiliesAreScoreableEndToEnd(t *testing.T) {
 			}
 			if len(result.Truth.Evidence) == 0 {
 				t.Fatal("a scored challenge has to show what the simulator measured")
+			}
+			// The contract, against the real binary: a condition netdoc has no
+			// verdict for has to say so rather than read as a wrong answer.
+			if _, known := challengeRecognition[condition.answer]; !known &&
+				result.NetworkDoctor.Score != ChallengeUnrecognized {
+				t.Fatalf("netdoc scored %s on a condition with no recognition rule",
+					result.NetworkDoctor.Score)
 			}
 			t.Logf("%s: netdoc %s (%s)", name, result.NetworkDoctor.Score, result.NetworkDoctor.Detail)
 		})

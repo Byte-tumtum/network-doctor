@@ -282,6 +282,15 @@ func resetConnection(event TCPResetEvidence) bool {
 	return event.Node != "" && event.Event == "reset" && event.Result == "connection_reset" && event.Count > 0
 }
 
+// droppedShapedPackets reports the netem qdisc's own drop counter, read back
+// off the kernel after the run, rather than the shaper having been installed
+// with the parameters that were asked for. A qdisc that matched no traffic
+// impaired nobody, and the counter is the only reading that separates a shaper
+// that was configured from one that was met.
+func droppedShapedPackets(condition PacketConditionEvidence) bool {
+	return condition.Node != "" && condition.Active && condition.DroppedPackets > 0
+}
+
 // The two reply readers below want a reply the service actually sent, which is
 // why neither looks at ServiceStateEvidence: a service that started in a faulty
 // mode has a state, and until it answered somebody nothing was done to anyone.
@@ -358,6 +367,13 @@ func proxyCONNECTRefusedAt(evidence Evidence, node, service, destination string,
 func udpPortDroppedAt(evidence Evidence, node string, port int) bool {
 	return slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
 		return sameName(node, drop.Node) && droppedInboundUDP(drop, port)
+	})
+}
+
+func shapedPacketsDroppedAt(evidence Evidence, node, segment string) bool {
+	return slices.ContainsFunc(evidence.PacketConditions, func(condition PacketConditionEvidence) bool {
+		return sameName(node, condition.Node) && sameName(segment, condition.Segment) &&
+			droppedShapedPackets(condition)
 	})
 }
 
