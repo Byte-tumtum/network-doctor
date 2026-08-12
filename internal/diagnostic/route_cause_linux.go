@@ -82,8 +82,8 @@ func parseIPv6DefaultRoutes(raw []byte) []defaultRouteState {
 		if err != nil || flags&routeFlagUp == 0 {
 			continue
 		}
-		metric, err := strconv.ParseUint(fields[5], 16, 32)
-		if err != nil || metric > uint64(^uint(0)>>1) {
+		metric, err := strconv.ParseInt(fields[5], 16, 32)
+		if err != nil || metric < 0 {
 			continue
 		}
 		gatewayRaw, err := hex.DecodeString(fields[4])
