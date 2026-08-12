@@ -191,9 +191,13 @@ func userNamespaceReason() string {
 // LaunchDirector re-executes this binary with argv inside a fresh user,
 // network and mount namespace, and returns its exit code. The child is where
 // the backend actually runs; the parent keeps no privileges and no namespaces.
-func LaunchDirector(ctx context.Context, self string, argv []string, stdout, stderr io.Writer) (int, error) {
+//
+// stdin is nil for every automated command — a simulation reads nothing from
+// the terminal — and is the caller's terminal only for Challenge Mode, where a
+// person is the one being asked.
+func LaunchDirector(ctx context.Context, self string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, self, argv...)
-	cmd.Stdout, cmd.Stderr, cmd.Stdin = stdout, stderr, nil
+	cmd.Stdout, cmd.Stderr, cmd.Stdin = stdout, stderr, stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
 		// uid 0 inside the namespace is this user outside it. That is the whole
@@ -990,6 +994,35 @@ func (e *netnsEnv) Exec(ctx context.Context, node string, argv, env []string) Ex
 	res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	res.Cancelled = ctx.Err() != nil && !res.TimedOut
 	return res
+}
+
+// ExecInteractive runs argv inside a node with the caller's terminal attached,
+// for the one case where a person rather than a probe is doing the looking. It
+// enters the same namespaces Exec does, through the same nsenter argument
+// slice, and adds nothing to what the director can already do: the child holds
+// no privilege the simulator did not already have, and owns nothing on the host.
+//
+// No process group is set. An interactive shell puts itself in one and claims
+// the terminal, which is what keeps the reader's Ctrl-C inside the node instead
+// of on the process holding the simulation open.
+func (e *netnsEnv) ExecInteractive(ctx context.Context, node string, argv, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	np, ok := e.byName[node]
+	if !ok {
+		return fmt.Errorf("unknown node %q", node)
+	}
+	if len(argv) == 0 {
+		return errors.New("empty command")
+	}
+	full := append([]string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "-m", "--"}, argv...)
+	cmd := exec.CommandContext(ctx, full[0], full[1:]...)
+	cmd.Env = append(simEnv(), env...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+	// A shell exiting non-zero is how shells exit; it is not a simulator error.
+	var exit *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exit) {
+		return err
+	}
+	return nil
 }
 
 func (e *netnsEnv) TrustAnchor(service string) (string, error) {

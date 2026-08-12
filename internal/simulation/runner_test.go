@@ -41,6 +41,7 @@ type fakeEnv struct {
 	panicOnClean  bool
 	stdout        string
 	lastEnv       []string
+	lastArgv      []string
 	execCtxErr    error
 	timedOut      bool
 	cancelled     bool
@@ -91,9 +92,10 @@ func (e *fakeEnv) appliedEvents() []TimedEvent {
 	return append([]TimedEvent(nil), e.applied...)
 }
 
-func (e *fakeEnv) Exec(ctx context.Context, _ string, _ []string, env []string) ExecResult {
+func (e *fakeEnv) Exec(ctx context.Context, _ string, argv, env []string) ExecResult {
 	e.execs++
 	e.lastEnv = append([]string(nil), env...)
+	e.lastArgv = append([]string(nil), argv...)
 	e.mu.Lock()
 	if len(e.applied) == 0 {
 		e.execBeforeInitial = true

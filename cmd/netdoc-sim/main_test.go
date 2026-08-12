@@ -75,13 +75,17 @@ type fakeDirectors struct {
 	stdout string
 	code   int
 	err    error
+	// stdin records whether the launcher offered the director a terminal. Only
+	// Challenge Mode does; every automated command must hand it nil.
+	stdin []bool
 }
 
 func stubDirectors(t *testing.T, d *fakeDirectors) *fakeDirectors {
 	t.Helper()
 	old := launchDirector
-	launchDirector = func(_ context.Context, self string, argv []string, stdout, _ io.Writer) (int, error) {
+	launchDirector = func(_ context.Context, self string, argv []string, stdin io.Reader, stdout, _ io.Writer) (int, error) {
 		d.calls = append(d.calls, directorCall{self: self, argv: slices.Clone(argv)})
+		d.stdin = append(d.stdin, stdin != nil)
 		if d.stdout != "" {
 			if _, err := io.WriteString(stdout, d.stdout); err != nil {
 				return 0, err

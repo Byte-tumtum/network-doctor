@@ -414,7 +414,7 @@ func launch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	code, err := launchDirector(ctx, self, directorArgv(f, ref, path), stdout, stderr)
+	code, err := launchDirector(ctx, self, directorArgv(f, ref, path), nil, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -464,7 +464,7 @@ func launchCampaign(ctx context.Context, args []string, stdout, stderr io.Writer
 		}
 		f.seed.set = true
 	}
-	code, err := launchDirector(ctx, self, campaignDirectorArgv(f, ref, path), stdout, stderr)
+	code, err := launchDirector(ctx, self, campaignDirectorArgv(f, ref, path), nil, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -577,7 +577,7 @@ func launchHunt(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	code, err := launchDirector(ctx, self, huntDirectorArgv(f, baseID, path), stdout, stderr)
+	code, err := launchDirector(ctx, self, huntDirectorArgv(f, baseID, path), nil, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError

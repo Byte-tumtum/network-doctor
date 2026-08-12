@@ -31,7 +31,7 @@ func (unsupportedBackend) Prepare(context.Context, *Scenario, string) (Env, erro
 // be reached: the caller checks Capabilities first, and only the Linux backend
 // spawns holders.
 
-func LaunchDirector(context.Context, string, []string, io.Writer, io.Writer) (int, error) {
+func LaunchDirector(context.Context, string, []string, io.Reader, io.Writer, io.Writer) (int, error) {
 	return 1, ErrUnsupported
 }
 

@@ -27,6 +27,12 @@ type Options struct {
 	Repeat int
 	// Keep leaves the environment running after the report is written.
 	Keep bool
+	// Hold, when set, is called once the topology is built, every fault is
+	// applied and the timeline's opening state has landed — and before the first
+	// netdoc process starts. Challenge Mode uses it to hand the finished network
+	// to a person, so both they and netdoc face the same state. A non-nil error
+	// abandons the run before any test, and cleanup still happens.
+	Hold func(context.Context, Env) error
 	// SetupTimeout, TestTimeout and CleanupTimeout bound the three phases. Each
 	// falls back to a sane default when zero.
 	SetupTimeout   time.Duration
@@ -146,6 +152,14 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 	}
 	defer stopSchedule()
 
+	// The hold sits here rather than before the scheduler so its holder sees the
+	// network the tests will see, including any offset-zero scheduled state.
+	if opts.Hold != nil {
+		if err := opts.Hold(ctx, env); err != nil {
+			rep.Error = "run was abandoned before its tests: " + textsafe.Clean(err.Error())
+			return rep
+		}
+	}
 	for _, t := range s.Tests {
 		rep.Tests = append(rep.Tests, runTest(ctx, env, t, s.Expect, opts, t0))
 	}
@@ -303,30 +317,20 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 			}
 		}
 	}
-	var commandEnv []string
-	// The fixed-endpoint fixtures (QUIC, encrypted DNS) share one CA directory
-	// so the real netdoc binary can trust them without implicitly trusting
-	// target TLS services that a scenario did not opt into. Either fixture names
-	// the same directory; whichever the scenario has is enough.
-	for _, fixture := range []string{quicProbeService, encryptedDNSProbeService} {
-		if root, err := env.TrustAnchor(fixture); err == nil {
-			commandEnv = append(commandEnv, "SSL_CERT_DIR="+filepath.Dir(root))
-			break
-		}
+	if t.Trust != nil {
+		// Recorded before the lookup that can fail, so a test that could not be
+		// given its trust anchor still says which one it wanted.
+		out.Trust = t.Trust.Service
+	}
+	commandEnv, err := probeTrustEnv(env, t)
+	if err != nil {
+		out.Error = textsafe.Clean(err.Error())
+		out.compare(expect, opts.ProbeTimeout)
+		return out
 	}
 	if t.Proxy != nil {
 		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))
 		commandEnv = append(commandEnv, "ALL_PROXY="+out.Proxy)
-	}
-	if t.Trust != nil {
-		out.Trust = t.Trust.Service
-		bundle, err := env.TrustAnchor(t.Trust.Service)
-		if err != nil {
-			out.Error = textsafe.Clean(err.Error())
-			out.compare(expect, opts.ProbeTimeout)
-			return out
-		}
-		commandEnv = append(commandEnv, "SSL_CERT_FILE="+bundle)
 	}
 	if t.Target != "" {
 		argv = append(argv, t.Target)
@@ -372,6 +376,33 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 	}
 	out.compare(expect, opts.ProbeTimeout)
 	return out
+}
+
+// probeTrustEnv is the trust configuration a process in this environment needs
+// to see the simulator's own certificates. It is shared so that anything else
+// the simulator puts inside a node — a challenge shell, for instance — verifies
+// the same fixtures the netdoc run does rather than a different set.
+//
+// The fixed-endpoint fixtures (QUIC, encrypted DNS) share one CA directory so
+// netdoc can trust them without implicitly trusting target TLS services a
+// scenario did not opt into. Either fixture names the same directory; whichever
+// the scenario has is enough.
+func probeTrustEnv(env Env, t Test) ([]string, error) {
+	var out []string
+	for _, fixture := range []string{quicProbeService, encryptedDNSProbeService} {
+		if root, err := env.TrustAnchor(fixture); err == nil {
+			out = append(out, "SSL_CERT_DIR="+filepath.Dir(root))
+			break
+		}
+	}
+	if t.Trust != nil {
+		bundle, err := env.TrustAnchor(t.Trust.Service)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, "SSL_CERT_FILE="+bundle)
+	}
+	return out, nil
 }
 
 // decodeDiagnosis reads netdoc's JSON report. netdoc exits 1 when a check

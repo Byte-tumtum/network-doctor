@@ -323,7 +323,7 @@ func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, ver
 			return nil, err
 		}
 		var out bytes.Buffer
-		code, err := launchDirector(ctx, self, huntDirectorArgv(f, scenario, netdoc), &out, stderr)
+		code, err := launchDirector(ctx, self, huntDirectorArgv(f, scenario, netdoc), nil, &out, stderr)
 		if err != nil {
 			return nil, err
 		}
