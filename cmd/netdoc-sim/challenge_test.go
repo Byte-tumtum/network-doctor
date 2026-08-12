@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,85 @@ func TestChallengeLaunchResolvesTheIDTheDirectorRunsWith(t *testing.T) {
 		if !offered {
 			t.Error("a challenge director was not given a terminal to ask with")
 		}
+	}
+}
+
+// The reproducibility invariant, at the seam where it can break: an explicitly
+// requested binary must be the one that is interrogated and the one the director
+// is told to run, even when automatic discovery had a perfectly good candidate
+// of its own. Both fakes report a different version, so a result carrying the
+// wrong one is unmistakable.
+func TestChallengeExplicitNetdocBeatsDiscoveryAndIsWhatRuns(t *testing.T) {
+	discoverable := writeFakeNetdoc(t, t.TempDir(), "netdoc v1.0.0-discoverable")
+	chosen := writeFakeNetdoc(t, t.TempDir(), "netdoc v2.0.0-chosen")
+	t.Setenv("PATH", filepath.Dir(discoverable))
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK})
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"challenge", "-netdoc", chosen, "-give-up"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if len(directors.calls) != 1 {
+		t.Fatalf("directors = %+v, want one", directors.calls)
+	}
+	f := receivedChallenge(t, directors.calls[0].argv)
+	if *f.netdoc != chosen {
+		t.Errorf("director runs %q, want the binary that was asked for, %q", *f.netdoc, chosen)
+	}
+	if *f.netdocVersion != "netdoc v2.0.0-chosen" {
+		t.Errorf("director carries version %q, want the chosen binary's", *f.netdocVersion)
+	}
+	if runs := fakeNetdocInvocations(t, chosen); len(runs) != 1 || runs[0] != "-version" {
+		t.Errorf("the chosen binary was invoked as %v, want exactly one -version", runs)
+	}
+	if runs := fakeNetdocInvocations(t, discoverable); runs != nil {
+		t.Errorf("the discoverable binary ran %v, and it was never selected", runs)
+	}
+}
+
+// The same invariant for the other half of the contract: with no -netdoc, the
+// identity belongs to whatever discovery settled on.
+func TestChallengeDiscoveredNetdocIsInterrogatedAndForwarded(t *testing.T) {
+	discovered := writeFakeNetdoc(t, t.TempDir(), "netdoc v3.0.0-discovered")
+	t.Setenv("PATH", filepath.Dir(discovered))
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK})
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"challenge", "-give-up"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	f := receivedChallenge(t, directors.calls[0].argv)
+	if *f.netdoc != discovered || *f.netdocVersion != "netdoc v3.0.0-discovered" {
+		t.Fatalf("director got %q at version %q, want %q", *f.netdoc, *f.netdocVersion, discovered)
+	}
+	if runs := fakeNetdocInvocations(t, discovered); len(runs) != 1 || runs[0] != "-version" {
+		t.Errorf("the discovered binary was invoked as %v, want exactly one -version", runs)
+	}
+}
+
+// A binary that cannot say what it is cannot be recorded, so the challenge does
+// not start — and it does not go looking for a second opinion either.
+func TestChallengeRefusesANetdocWithNoVersion(t *testing.T) {
+	working := writeFakeNetdoc(t, t.TempDir(), "netdoc v1.0.0-working")
+	silent := writeFakeNetdoc(t, t.TempDir(), "")
+	t.Setenv("PATH", filepath.Dir(working))
+	stubBackends(t, true)
+	directors := stubDirectors(t, &fakeDirectors{code: exitOK})
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"challenge", "-netdoc", silent, "-give-up"}, &stdout, &stderr); code != exitUsage {
+		t.Fatalf("code = %d, want %d (stderr %q)", code, exitUsage, stderr.String())
+	}
+	if len(directors.calls) != 0 {
+		t.Fatalf("a challenge started anyway: %+v", directors.calls)
+	}
+	if !strings.Contains(stderr.String(), "printed no version") {
+		t.Errorf("stderr = %q, want it to say the binary printed no version", stderr.String())
+	}
+	if runs := fakeNetdocInvocations(t, working); runs != nil {
+		t.Errorf("fell back to another netdoc and ran it %v", runs)
 	}
 }
 
@@ -132,6 +212,22 @@ func TestChallengeStopsBeforeTheDirector(t *testing.T) {
 			code: exitError, stderrHas: "stub backend: this host cannot simulate"},
 		{name: "no netdoc anywhere", supported: true, args: []string{"challenge"}, code: exitUsage,
 			stderrHas: "cannot find the netdoc binary"},
+	})
+}
+
+// The director never resolves a binary of its own: it is handed one, already
+// interrogated, and refuses to run a challenge whose result could not name what
+// produced it.
+func TestChallengeDirectorNeedsAResolvedNetdoc(t *testing.T) {
+	runDirectorRejections(t, []dispatchCase{
+		{name: "no netdoc", supported: true,
+			args:      []string{challengeDirectorCommand, "-id", "V1-8F42C1", "-give-up"},
+			code:      exitError,
+			stderrHas: "did not receive a resolved netdoc"},
+		{name: "no version", supported: true,
+			args:      []string{challengeDirectorCommand, "-id", "V1-8F42C1", "-netdoc", "/opt/builds/netdoc", "-give-up"},
+			code:      exitError,
+			stderrHas: "did not receive a resolved netdoc"},
 	})
 }
 

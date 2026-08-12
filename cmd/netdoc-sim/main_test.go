@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -256,21 +257,95 @@ func TestRunDispatchCapabilities(t *testing.T) {
 // absolute path and nothing that could override it, with every other flag and
 // the scenario reference arriving unchanged.
 
-// fakeNetdoc drops an executable named netdoc in a fresh directory and makes it
-// the working directory, so a relative -netdoc has something real to resolve.
-// Windows recognizes an executable only by its PATHEXT suffix, and LookPath
-// appends one to an extensionless argument, so the file on disk needs .exe for
-// the callers' plain "./netdoc" to resolve there.
-func fakeNetdoc(t *testing.T) string {
+// A stand-in netdoc has to be a real executable on every OS the tests run on,
+// because the challenge launcher now runs it: it resolves the binary and asks
+// that binary for its version. A shell script is not that on Windows, and
+// building one would need a toolchain mid-test, so the stand-in is a copy of
+// this test binary. TestMain turns any copy with a .version file beside it into
+// a fake netdoc, and each copy reports the version written next to it — which
+// is what lets one test give two binaries two different identities.
+
+const fakeNetdocDefaultVersion = "netdoc v0.0.0-fake"
+
+func TestMain(m *testing.M) {
+	if version, ok := fakeNetdocRole(); ok {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// fakeNetdocRole reports whether this process was started as a stand-in netdoc,
+// and what it should answer. It also appends the argv it was called with to a
+// .invoked log beside itself, so a test can prove which of two binaries ran
+// rather than inferring it from the version that came back.
+//
+// os.Args[0], not os.Executable: the question is which path the caller chose to
+// execute, and two hard links to one inode are two answers to that.
+func fakeNetdocRole() (string, bool) {
+	version, err := os.ReadFile(os.Args[0] + ".version")
+	if err != nil {
+		return "", false
+	}
+	log, err := os.OpenFile(os.Args[0]+".invoked", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err == nil {
+		fmt.Fprintln(log, strings.Join(os.Args[1:], " "))
+		log.Close()
+	}
+	return strings.TrimSpace(string(version)), true
+}
+
+// writeFakeNetdoc installs a stand-in netdoc in dir that answers -version with
+// version, and returns its path. Windows recognizes an executable only by its
+// PATHEXT suffix, so the file needs .exe there for a plain "netdoc" to resolve.
+func writeFakeNetdoc(t *testing.T, dir, version string) string {
 	t.Helper()
 	name := "netdoc"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	self, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(dir, name)
+	// A link when the filesystem allows one, a copy when it does not: t.TempDir
+	// and the test binary do not always live on the same device.
+	if err := os.Link(self, path); err != nil {
+		body, err := os.ReadFile(self)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path+".version", []byte(version+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// fakeNetdocInvocations reports the argv slices a stand-in netdoc was executed
+// with, newest last, and nil when it was never run at all.
+func fakeNetdocInvocations(t *testing.T, path string) []string {
+	t.Helper()
+	log, err := os.ReadFile(path + ".invoked")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(log), "\n"), "\n")
+}
+
+// fakeNetdoc drops a stand-in netdoc in a fresh directory and makes it the
+// working directory, so a relative -netdoc has something real to resolve.
+func fakeNetdoc(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	name := filepath.Base(writeFakeNetdoc(t, dir, fakeNetdocDefaultVersion))
 	t.Chdir(dir)
 	// t.TempDir can sit behind a symlink; compare against what Abs will produce.
 	abs, err := filepath.Abs(name)
@@ -278,6 +353,152 @@ func fakeNetdoc(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return abs
+}
+
+// findNetdoc is the whole binary-selection contract, and every result that
+// records which netdoc ran depends on it picking the same one the launcher then
+// executes. The order is documented in `netdoc-sim help`: -netdoc, else a
+// sibling of netdoc-sim, else $PATH.
+func TestFindNetdocSearchOrder(t *testing.T) {
+	// An unrelated netdoc on $PATH throughout: every case below either has to
+	// prefer something else or fail outright, and none may quietly land here.
+	pathDir := t.TempDir()
+	onPath := writeFakeNetdoc(t, pathDir, "netdoc v0.0.0-on-path")
+	t.Setenv("PATH", pathDir)
+
+	siblingDir := t.TempDir()
+	sibling := writeFakeNetdoc(t, siblingDir, "netdoc v0.0.0-sibling")
+	self := filepath.Join(siblingDir, "netdoc-sim")
+
+	elsewhere := t.TempDir()
+	explicit := writeFakeNetdoc(t, elsewhere, "netdoc v0.0.0-explicit")
+
+	t.Run("explicit absolute path wins", func(t *testing.T) {
+		got, err := findNetdoc(explicit, self)
+		if err != nil || got != explicit {
+			t.Fatalf("findNetdoc(%q) = %q, %v", explicit, got, err)
+		}
+	})
+
+	// A relative -netdoc is resolved against the working directory and returned
+	// absolute, because it is forwarded into a re-execution that no longer
+	// shares it.
+	t.Run("explicit relative path resolves to an absolute one", func(t *testing.T) {
+		t.Chdir(elsewhere)
+		got, err := findNetdoc("./"+filepath.Base(explicit), self)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !filepath.IsAbs(got) {
+			t.Fatalf("findNetdoc returned %q, which is not absolute", got)
+		}
+		if filepath.Base(got) != filepath.Base(explicit) || filepath.Dir(got) != filepath.Dir(explicit) {
+			t.Fatalf("findNetdoc = %q, want %q", got, explicit)
+		}
+	})
+
+	// A bare name has no directory in it, so it means what it means to a shell:
+	// look it up on $PATH. This is why the flag is documented as a path.
+	t.Run("explicit bare name is a $PATH lookup", func(t *testing.T) {
+		t.Chdir(elsewhere)
+		got, err := findNetdoc(filepath.Base(onPath), self)
+		if err != nil || got != onPath {
+			t.Fatalf("findNetdoc(%q) = %q, %v, want %q", filepath.Base(onPath), got, err, onPath)
+		}
+	})
+
+	t.Run("explicit missing path is an error, not a fallback", func(t *testing.T) {
+		missing := filepath.Join(elsewhere, "no-such-netdoc")
+		got, err := findNetdoc(missing, self)
+		if err == nil {
+			t.Fatalf("findNetdoc(%q) = %q, want an error rather than some other netdoc", missing, got)
+		}
+		if !strings.Contains(err.Error(), "-netdoc") {
+			t.Errorf("error %q does not name the flag that caused it", err)
+		}
+	})
+
+	t.Run("a sibling of netdoc-sim beats $PATH", func(t *testing.T) {
+		got, err := findNetdoc("", self)
+		if err != nil || got != sibling {
+			t.Fatalf("findNetdoc(\"\") = %q, %v, want the sibling %q", got, err, sibling)
+		}
+	})
+
+	t.Run("$PATH is used when there is no sibling", func(t *testing.T) {
+		got, err := findNetdoc("", filepath.Join(t.TempDir(), "netdoc-sim"))
+		if err != nil || got != onPath {
+			t.Fatalf("findNetdoc(\"\") = %q, %v, want the one on $PATH %q", got, err, onPath)
+		}
+	})
+
+	t.Run("nothing anywhere is an actionable error", func(t *testing.T) {
+		t.Setenv("PATH", "")
+		got, err := findNetdoc("", filepath.Join(t.TempDir(), "netdoc-sim"))
+		if err == nil {
+			t.Fatalf("findNetdoc(\"\") = %q, want an error", got)
+		}
+		for _, want := range []string{"cannot find the netdoc binary", "go build -o netdoc", "-netdoc"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not say %q", err, want)
+			}
+		}
+	})
+
+	// A file merely named netdoc is not a netdoc. Preferring it would shadow a
+	// working binary on $PATH and turn a clear "not found" into an exec failure
+	// deep inside a namespace.
+	t.Run("an unexecutable sibling is skipped", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows takes executability from the PATHEXT suffix, not a mode bit")
+		}
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "netdoc"), []byte("not a binary\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := findNetdoc("", filepath.Join(dir, "netdoc-sim"))
+		if err != nil || got != onPath {
+			t.Fatalf("findNetdoc(\"\") = %q, %v, want the one on $PATH %q", got, err, onPath)
+		}
+	})
+}
+
+// The version has to come out of the binary that was selected, not out of the
+// checkout or the simulator's own build.
+func TestResolveNetdocAsksTheBinaryItSelected(t *testing.T) {
+	pathDir := t.TempDir()
+	onPath := writeFakeNetdoc(t, pathDir, "netdoc v0.0.0-on-path")
+	t.Setenv("PATH", pathDir)
+	chosen := writeFakeNetdoc(t, t.TempDir(), "netdoc v9.9.9-chosen")
+
+	got, err := resolveNetdoc(context.Background(), chosen, filepath.Join(t.TempDir(), "netdoc-sim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.path != chosen || got.version != "netdoc v9.9.9-chosen" {
+		t.Fatalf("resolveNetdoc = %+v, want %q at %q", got, "netdoc v9.9.9-chosen", chosen)
+	}
+	if runs := fakeNetdocInvocations(t, chosen); len(runs) != 1 || runs[0] != "-version" {
+		t.Errorf("the chosen binary was invoked as %v, want one -version", runs)
+	}
+	if runs := fakeNetdocInvocations(t, onPath); runs != nil {
+		t.Errorf("the binary on $PATH was run %v, and it was never selected", runs)
+	}
+}
+
+// A binary that answers nothing has no identity, and a challenge recorded
+// against it could not be reproduced. Say so instead of recording a blank.
+func TestNetdocVersionRejectsASilentBinary(t *testing.T) {
+	silent := writeFakeNetdoc(t, t.TempDir(), "")
+	if got, err := netdocVersion(context.Background(), silent); err == nil {
+		t.Fatalf("netdocVersion = %q, want an error", got)
+	} else if !strings.Contains(err.Error(), "printed no version") {
+		t.Errorf("error = %q, want it to say the binary printed no version", err)
+	}
+	missing := filepath.Join(t.TempDir(), "not-a-binary")
+	if got, err := netdocVersion(context.Background(), missing); err == nil {
+		t.Fatalf("netdocVersion(%q) = %q, want an error", missing, got)
+	}
 }
 
 func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {

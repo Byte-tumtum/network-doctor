@@ -671,10 +671,75 @@ func TestChallengeJSONIsDeterministicExceptTiming(t *testing.T) {
 	if err := json.Unmarshal([]byte(first), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"challenge_id", "difficulty", "truth", "human", "network_doctor", "result", "replay"} {
+	for _, field := range []string{"challenge_id", "difficulty", "truth", "human", "network_doctor", "netdoc", "result", "replay"} {
 		if _, ok := decoded[field]; !ok {
 			t.Fatalf("challenge JSON has no %q field", field)
 		}
+	}
+}
+
+// A challenge result is only reproducible if it says which Network Doctor
+// produced it. The path is not carried alongside the run — it is read back off
+// the argv the run was built from, so a result cannot name a binary other than
+// the one that executed.
+func TestChallengeResultRecordsTheNetdocThatRan(t *testing.T) {
+	challenge := challengeWithMutation(t, "service.tcp_reset")
+	env := &fakeEnv{stdout: `{"checks":[{"id":"http","status":"FAIL"}],"verdict":"service"}`}
+	backend := &fakeBackend{caps: Capabilities{Supported: true, Backend: "fake"}, env: env}
+	result, err := RunChallenge(context.Background(), challenge, backend, ChallengeOptions{
+		Run:           Options{Netdoc: "/opt/builds/netdoc"},
+		NetdocVersion: "netdoc v1.2.3",
+		Play: func(context.Context, *ChallengeSession) (ChallengeSubmission, error) {
+			return ChallengeSubmission{Answer: AnswerReset}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("run challenge: %v", err)
+	}
+	if result.Netdoc.Path != "/opt/builds/netdoc" || result.Netdoc.Version != "netdoc v1.2.3" {
+		t.Fatalf("result records %+v", result.Netdoc)
+	}
+	if len(env.lastArgv) == 0 || env.lastArgv[0] != result.Netdoc.Path {
+		t.Fatalf("netdoc ran as %v, but the result names %q", env.lastArgv, result.Netdoc.Path)
+	}
+
+	var out bytes.Buffer
+	if err := result.WriteJSON(&out); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Netdoc NetdocIdentity `json:"netdoc"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Netdoc != result.Netdoc {
+		t.Fatalf("challenge JSON carries %+v, want %+v", decoded.Netdoc, result.Netdoc)
+	}
+
+	// The reveal is the one place a person sees it; per-test output stays clean.
+	var text bytes.Buffer
+	result.WriteText(&text)
+	for _, want := range []string{"/opt/builds/netdoc", "netdoc v1.2.3"} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("the reveal does not show %q:\n%s", want, text.String())
+		}
+	}
+}
+
+// A development build reports `dev`, and that is the honest identity of the
+// thing that ran. Nothing may substitute a release-looking version for it.
+func TestChallengeResultKeepsADevelopmentVersion(t *testing.T) {
+	challenge := challengeWithMutation(t, "service.tcp_reset")
+	report := resetChallengeReport(t, challenge, "connection_reset")
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerReset})
+	result.Netdoc = NetdocIdentity{Path: "/home/dev/network-doctor/netdoc", Version: "netdoc dev"}
+	var out bytes.Buffer
+	if err := result.WriteJSON(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"version": "netdoc dev"`) {
+		t.Fatalf("challenge JSON did not preserve a development version:\n%s", out.String())
 	}
 }
 

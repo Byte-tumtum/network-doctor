@@ -901,10 +901,17 @@ func cleanup(args []string, stdout, stderr io.Writer) int {
 	return code
 }
 
-// findNetdoc locates the binary the tests will run: the one asked for, else one
-// sitting next to netdoc-sim, else one on $PATH. A build in the repo root
-// beside a `go run ./cmd/netdoc-sim` binary will not be found, which is why the
-// error says how to point at one.
+// findNetdoc locates the binary the tests will run, in one order: the one asked
+// for with -netdoc, else one sitting next to netdoc-sim, else one on $PATH. A
+// build in the repo root beside a `go run ./cmd/netdoc-sim` binary will not be
+// found, which is why the error says how to point at one.
+//
+// -netdoc never falls back. An explicit binary that cannot be executed is an
+// error, because quietly running a different netdoc than the one named would
+// make every result it produced a lie about which build was measured.
+//
+// The result is always absolute: it is forwarded across a re-execution into new
+// namespaces, and it is recorded as the identity of what ran.
 func findNetdoc(want, self string) (string, error) {
 	if want != "" {
 		path, err := exec.LookPath(want)
@@ -913,12 +920,66 @@ func findNetdoc(want, self string) (string, error) {
 		}
 		return filepath.Abs(path)
 	}
+	// LookPath rather than Stat: the sibling has to be something this OS will
+	// actually execute — the executable bit on Unix, a PATHEXT suffix on
+	// Windows — or a file that merely has the right name shadows a working
+	// netdoc on $PATH and the run dies later, at exec time, for no visible
+	// reason. LookPath also reports which name it settled on, which is the path
+	// worth recording.
 	sibling := filepath.Join(filepath.Dir(self), "netdoc")
-	if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
-		return sibling, nil
+	if path, err := exec.LookPath(sibling); err == nil {
+		return filepath.Abs(path)
 	}
 	if path, err := exec.LookPath("netdoc"); err == nil {
 		return filepath.Abs(path)
 	}
 	return "", errors.New("cannot find the netdoc binary: build one with `go build -o netdoc .` and pass it with -netdoc ./netdoc")
+}
+
+// netdocVersionTimeout bounds the one -version call. Printing a string needs no
+// network, no privilege and no namespace, so a binary slower than this is not
+// one a simulation is going to survive either.
+const netdocVersionTimeout = 5 * time.Second
+
+// netdocIdentity is which Network Doctor a run launched: the resolved path, and
+// what that same executable answers for -version. Both travel with the run and
+// land in the result, so a saved challenge names the build that produced it
+// rather than whatever `netdoc` happens to mean on the next machine.
+type netdocIdentity struct {
+	path    string
+	version string
+}
+
+// resolveNetdoc does the lookup once and then interrogates exactly what the
+// lookup returned. Keeping the two together is the point: a version read from
+// anywhere else — the checkout, a filename, a second lookup — can describe a
+// different binary than the one the run executes.
+func resolveNetdoc(ctx context.Context, want, self string) (netdocIdentity, error) {
+	path, err := findNetdoc(want, self)
+	if err != nil {
+		return netdocIdentity{}, err
+	}
+	version, err := netdocVersion(ctx, path)
+	if err != nil {
+		return netdocIdentity{}, err
+	}
+	return netdocIdentity{path: path, version: version}, nil
+}
+
+// netdocVersion asks the binary what it is, through netdoc's own -version
+// interface. The line is recorded as given, minus surrounding whitespace: a
+// local build legitimately reports `dev`, and inventing a release version for
+// it would be worse than recording the truth.
+func netdocVersion(ctx context.Context, path string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, netdocVersionTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-version").Output()
+	if err != nil {
+		return "", fmt.Errorf("%s -version: %w", path, err)
+	}
+	version := textsafe.Clean(strings.TrimSpace(string(out)))
+	if version == "" {
+		return "", fmt.Errorf("%s -version: printed no version", path)
+	}
+	return version, nil
 }

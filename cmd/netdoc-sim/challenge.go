@@ -37,8 +37,13 @@ type challengeFlags struct {
 	giveUp     *bool
 	json       *bool
 	netdoc     *string
-	timeout    *time.Duration
-	verbose    *bool
+	// netdocVersion is not for people to set. The launcher resolves the binary
+	// and asks it for its version out here, where $PATH and the working
+	// directory still mean what the user meant, and hands both to the director
+	// so the identity in the result belongs to the binary that was found.
+	netdocVersion *string
+	timeout       *time.Duration
+	verbose       *bool
 }
 
 func newChallengeFlags(out io.Writer) *challengeFlags {
@@ -50,6 +55,7 @@ func newChallengeFlags(out io.Writer) *challengeFlags {
 	f.giveUp = f.fs.Bool("give-up", false, "skip straight to the answer")
 	f.json = f.fs.Bool("json", false, "print the machine-readable result")
 	f.netdoc = f.fs.String("netdoc", "", "path to the netdoc binary")
+	f.netdocVersion = f.fs.String("netdoc-version", "", "internal: what the resolved netdoc binary reports for -version")
 	f.timeout = f.fs.Duration("timeout", 4*time.Second, "netdoc per-probe timeout")
 	f.verbose = f.fs.Bool("v", false, "log each privileged command as it runs")
 	return f
@@ -116,12 +122,15 @@ func launchChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
 	}
-	path, err := findNetdoc(*f.netdoc, self)
+	// Resolved once, before any namespace exists: the executable recorded in the
+	// result has to be the executable the run launches, and a binary that cannot
+	// even print its version is worth rejecting while the error is still cheap.
+	netdoc, err := resolveNetdoc(ctx, *f.netdoc, self)
 	if err != nil {
-		fmt.Fprintln(stderr, "netdoc-sim:", err)
+		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitUsage
 	}
-	code, err := launchDirector(ctx, self, challengeDirectorArgv(f, challenge.ID, path), stdin, stdout, stderr)
+	code, err := launchDirector(ctx, self, challengeDirectorArgv(f, challenge.ID, netdoc), stdin, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -136,9 +145,10 @@ func resolveChallenge(id, difficulty string) (*simulation.Challenge, error) {
 	return simulation.FindChallenge(difficulty)
 }
 
-func challengeDirectorArgv(f *challengeFlags, id, netdoc string) []string {
+func challengeDirectorArgv(f *challengeFlags, id string, netdoc netdocIdentity) []string {
 	return []string{challengeDirectorCommand,
-		"-netdoc", netdoc,
+		"-netdoc", netdoc.path,
+		"-netdoc-version", netdoc.version,
 		"-timeout", f.timeout.String(),
 		"-id", id,
 		"-answer", *f.answer,
@@ -161,6 +171,10 @@ func directChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 		fmt.Fprintln(stderr, "netdoc-sim: internal challenge director did not receive an id")
 		return exitError
 	}
+	if *f.netdoc == "" || *f.netdocVersion == "" {
+		fmt.Fprintln(stderr, "netdoc-sim: internal challenge director did not receive a resolved netdoc")
+		return exitError
+	}
 	challenge, err := simulation.BuildChallenge(*f.id)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
@@ -179,8 +193,9 @@ func directChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 	play := &challengePlay{challenge: challenge, stdin: stdin, in: bufio.NewReader(stdin), out: console,
 		answer: *f.answer, giveUp: *f.giveUp}
 	result, err := simulation.RunChallenge(ctx, challenge, newBackend(false, log), simulation.ChallengeOptions{
-		Run:  simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log},
-		Play: play.run,
+		Run:           simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log},
+		NetdocVersion: *f.netdocVersion,
+		Play:          play.run,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))

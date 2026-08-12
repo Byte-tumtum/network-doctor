@@ -82,6 +82,12 @@ func (r *ChallengeResult) WriteText(w io.Writer) {
 		formatElapsed(msDuration(r.Timing.HumanMS)), formatElapsed(msDuration(r.Timing.NetdocMS)))
 	fmt.Fprintf(w, "\nCase\n  base %s  seed %d  case %d  fingerprint %s  generator %s\n",
 		textsafe.Clean(r.BaseScenario), r.Seed, r.Case, r.CaseFingerprint, r.GeneratorVersion)
+	if r.Netdoc.Path != "" {
+		// Provenance, once, next to the case: the id says which puzzle this was,
+		// and this says which build answered it.
+		fmt.Fprintf(w, "\nNetwork Doctor under test\n  %s\n  %s\n",
+			textsafe.Clean(r.Netdoc.Path), textsafe.Clean(r.Netdoc.Version))
+	}
 	if r.Error != "" {
 		fmt.Fprintf(w, "\nSimulator error: %s\n", textsafe.Clean(r.Error))
 	}

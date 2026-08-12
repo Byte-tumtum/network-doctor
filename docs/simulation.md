@@ -47,6 +47,26 @@ The backend is Linux-only. It needs unprivileged user namespaces and the `ip`,
 host's support and the privileged operations a run would perform. Seeded netem
 loss or jitter additionally needs iproute2 6.6 or newer.
 
+### Which netdoc gets run
+
+Every command that runs netdoc picks the binary once, in the launcher, where
+`$PATH` and the working directory still mean what the user meant by them, and
+forwards the resolved absolute path into the namespaces. The order is:
+
+1. `-netdoc` when given. A path (`./netdoc`, `/opt/builds/netdoc`) names that
+   file; a bare name (`netdoc`) is looked up on `$PATH`, exactly as a shell
+   would. A relative path is resolved against the working directory. An explicit
+   binary that does not exist or cannot be executed is an error — nothing falls
+   back to a different netdoc, because a run that quietly measured some other
+   build is worse than a run that did not happen.
+2. A `netdoc` sitting next to the `netdoc-sim` binary. This is what makes
+   `./netdoc-sim run healthy` use the `./netdoc` built beside it. A file with the
+   right name that this OS will not execute is skipped rather than preferred.
+3. A `netdoc` on `$PATH`.
+
+`go run ./cmd/netdoc-sim` puts the binary in a build cache, so step 2 finds
+nothing there; build `netdoc-sim` or pass `-netdoc`.
+
 Build netdoc with `CGO_ENABLED=0`. A cgo build may resolve through the host's
 glibc/system resolver rather than the node's private `/etc/resolv.conf`, which
 would test the host instead of the simulation. The namespace integration tests
@@ -500,6 +520,32 @@ Elapsed human time is recorded because it is fun to compare, and is deliberately
 not part of the matchup: netdoc is automated and a person is not. In `-json` it
 is the only thing under `timing`, which is also the only part of a result a
 replay of the same id will not reproduce.
+
+### Which Network Doctor a result was scored against
+
+The id makes the puzzle reproducible. The `netdoc` object makes the other half
+reproducible — which build answered it:
+
+```json
+"netdoc": {
+  "path": "/home/you/network-doctor/netdoc",
+  "version": "netdoc v1.11.2"
+}
+```
+
+`path` is the absolute path the run launched, selected by the rules in [Which
+netdoc gets run](#which-netdoc-gets-run) and resolved once, before the network
+exists. `version` is the line that same executable printed for `netdoc
+-version`, recorded verbatim: a local build says `netdoc dev`, and that is the
+truthful identity of what ran rather than something inferred from the checkout.
+The checkout and the binary are routinely different builds, which is the whole
+reason the binary is asked instead.
+
+A binary that cannot be executed, or that answers `-version` with nothing, ends
+the challenge before it starts: a result nobody can attribute to a build is not
+worth playing for. The same two values appear in the reveal under `Network
+Doctor under test`, and deliberately not in the share block, which stays a
+spoiler-free postable summary.
 
 ### Not spoiling it
 

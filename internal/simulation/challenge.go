@@ -580,6 +580,19 @@ type ChallengeTiming struct {
 	NetdocMS int64 `json:"network_doctor_ms"`
 }
 
+// NetdocIdentity is which Network Doctor executable produced a result: the
+// absolute path the run launched, and the line that same executable printed for
+// -version. It is what makes a saved result reproducible — `netdoc` on the next
+// machine, or in the next month, is not necessarily this build.
+//
+// The version is recorded as the binary reported it. A local build says `dev`,
+// and that is the honest answer; nothing here infers a version from the
+// checkout, the filename, or the simulator's own build.
+type NetdocIdentity struct {
+	Path    string `json:"path"`
+	Version string `json:"version"`
+}
+
 // ChallengeResult is the whole matchup, and the machine-readable artifact.
 type ChallengeResult struct {
 	ChallengeID      string              `json:"challenge_id"`
@@ -592,6 +605,7 @@ type ChallengeResult struct {
 	CaseFingerprint  string              `json:"case_fingerprint"`
 	Node             string              `json:"node"`
 	Target           string              `json:"target,omitempty"`
+	Netdoc           NetdocIdentity      `json:"netdoc"`
 	Truth            ChallengeTruth      `json:"truth"`
 	Human            ChallengeContestant `json:"human"`
 	NetworkDoctor    ChallengeContestant `json:"network_doctor"`

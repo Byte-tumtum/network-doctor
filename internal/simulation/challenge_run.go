@@ -12,6 +12,11 @@ import (
 // ChallengeOptions configures one challenge run.
 type ChallengeOptions struct {
 	Run Options
+	// NetdocVersion is what Run.Netdoc answered for -version, asked of that same
+	// executable by whoever resolved it. Only the version travels: the path in
+	// the result is read straight back off Run.Netdoc, so the binary a result
+	// names cannot drift from the binary the run launched.
+	NetdocVersion string
 	// Play is handed the live network once every fault is in place and before
 	// any netdoc process starts, and returns the diagnosis the person committed
 	// to. A nil Play submits nothing, which is how a non-interactive answer runs.
@@ -116,5 +121,10 @@ func RunChallenge(ctx context.Context, c *Challenge, backend Backend, opts Chall
 		// that a checked fact rather than a comment.
 		return nil, fmt.Errorf("challenge %s: case fingerprint changed during the run", c.ID)
 	}
-	return ScoreChallenge(c, report, submission), nil
+	result := ScoreChallenge(c, report, submission)
+	// run.Netdoc is the string every netdoc argv in this run was built from, so
+	// recording it here is recording what actually executed rather than what was
+	// separately looked up and hoped to be the same thing.
+	result.Netdoc = NetdocIdentity{Path: run.Netdoc, Version: opts.NetdocVersion}
+	return result, nil
 }
