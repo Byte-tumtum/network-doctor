@@ -39,3 +39,31 @@ func TestParseDefaultRoutesRejectsMalformedRows(t *testing.T) {
 		t.Errorf("malformed routes = %+v", got)
 	}
 }
+
+func TestIPv6RouteFailureCauseFromKernelTable(t *testing.T) {
+	zero := "00000000000000000000000000000000"
+	viaPreferred := "20010db8007900010000000000000001"
+	viaAlternate := "20010db8007900030000000000000001"
+	routes := zero + " 00 " + zero + " 00 " + viaAlternate + " 00000064 00000000 00000000 00000003 alt0\n" +
+		zero + " 00 " + zero + " 00 " + viaPreferred + " 00000032 00000000 00000000 00000003 pref0\n"
+	if got := routeFailureCauseIPv6From([]byte(routes)); got != RouteCausePreferredPathFailed {
+		t.Fatalf("IPv6 cause = %q, want %q", got, RouteCausePreferredPathFailed)
+	}
+	parsed := parseIPv6DefaultRoutes([]byte(routes))
+	if len(parsed) != 2 || parsed[0].metric != 100 || parsed[1].metric != 50 ||
+		parsed[0].gateway.String() != "2001:db8:79:3::1" || parsed[1].gateway.String() != "2001:db8:79:1::1" {
+		t.Fatalf("parsed IPv6 defaults = %+v", parsed)
+	}
+}
+
+func TestIPv6RouteFailureCauseRejectsMissingAndMalformedDefaults(t *testing.T) {
+	zero := "00000000000000000000000000000000"
+	if got := routeFailureCauseIPv6From(nil); got != RouteCauseNoDefaultRoute {
+		t.Fatalf("missing IPv6 default cause = %q", got)
+	}
+	raw := zero + " 01 " + zero + " 00 " + zero + " 00000032 00000000 00000000 00000003 eth0\n" +
+		zero + " 00 " + zero + " 00 nothex 00000032 00000000 00000000 00000003 eth0\n"
+	if got := parseIPv6DefaultRoutes([]byte(raw)); len(got) != 0 {
+		t.Fatalf("malformed IPv6 defaults = %+v", got)
+	}
+}

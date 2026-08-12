@@ -304,8 +304,8 @@ type netops struct {
 	// optional validated HTTP(S) redirect URL.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
 	portalCheck func(ctx context.Context) (int, string, error)
-	// routeCause classifies a failed direct IPv4 path from OS route/neighbor
-	// state. Nil keeps deterministic probe unit tests independent of the host.
+	// routeCause classifies a failed direct path from OS route/neighbor state.
+	// Nil keeps deterministic probe unit tests independent of the host.
 	routeCause func(net.IP) string
 }
 

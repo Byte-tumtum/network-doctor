@@ -213,7 +213,7 @@ func (e *netnsEnv) observeFamilyReachability(ctx context.Context, out *Evidence)
 // path using a literal target owned by a simulator TCP fixture. Single-path,
 // hostname and arbitrary external targets remain diagnosis concerns.
 func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out *Evidence) error {
-	if !hasWorkingAlternatePath(e.scenario) {
+	if !hasPreferredPathFailureCandidate(e.scenario) {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -234,7 +234,7 @@ func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out 
 		}
 		out.ControlledTargets = append(out.ControlledTargets, ControlledTargetEvidence{
 			From: test.Node, To: netip.AddrPortFrom(netip.MustParseAddr(addr), uint16(target.Port)).String(),
-			Via: selectedDestinationPath(out.Routes, test.Node, addr), Reachable: reachable,
+			Family: addressFamily(netip.MustParseAddr(addr)), Via: selectedDestinationPath(out.Routes, test.Node, addr), Reachable: reachable,
 		})
 	}
 	return nil

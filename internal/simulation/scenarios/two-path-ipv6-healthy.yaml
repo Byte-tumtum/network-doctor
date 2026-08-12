@@ -1,0 +1,84 @@
+name: two-path-ipv6-healthy
+description: >-
+  The IPv6-only client has two independently routed defaults. The lower-metric
+  preferred path carries ordinary Internet traffic; a controlled literal
+  target proves the higher-metric alternate path before hunts fail the
+  preferred router beyond the client-visible gateway.
+
+topology:
+  segments:
+    - {name: preferred-lan, ipv6: "2001:db8:79:1::/64"}
+    - {name: preferred-upstream, ipv6: "2001:db8:79:2::/64"}
+    - {name: alternate-lan, ipv6: "2001:db8:79:3::/64"}
+    - {name: alternate-upstream, ipv6: "2001:db8:79:4::/64"}
+  nodes:
+    - name: client
+      role: client
+      resolver: "2001:db8:79:2::20"
+      interfaces:
+        - {segment: preferred-lan, ipv6: "2001:db8:79:1::10/64"}
+        - {segment: alternate-lan, ipv6: "2001:db8:79:3::10/64"}
+    - name: preferred-gateway
+      role: router
+      interfaces:
+        - {segment: preferred-lan, ipv6: "2001:db8:79:1::1/64"}
+        - {segment: preferred-upstream, ipv6: "2001:db8:79:2::1/64"}
+    - name: alternate-gateway
+      role: router
+      interfaces:
+        - {segment: alternate-lan, ipv6: "2001:db8:79:3::1/64"}
+        - {segment: alternate-upstream, ipv6: "2001:db8:79:4::1/64"}
+    - name: target
+      interfaces:
+        - {segment: preferred-upstream, ipv6: "2001:db8:79:2::20/64"}
+        - {segment: alternate-upstream, ipv6: "2001:db8:79:4::20/64"}
+      aliases: ["2606:4700:4700::1111", "2001:4860:4860::8888", "2001:db8:79::99"]
+      services:
+        - name: routed-resolver
+          type: dns
+          records:
+            - {name: connectivitycheck.gstatic.com, address: "2001:db8:79:2::20"}
+        - {name: routed-http, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, records: [{name: connectivitycheck.gstatic.com, address: "2001:db8:79:2::20"}]}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+  routes:
+    - {node: client, destination: default, via: "2001:db8:79:1::1", metric: 50}
+    - {node: client, destination: default, via: "2001:db8:79:3::1", metric: 100}
+    - {node: client, destination: "2001:db8:79:2::20/128", via: "2001:db8:79:3::1"}
+    - {node: client, destination: "2001:db8:79::99/128", via: "2001:db8:79:3::1"}
+    - {node: preferred-gateway, destination: "2606:4700:4700::1111/128", via: "2001:db8:79:2::20"}
+    - {node: preferred-gateway, destination: "2001:4860:4860::8888/128", via: "2001:db8:79:2::20"}
+    - {node: alternate-gateway, destination: "2606:4700:4700::1111/128", via: "2001:db8:79:4::20"}
+    - {node: alternate-gateway, destination: "2001:4860:4860::8888/128", via: "2001:db8:79:4::20"}
+    - {node: alternate-gateway, destination: "2001:db8:79:2::20/128", via: "2001:db8:79:4::20"}
+    - {node: alternate-gateway, destination: "2001:db8:79::99/128", via: "2001:db8:79:4::20"}
+    - {node: target, destination: "2001:db8:79:1::/64", via: "2001:db8:79:2::1"}
+    - {node: target, destination: "2001:db8:79:3::/64", via: "2001:db8:79:4::1"}
+
+tests:
+  # The first forwarded IPv6 SYN is held behind cold NDP and retransmitted
+  # after Network Doctor's latency warning threshold. DNS takes the explicit
+  # alternate route, warming both real paths without a sleep or synthetic state.
+  - name: warm both IPv6 forwarding paths
+    node: client
+    source_segment: preferred-lan
+    expect:
+      verdict: degraded
+      checks:
+        - {id: iface, status: PASS}
+        - {id: internet_tcp, status: WARN, ipv6: reachable}
+        - {id: dns, status: PASS}
+  - name: alternate IPv6 route reaches controlled target
+    node: client
+    target: "http://[2001:db8:79::99]:80"
+    expect:
+      verdict: ok
+      checks:
+        - {id: iface, status: PASS}
+        - {id: internet_tcp, status: PASS, ipv6: reachable}
+        - {id: dns, status: N/A}
+        - {id: dns_public, status: N/A}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+
+expect: {verdict: ok}

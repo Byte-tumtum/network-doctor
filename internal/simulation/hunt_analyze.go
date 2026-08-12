@@ -359,22 +359,28 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 }
 
 func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bool {
-	if mutation.TargetNode == "" || mutation.Family != "ipv4" {
+	if mutation.TargetNode == "" || mutation.PreferredVia == "" || mutation.PreferredSegment == "" ||
+		mutation.AlternateVia == "" || mutation.AlternateSegment == "" || mutation.ControlTarget == "" ||
+		(mutation.Family != string(familyIPv4) && mutation.Family != string(familyIPv6)) {
 		return false
 	}
 	var selected *RouteEvidence
 	for i := range report.Evidence.Routes {
 		route := &report.Evidence.Routes[i]
 		if route.Node == mutation.TargetNode && route.Selected && route.Family == mutation.Family &&
-			(route.Destination == "1.1.1.1" || route.Destination == "8.8.8.8") {
+			slices.Contains(internetEndpointsForFamily(mutation.Family), route.Destination) &&
+			route.Via == mutation.PreferredVia && route.Segment == mutation.PreferredSegment &&
+			route.Metric == mutation.PreferredMetric {
 			selected = route
 			break
 		}
 	}
-	if selected == nil || !nodeInterfaceOwns(report, mutation.Node, selected.Segment, selected.Via) ||
+	if selected == nil || !defaultRouteMatches(report, mutation.TargetNode, mutation.Family,
+		mutation.PreferredVia, mutation.PreferredSegment, mutation.PreferredMetric) ||
+		!nodeInterfaceOwns(report, mutation.Node, mutation.Family, selected.Segment, selected.Via) ||
 		!linkState(report, mutation.Node, mutation.Segment, false) ||
 		!linkState(report, mutation.Node, selected.Segment, true) ||
-		!routerForwardsIPv4(report, mutation.Node) ||
+		!routerForwardsFamily(report, mutation.Node, mutation.Family) ||
 		!familyReachabilityMatches(report, mutation.TargetNode, mutation.Family,
 			[]string{selected.Segment, selected.Via}, FamilyStateUnreachable) {
 		return false
@@ -385,15 +391,18 @@ func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bo
 			continue
 		}
 		for _, alternate := range node.Routes {
-			if alternate.Destination != "default" || alternate.Family != mutation.Family ||
+			if !defaultDestination(alternate.Destination) || alternate.Family != mutation.Family || alternate.Via != mutation.AlternateVia ||
+				alternate.Segment != mutation.AlternateSegment || alternate.Metric != mutation.AlternateMetric ||
 				alternate.Via == selected.Via || alternate.Segment == selected.Segment || alternate.Metric <= selected.Metric ||
 				!gatewayReachable(report, mutation.TargetNode, alternate) ||
-				!controlledTargetMatches(report, mutation.TargetNode, []string{alternate.Segment, alternate.Via}, true) {
+				!controlledTargetMatches(report, mutation.TargetNode, mutation.Family, mutation.ControlTarget,
+					[]string{alternate.Segment, alternate.Via}, true) {
 				continue
 			}
 			for _, gateway := range report.Topology {
-				if gateway.Role == "router" && nodeInterfaceOwns(report, gateway.Name, alternate.Segment, alternate.Via) &&
-					routerForwardsIPv4(report, gateway.Name) && routerHasOtherLiveLink(report, gateway.Name, alternate.Segment) {
+				if gateway.Role == "router" && nodeInterfaceOwns(report, gateway.Name, mutation.Family, alternate.Segment, alternate.Via) &&
+					routerForwardsFamily(report, gateway.Name, mutation.Family) &&
+					routerHasOtherLiveLink(report, gateway.Name, mutation.Family, alternate.Segment) {
 					return true
 				}
 			}
@@ -402,7 +411,22 @@ func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bo
 	return false
 }
 
-func nodeInterfaceOwns(report *Report, node, segment, address string) bool {
+func defaultRouteMatches(report *Report, node, family, via, segment string, metric int) bool {
+	for _, item := range report.Topology {
+		if item.Name != node {
+			continue
+		}
+		for _, route := range item.Routes {
+			if defaultDestination(route.Destination) && route.Family == family && route.Via == via &&
+				route.Segment == segment && route.Metric == metric {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func nodeInterfaceOwns(report *Report, node, family, segment, address string) bool {
 	for _, item := range report.Topology {
 		if item.Name != node {
 			continue
@@ -411,7 +435,11 @@ func nodeInterfaceOwns(report *Report, node, segment, address string) bool {
 			if iface.Segment != segment {
 				continue
 			}
-			for _, raw := range []string{iface.Address, iface.IPv4} {
+			raw := iface.IPv6
+			if family == string(familyIPv4) {
+				raw = iface.IPv4
+			}
+			for _, raw := range []string{raw, iface.Address} {
 				if prefix, err := netip.ParsePrefix(raw); err == nil && prefix.Addr().String() == address {
 					return true
 				}
@@ -430,18 +458,22 @@ func linkState(report *Report, node, segment string, up bool) bool {
 	return false
 }
 
-func routerForwardsIPv4(report *Report, node string) bool {
+func routerForwardsFamily(report *Report, node, family string) bool {
 	for _, router := range report.Evidence.Routers {
 		if router.Node == node {
-			return router.IPv4Forwarding
+			if family == string(familyIPv4) {
+				return router.IPv4Forwarding
+			}
+			return router.IPv6Forwarding
 		}
 	}
 	return false
 }
 
-func controlledTargetMatches(report *Report, from string, via []string, reachable bool) bool {
+func controlledTargetMatches(report *Report, from, family, target string, via []string, reachable bool) bool {
 	for _, item := range report.Evidence.ControlledTargets {
-		if item.From == from && item.Reachable == reachable && slices.Equal(item.Via, via) {
+		if item.From == from && item.Family == family && item.To == target &&
+			item.Reachable == reachable && slices.Equal(item.Via, via) {
 			return true
 		}
 	}
@@ -459,7 +491,7 @@ func familyReachabilityMatches(report *Report, node, family string, via []string
 
 func gatewayReachable(report *Report, node string, route RouteInfo) bool {
 	for _, item := range report.Evidence.Routes {
-		if item.Node == node && item.Destination == "default" && item.Family == route.Family &&
+		if item.Node == node && defaultDestination(item.Destination) && item.Family == route.Family &&
 			item.Via == route.Via && item.Segment == route.Segment && item.Metric == route.Metric &&
 			item.GatewayReachable != nil && *item.GatewayReachable {
 			return true
@@ -468,9 +500,21 @@ func gatewayReachable(report *Report, node string, route RouteInfo) bool {
 	return false
 }
 
-func routerHasOtherLiveLink(report *Report, node, clientSegment string) bool {
+func defaultDestination(destination string) bool {
+	if destination == "default" {
+		return true
+	}
+	prefix, err := netip.ParsePrefix(destination)
+	return err == nil && prefix.Bits() == 0
+}
+
+func routerHasOtherLiveLink(report *Report, node, family, clientSegment string) bool {
 	for _, link := range report.Evidence.Links {
-		if link.Node == node && link.Segment != clientSegment && link.Up {
+		address := link.IPv6
+		if family == string(familyIPv4) {
+			address = link.IPv4
+		}
+		if link.Node == node && link.Segment != clientSegment && link.Up && address != "" {
 			return true
 		}
 	}

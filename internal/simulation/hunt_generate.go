@@ -20,8 +20,8 @@ import (
 const (
 	// HuntGeneratorVersion is part of every manifest and seed domain. A future
 	// algorithm change must increment it instead of silently changing old cases.
-	HuntGeneratorVersion = "v2"
-	huntSeedDomain       = "netdoc-sim-hunt-v2"
+	HuntGeneratorVersion = "v3"
+	huntSeedDomain       = "netdoc-sim-hunt-v3"
 	HuntMaxFaults        = 3
 	HuntMaxCases         = 500
 	HuntMaxCaseNumber    = 999999
@@ -29,7 +29,7 @@ const (
 
 // Sorted: validHuntBase binary-searches this list.
 var huntBaseNames = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
-	"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy"}
+	"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy", "two-path-ipv6-healthy"}
 
 // HuntBaseNames returns the deliberately small set of known-good controls the
 // first generator is allowed to mutate.
@@ -43,21 +43,28 @@ func validHuntBase(name string) bool {
 // GeneratedMutation is a completely materialized semantic operation. It has
 // no command strings, kernel interface names, paths, or deferred randomness.
 type GeneratedMutation struct {
-	ID          string  `json:"id"`
-	Description string  `json:"description"`
-	Node        string  `json:"node,omitempty"`
-	TargetNode  string  `json:"target_node,omitempty"`
-	Segment     string  `json:"segment,omitempty"`
-	Service     string  `json:"service,omitempty"`
-	Family      string  `json:"family,omitempty"`
-	LossPercent float64 `json:"loss_percent,omitempty"`
-	LatencyMS   int64   `json:"latency_ms,omitempty"`
-	JitterMS    int64   `json:"jitter_ms,omitempty"`
-	StartMS     int64   `json:"start_ms,omitempty"`
-	DurationMS  int64   `json:"duration_ms,omitempty"`
-	NetemSeed   uint32  `json:"netem_seed,omitempty"`
-	TargetPort  int     `json:"target_port,omitempty"`
-	Status      int     `json:"status,omitempty"`
+	ID               string  `json:"id"`
+	Description      string  `json:"description"`
+	Node             string  `json:"node,omitempty"`
+	TargetNode       string  `json:"target_node,omitempty"`
+	Segment          string  `json:"segment,omitempty"`
+	Service          string  `json:"service,omitempty"`
+	Family           string  `json:"family,omitempty"`
+	PreferredVia     string  `json:"preferred_via,omitempty"`
+	PreferredSegment string  `json:"preferred_segment,omitempty"`
+	PreferredMetric  int     `json:"preferred_metric,omitempty"`
+	AlternateVia     string  `json:"alternate_via,omitempty"`
+	AlternateSegment string  `json:"alternate_segment,omitempty"`
+	AlternateMetric  int     `json:"alternate_metric,omitempty"`
+	ControlTarget    string  `json:"control_target,omitempty"`
+	LossPercent      float64 `json:"loss_percent,omitempty"`
+	LatencyMS        int64   `json:"latency_ms,omitempty"`
+	JitterMS         int64   `json:"jitter_ms,omitempty"`
+	StartMS          int64   `json:"start_ms,omitempty"`
+	DurationMS       int64   `json:"duration_ms,omitempty"`
+	NetemSeed        uint32  `json:"netem_seed,omitempty"`
+	TargetPort       int     `json:"target_port,omitempty"`
+	Status           int     `json:"status,omitempty"`
 }
 
 // GeneratedCaseManifest is the stable, display-safe reproduction artifact.
@@ -106,7 +113,7 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "family.ipv4_drop", description: "IPv4 path fails while IPv6 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv4Drop},
 	{id: "family.ipv6_drop", description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
 	{id: "link.transient_down", description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
-	{id: "routing.preferred_path_failure", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWorkingAlternatePath, generate: generatePreferredPathFailure},
+	{id: "routing.preferred_path_failure", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasPreferredPathFailureCandidate, generate: generatePreferredPathFailure},
 }
 
 // DeriveHuntCaseSeed makes case N independent of every earlier PRNG stream.
@@ -567,14 +574,145 @@ func hasWorkingDoHFixture(s *Scenario) bool {
 	return false
 }
 
-func hasWorkingAlternatePath(s *Scenario) bool {
-	defaults := 0
+type routeFamily string
+
+const (
+	familyIPv4 routeFamily = "ipv4"
+	familyIPv6 routeFamily = "ipv6"
+)
+
+type preferredPathCandidate struct {
+	family                    routeFamily
+	preferred, alternate      Route
+	preferredRouter, upstream string
+	controlTarget             string
+}
+
+func hasWorkingAlternatePath(s *Scenario, family routeFamily) bool {
+	_, ok := findPreferredPathCandidate(s, family)
+	return ok
+}
+
+func hasPreferredPathFailureCandidate(s *Scenario) bool {
+	return hasWorkingAlternatePath(s, familyIPv4) || hasWorkingAlternatePath(s, familyIPv6)
+}
+
+func findPreferredPathCandidate(s *Scenario, family routeFamily) (preferredPathCandidate, bool) {
+	client := clientNode(s)
+	var defaults []Route
 	for _, route := range s.Topology.Routes {
-		if route.Default && route.Node == clientNode(s) && route.Family == "ipv4" {
-			defaults++
+		if route.Default && route.Node == client && route.Family == string(family) {
+			defaults = append(defaults, route)
 		}
 	}
-	return defaults >= 2 && len(clientInterfaces(s)) >= 2
+	sort.SliceStable(defaults, func(i, j int) bool { return defaults[i].Metric < defaults[j].Metric })
+	if len(defaults) < 2 || defaults[0].Metric == defaults[1].Metric {
+		return preferredPathCandidate{}, false
+	}
+	preferred := defaults[0]
+	preferredRouter, _, upstream, ok := routeGatewayPath(s, preferred, family)
+	if !ok {
+		return preferredPathCandidate{}, false
+	}
+	for _, alternate := range defaults[1:] {
+		if alternate.Metric <= preferred.Metric || alternate.Via == preferred.Via {
+			continue
+		}
+		alternateRouter, alternateSegment, alternateUpstream, alternateOK := routeGatewayPath(s, alternate, family)
+		if !alternateOK || alternateRouter == preferredRouter || alternateSegment == mustRouteSegment(s, preferred) ||
+			alternateUpstream == upstream {
+			continue
+		}
+		control, controlOK := controlledTargetOnRoute(s, client, family, alternate)
+		if controlOK {
+			return preferredPathCandidate{family: family, preferred: preferred, alternate: alternate,
+				preferredRouter: preferredRouter, upstream: upstream, controlTarget: control}, true
+		}
+	}
+	return preferredPathCandidate{}, false
+}
+
+func routeGatewayPath(s *Scenario, route Route, family routeFamily) (router, clientSegment, upstream string, ok bool) {
+	via, err := netip.ParseAddr(route.Via)
+	if err != nil || addressFamily(via) != string(family) {
+		return "", "", "", false
+	}
+	clientSegment, ok = nodeSegmentForAddress(s.Topology.node(route.Node), via)
+	if !ok {
+		return "", "", "", false
+	}
+	for _, node := range s.Topology.Nodes {
+		if node.Role != "router" || !nodeOwnsAddress(node, route.Via) {
+			continue
+		}
+		if gatewaySegment, owns := nodeSegmentForAddress(&node, via); !owns || gatewaySegment != clientSegment {
+			continue
+		}
+		for _, iface := range node.Interfaces {
+			if iface.Segment != clientSegment {
+				if _, familyOK := iface.addressForFamily(string(family)); familyOK {
+					return node.Name, clientSegment, iface.Segment, true
+				}
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func mustRouteSegment(s *Scenario, route Route) string {
+	segment, _ := nodeSegmentForAddress(s.Topology.node(route.Node), netip.MustParseAddr(route.Via))
+	return segment
+}
+
+func controlledTargetOnRoute(s *Scenario, client string, family routeFamily, want Route) (string, bool) {
+	for _, test := range s.Tests {
+		target, err := diagnostic.ParseTarget(test.Target)
+		if err != nil || test.Node != client || target.IP == nil || addressFamily(netip.MustParseAddr(target.IP.String())) != string(family) ||
+			!scenarioControlledTCPPort(s, target.IP.String(), target.Port) {
+			continue
+		}
+		selected, ok := configuredRouteTo(s.Topology.Routes, client, netip.MustParseAddr(target.IP.String()))
+		if ok && selected.Via == want.Via {
+			return netip.AddrPortFrom(netip.MustParseAddr(target.IP.String()), uint16(target.Port)).String(), true
+		}
+	}
+	return "", false
+}
+
+func scenarioControlledTCPPort(s *Scenario, address string, port int) bool {
+	for _, node := range s.Topology.Nodes {
+		if !nodeOwnsAddress(node, address) {
+			continue
+		}
+		for _, service := range node.Services {
+			if service.Port == port && service.Type != ServiceQUIC {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func configuredRouteTo(routes []Route, node string, destination netip.Addr) (Route, bool) {
+	bestBits := -1
+	var best Route
+	for _, route := range routes {
+		if route.Node != node || route.Family != addressFamily(destination) {
+			continue
+		}
+		bits := 0
+		if !route.Default {
+			prefix, err := netip.ParsePrefix(route.Destination)
+			if err != nil || !prefix.Contains(destination) {
+				continue
+			}
+			bits = prefix.Bits()
+		}
+		if bits > bestBits || bits == bestBits && route.Metric < best.Metric {
+			bestBits, best = bits, route
+		}
+	}
+	return best, bestBits >= 0
 }
 
 func clientNode(s *Scenario) string {
@@ -584,15 +722,6 @@ func clientNode(s *Scenario) string {
 		}
 	}
 	return ""
-}
-
-func clientInterfaces(s *Scenario) []Interface {
-	for _, node := range s.Topology.Nodes {
-		if node.Role == "client" {
-			return node.Interfaces
-		}
-	}
-	return nil
 }
 
 func generateLoss(rng *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
@@ -699,36 +828,26 @@ func generateTransientLink(rng *mathrand.Rand, s *Scenario) (GeneratedMutation, 
 		Description: fmt.Sprintf("lower non-client link %s/%s for %d ms, then restore it", node, segment, duration)}, nil
 }
 
-func generatePreferredPathFailure(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
-	client := clientNode(s)
-	var preferred *Route
-	for i := range s.Topology.Routes {
-		route := &s.Topology.Routes[i]
-		if route.Node != client || !route.Default || route.Family != "ipv4" {
-			continue
-		}
-		if preferred == nil || route.Metric < preferred.Metric {
-			preferred = route
+func generatePreferredPathFailure(rng *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	var candidates []preferredPathCandidate
+	for _, family := range []routeFamily{familyIPv4, familyIPv6} {
+		if candidate, ok := findPreferredPathCandidate(s, family); ok {
+			candidates = append(candidates, candidate)
 		}
 	}
-	if preferred == nil {
-		return GeneratedMutation{}, errors.New("preferred default route disappeared")
+	if len(candidates) == 0 {
+		return GeneratedMutation{}, errors.New("preferred default route with a working alternate disappeared")
 	}
-	via, _ := netip.ParseAddr(preferred.Via)
-	clientTopology := s.Topology.node(client)
-	preferredSegment, _ := nodeSegmentForAddress(clientTopology, via)
-	for _, node := range s.Topology.Nodes {
-		if !nodeOwnsAddress(node, via.String()) || node.Role != "router" {
-			continue
-		}
-		for _, iface := range node.Interfaces {
-			if iface.Segment != preferredSegment {
-				return GeneratedMutation{Node: node.Name, TargetNode: client, Segment: iface.Segment, Family: "ipv4",
-					Description: fmt.Sprintf("disable preferred router %s upstream %s while retaining the alternate default", node.Name, iface.Segment)}, nil
-			}
-		}
+	candidate := candidates[0]
+	if len(candidates) > 1 {
+		candidate = candidates[rng.Intn(len(candidates))]
 	}
-	return GeneratedMutation{}, errors.New("preferred route has no independently failing upstream")
+	return GeneratedMutation{Node: candidate.preferredRouter, TargetNode: clientNode(s), Segment: candidate.upstream,
+		Family: string(candidate.family), PreferredVia: candidate.preferred.Via,
+		PreferredSegment: mustRouteSegment(s, candidate.preferred), PreferredMetric: candidate.preferred.Metric,
+		AlternateVia: candidate.alternate.Via, AlternateSegment: mustRouteSegment(s, candidate.alternate),
+		AlternateMetric: candidate.alternate.Metric, ControlTarget: candidate.controlTarget,
+		Description: fmt.Sprintf("disable %s preferred router %s upstream %s while retaining the alternate default", candidate.family, candidate.preferredRouter, candidate.upstream)}, nil
 }
 
 func applyGeneratedMutation(s *Scenario, m GeneratedMutation) error {

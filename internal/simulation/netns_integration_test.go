@@ -797,7 +797,7 @@ func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
 
 	// A generated timed resolver case must rediscover the existing structured
 	// resampling opportunity; assert the code, never the human wording.
-	known := run("--case", "76")
+	known := run("--case", "114")
 	if len(known.Cases) != 1 || !hasHuntSuggestion(known.Suggestions, SuggestTransientNotResampled) {
 		t.Fatalf("known hunt gap not rediscovered: %+v", known.Suggestions)
 	}
@@ -1130,10 +1130,10 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 		}
 		return rep
 	}
-	targetObservation := func(t *testing.T, report Report) ControlledTargetEvidence {
+	targetObservation := func(t *testing.T, report Report, target string) ControlledTargetEvidence {
 		t.Helper()
 		for _, item := range report.Evidence.ControlledTargets {
-			if item.From == "client" && item.To == "9.9.9.9:80" {
+			if item.From == "client" && item.To == target {
 				return item
 			}
 		}
@@ -1141,73 +1141,85 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 		return ControlledTargetEvidence{}
 	}
 
-	base := loadHuntBase(t, "two-path-healthy")
-	op := huntOperator(t, "routing.preferred_path_failure")
-	if !op.applicable(base) {
-		t.Fatal("production applicability rejected two-path-healthy")
-	}
-	mutation, err := op.generate(newTestRNG(), base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mutation.ID = op.id
-	manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
+	for _, tc := range []struct {
+		name, base, family, preferredVia, endpoint, target string
+	}{
+		{"IPv4", "two-path-healthy", "ipv4", "10.79.1.1", "1.1.1.1", "9.9.9.9:80"},
+		{"IPv6", "two-path-ipv6-healthy", "ipv6", "2001:db8:79:1::1", "2606:4700:4700::1111", "[2001:db8:79::99]:80"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := loadHuntBase(t, tc.base)
+			op := huntOperator(t, "routing.preferred_path_failure")
+			if !op.applicable(base) {
+				t.Fatalf("production applicability rejected %s", tc.base)
+			}
+			mutation, err := op.generate(newTestRNG(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = op.id
+			manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
 
-	baseline := run(t, base)
-	if baseline.Result != ResultPass {
-		t.Fatalf("baseline result = %s; tests=%+v suggestions=%+v", baseline.Result, baseline.Tests, baseline.Suggestions)
-	}
-	baseline4, count := familyReachability(baseline, "client", "ipv4")
-	if count != 1 || baseline4.State != FamilyStateReachable || !reflect.DeepEqual(baseline4.Via, []string{"preferred-lan", "10.79.1.1"}) {
-		t.Fatalf("baseline preferred reachability = %+v count=%d", baseline4, count)
-	}
-	if alternate := targetObservation(t, baseline); !alternate.Reachable ||
-		!reflect.DeepEqual(alternate.Via, []string{"alternate-lan", "10.79.3.1"}) {
-		t.Fatalf("baseline alternate reachability = %+v", alternate)
-	}
-	baselineTruth := collectObservedTruth(manifest, &baseline)
-	if baselineTruth.IPv4 != "reachable" || len(baselineTruth.ObservedFaults) != 0 ||
-		mutationObserved(mutation, &baseline, baselineTruth) {
-		t.Fatalf("healthy baseline observed routing failure: %+v", baselineTruth)
-	}
+			baseline := run(t, base)
+			if baseline.Result != ResultPass {
+				t.Fatalf("baseline result = %s; tests=%+v suggestions=%+v", baseline.Result, baseline.Tests, baseline.Suggestions)
+			}
+			baselineFamily, count := familyReachability(baseline, "client", tc.family)
+			if count != 1 || baselineFamily.State != FamilyStateReachable ||
+				!reflect.DeepEqual(baselineFamily.Via, []string{"preferred-lan", tc.preferredVia}) {
+				t.Fatalf("baseline preferred reachability = %+v count=%d", baselineFamily, count)
+			}
+			if alternate := targetObservation(t, baseline, tc.target); !alternate.Reachable || alternate.Family != tc.family ||
+				!reflect.DeepEqual(alternate.Via, []string{"alternate-lan", mutation.AlternateVia}) {
+				t.Fatalf("baseline alternate reachability = %+v", alternate)
+			}
+			baselineTruth := collectObservedTruth(manifest, &baseline)
+			if len(baselineTruth.ObservedFaults) != 0 || mutationObserved(mutation, &baseline, baselineTruth) {
+				t.Fatalf("healthy baseline observed routing failure: %+v", baselineTruth)
+			}
 
-	mutated := cloneScenario(base)
-	canonicalScenarioInput(mutated)
-	if err := applyGeneratedMutation(mutated, mutation); err != nil {
-		t.Fatal(err)
+			mutated := cloneScenario(base)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			mutated.Name = "test-routing-preferred-path-failure-" + tc.family
+			if err := mutated.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			rep := run(t, mutated)
+			mutatedFamily, count := familyReachability(rep, "client", tc.family)
+			if count != 1 || mutatedFamily.State != FamilyStateUnreachable || !reflect.DeepEqual(mutatedFamily.Via, baselineFamily.Via) {
+				t.Fatalf("mutated preferred reachability = %+v count=%d; baseline=%+v", mutatedFamily, count, baselineFamily)
+			}
+			if alternate := targetObservation(t, rep, tc.target); !alternate.Reachable || alternate.Family != tc.family ||
+				!reflect.DeepEqual(alternate.Via, []string{"alternate-lan", mutation.AlternateVia}) {
+				t.Fatalf("mutated alternate reachability = %+v", alternate)
+			}
+			if !hasSelectedRoute(rep, "client", tc.endpoint, tc.preferredVia, "preferred-lan", nil) ||
+				!hasLink(rep, "preferred-gateway", "preferred-upstream", false) {
+				t.Fatalf("preferred route was not retained over the failed path: routes=%+v links=%+v", rep.Evidence.Routes, rep.Evidence.Links)
+			}
+			truth := collectObservedTruth(manifest, &rep)
+			if !reflect.DeepEqual(truth.ObservedFaults, []string{mutation.ID}) || !mutationObserved(mutation, &rep, truth) {
+				t.Fatalf("routing consequence was not independently observed: truth=%+v mutation=%+v", truth, mutation)
+			}
+			if truthFingerprint(truth) == truthFingerprint(baselineTruth) {
+				t.Fatal("routing consequence did not change truth fingerprint")
+			}
+			check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
+			if check.Cause != diagnostic.RouteCausePreferredPathFailed || diagnosedFamily(rep.Tests[len(rep.Tests)-1].Diagnosis, tc.family) != FamilyStateUnreachable {
+				t.Fatalf("diagnosis did not recognize %s preferred-path failure: %+v stderr=%s", tc.family, check, rep.Tests[0].Stderr)
+			}
+			if findings := unrecognizedConditionFindings(&rep, truth); len(findings) != 0 {
+				t.Fatalf("independent %s truth was not reconciled with diagnosis: %+v", tc.family, findings)
+			}
+			t.Logf("mutation=%+v baseline=%+v mutated=%+v diagnosis=%s/%s families=%+v mutationObserved=true",
+				mutation, baselineFamily, mutatedFamily, check.Status, check.Cause, check.Families)
+			assertCleanedUp(t, baseline)
+			assertCleanedUp(t, rep)
+		})
 	}
-	mutated.Name = "test-routing-preferred-path-failure"
-	if err := mutated.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	rep := run(t, mutated)
-	mutated4, count := familyReachability(rep, "client", "ipv4")
-	if count != 1 || mutated4.State != FamilyStateUnreachable || !reflect.DeepEqual(mutated4.Via, baseline4.Via) {
-		t.Fatalf("mutated preferred reachability = %+v count=%d; baseline=%+v", mutated4, count, baseline4)
-	}
-	if alternate := targetObservation(t, rep); !alternate.Reachable ||
-		!reflect.DeepEqual(alternate.Via, []string{"alternate-lan", "10.79.3.1"}) {
-		t.Fatalf("mutated alternate reachability = %+v", alternate)
-	}
-	if !hasSelectedRoute(rep, "client", "1.1.1.1", "10.79.1.1", "preferred-lan", nil) ||
-		!hasLink(rep, "preferred-gateway", "preferred-upstream", false) {
-		t.Fatalf("preferred route was not retained over the failed path: routes=%+v links=%+v", rep.Evidence.Routes, rep.Evidence.Links)
-	}
-	truth := collectObservedTruth(manifest, &rep)
-	if truth.IPv4 != "unreachable" || !reflect.DeepEqual(truth.ObservedFaults, []string{mutation.ID}) ||
-		!mutationObserved(mutation, &rep, truth) {
-		t.Fatalf("routing consequence was not independently observed: truth=%+v mutation=%+v", truth, mutation)
-	}
-	if truthFingerprint(truth) == truthFingerprint(baselineTruth) {
-		t.Fatal("routing consequence did not change truth fingerprint")
-	}
-	check := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet))
-	findings := familyMismatchFindings(analyzeHuntCase(manifest, &rep, truth))
-	t.Logf("mutation=%+v baseline IPv4=%s via=%v mutated IPv4=%s via=%v diagnosis=%s/%s families=%+v mismatch_findings=%+v",
-		mutation, baseline4.State, baseline4.Via, mutated4.State, mutated4.Via,
-		check.Status, check.Cause, check.Families, findings)
-	assertCleanedUp(t, baseline)
-	assertCleanedUp(t, rep)
 }
 
 // TestFamilyDropMutationsMoveHolderSideObservation validates the family oracle

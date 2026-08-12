@@ -20,7 +20,7 @@ func loadHuntBase(t testing.TB, name string) *Scenario {
 
 func TestHuntMutationRegistryOrder(t *testing.T) {
 	wantBases := []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
-		"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy"}
+		"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy", "two-path-ipv6-healthy"}
 	if got := HuntBaseNames(); !reflect.DeepEqual(got, wantBases) {
 		t.Fatalf("hunt bases = %v, want sorted %v", got, wantBases)
 	}
@@ -39,13 +39,18 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registry = %v, want %v", got, want)
 	}
-	if !hasWorkingAlternatePath(loadHuntBase(t, "two-path-healthy")) {
+	if !hasWorkingAlternatePath(loadHuntBase(t, "two-path-healthy"), familyIPv4) {
 		t.Error("the multipath hunt base does not satisfy preferred-path applicability")
 	}
-	if hasWorkingAlternatePath(loadHuntBase(t, "healthy")) ||
-		hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network")) ||
-		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy")) {
+	if hasWorkingAlternatePath(loadHuntBase(t, "two-path-healthy"), familyIPv6) ||
+		hasWorkingAlternatePath(loadHuntBase(t, "healthy"), familyIPv4) ||
+		hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network"), familyIPv4) ||
+		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy"), familyIPv4) {
 		t.Error("a curated base claims a working alternate route it does not have")
+	}
+	if !hasWorkingAlternatePath(loadHuntBase(t, "two-path-ipv6-healthy"), familyIPv6) ||
+		hasWorkingAlternatePath(loadHuntBase(t, "two-path-ipv6-healthy"), familyIPv4) {
+		t.Error("IPv6-only multipath applicability leaked across address families")
 	}
 }
 
@@ -61,7 +66,10 @@ func TestPreferredPathFailureGeneratorTargetsPreferredRouterUpstream(t *testing.
 	}
 	mutation.ID = op.id
 	if mutation.Node != "preferred-gateway" || mutation.TargetNode != "client" ||
-		mutation.Segment != "preferred-upstream" || mutation.Family != "ipv4" {
+		mutation.Segment != "preferred-upstream" || mutation.Family != "ipv4" ||
+		mutation.PreferredVia != "10.79.1.1" || mutation.PreferredSegment != "preferred-lan" || mutation.PreferredMetric != 50 ||
+		mutation.AlternateVia != "10.79.3.1" || mutation.AlternateSegment != "alternate-lan" || mutation.AlternateMetric != 100 ||
+		mutation.ControlTarget != "9.9.9.9:80" {
 		t.Fatalf("generated mutation = %+v", mutation)
 	}
 	mutated := cloneScenario(base)
@@ -73,19 +81,73 @@ func TestPreferredPathFailureGeneratorTargetsPreferredRouterUpstream(t *testing.
 		got.Node != mutation.Node || got.Segment != mutation.Segment {
 		t.Fatalf("applied fault = %+v", got)
 	}
-	if hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network")) ||
-		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy")) {
+	if hasWorkingAlternatePath(loadHuntBase(t, "healthy-routed-network"), familyIPv4) ||
+		hasWorkingAlternatePath(loadHuntBase(t, "dual-stack-healthy"), familyIPv4) {
 		t.Fatal("single-path controls became applicable")
+	}
+}
+
+func TestPreferredPathFailureGeneratorTargetsIPv6PreferredRouterUpstream(t *testing.T) {
+	base := loadHuntBase(t, "two-path-ipv6-healthy")
+	op := huntOperator(t, "routing.preferred_path_failure")
+	mutation, err := op.generate(newTestRNG(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutation.Node != "preferred-gateway" || mutation.TargetNode != "client" ||
+		mutation.Segment != "preferred-upstream" || mutation.Family != "ipv6" ||
+		mutation.PreferredVia != "2001:db8:79:1::1" || mutation.PreferredSegment != "preferred-lan" || mutation.PreferredMetric != 50 ||
+		mutation.AlternateVia != "2001:db8:79:3::1" || mutation.AlternateSegment != "alternate-lan" || mutation.AlternateMetric != 100 ||
+		mutation.ControlTarget != "[2001:db8:79::99]:80" {
+		t.Fatalf("generated IPv6 mutation = %+v", mutation)
+	}
+}
+
+func TestPreferredPathApplicabilityDoesNotMixFamilyPathCounts(t *testing.T) {
+	mixed := cloneScenario(loadHuntBase(t, "two-path-healthy"))
+	mixed.Topology.Routes = append(mixed.Topology.Routes, Route{Node: "client", Destination: "default",
+		Via: "2001:db8:79:1::1", Metric: 50, Default: true, Family: "ipv6"})
+	if !hasWorkingAlternatePath(mixed, familyIPv4) {
+		t.Fatal("two working IPv4 paths stopped satisfying IPv4 applicability")
+	}
+	if hasWorkingAlternatePath(mixed, familyIPv6) {
+		t.Fatal("two IPv4 defaults plus one IPv6 default satisfied IPv6 applicability")
+	}
+
+	ambiguous := cloneScenario(loadHuntBase(t, "two-path-healthy"))
+	ambiguous.Topology.Routes[1].Metric = ambiguous.Topology.Routes[0].Metric
+	if hasWorkingAlternatePath(ambiguous, familyIPv4) {
+		t.Fatal("equal-metric defaults were treated as an unambiguous preferred path")
+	}
+
+	sharedRouter := cloneScenario(loadHuntBase(t, "two-path-healthy"))
+	sharedRouter.Topology.Nodes[1].Interfaces = append(sharedRouter.Topology.Nodes[1].Interfaces,
+		Interface{Segment: "alternate-lan", Address: "10.79.3.1/24"})
+	sharedRouter.Topology.Nodes[2].Role = "target"
+	if hasWorkingAlternatePath(sharedRouter, familyIPv4) {
+		t.Fatal("defaults through the same router were treated as independently fail-able paths")
 	}
 }
 
 func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-healthy")
-	generated, err := GenerateHuntCase("two-path-healthy", base, 20260811, 38, 1)
+	generated, err := GenerateHuntCase("two-path-healthy", base, 20260811, 20, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "routing.preferred_path_failure" {
+		t.Fatalf("generated mutations = %+v", generated.Manifest.Mutations)
+	}
+}
+
+func TestGenerateHuntCaseCanSelectIPv6PreferredPathFailure(t *testing.T) {
+	base := loadHuntBase(t, "two-path-ipv6-healthy")
+	generated, err := GenerateHuntCase("two-path-ipv6-healthy", base, 20260811, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "routing.preferred_path_failure" ||
+		generated.Manifest.Mutations[0].Family != "ipv6" {
 		t.Fatalf("generated mutations = %+v", generated.Manifest.Mutations)
 	}
 }
@@ -289,22 +351,24 @@ func TestHuntCaseGenerationIsIndependentAndDeterministic(t *testing.T) {
 	}
 }
 
-func TestHuntGeneratorVersion2Reproduction(t *testing.T) {
+func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
 	generated, err := GenerateHuntCase("healthy-routed-network", loadHuntBase(t, "healthy-routed-network"), 12345, 76, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := GeneratedCaseManifest{
-		GeneratorVersion: "v2", BaseScenario: "healthy-routed-network", HuntSeed: 12345, Case: 76,
-		CaseSeed: -5803233938164469489,
-		Mutations: []GeneratedMutation{{
-			ID: "timeline.dns_outage", Description: "delay, then silence resolver routed-resolver for 758 ms before recovery",
-			Service: "routed-resolver", StartMS: 150, DurationMS: 758,
-		}},
-		CaseFingerprint: "8581a988c9575ea8",
+		GeneratorVersion: "v3", BaseScenario: "healthy-routed-network", HuntSeed: 12345, Case: 76,
+		CaseSeed: 1449211129837338081,
+		Mutations: []GeneratedMutation{
+			{ID: "netem.jitter", Description: "add 426 ms latency with 249 ms jitter on gateway/upstream",
+				Node: "gateway", Segment: "upstream", LatencyMS: 426, JitterMS: 249, NetemSeed: 2467781340},
+			{ID: "service.tcp_reset", Description: "replace target TCP port 80 with an accept-then-reset service",
+				Node: "target", TargetPort: 80},
+		},
+		CaseFingerprint: "3b23592ff5c01fd9",
 	}
 	if !reflect.DeepEqual(generated.Manifest, want) {
-		t.Fatalf("v2 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
+		t.Fatalf("v3 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
 	}
 }
 

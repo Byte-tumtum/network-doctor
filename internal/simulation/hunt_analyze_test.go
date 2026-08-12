@@ -543,17 +543,17 @@ func preferredPathReport() Report {
 					Family: "ipv4", Selected: true, GatewayReachable: &reachable},
 			},
 			Links: []LinkEvidence{
-				{Node: "preferred-gateway", Segment: "preferred-lan", Up: true},
-				{Node: "preferred-gateway", Segment: "preferred-upstream", Up: false},
-				{Node: "alternate-gateway", Segment: "alternate-lan", Up: true},
-				{Node: "alternate-gateway", Segment: "alternate-upstream", Up: true},
+				{Node: "preferred-gateway", Segment: "preferred-lan", IPv4: "10.79.1.1/24", Up: true},
+				{Node: "preferred-gateway", Segment: "preferred-upstream", IPv4: "10.79.2.1/24", Up: false},
+				{Node: "alternate-gateway", Segment: "alternate-lan", IPv4: "10.79.3.1/24", Up: true},
+				{Node: "alternate-gateway", Segment: "alternate-upstream", IPv4: "10.79.4.1/24", Up: true},
 			},
 			Routers: []RouterEvidence{
 				{Node: "preferred-gateway", IPv4Forwarding: true},
 				{Node: "alternate-gateway", IPv4Forwarding: true},
 			},
 			ControlledTargets: []ControlledTargetEvidence{
-				{From: "client", To: "9.9.9.9:80", Via: []string{"alternate-lan", "10.79.3.1"}, Reachable: reachable},
+				{From: "client", To: "9.9.9.9:80", Family: "ipv4", Via: []string{"alternate-lan", "10.79.3.1"}, Reachable: reachable},
 			},
 			FamilyReachability: []FamilyReachabilityEvidence{
 				{Node: "client", Family: "ipv4", Target: "IPv4 internet endpoints",
@@ -565,7 +565,9 @@ func preferredPathReport() Report {
 
 func TestPreferredPathMutationObservedFromIndependentPathConsequence(t *testing.T) {
 	mutation := GeneratedMutation{ID: "routing.preferred_path_failure", Node: "preferred-gateway",
-		TargetNode: "client", Segment: "preferred-upstream", Family: "ipv4"}
+		TargetNode: "client", Segment: "preferred-upstream", Family: "ipv4",
+		PreferredVia: "10.79.1.1", PreferredSegment: "preferred-lan", PreferredMetric: 50,
+		AlternateVia: "10.79.3.1", AlternateSegment: "alternate-lan", AlternateMetric: 100, ControlTarget: "9.9.9.9:80"}
 	positive := preferredPathReport()
 	if !mutationObserved(mutation, &positive, ObservedTruth{IPv4: "unreachable"}) {
 		t.Fatal("matching selected-route, failed-path, and alternate-path evidence did not observe mutation")
@@ -634,6 +636,103 @@ func TestPreferredPathMutationObservedFromIndependentPathConsequence(t *testing.
 	truth := collectObservedTruth(huntManifest(mutation), &positive)
 	if !reflect.DeepEqual(truth.ObservedFaults, []string{mutation.ID}) {
 		t.Fatalf("observed faults = %v, want %q", truth.ObservedFaults, mutation.ID)
+	}
+}
+
+func preferredPathIPv6Report() Report {
+	reachable := true
+	return Report{
+		Topology: []NodeInfo{
+			{Name: "client", Role: "client", Routes: []RouteInfo{
+				{Destination: "default", Via: "2001:db8:79:1::1", Segment: "preferred-lan", Metric: 50, Family: "ipv6"},
+				{Destination: "default", Via: "2001:db8:79:3::1", Segment: "alternate-lan", Metric: 100, Family: "ipv6"},
+			}},
+			{Name: "preferred-gateway", Role: "router", Interfaces: []InterfaceInfo{
+				{Segment: "preferred-lan", IPv6: "2001:db8:79:1::1/64"},
+				{Segment: "preferred-upstream", IPv6: "2001:db8:79:2::1/64"},
+			}},
+			{Name: "alternate-gateway", Role: "router", Interfaces: []InterfaceInfo{
+				{Segment: "alternate-lan", IPv6: "2001:db8:79:3::1/64"},
+				{Segment: "alternate-upstream", IPv6: "2001:db8:79:4::1/64"},
+			}},
+		},
+		Evidence: Evidence{
+			Routes: []RouteEvidence{
+				{Node: "client", Destination: "2606:4700:4700::1111", Via: "2001:db8:79:1::1", Segment: "preferred-lan",
+					Metric: 50, Family: "ipv6", Selected: true, GatewayReachable: &reachable},
+				{Node: "client", Destination: "default", Via: "2001:db8:79:3::1", Segment: "alternate-lan",
+					Metric: 100, Family: "ipv6", GatewayReachable: &reachable},
+				{Node: "client", Destination: "2001:db8:79::99", Via: "2001:db8:79:3::1", Segment: "alternate-lan",
+					Family: "ipv6", Selected: true, GatewayReachable: &reachable},
+			},
+			Links: []LinkEvidence{
+				{Node: "preferred-gateway", Segment: "preferred-lan", IPv6: "2001:db8:79:1::1/64", Up: true},
+				{Node: "preferred-gateway", Segment: "preferred-upstream", IPv6: "2001:db8:79:2::1/64", Up: false},
+				{Node: "alternate-gateway", Segment: "alternate-lan", IPv6: "2001:db8:79:3::1/64", Up: true},
+				{Node: "alternate-gateway", Segment: "alternate-upstream", IPv6: "2001:db8:79:4::1/64", Up: true},
+			},
+			Routers: []RouterEvidence{
+				{Node: "preferred-gateway", IPv6Forwarding: true},
+				{Node: "alternate-gateway", IPv6Forwarding: true},
+			},
+			ControlledTargets: []ControlledTargetEvidence{
+				{From: "client", To: "[2001:db8:79::99]:80", Family: "ipv6", Via: []string{"alternate-lan", "2001:db8:79:3::1"}, Reachable: true},
+			},
+			FamilyReachability: []FamilyReachabilityEvidence{
+				{Node: "client", Family: "ipv6", Target: "IPv6 internet endpoints",
+					Via: []string{"preferred-lan", "2001:db8:79:1::1"}, State: FamilyStateUnreachable},
+			},
+		},
+	}
+}
+
+func TestIPv6PreferredPathMutationObservationAndHuntGrading(t *testing.T) {
+	mutation := GeneratedMutation{ID: "routing.preferred_path_failure", Node: "preferred-gateway",
+		TargetNode: "client", Segment: "preferred-upstream", Family: "ipv6",
+		PreferredVia: "2001:db8:79:1::1", PreferredSegment: "preferred-lan", PreferredMetric: 50,
+		AlternateVia: "2001:db8:79:3::1", AlternateSegment: "alternate-lan", AlternateMetric: 100,
+		ControlTarget: "[2001:db8:79::99]:80"}
+	report := preferredPathIPv6Report()
+	truth := collectObservedTruth(huntManifest(mutation), &report)
+	if truth.IPv6 != FamilyStateUnreachable || !reflect.DeepEqual(truth.ObservedFaults, []string{mutation.ID}) ||
+		!mutationObserved(mutation, &report, truth) {
+		t.Fatalf("IPv6 preferred path was not independently observed: truth=%+v", truth)
+	}
+	if got := observedConditions(report.Evidence, truth); !slices.Contains(got, ConditionIPv6InternetUnreachable) {
+		t.Fatalf("observed conditions = %v, want IPv6 unreachable", got)
+	}
+
+	report.Cleanup.Done = true
+	report.Tests = []TestOutcome{{Node: "client", ProcessOutcome: ProcessExited,
+		Diagnosis: &Diagnosis{Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+			Families: &DiagnosisFamilies{IPv6: FamilyStateUnreachable}}}}}}
+	if findings := unrecognizedConditionFindings(&report, truth); len(findings) != 0 {
+		t.Fatalf("recognized IPv6 condition produced findings: %+v", findings)
+	}
+	report.Tests[0].Diagnosis.Checks[0].Families.IPv6 = FamilyStateReachable
+	findings := unrecognizedConditionFindings(&report, truth)
+	if len(findings) != 1 || findings[0].Family != "ipv6" || findings[0].Expected != string(ConditionIPv6InternetUnreachable) {
+		t.Fatalf("unrecognized IPv6 condition findings = %+v", findings)
+	}
+
+	nearMisses := map[string]func(*Report){
+		"scheduled only": func(report *Report) {
+			*report = Report{Faults: []FaultInfo{{Type: FaultLinkDown, Node: mutation.Node}}}
+		},
+		"alternate broken":        func(report *Report) { report.Evidence.ControlledTargets[0].Reachable = false },
+		"IPv4 alternate evidence": func(report *Report) { report.Evidence.ControlledTargets[0].Family = "ipv4" },
+		"wrong node":              func(report *Report) { report.Evidence.ControlledTargets[0].From = "other-client" },
+		"wrong path":              func(report *Report) { report.Evidence.ControlledTargets[0].Via[0] = "other-lan" },
+		"IPv6 unavailable":        func(report *Report) { report.Evidence.FamilyReachability[0].State = FamilyStateUnavailable },
+	}
+	for name, change := range nearMisses {
+		t.Run(name, func(t *testing.T) {
+			nearMiss := preferredPathIPv6Report()
+			change(&nearMiss)
+			if mutationObserved(mutation, &nearMiss, ObservedTruth{IPv6: FamilyStateUnreachable}) {
+				t.Fatal("inconclusive IPv6 evidence counted as observed")
+			}
+		})
 	}
 }
 

@@ -229,6 +229,16 @@ var (
 	internetEndpoints6 = []string{"2606:4700:4700::1111", "2001:4860:4860::8888"}
 )
 
+func internetEndpointsForFamily(family string) []string {
+	if family == string(familyIPv4) {
+		return internetEndpoints4
+	}
+	if family == string(familyIPv6) {
+		return internetEndpoints6
+	}
+	return nil
+}
+
 // internetProbePort is the port both netdoc and the simulator connect to on
 // those endpoints.
 const internetProbePort = 443

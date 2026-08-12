@@ -105,6 +105,7 @@ type RouterEvidence struct {
 type ControlledTargetEvidence struct {
 	From      string   `json:"from"`
 	To        string   `json:"to"`
+	Family    string   `json:"family"`
 	Via       []string `json:"via"`
 	Reachable bool     `json:"reachable"`
 }

@@ -295,6 +295,7 @@ func (t *Topology) validateRoutes(nodes map[string]*Node) error {
 			if err := validateNetworkPrefix(prefix); err != nil {
 				return fmt.Errorf("topology.routes[%d].destination: %w", i, err)
 			}
+			route.Default = prefix.Bits() == 0
 			route.Destination = prefix.String()
 		}
 		key := route.Node + "\x00" + route.Family + "\x00" + route.Destination + "\x00" + strconv.Itoa(route.Metric)

@@ -13,6 +13,7 @@ import (
 
 const (
 	procIPv4Routes = "/proc/net/route"
+	procIPv6Routes = "/proc/net/ipv6_route"
 	procARPTable   = "/proc/net/arp"
 	routeFlagUp    = 0x1
 	routeFlagGW    = 0x2
@@ -25,19 +26,36 @@ type defaultRouteState struct {
 }
 
 func routeFailureCause(destination net.IP) string {
-	if destination.To4() == nil {
+	if destination.To4() != nil {
+		routes, err := os.ReadFile(procIPv4Routes)
+		if err != nil {
+			return ""
+		}
+		arp, _ := os.ReadFile(procARPTable)
+		return routeFailureCauseFrom(routes, arp)
+	}
+	if destination.To16() == nil {
 		return ""
 	}
-	routes, err := os.ReadFile(procIPv4Routes)
+	routes, err := os.ReadFile(procIPv6Routes)
 	if err != nil {
 		return ""
 	}
-	arp, _ := os.ReadFile(procARPTable)
-	return routeFailureCauseFrom(routes, arp)
+	return routeFailureCauseIPv6From(routes)
 }
 
 func routeFailureCauseFrom(routeData, arpData []byte) string {
 	routes := parseDefaultRoutes(routeData)
+	return classifyDefaultRoutes(routes, func(route defaultRouteState) bool {
+		return route.gateway != nil && arpGatewayFailed(arpData, route.gateway.String(), route.iface)
+	})
+}
+
+func routeFailureCauseIPv6From(routeData []byte) string {
+	return classifyDefaultRoutes(parseIPv6DefaultRoutes(routeData), nil)
+}
+
+func classifyDefaultRoutes(routes []defaultRouteState, gatewayFailed func(defaultRouteState) bool) string {
 	if len(routes) == 0 {
 		return RouteCauseNoDefaultRoute
 	}
@@ -46,10 +64,39 @@ func routeFailureCauseFrom(routeData, arpData []byte) string {
 		return RouteCausePreferredPathFailed
 	}
 	selected := routes[0]
-	if selected.gateway != nil && arpGatewayFailed(arpData, selected.gateway.String(), selected.iface) {
+	if gatewayFailed != nil && gatewayFailed(selected) {
 		return RouteCauseGatewayUnreachable
 	}
 	return RouteCauseSelectedPathFailed
+}
+
+func parseIPv6DefaultRoutes(raw []byte) []defaultRouteState {
+	var out []defaultRouteState
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 || fields[0] != strings.Repeat("0", 32) || fields[1] != "00" ||
+			fields[2] != strings.Repeat("0", 32) || fields[3] != "00" {
+			continue
+		}
+		flags, err := strconv.ParseUint(fields[8], 16, 32)
+		if err != nil || flags&routeFlagUp == 0 {
+			continue
+		}
+		metric, err := strconv.ParseUint(fields[5], 16, 32)
+		if err != nil || metric > uint64(^uint(0)>>1) {
+			continue
+		}
+		gatewayRaw, err := hex.DecodeString(fields[4])
+		if err != nil || len(gatewayRaw) != net.IPv6len {
+			continue
+		}
+		var gateway net.IP
+		if !net.IP(gatewayRaw).IsUnspecified() {
+			gateway = net.IP(gatewayRaw)
+		}
+		out = append(out, defaultRouteState{iface: fields[9], gateway: gateway, metric: int(metric)})
+	}
+	return out
 }
 
 func parseDefaultRoutes(raw []byte) []defaultRouteState {

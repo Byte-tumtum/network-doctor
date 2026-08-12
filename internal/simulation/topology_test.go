@@ -193,7 +193,7 @@ func TestDualStackTopologyValidation(t *testing.T) {
 	if len(routes) != 2 || routes[0].Node != "client" || routes[0].Destination != "default" || routes[0].Family != "ipv4" {
 		t.Errorf("IPv4 default = %+v", routes)
 	}
-	if len(routes) != 2 || routes[1].Node != "client" || routes[1].Destination != "::/0" || routes[1].Family != "ipv6" {
+	if len(routes) != 2 || routes[1].Node != "client" || routes[1].Destination != "::/0" || routes[1].Family != "ipv6" || !routes[1].Default {
 		t.Errorf("IPv6 default = %+v", routes)
 	}
 }
