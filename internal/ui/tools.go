@@ -209,11 +209,16 @@ func toolsFor(t *diagnostic.Target, goos string, b toolBind) []Tool {
 		pp.Timeout = 90 * time.Second
 		tools = append(tools, pp)
 	} else {
+		// mtr report mode only — never curses inside our TUI. Report mode
+		// prints nothing until the last cycle, so a run cut short by the
+		// default budget yields no output at all; five cycles plus reverse DNS
+		// against a distant host regularly passes 12s, so it gets its own.
+		mt := boundTool(quote, "m", "path quality", "mtr", b.named("-I", "-a"), host, "--report", "--report-cycles", "5")
+		mt.Timeout = 45 * time.Second
 		tools = append(tools,
 			// Both Linux and BSD traceroute take -i device and -s src_addr.
 			boundTool(quote, "t", "trace the path", "traceroute", b.named("-i", "-s"), host, "-w", "2", "-q", "1", "-m", "20"),
-			// mtr report mode only — never curses inside our TUI.
-			boundTool(quote, "m", "path quality", "mtr", b.named("-I", "-a"), host, "--report", "--report-cycles", "5"))
+			mt)
 	}
 
 	// Targeted nmap actively scans the host, so it is gated behind a shown-command

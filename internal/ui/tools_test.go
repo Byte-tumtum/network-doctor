@@ -421,8 +421,10 @@ func TestToolsForDarwin(t *testing.T) {
 	if bin := toolByKey(t, tools, "c").Bin; bin != "curl" {
 		t.Errorf("darwin c = %q, want curl", bin)
 	}
-	if pt := toolByKey(t, tools, "m").Timeout; pt != 0 {
-		t.Errorf("darwin mtr Timeout = %v, want 0 (default)", pt)
+	// Report mode prints only at the end, so mtr must outlive the default
+	// 12s budget or a slow path yields an empty job.
+	if pt := toolByKey(t, tools, "m").Timeout; pt != 45*time.Second {
+		t.Errorf("darwin mtr Timeout = %v, want 45s", pt)
 	}
 }
 
