@@ -44,6 +44,25 @@ Keep network semantics independent of the UI. Put OS-specific behavior in
 build-tagged or platform-suffixed files, keep probes unprivileged and bounded,
 and pass commands as argument slices rather than shell strings.
 
+## Cleaning build output
+
+Local builds and release dry runs leave generated files in the clone. Remove
+them by name; the command is safe to repeat and safe when nothing is there:
+
+```sh
+rm -rf netdoc netdoc-sim network-doctor dist vendor network-doctor-*-vendor.tar.gz
+```
+
+`vendor/` matters most. GoReleaser's before-hooks write it and the matching
+tarball into the repo root at release time, and a leftover `vendor/` silently
+switches every later `go build` and `go test` in the clone to `-mod=vendor`,
+resolving dependencies from that snapshot instead of `go.mod`. A stale `dist/`
+also aborts the next GoReleaser run, which requires it empty.
+
+Prefer the explicit list over `git clean -Xdf`: everything above is ignored,
+but so are editor and tool settings such as `.claude/` and `.codex/`, which
+that command would delete too.
+
 ## Validation
 
 Start with the tests nearest your change, then run the complete validation gate
