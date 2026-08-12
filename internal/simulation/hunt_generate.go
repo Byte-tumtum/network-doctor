@@ -382,8 +382,11 @@ type httpTarget struct {
 	port    int
 }
 
-func findHTTPTestTarget(s *Scenario) (httpTarget, bool) {
-	for _, test := range s.Tests {
+// findHTTPTestTarget returns the first HTTP service one of tests names. tests
+// is a parameter rather than s.Tests so a caller can ask the narrower question
+// of what one particular test is pointed at.
+func findHTTPTestTarget(s *Scenario, tests []Test) (httpTarget, bool) {
+	for _, test := range tests {
 		target, err := diagnostic.ParseTarget(test.Target)
 		if err != nil {
 			continue
@@ -431,10 +434,10 @@ func dnsAddress(s *Scenario, name string) string {
 	return ""
 }
 
-func hasHTTPTestTarget(s *Scenario) bool { _, ok := findHTTPTestTarget(s); return ok }
+func hasHTTPTestTarget(s *Scenario) bool { _, ok := findHTTPTestTarget(s, s.Tests); return ok }
 
 func hasSuccessfulHTTPTestTarget(s *Scenario) bool {
-	target, ok := findHTTPTestTarget(s)
+	target, ok := findHTTPTestTarget(s, s.Tests)
 	return ok && s.Topology.node(target.node).Services[target.service].Status/100 == 2
 }
 
@@ -776,7 +779,7 @@ func generateDNSOutage(rng *mathrand.Rand, s *Scenario) (GeneratedMutation, erro
 }
 
 func generateTCPReset(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
-	target, _ := findHTTPTestTarget(s)
+	target, _ := findHTTPTestTarget(s, s.Tests)
 	return GeneratedMutation{Node: target.node, TargetPort: target.port,
 		Description: fmt.Sprintf("replace %s TCP port %d with an accept-then-reset service", target.node, target.port)}, nil
 }
@@ -806,7 +809,7 @@ func generateInvalidDoHResponse(_ *mathrand.Rand, s *Scenario) (GeneratedMutatio
 }
 
 func generateHTTP503(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
-	target, _ := findHTTPTestTarget(s)
+	target, _ := findHTTPTestTarget(s, s.Tests)
 	return GeneratedMutation{Node: target.node, TargetPort: target.port, Status: http.StatusServiceUnavailable,
 		Description: fmt.Sprintf("make %s HTTP port %d return status 503", target.node, target.port)}, nil
 }

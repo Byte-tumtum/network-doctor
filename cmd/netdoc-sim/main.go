@@ -30,6 +30,7 @@ import (
 const directorCommand = "__director"
 const campaignDirectorCommand = "__campaign_director"
 const huntDirectorCommand = "__hunt_director"
+const challengeDirectorCommand = "__challenge_director"
 
 // Exit codes. Separated so a CI job can tell "netdoc diagnosed this wrong"
 // from "the simulator could not run".
@@ -82,12 +83,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return launchHunt(ctx, args[1:], stdout, stderr)
 	case "triage":
 		return launchTriage(ctx, args[1:], stdout, stderr)
+	case "challenge":
+		return launchChallenge(ctx, args[1:], os.Stdin, stdout, stderr)
 	case directorCommand:
 		return direct(ctx, args[1:], stdout, stderr)
 	case campaignDirectorCommand:
 		return directCampaign(ctx, args[1:], stdout, stderr)
 	case huntDirectorCommand:
 		return directHunt(ctx, args[1:], stdout, stderr)
+	case challengeDirectorCommand:
+		return directChallenge(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "validate":
 		return validate(args[1:], stdout, stderr)
 	case "scenarios":
@@ -120,6 +125,7 @@ Commands:
   campaign <scenario>      run a seeded scenario campaign sequentially
   hunt [base] [flags]      generate deterministic faults and rank likely bugs
   triage [flags]           hunt the fixed baselines, reproduce findings, file issues
+  challenge [id] [flags]   diagnose a hidden fault yourself, then let netdoc try
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
   capabilities             report whether this host can simulate, and what a run does
@@ -175,11 +181,24 @@ Flags for triage:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
 
+Flags for challenge:
+  -id <ID>                 replay a specific challenge instead of drawing one
+  -difficulty <level>      draw an easy, medium or hard challenge
+  -answer <name>           submit this diagnosis without opening a shell
+  -give-up                 skip straight to the answer
+  -json                    print the machine-readable result (needs -answer or -give-up)
+  -netdoc <path>           the netdoc binary to run
+  -timeout <duration>      netdoc's per-probe timeout (default 4s)
+  -v                       log each privileged command as it runs
+
 Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 3 the simulation could not run.
 
 For hunt: 0 no reportable finding, 1 findings, 2 usage or generation
 failure, 3 simulator runtime failure or cancellation.
+
+For challenge: 0 your diagnosis was correct; 1 it was not, or you gave up;
+2 usage; 3 the challenge could not be scored.
 
 For triage: 0 nothing reproducible, or every reproducible finding is now
 tracked by an issue; 1 reproducible findings nobody recorded; 2 usage;

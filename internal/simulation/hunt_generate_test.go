@@ -188,7 +188,7 @@ func TestProbeFamilyMutationGenerators(t *testing.T) {
 			}
 		}},
 		{"http.status_503", "healthy", "http-error", "", func(t *testing.T, m GeneratedMutation, s *Scenario) {
-			target, ok := findHTTPTestTarget(s)
+			target, ok := findHTTPTestTarget(s, s.Tests)
 			if !ok {
 				t.Fatal("mutated HTTP target disappeared")
 			}

@@ -453,6 +453,52 @@ guide](docs/simulation.md)** for setup and requirements, commands and workflows,
 scenario authoring, campaigns, hunt and triage usage, reports, troubleshooting,
 tests, and limitations.
 
+### Think you can beat Network Doctor?
+
+Challenge Mode drops you into a deliberately broken network without telling you
+what's wrong. Investigate it with the tools you'd normally use, commit to your
+diagnosis, then let Network Doctor take a shot at the exact same problem. Both
+answers are judged against the simulator's independently observed ground truth.
+
+```sh
+./netdoc-sim challenge                  # draw a challenge and play it
+./netdoc-sim challenge -difficulty hard
+./netdoc-sim challenge -id V1-8F42C1    # play the one a friend sent you
+```
+
+You land in a shell inside the broken machine. Use `ping`, `dig`, `curl`, `ip
+route`, `ss`, `traceroute`, `nc` — whatever you'd reach for on a real
+call-out. Type `exit` when you're ready, pick your diagnosis from the menu, and
+the reveal shows the ground truth, the evidence behind it, your answer, Network
+Doctor's answer, and who got it right:
+
+```text
+Result
+  YOU BEAT NETWORK DOCTOR
+
+Human investigation: 1m 47s
+Network Doctor run:  3s
+```
+
+It ends with a block you can paste anywhere. It carries the challenge id and two
+check marks and never names the fault, so sharing your result doesn't spoil the
+puzzle for whoever plays it next:
+
+```text
+Network Doctor Challenge V1-8F42C1 (hard)
+Me:             ✓
+Network Doctor: ✗
+YOU BEAT NETWORK DOCTOR in 1m 47s
+Your turn: netdoc-sim challenge -id V1-8F42C1
+```
+
+Everything is local and reproducible: no account, no server, no leaderboard. A
+challenge id is the whole puzzle, so the same id is the same broken network on
+anyone's machine. Same requirements as the rest of the simulator — Linux,
+unprivileged, and nothing on your real network is touched. See the [Challenge
+Mode guide](docs/simulation.md#challenge-mode) for how scoring works and why
+Network Doctor never gets to see the answer either.
+
 ## Development
 
 The package layout and the dependency rules between the packages are documented

@@ -6,7 +6,10 @@ diagnosis matched the injected fault.
 
 It is permanent development and regression-testing infrastructure, not an
 end-user product surface. `internal/simulation` is imported by
-`cmd/netdoc-sim` alone and does not ship in the `netdoc` binary.
+`cmd/netdoc-sim` alone and does not ship in the `netdoc` binary. The one part
+meant to be played with rather than scripted is [Challenge
+Mode](#challenge-mode), which is still a `netdoc-sim` command and still ships
+nowhere near the `netdoc` binary.
 
 Use the commands themselves for current inventory and flag details:
 
@@ -410,6 +413,120 @@ the lower-metric client route remains selected. Observation requires the
 selected preferred family path to be unreachable and the controlled target on
 the distinct higher-metric alternate path to remain reachable; successful
 link-down application alone is insufficient.
+
+## Challenge Mode
+
+`netdoc-sim challenge` is the hunt with the contestants swapped: instead of the
+oracle grading netdoc alone, a person diagnoses the network first and both
+answers are graded against the same independently observed truth.
+
+```sh
+./netdoc-sim challenge                       # draw one and play it
+./netdoc-sim challenge -difficulty hard
+./netdoc-sim challenge -id V1-8F42C1          # replay someone else's
+./netdoc-sim challenge -id V1-8F42C1 -answer dns_failure -json
+```
+
+One command runs the whole session: it builds the network, opens a shell in the
+client node, takes a structured answer, runs the real netdoc in the same live
+network, and prints the reveal. It is one foreground process because a
+simulated network only exists while the process holding its namespaces does —
+`start`/`shell`/`diagnose` subcommands would need a daemon and a state file
+pointing at it, and would make it possible for the player and netdoc to be
+handed different networks.
+
+### Challenge ids
+
+A challenge id is `V1-8F42C1`: a generator version and six hex digits. It
+resolves with no state on disk and no network, so the same id is the same
+puzzle on anyone's machine. A bare `8F42C1` is accepted and always means `V1`.
+
+The version is part of the id because it has to be. What an id means depends on
+this file's selection rules, on the hunt generator behind them, and on the base
+scenario YAML they draw from — so a change to any of the three would repoint
+every id already shared. Such a change adds an entry to `challengeGenerators`
+instead, leaving old ids resolving through the rules they were minted under.
+`TestChallengeIDsResolveToTheSameCaseForever` pins one id per family and fails
+if the chain moves under them.
+
+### What is shared with the hunt, and what is not
+
+Challenge Mode adds no fault model. A challenge id resolves, deterministically
+and with no state on disk, to a hunt base scenario and a hunt case number, and
+the case is materialized by `GenerateHuntCase` with a maximum of one mutation.
+Truth comes from `collectObservedTruth`, so a mutation counts only when the
+executed run left independent evidence for it — the same `observed_faults` rule
+the hunt uses. Recognition of a condition the hunt oracle already grades reuses
+that oracle's `recognized` half rather than restating it.
+
+What is challenge-specific is the answer vocabulary, the reviewed subset of
+mutations that make fair human puzzles, the difficulty metadata, and the
+matchup. `internal/simulation/challenge.go` is authoritative for all four.
+
+A hunt mutation is not automatically a challenge. `challengeFamilies` lists the
+eligible ones and says next to each excluded family why it is out: timed faults
+(the two contestants would face different networks), netem impairment and HTTP
+error statuses (netdoc reports no failure there by design, so grading it would
+invent a contract), the proxy fault (only the netdoc process is handed the
+proxy), and the QUIC block (ordinary tools leave a person nothing to reason
+from).
+
+### Scoring
+
+Each contestant is graded separately against the observed truth, and the
+matchup is derived from the two scores. There is no partial credit and no
+scoring on prose: the human picks from a fixed menu, and netdoc is read through
+its own cause vocabulary, structured per-family verdicts and verdict class.
+
+A challenge is scoreable only when the run completed and cleaned up, netdoc
+produced a diagnosis for the primary test, and the answer is established
+independently. For an injected fault that means the mutation is in
+`observed_faults`. For a challenge that injected nothing it means the simulator
+positively measured health along every dimension a challenge is able to break:
+a reachable family at the client node and no unreachable one, every controlled
+target reached, every selected gateway answering, no failing DNS answers, no
+reset connections, no expired certificate a client refused, and no downed
+link. An empty mutation
+list is not evidence of anything, and neither is netdoc's verdict — the healthy
+oracle reads neither. Anything else is `no_result`, for both contestants at
+once.
+
+The fault also has to sit where the player was pointed. A base with more than
+one client test can have the generator place a service fault on a target the
+briefing never names, which would be a clue nobody was shown and a question the
+graded netdoc run was never asked; those cases are not challenge-capable.
+
+Elapsed human time is recorded because it is fun to compare, and is deliberately
+not part of the matchup: netdoc is automated and a person is not. In `-json` it
+is the only thing under `timing`, which is also the only part of a result a
+replay of the same id will not reproduce.
+
+### Not spoiling it
+
+The briefing prints the id and the difficulty. The base scenario, seed, case
+number and mutation are the answer, so they appear only in the reveal, and a
+test asserts the briefing contains none of them. The share block carries two
+check marks and the id but never names the fault, so posting a result does not
+spoil the challenge for whoever reads it.
+
+`-v`, a JSON report, or reading the source obviously defeats all of this. It is
+a game, not a security boundary.
+
+### Requirements and cleanup
+
+Challenge Mode needs exactly what any other run needs — the Linux namespace
+backend, no root — plus a terminal, because a person is being asked a question.
+The shell enters the node through the same `nsenter` argument slice the netdoc
+run uses, gains no privilege the simulator did not already have, and is given
+the simulator's trust anchors so a generated certificate verifies for the
+player exactly as it does for netdoc.
+
+Nothing survives the command. A challenge never keeps its simulation: the
+namespaces go when the director exits, the workspace is removed on every exit
+path including an abandoned session, and no state record is written at all.
+Editing the network from inside the challenge shell is possible and is its own
+punishment — truth is collected after netdoc runs, so a repaired fault stops
+being observed and the challenge scores `no_result`.
 
 ## Triage and nightly automation
 

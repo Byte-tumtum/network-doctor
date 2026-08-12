@@ -2437,3 +2437,130 @@ func TestDryRunCreatesNothing(t *testing.T) {
 		}
 	}
 }
+
+// --- challenge ----------------------------------------------------------
+
+// runChallenge plays one challenge end to end through the real binaries, with
+// the human answer supplied on the command line instead of typed.
+func runChallenge(t *testing.T, sim, netdoc string, extra ...string) ChallengeResult {
+	t.Helper()
+	cmd := exec.Command(sim, append([]string{"challenge", "-json", "-netdoc", netdoc}, extra...)...)
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if err != nil && !asExitError(err, &exit) {
+		t.Fatalf("challenge %v: %v", extra, err)
+	}
+	var result ChallengeResult
+	if jsonErr := json.Unmarshal(out, &result); jsonErr != nil {
+		t.Fatalf("challenge %v: result is not JSON (%v): %s", extra, jsonErr, out)
+	}
+	return result
+}
+
+// Every challenge-capable family has to reach a scoreable truth through the
+// real namespace backend, or the game would tell players "no result" for a
+// fault the simulator did inject.
+func TestChallengeFamiliesAreScoreableEndToEnd(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	for _, family := range challengeFamilies {
+		name := family.mutation
+		if name == "" {
+			name = "healthy"
+		}
+		t.Run(name, func(t *testing.T) {
+			challenge := challengeWithMutation(t, family.mutation)
+			result := runChallenge(t, sim, netdoc, "-id", challenge.ID, "-answer", string(family.answer))
+			if !result.Truth.Scoreable {
+				t.Fatalf("challenge %s is not scoreable: %s", challenge.ID, result.Truth.Reason)
+			}
+			if result.Truth.Answer != family.answer {
+				t.Fatalf("truth = %s, want %s", result.Truth.Answer, family.answer)
+			}
+			if family.mutation != "" && !slices.Contains(result.Truth.ObservedFaults, family.mutation) {
+				t.Fatalf("truth was scored without observing %s: %v", family.mutation, result.Truth.ObservedFaults)
+			}
+			if family.mutation == "" && len(result.Truth.ObservedFaults) != 0 {
+				t.Fatalf("a healthy challenge observed faults: %v", result.Truth.ObservedFaults)
+			}
+			if result.Human.Score != ChallengeCorrect {
+				t.Fatalf("the correct answer scored %s", result.Human.Score)
+			}
+			if result.Result != ChallengeDraw && result.Result != ChallengeHumanWins {
+				t.Fatalf("result = %s with a correct human answer", result.Result)
+			}
+			if len(result.Truth.Evidence) == 0 {
+				t.Fatal("a scored challenge has to show what the simulator measured")
+			}
+			t.Logf("%s: netdoc %s (%s)", name, result.NetworkDoctor.Score, result.NetworkDoctor.Detail)
+		})
+	}
+}
+
+// The same id twice is the same puzzle, and the human's answer is the only
+// thing their answer changes.
+func TestChallengeReplayIsStableAndHumanAnswerMovesNothingElse(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	challenge := challengeWithMutation(t, "dns.servfail")
+	right := runChallenge(t, sim, netdoc, "-id", challenge.ID, "-answer", string(AnswerDNSFailure))
+	wrong := runChallenge(t, sim, netdoc, "-id", challenge.ID, "-answer", string(AnswerHTTPService))
+
+	if right.Human.Score != ChallengeCorrect || wrong.Human.Score != ChallengeIncorrect {
+		t.Fatalf("human scores %s and %s", right.Human.Score, wrong.Human.Score)
+	}
+	if right.Truth.Answer != wrong.Truth.Answer || right.Truth.Scoreable != wrong.Truth.Scoreable ||
+		!slices.Equal(right.Truth.ObservedFaults, wrong.Truth.ObservedFaults) {
+		t.Fatalf("the human's answer moved the truth:\n%+v\n%+v", right.Truth, wrong.Truth)
+	}
+	if right.NetworkDoctor.Score != wrong.NetworkDoctor.Score {
+		t.Fatalf("the human's answer moved Network Doctor's score: %s then %s",
+			right.NetworkDoctor.Score, wrong.NetworkDoctor.Score)
+	}
+	if right.CaseFingerprint != wrong.CaseFingerprint || right.BaseScenario != wrong.BaseScenario ||
+		right.Case != wrong.Case {
+		t.Fatalf("one id ran two cases: %s/%d and %s/%d",
+			right.BaseScenario, right.Case, wrong.BaseScenario, wrong.Case)
+	}
+}
+
+// A challenge is not a kept simulation: when the command returns, the
+// namespaces, the workspace and any record of them are gone.
+func TestChallengeLeavesNothingBehind(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	before := stateEntries(t)
+	result := runChallenge(t, sim, netdoc, "-give-up")
+	if result.ChallengeID == "" {
+		t.Fatalf("challenge did not run: %+v", result)
+	}
+	if after := stateEntries(t); len(after) != len(before) {
+		t.Fatalf("challenge left %d state records behind, was %d", len(after), len(before))
+	}
+	leftovers, err := filepath.Glob(filepath.Join(os.TempDir(), "netdoc-sim-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range leftovers {
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if info.ModTime().After(time.Now().Add(-2 * time.Minute)) {
+			t.Errorf("challenge left a workspace behind: %s", path)
+		}
+	}
+}
+
+func stateEntries(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(StateDir())
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range entries {
+		out = append(out, entry.Name())
+	}
+	return out
+}
