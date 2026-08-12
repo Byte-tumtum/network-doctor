@@ -992,3 +992,48 @@ func TestSinceNeverZero(t *testing.T) {
 		t.Errorf("since(now) = %v, Ms = %d, want at least 1ms", d, Ms(d))
 	}
 }
+
+// hasGlobalUnicast answers an address-configuration question, not a link-state
+// one: FlagUp (administratively up) gates it, FlagRunning (carrier/operational)
+// deliberately does not. A cable pulled from a configured NIC leaves the
+// address assigned, and that is exactly the black-holed case the caller warns
+// about — requiring FlagRunning here would silence it.
+func TestHasGlobalUnicastIgnoresRunningState(t *testing.T) {
+	addr := func(s string) []net.Addr {
+		ip, n, err := net.ParseCIDR(s)
+		if err != nil {
+			t.Fatalf("ParseCIDR(%q): %v", s, err)
+		}
+		n.IP = ip
+		return []net.Addr{n}
+	}
+	for _, tc := range []struct {
+		name  string
+		flags net.Flags
+		addrs []net.Addr
+		v4    bool
+		want  bool
+	}{
+		{"up without carrier still counts", net.FlagUp, addr("192.0.2.5/24"), true, true},
+		{"up and running counts", net.FlagUp | net.FlagRunning, addr("192.0.2.5/24"), true, true},
+		{"administratively down does not", 0, addr("192.0.2.5/24"), true, false},
+		{"running but admin down does not", net.FlagRunning, addr("192.0.2.5/24"), true, false},
+		{"loopback never counts", net.FlagUp | net.FlagRunning | net.FlagLoopback, addr("127.0.0.1/8"), true, false},
+		{"link-local v4 is not configured egress", net.FlagUp, addr("169.254.1.2/16"), true, false},
+		{"v6 up without carrier still counts", net.FlagUp, addr("2001:db8::1/64"), false, true},
+		{"v6 ULA does not count", net.FlagUp | net.FlagRunning, addr("fd00::1/64"), false, false},
+		{"wrong family does not count", net.FlagUp | net.FlagRunning, addr("192.0.2.5/24"), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ops := &netops{
+				interfaces: func() ([]net.Interface, error) {
+					return []net.Interface{{Name: "eth0", Flags: tc.flags}}, nil
+				},
+				interfaceAddrs: func(*net.Interface) ([]net.Addr, error) { return tc.addrs, nil },
+			}
+			if got := ops.hasGlobalUnicast(tc.v4); got != tc.want {
+				t.Errorf("hasGlobalUnicast(v4=%v) = %v, want %v", tc.v4, got, tc.want)
+			}
+		})
+	}
+}
