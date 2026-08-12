@@ -840,7 +840,7 @@ func TestHuntAnalysisFindsObservedDNSFalseNegative(t *testing.T) {
 		Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledDNS, Service: "r", Outcome: DNSOutcomeDrop}, Result: EventApplied}},
 		Tests: []TestOutcome{{Name: "t", StartOffset: 0, EndOffset: time.Second, ProcessOutcome: ProcessExited,
 			Diagnosis: &Diagnosis{Checks: []DiagnosisCheck{{ID: "dns", Status: "PASS", Detail: "resolved"}}}}},
-		Evidence:    Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED", Offset: 100 * time.Millisecond}}},
+		Evidence:    Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED", Offset: 100 * time.Millisecond, OffsetKnown: true}}},
 		Suggestions: []Suggestion{}}
 	truth := collectObservedTruth(manifest, report)
 	findings := analyzeHuntCase(manifest, report, truth)
@@ -1152,7 +1152,7 @@ func TestHuntAnalysisStopsAfterRuntimeFailure(t *testing.T) {
 	report := &Report{Cleanup: CleanupInfo{Errors: []string{"evidence recorder failed"}},
 		Tests: []TestOutcome{{StartOffset: 0, EndOffset: time.Second,
 			Diagnosis: &Diagnosis{Checks: []DiagnosisCheck{{ID: "dns", Status: "PASS"}}}}},
-		Evidence: Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED", Offset: time.Millisecond}}}}
+		Evidence: Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED", Offset: time.Millisecond, OffsetKnown: true}}}}
 	findings := analyzeHuntCase(manifest, report, collectObservedTruth(manifest, report))
 	if len(findings) != 1 || findings[0].Code != "simulation_cleanup_failed" {
 		t.Fatalf("findings from incomplete evidence = %+v", findings)
@@ -1202,7 +1202,7 @@ func huntDNSReport(queryOutcome, checkStatus string) *Report {
 		Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledDNS, Service: "r", Outcome: DNSOutcomeDrop}, Result: EventApplied}},
 		Tests: []TestOutcome{{Name: "netdoc", ProcessOutcome: ProcessExited, EndOffset: time.Second,
 			Diagnosis: &Diagnosis{Verdict: "diagnosed", Checks: []DiagnosisCheck{{ID: "dns", Status: checkStatus}}}}},
-		Evidence: Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: queryOutcome, Offset: 100 * time.Millisecond}}}}
+		Evidence: Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: queryOutcome, Offset: 100 * time.Millisecond, OffsetKnown: true}}}}
 }
 
 func divergenceFindings(cases []HuntCaseResult) []HuntCaseFinding {

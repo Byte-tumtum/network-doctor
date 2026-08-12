@@ -691,7 +691,7 @@ func finalStateComparable(report *Report) bool {
 func dnsFailureDuring(test TestOutcome, queries []DNSQueryEvidence) bool {
 	last := map[string]DNSQueryEvidence{}
 	for _, query := range queries {
-		if query.Offset < test.StartOffset || query.Offset >= test.EndOffset {
+		if !query.placedWithin(test.StartOffset, test.EndOffset) {
 			continue
 		}
 		if prev, seen := last[query.Service]; !seen || query.Offset > prev.Offset {

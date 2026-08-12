@@ -159,8 +159,8 @@ func (r *Report) resamplingGap(test *TestOutcome, recovery FaultEventEvidence) (
 		return Suggestion{}, false
 	}
 	for _, q := range r.Evidence.DNSQueries {
-		if q.Service == recovery.Event.Service && q.Offset >= recovery.AppliedOffset &&
-			q.Offset < test.EndOffset && q.ActualOutcome != "DROPPED" {
+		if q.Service == recovery.Event.Service && q.placedWithin(recovery.AppliedOffset, test.EndOffset) &&
+			q.ActualOutcome != "DROPPED" {
 			return Suggestion{}, false
 		}
 	}

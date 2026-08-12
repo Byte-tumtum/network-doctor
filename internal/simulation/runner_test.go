@@ -536,3 +536,31 @@ func TestHolderProbeReplyRejectsUnusableRequests(t *testing.T) {
 		}
 	}
 }
+
+// Placing evidence on the timeline is where "no wall clock" would otherwise
+// turn into "observed at T0": Offset is zero before the director touches it, so
+// the only thing separating the two is whether the director says it placed the
+// query. An observation that really did land on T0 still has to come out known.
+func TestPlaceEvidenceOnTimelineMarksOnlyPlacedQueries(t *testing.T) {
+	t0 := time.Now()
+	rep := &Report{Evidence: Evidence{DNSQueries: []DNSQueryEvidence{
+		{Service: "unplaced", ActualOutcome: "DROPPED"},
+		{Service: "at-epoch", ActualOutcome: "DROPPED", at: t0},
+		{Service: "later", ActualOutcome: "ANSWER", at: t0.Add(250 * time.Millisecond)},
+	}}}
+	rep.placeEvidenceOnTimeline(t0)
+
+	for i, want := range []struct {
+		offset time.Duration
+		known  bool
+	}{{0, false}, {0, true}, {250 * time.Millisecond, true}} {
+		got := rep.Evidence.DNSQueries[i]
+		if got.Offset != want.offset || got.OffsetKnown != want.known {
+			t.Errorf("%s: offset = %v known = %v, want %v/%v", got.Service, got.Offset, got.OffsetKnown, want.offset, want.known)
+		}
+	}
+	// The first two share an offset on purpose; the flag is the whole difference.
+	if rep.Evidence.DNSQueries[0].OffsetKnown == rep.Evidence.DNSQueries[1].OffsetKnown {
+		t.Error("an unplaced query and one observed at T0 came out indistinguishable")
+	}
+}

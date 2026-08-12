@@ -171,8 +171,12 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 // clock; nothing is ordered by it, it only locates an observation.
 func (r *Report) placeEvidenceOnTimeline(t0 time.Time) {
 	for i := range r.Evidence.DNSQueries {
+		// An observation that reached the director without a wall clock stays
+		// unplaced. Marking it is what keeps it out of the interval readers
+		// instead of letting the zero offset speak for it.
 		if at := r.Evidence.DNSQueries[i].at; !at.IsZero() {
 			r.Evidence.DNSQueries[i].Offset = at.Sub(t0)
+			r.Evidence.DNSQueries[i].OffsetKnown = true
 		}
 	}
 }

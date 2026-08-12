@@ -161,10 +161,24 @@ type DNSQueryEvidence struct {
 	ScheduledOutcome string `json:"scheduled_outcome"`
 	ActualOutcome    string `json:"actual_outcome"`
 	// Offset places the query on the fault timeline, relative to T0. It is
-	// filled in by the director once the run's epoch is known.
-	Offset  time.Duration `json:"offset_ms"`
-	DelayMs int64         `json:"delay_ms,omitempty"`
-	at      time.Time
+	// filled in by the director once the run's epoch is known, and only means
+	// anything when OffsetKnown is set.
+	Offset time.Duration `json:"offset_ms"`
+	// OffsetKnown reports whether the holder's observation carried a wall clock
+	// the director could place on the timeline. Without it Offset is zero
+	// because there is nothing to put there, which is a different claim from a
+	// query observed exactly at T0, so the two are not left to share a value.
+	OffsetKnown bool  `json:"offset_known"`
+	DelayMs     int64 `json:"delay_ms,omitempty"`
+	at          time.Time
+}
+
+// placedWithin reports whether this query is known to have been observed in
+// [start, end). A query the director could not place is left out rather than
+// read as T0: unknown timing must never be enough to satisfy an interval a
+// caller asked about.
+func (q DNSQueryEvidence) placedWithin(start, end time.Duration) bool {
+	return q.OffsetKnown && q.Offset >= start && q.Offset < end
 }
 
 type TCPResetEvidence struct {

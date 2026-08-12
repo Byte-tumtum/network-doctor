@@ -43,7 +43,7 @@ func TestResamplingGapNeedsRecoveryInsideTheRunAndNoLaterQuery(t *testing.T) {
 	// A query that reached the recovered resolver inside the same run means
 	// netdoc did resample; there is no gap to report.
 	rep = timedReport(timeline, failing)
-	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER"}}
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER", OffsetKnown: true}}
 	if codes(rep.timelineSuggestions())[SuggestTransientNotResampled] {
 		t.Errorf("resampling gap reported although a later query was answered: %+v", rep.timelineSuggestions())
 	}
@@ -99,7 +99,7 @@ func TestPermanentWordingPairsTheRecoveryWithTheFailureItExplains(t *testing.T) 
 	dnsFailed.Diagnosis = diag("DNS is not resolving", DiagnosisCheck{ID: "dns", Status: "FAIL"})
 	// The resample happened, so only the wording is at issue here.
 	rep := timedReport(timeline, dnsFailed)
-	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER"}}
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER", OffsetKnown: true}}
 	if !codes(rep.timelineSuggestions())[SuggestTransientReportedPermanent] {
 		t.Error("a healed DNS outage was not paired with the DNS failure it explains")
 	}
@@ -110,14 +110,14 @@ func TestPermanentWordingPairsTheRecoveryWithTheFailureItExplains(t *testing.T) 
 func TestDNSFailureDuringJudgesTheLastQueryPerService(t *testing.T) {
 	test := TestOutcome{EndOffset: time.Second}
 	recovered := []DNSQueryEvidence{
-		{Service: "r", Offset: 200 * time.Millisecond, ActualOutcome: "DROPPED"},
-		{Service: "r", Offset: 700 * time.Millisecond, ActualOutcome: "ANSWER"},
+		{Service: "r", Offset: 200 * time.Millisecond, ActualOutcome: "DROPPED", OffsetKnown: true},
+		{Service: "r", Offset: 700 * time.Millisecond, ActualOutcome: "ANSWER", OffsetKnown: true},
 	}
 	if dnsFailureDuring(test, recovered) {
 		t.Error("a resolver that answered the resample was reported as still failing")
 	}
 	if !dnsFailureDuring(test, append(recovered,
-		DNSQueryEvidence{Service: "public", Offset: 800 * time.Millisecond, ActualOutcome: "SERVFAIL"})) {
+		DNSQueryEvidence{Service: "public", Offset: 800 * time.Millisecond, ActualOutcome: "SERVFAIL", OffsetKnown: true})) {
 		t.Error("a second resolver still failing at the end of the run was not reported")
 	}
 }
@@ -184,5 +184,63 @@ func TestTimelineSuggestionsAreStableAcrossRuns(t *testing.T) {
 				t.Fatalf("suggestion order changed at %d: %+v != %+v", j, next[j], first[j])
 			}
 		}
+	}
+}
+
+// The window predicate has to answer three different questions apart, and the
+// one that matters most is the one production evidence collection cannot reach
+// today: a query the director could not place must not be read as a query
+// observed at T0. Offset carries zero in both cases, so only OffsetKnown keeps
+// "not placed" from arguing that a resolver failed inside a window it was
+// never located in.
+func TestDNSFailureDuringSeparatesUnknownTimingFromOffsetZero(t *testing.T) {
+	window := TestOutcome{StartOffset: 100 * time.Millisecond, EndOffset: 500 * time.Millisecond}
+	fromZero := TestOutcome{StartOffset: 0, EndOffset: 500 * time.Millisecond}
+
+	for _, tc := range []struct {
+		name  string
+		test  TestOutcome
+		query DNSQueryEvidence
+		want  bool
+	}{
+		{"known failure inside the window", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 300 * time.Millisecond, OffsetKnown: true}, true},
+		{"known failure before the window", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 50 * time.Millisecond, OffsetKnown: true}, false},
+		{"known failure after the window", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 900 * time.Millisecond, OffsetKnown: true}, false},
+		{"start offset is inclusive", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "SERVFAIL", Offset: 100 * time.Millisecond, OffsetKnown: true}, true},
+		{"end offset is exclusive", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "SERVFAIL", Offset: 500 * time.Millisecond, OffsetKnown: true}, false},
+		// The pair this whole distinction exists for: identical Offset, opposite
+		// answers, decided only by whether the observation was ever placed.
+		{"a failure known to be at T0 is inside a window starting at T0", fromZero,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 0, OffsetKnown: true}, true},
+		{"an unplaced failure does not match a window containing zero", fromZero,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 0}, false},
+		{"an unplaced failure does not match a window starting later", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 0}, false},
+		{"a served answer inside the window is not a failure", window,
+			DNSQueryEvidence{Service: "r", ActualOutcome: "ANSWER", Offset: 300 * time.Millisecond, OffsetKnown: true}, false},
+	} {
+		if got := dnsFailureDuring(tc.test, []DNSQueryEvidence{tc.query}); got != tc.want {
+			t.Errorf("%s: dnsFailureDuring = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// An unplaced query cannot clear a resolver either: the last-query-per-service
+// rule needs to know which query was last, and an observation with no offset
+// never earns that position.
+func TestDNSFailureDuringIgnoresUnplacedQueriesForTheLastQueryRule(t *testing.T) {
+	test := TestOutcome{EndOffset: time.Second}
+	failing := DNSQueryEvidence{Service: "r", ActualOutcome: "DROPPED", Offset: 200 * time.Millisecond, OffsetKnown: true}
+
+	if !dnsFailureDuring(test, []DNSQueryEvidence{failing, {Service: "r", ActualOutcome: "ANSWER"}}) {
+		t.Error("an unplaced answer was allowed to exonerate a resolver that failed inside the run")
+	}
+	if !dnsFailureDuring(test, []DNSQueryEvidence{{Service: "r", ActualOutcome: "ANSWER", OffsetKnown: true, Offset: 100 * time.Millisecond}, failing}) {
+		t.Error("a placed answer before the placed failure was read as a recovery")
 	}
 }
