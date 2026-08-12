@@ -1,27 +1,38 @@
 # VHS tape for the README demo GIF (https://github.com/charmbracelet/vhs).
-# Regenerate with:  go build -o netdoc . && vhs demo.tape
+# Regenerate with:
+#
+#   go build -o netdoc . && HOME=$(mktemp -d) vhs demo.tape
+#
 # Needs a working network connection; probes run live against github.com:443.
 # The network-map segment sweeps the local /24 and shows real device names —
 # record on a network you're happy to publish.
 #
-# The SSH form lists the private keys in ~/.ssh by name, so the published GIF
-# has that value blacked out afterwards. Find the frame range where a real key
-# (not "none") is on screen, then redact it — the range moves whenever the
-# timings above change, so re-derive it rather than reusing these numbers:
+# Record under a throwaway HOME so nothing personal reaches the GIF and the
+# recording is reproducible. Two panes read from it:
 #
-#   ffmpeg -i raw.gif -filter_complex \
-#     "[0:v]drawbox=x=152:y=438:w=155:h=20:color=black:t=fill:enable='between(n,1389,1515)',\
-#      split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer" \
-#     -loop 0 assets/demo.gif
+#   $HOME/.ssh/id_ed25519{,.pub}      the SSH form lists key names
+#   $HOME/.config/netdoc/history      the restart prompt's ↑ history
+#
+# Seed both before recording (an empty file passes for a key — the form only
+# stats the private half next to a .pub):
+#
+#   H=$(mktemp -d); mkdir -p $H/.ssh $H/.config/netdoc
+#   touch $H/.ssh/id_ed25519 $H/.ssh/id_ed25519.pub
+#   printf 'cloudflare.com\nexample.com:80\n1.1.1.1:53\n' > $H/.config/netdoc/history
+#
+# Without that, the form lists your real key names and the GIF needs blacking
+# out frame-by-frame afterwards.
 
 Output assets/demo.gif
 
 Set FontSize 15
 # 1300px is the narrowest width that fits the longest verdict sentence (the
-# split-DNS one) without the summary line being cut off; 600px is the tallest
-# pane stack (the SSH form).
+# split-DNS one) without the summary line being cut off. Height must clear the
+# check list, the toolbox chips and the help bar before the job pane gets any
+# rows at all — at 600px the streaming tool output is silently shed and never
+# appears on the main screen. 820px leaves it about eight lines.
 Set Width 1300
-Set Height 600
+Set Height 820
 Set Padding 12
 Set TypingSpeed 40ms
 
@@ -34,9 +45,9 @@ Sleep 6s
 
 # Walk the checks so the detail pane changes.
 Down@600ms 4
-Sleep 1.5s
+Sleep 1.2s
 Down@600ms 3
-Sleep 1.5s
+Sleep 1.2s
 
 # Full-screen help overlay.
 Type "?"
@@ -72,29 +83,30 @@ Sleep 800ms
 Escape
 Sleep 500ms
 
-# mtr finished meanwhile — tab over to its report.
-Tab
-Sleep 3s
-
 # Network map: the /24 sweep sits behind the same confirm gate as nmap;
 # the map opens on launch and fills as hosts are found.
 Type "v"
 Sleep 2s
 Type "y"
-Sleep 12s
+Sleep 10s
 Down@600ms 2
 Sleep 2s
 Type "v"
 Sleep 500ms
 
+# Tab over to the mtr report, which has had time to finish by now: report mode
+# prints nothing at all until every cycle is done (~20s to a distant host), so
+# this segment sits here rather than right after the launch.
+Tab
+Sleep 4s
+
 # SSH login form: username, key picker, password. The form opens on the
-# username, so tab first; nothing is submitted here — esc backs out. This is
-# the segment the post-processing blacks out.
+# username, so tab first; nothing is submitted here — esc backs out.
 Type "S"
 Sleep 2s
 Tab
 Sleep 800ms
-Right@700ms 2
+Right@700ms 1
 Sleep 1.5s
 Tab
 Sleep 500ms
@@ -116,14 +128,43 @@ Sleep 500ms
 # Save a report of the chain plus the completed tool output.
 Type "w"
 Sleep 3s
+Type "q"
+Sleep 1s
+
+# Toolbox mode: no chain, just the tools — local state is one keypress away.
+Type "./netdoc --toolbox"
+Sleep 500ms
+Enter
+Sleep 2s
+Type "i"
+Sleep 2.5s
+Type "s"
+Sleep 2.5s
+Type "q"
+Sleep 1s
+
+# Probe selection plus a different second-opinion resolver: only the named
+# checks and their prerequisites run.
+Type "./netdoc --check dns,dns_public,target_tcp,tls --public-dns 9.9.9.9 github.com:443"
+Sleep 500ms
+Enter
+Sleep 4s
+Type "q"
+Sleep 1s
+
+# Headless JSON for scripts and CI; the tail carries the verdict. stderr is
+# dropped because quic-go logs a UDP-buffer warning there on many Linux hosts,
+# which is noise in the recording rather than anything about the report.
+Type "./netdoc --json github.com:443 2>/dev/null | tail -18"
+Sleep 500ms
+Enter
+Sleep 6s
 
 # Watch mode: the same chain re-run every 5s, with a per-check history strip
 # and failure count. Three passes is enough to show the strip filling in.
-Type "q"
-Sleep 1s
 Type "./netdoc --watch github.com:443"
 Sleep 500ms
 Enter
-Sleep 16s
+Sleep 14s
 Ctrl+C
 Sleep 1s

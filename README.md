@@ -8,7 +8,7 @@
 cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
 TLS, HTTP, proxy, and path-MTU checks into one plain-English diagnosis.
 
-![Network Doctor diagnosing github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, and watch mode](assets/demo.gif)
+![Network Doctor diagnosing github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, the mtr report, toolbox mode, probe selection with --check, headless --json, and watch mode](assets/demo.gif)
 
 Instead of handing you a wall of `ping`, `dig`, and `curl` output, Network
 Doctor answers the useful question: **is the problem on my network, along the
