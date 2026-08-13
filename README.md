@@ -461,7 +461,26 @@ Race, fuzz, and network-namespace checks run only on Linux in CI. The
 `netns_integration` tests skip themselves on a host without unprivileged user
 namespaces; they never need root. That gate keeps `-v` because a skipped run and
 a real one both print just `ok` otherwise, and `-count=1` because a cached
-result would not have exercised any namespace at all.
+result would not have exercised any namespace at all. Off Linux those tests are
+absent rather than skipped — they read the backend's own Linux internals to
+prove the host was left alone — so the step passes there without exercising a
+namespace.
+
+Two steps therefore mean less than they appear to on macOS and Windows, and one
+of them looks like a failure. `golangci-lint` analyses a single build
+configuration, and CI lints on Linux: run it from another platform and the
+`unused` linter reports every helper that only Linux-tagged code calls — around
+forty in `internal/simulation`, none of them real. To reproduce CI's result,
+build the linter for your own machine and point it at the Linux configuration:
+
+```sh
+tools=$(mktemp -d)
+GOBIN=$tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+GOOS=linux $tools/golangci-lint run ./...
+```
+
+`GOOS=linux go run …` does not work for this: it cross-builds the linter itself
+and then cannot execute it.
 
 ## Testing Network Doctor against broken networks
 
