@@ -682,6 +682,16 @@ func healthyChallenge(id, base string, seed int64, generatorVersion, difficulty 
 
 func newChallenge(id, base string, seed int64, caseNumber int, difficulty string,
 	manifest GeneratedCaseManifest, scenario *Scenario, condition challengeCondition) (*Challenge, error) {
+	// The target gets this challenge's own name before anybody is told what it
+	// is. Derived from the id alone, so a replay renames it identically, and
+	// applied to the executing scenario rather than to the briefing, so the name
+	// the player is given is the name the network answers to.
+	if nameChallengeTarget(scenario, id) != "" {
+		canonicalScenarioInput(scenario)
+		if err := scenario.Validate(); err != nil {
+			return nil, fmt.Errorf("challenge %s: naming the target broke the scenario: %w", id, err)
+		}
+	}
 	primary, ok := primaryTest(scenario)
 	if !ok {
 		return nil, fmt.Errorf("challenge base %s has no client test", base)

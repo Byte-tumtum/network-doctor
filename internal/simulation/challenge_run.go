@@ -60,8 +60,18 @@ func (s *ChallengeSession) Shell(ctx context.Context, stdin io.Reader, stdout, s
 	if !ok {
 		return errors.New("this backend cannot open a shell inside a node")
 	}
+	// The target is exported so the player does not have to retype the hostname
+	// at every command: `curl $NETDOC_CHALLENGE_TARGET`, `dig $NETDOC_CHALLENGE_HOST`.
+	// Both are the briefing's own values, so this discloses nothing the briefing
+	// did not — and a challenge with no specific target exports neither, rather
+	// than exporting an empty string that would read as one.
+	env := []string{"NETDOC_CHALLENGE=" + s.Challenge.ID}
+	if s.Challenge.Target != "" {
+		env = append(env, "NETDOC_CHALLENGE_TARGET="+s.Challenge.Target,
+			"NETDOC_CHALLENGE_HOST="+challengeTargetHost(s.Challenge.Target))
+	}
 	return interactive.ExecInteractive(ctx, s.Challenge.Node, []string{loginShell(), "-i"},
-		append([]string{"NETDOC_CHALLENGE=" + s.Challenge.ID}, s.shellEnv...), stdin, stdout, stderr)
+		append(env, s.shellEnv...), stdin, stdout, stderr)
 }
 
 // loginShell picks the player's shell, falling back to the one every POSIX host

@@ -2644,6 +2644,91 @@ func TestChallengeReplayIsStableAndHumanAnswerMovesNothingElse(t *testing.T) {
 	}
 }
 
+// The hostname in the briefing has to be a real part of the simulated network,
+// answered by real DNS over real sockets from inside the node — not a label
+// printed beside a topology that knows it by another name. A player who is
+// handed a name they cannot resolve is debugging the game.
+//
+// This runs the challenge's own scenario through the ordinary run path, so the
+// diagnosis it checks is netdoc resolving the renamed name through the node's own
+// /etc/resolv.conf against the simulator's own DNS service.
+func TestChallengeHostnameResolvesInsideTheNamespaces(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	// A healthy challenge on each base that briefs a hostname, one with plain HTTP
+	// and one with TLS: the TLS case additionally proves the renamed name is the
+	// name the certificate was issued for, since the handshake verifies it.
+	for _, id := range []string{"V3-022CCE", "V3-01EEF0", "V3-013556"} {
+		challenge, err := BuildChallenge(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(id+"/"+challenge.Base, func(t *testing.T) {
+			host := challengeTargetHost(challenge.Target)
+			if host == "" || !strings.HasSuffix(host, challengeHostSuffix) {
+				t.Fatalf("challenge %s does not brief a hostname (target %q)", id, challenge.Target)
+			}
+			rep := runScenarioDefinition(t, sim, netdoc, challenge.Scenario)
+			var primary *TestOutcome
+			for i := range rep.Tests {
+				if rep.Tests[i].Node == challenge.Node {
+					primary = &rep.Tests[i]
+					break
+				}
+			}
+			if primary == nil || primary.Diagnosis == nil {
+				t.Fatalf("no diagnosis for the challenge node: %+v", rep.Tests)
+			}
+			// The target netdoc was actually pointed at is the briefed name, so both
+			// contestants are answering about the same host.
+			if !strings.Contains(primary.Target, host) {
+				t.Fatalf("netdoc was pointed at %q, not the briefed host %q", primary.Target, host)
+			}
+			// And it resolved. A DNS row that passed is the simulated resolver
+			// answering a name that only exists inside this simulation; a failing one
+			// would mean the rename reached the briefing and not the zone.
+			for _, want := range []string{"dns", "target_tcp"} {
+				check, ok := findCheck(primary.Diagnosis.Checks, want)
+				if !ok {
+					t.Fatalf("the diagnosis has no %s row: %+v", want, primary.Diagnosis.Checks)
+				}
+				if check.Status != "PASS" {
+					t.Fatalf("%s on the briefed host %q is %s (%s); the name is not answerable in the simulation",
+						want, host, check.Status, check.Detail)
+				}
+			}
+			if primary.Diagnosis.Verdict != diagnostic.VerdictOK {
+				t.Fatalf("a healthy challenge on %q reached verdict %q: %s",
+					host, primary.Diagnosis.Verdict, primary.Diagnosis.Summary)
+			}
+			// Nothing left the namespace to make that work: the name is under the
+			// reserved TLD no public resolver may answer, and the resolver the node
+			// was given is an address this scenario owns.
+			client := challenge.Scenario.Topology.node(challenge.Node)
+			if client == nil || client.Resolver == "" {
+				t.Fatalf("the challenge node has no scenario resolver to have asked")
+			}
+			owned := false
+			for _, node := range challenge.Scenario.Topology.Nodes {
+				owned = owned || nodeOwnsAddress(node, client.Resolver)
+			}
+			if !owned {
+				t.Fatalf("the node's resolver %q is not an address this simulation owns", client.Resolver)
+			}
+		})
+	}
+}
+
+// findCheck is one row of a diagnosis by its stable probe id.
+func findCheck(checks []DiagnosisCheck, id string) (DiagnosisCheck, bool) {
+	for _, check := range checks {
+		if check.ID == id {
+			return check, true
+		}
+	}
+	return DiagnosisCheck{}, false
+}
+
 // A challenge is not a kept simulation: when the command returns, the
 // namespaces, the workspace and any record of them are gone.
 func TestChallengeLeavesNothingBehind(t *testing.T) {
