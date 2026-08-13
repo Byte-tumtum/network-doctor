@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,22 @@ const directorCommand = "__director"
 const campaignDirectorCommand = "__campaign_director"
 const huntDirectorCommand = "__hunt_director"
 const challengeDirectorCommand = "__challenge_director"
+
+// version is injected at build time with -X main.version, by the same
+// GoReleaser build that stamps netdoc and by the container image build. Asking
+// netdoc-sim rather than inferring from the package or image tag is the same
+// rule the simulator applies to netdoc: the binary is the only thing that knows
+// which build it is. A local build says "dev", truthfully.
+var version = "dev"
+
+func init() {
+	// A `go install ...@vX.Y.Z` build has no injected version but does carry the
+	// module version, and introducing itself as "dev" there would be a lie.
+	if info, ok := debug.ReadBuildInfo(); ok && version == "dev" &&
+		info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+}
 
 // Exit codes. Separated so a CI job can tell "netdoc diagnosed this wrong"
 // from "the simulator could not run".
@@ -108,6 +125,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return inspect(args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(args[1:], stdout, stderr)
+	case "version", "-version", "--version":
+		fmt.Fprintln(stdout, "netdoc-sim", version)
+		return exitOK
 	}
 	fmt.Fprintf(stderr, "netdoc-sim: unknown command %q\n", textsafe.Clean(args[0]))
 	fmt.Fprintln(stderr, "run 'netdoc-sim help' for usage")
@@ -132,6 +152,7 @@ Commands:
   list                     list simulations left running by 'run -keep'
   inspect <id>             show a kept simulation's nodes and how to enter them
   cleanup [<id>|-all]      release a kept simulation's namespaces and files
+  version                  print the build version, the same one netdoc reports
 
 A <scenario> is a built-in name or a path to a YAML file.
 
