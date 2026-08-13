@@ -276,12 +276,11 @@ func parseKeySeq(seq string) (string, error) {
 func validateBindings(bindings map[keyAction][]string) []error {
 	var errs []error
 	toolKeys := allToolKeys()
-	// Indexed by context, so the same key may mean one thing in the check
-	// list and another in the viewer, as esc always has.
+	// owner is indexed by context, so the same key may mean one thing in the
+	// check list and another in the viewer, as esc always has.
 	owner := make([]map[string]string, numContexts)
-	seqs := make([]map[string]string, numContexts)
 	for ctx := range numContexts {
-		owner[ctx], seqs[ctx] = map[string]string{}, map[string]string{}
+		owner[ctx] = map[string]string{}
 	}
 	for _, def := range actionDefs {
 		for _, seq := range bindings[def.act] {
@@ -291,7 +290,6 @@ func validateBindings(bindings map[keyAction][]string) []error {
 					continue
 				}
 				owner[ctx][seq] = def.name
-				seqs[ctx][seq] = def.name
 			}
 			if slices.Contains(toolKeys, strings.Fields(seq)[0]) && def.desc[ctxList] != "" {
 				errs = append(errs, fmt.Errorf("%s is bound to %q, which the toolbox uses to run a tool", def.name, displaySeq(seq)))
@@ -301,8 +299,8 @@ func validateBindings(bindings map[keyAction][]string) []error {
 	// A binding buried under a chord that starts with it would never fire:
 	// the first key would always wait for the second.
 	for ctx := range numContexts {
-		for seq, name := range seqs[ctx] {
-			for other, otherName := range seqs[ctx] {
+		for seq, name := range owner[ctx] {
+			for other, otherName := range owner[ctx] {
 				if seq != other && strings.HasPrefix(other, seq+" ") {
 					errs = append(errs, fmt.Errorf("%s is bound to %q, which is the start of %s's %q", name, displaySeq(seq), otherName, displaySeq(other)))
 				}
