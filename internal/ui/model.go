@@ -241,9 +241,19 @@ var (
 	}
 )
 
+// Option adjusts a new model. Everything the TUI needs to run is a positional
+// argument; options are for what the user configured rather than what the run
+// requires, so leaving them all off yields netdoc's stock behavior.
+type Option func(*model)
+
+// WithKeymap runs the TUI on a resolved keymap instead of the default one.
+func WithKeymap(km Keymap) Option {
+	return func(m *model) { m.keys = km }
+}
+
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
-func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection) tea.Model {
+func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
 	allProbes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
 	probes := selection.Apply(allProbes)
 	sp := spinner.New()
@@ -266,6 +276,9 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 		histPath:         histFile,
 		version:          version,
 		width:            100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+	}
+	for _, opt := range opts {
+		opt(&m)
 	}
 	m.history = loadHistory(histFile)
 	if t != nil {

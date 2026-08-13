@@ -14,24 +14,19 @@ func pressed(t *testing.T, m model, msg tea.KeyMsg) model {
 	return asModel(t, u)
 }
 
-var (
-	homeKey = tea.KeyMsg{Type: tea.KeyHome}
-	endKey  = tea.KeyMsg{Type: tea.KeyEnd}
-)
-
 func TestListJumpsToFirstAndLastCheck(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com"), false)
 	if len(m.probes) < 2 {
 		t.Fatalf("need at least two probes, got %d", len(m.probes))
 	}
-	end := pressed(t, m, endKey)
+	end := pressed(t, m, keyPress("end"))
 	if end.selected != len(m.probes)-1 {
 		t.Errorf("end selected row %d, want %d", end.selected, len(m.probes)-1)
 	}
 	if !end.selMoved {
 		t.Error("end did not count as the user moving the cursor, so completion may yank it away")
 	}
-	if home := pressed(t, end, homeKey); home.selected != 0 {
+	if home := pressed(t, end, keyPress("home")); home.selected != 0 {
 		t.Errorf("home selected row %d, want 0", home.selected)
 	}
 }
@@ -41,7 +36,7 @@ func TestListJumpsToFirstAndLastCheck(t *testing.T) {
 func TestListJumpSurvivesAnEmptyList(t *testing.T) {
 	m := newModel(nil, false)
 	m.probes = nil
-	if got := pressed(t, m, endKey).selected; got != 0 {
+	if got := pressed(t, m, keyPress("end")).selected; got != 0 {
 		t.Errorf("end on an empty list selected %d, want 0", got)
 	}
 }
@@ -60,14 +55,14 @@ func TestMapJumpsToFirstAndLastDevice(t *testing.T) {
 	if hosts != 3 {
 		t.Fatalf("networkHosts() = %d, want 3", hosts)
 	}
-	end := pressed(t, m, endKey)
+	end := pressed(t, m, keyPress("end"))
 	if end.mapSelected != hosts-1 {
 		t.Errorf("end selected device %d, want %d", end.mapSelected, hosts-1)
 	}
 	if end.selected != 0 {
 		t.Errorf("the check cursor moved to %d while the map was open", end.selected)
 	}
-	if home := pressed(t, end, homeKey); home.mapSelected != 0 {
+	if home := pressed(t, end, keyPress("home")); home.mapSelected != 0 {
 		t.Errorf("home selected device %d, want 0", home.mapSelected)
 	}
 }

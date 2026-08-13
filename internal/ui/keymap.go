@@ -152,9 +152,42 @@ var defaultPreset = map[keyAction][]string{
 	actQuit:         {"q"},
 }
 
-// presets are the names accepted by `keys:` in the config file.
+// vimOverlay is what `keys: vim` changes, and it is deliberately short: j/k,
+// /, and y were already the vim spelling of themselves, so the preset is the
+// motions the default keymap had no answer for. Nothing is taken away —
+// home/end/pgup/pgdown keep working, because a preset that unbound them would
+// trade one set of habits for another rather than add to it.
+//
+// gg over g: the chord is what a vim user's fingers already do, and the
+// machinery to resolve it is the same machinery a config file needs anyway.
+var vimOverlay = map[keyAction][]string{
+	actTop:          {"g g", "home"},
+	actBottom:       {"G", "end"},
+	actPageUp:       {"ctrl+b", "pgup"},
+	actPageDown:     {"ctrl+f", "pgdown"},
+	actHalfPageUp:   {"ctrl+u"},
+	actHalfPageDown: {"ctrl+d"},
+}
+
+// presets are the names accepted by -keys and by `keys:` in the config file.
 var presets = map[string]map[keyAction][]string{
 	"default": defaultPreset,
+	"vim":     mergePreset(defaultPreset, vimOverlay),
+}
+
+func mergePreset(base, overlay map[keyAction][]string) map[keyAction][]string {
+	out := maps.Clone(base)
+	maps.Copy(out, overlay)
+	return out
+}
+
+// PresetKeymap returns a named preset's keymap, for -keys.
+func PresetKeymap(name string) (Keymap, error) {
+	km, errs := buildKeymap(name, nil)
+	if len(errs) > 0 {
+		return km, errs[0]
+	}
+	return km, nil
 }
 
 // presetNames lists the presets for error messages, in a stable order.
@@ -165,29 +198,31 @@ func presetNames() []string { return slices.Sorted(maps.Keys(presets)) }
 // each name rather than by copying the strings, so a binding can never be
 // written in a spelling that no keypress will ever match ("pgdn" for
 // "pgdown"). Printable single runes are accepted on top of these.
+//
+// Absent on purpose: ctrl+c (the terminal's own way out, and the second press
+// quits whatever quit is bound to), ctrl+h/ctrl+i/ctrl+j/ctrl+m (the same
+// bytes as backspace/tab/enter, so binding them would move a key the user did
+// not name), and ctrl+z (the shell's job control).
+var bindableKeyTypes = []tea.KeyType{
+	tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
+	tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftLeft, tea.KeyShiftRight,
+	tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlLeft, tea.KeyCtrlRight,
+	tea.KeyEnter, tea.KeyEsc, tea.KeyTab, tea.KeyShiftTab, tea.KeySpace,
+	tea.KeyBackspace, tea.KeyDelete, tea.KeyInsert,
+	tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown,
+	tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyCtrlPgUp, tea.KeyCtrlPgDown,
+	tea.KeyCtrlA, tea.KeyCtrlB, tea.KeyCtrlD, tea.KeyCtrlE,
+	tea.KeyCtrlF, tea.KeyCtrlG, tea.KeyCtrlK, tea.KeyCtrlL,
+	tea.KeyCtrlN, tea.KeyCtrlO, tea.KeyCtrlP, tea.KeyCtrlQ,
+	tea.KeyCtrlR, tea.KeyCtrlS, tea.KeyCtrlT, tea.KeyCtrlU,
+	tea.KeyCtrlV, tea.KeyCtrlW, tea.KeyCtrlX, tea.KeyCtrlY,
+	tea.KeyF1, tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6,
+	tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12,
+}
+
 var keyNames = func() map[string]bool {
-	types := []tea.KeyType{
-		tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
-		tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftLeft, tea.KeyShiftRight,
-		tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlLeft, tea.KeyCtrlRight,
-		tea.KeyEnter, tea.KeyEsc, tea.KeyTab, tea.KeyShiftTab, tea.KeySpace,
-		tea.KeyBackspace, tea.KeyDelete, tea.KeyInsert,
-		tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown,
-		tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyCtrlPgUp, tea.KeyCtrlPgDown,
-		tea.KeyCtrlA, tea.KeyCtrlB, tea.KeyCtrlD, tea.KeyCtrlE,
-		tea.KeyCtrlF, tea.KeyCtrlG, tea.KeyCtrlK, tea.KeyCtrlL,
-		tea.KeyCtrlN, tea.KeyCtrlO, tea.KeyCtrlP, tea.KeyCtrlQ,
-		tea.KeyCtrlR, tea.KeyCtrlS, tea.KeyCtrlT, tea.KeyCtrlU,
-		tea.KeyCtrlV, tea.KeyCtrlW, tea.KeyCtrlX, tea.KeyCtrlY,
-		tea.KeyF1, tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6,
-		tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12,
-	}
-	// Absent on purpose: ctrl+c (the terminal's own way out, and the second
-	// press quits whatever quit is bound to), ctrl+h/ctrl+i/ctrl+j/ctrl+m
-	// (the same bytes as backspace/tab/enter, so binding them would move a
-	// key the user did not name), and ctrl+z (the shell's job control).
-	names := make(map[string]bool, len(types))
-	for _, kt := range types {
+	names := make(map[string]bool, len(bindableKeyTypes))
+	for _, kt := range bindableKeyTypes {
 		names[tea.Key{Type: kt}.String()] = true
 	}
 	return names

@@ -5,12 +5,26 @@
 package ui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
+
+// keyPress builds the message a real terminal would send for a binding's key
+// name, so a test that says ctrl+d exercises the same path ctrl+d takes.
+func keyPress(name string) tea.KeyMsg {
+	for _, kt := range bindableKeyTypes {
+		if (tea.Key{Type: kt}).String() == name {
+			return tea.KeyMsg{Type: kt}
+		}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
+}
 
 // Every shipped preset has to survive the same validation a user's config
 // does; a preset that couldn't be written by hand would be a keymap the
@@ -117,6 +131,99 @@ func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
 	u, _ = m.handleKey(keyMsg("g"))
 	if !u.(model).helping {
 		t.Fatal("gg did not open the cheatsheet")
+	}
+}
+
+// The vim preset's whole point is the motions, so each one is pinned against
+// the screen it moves — and against the default keys it must not have taken
+// away on its way in.
+func TestVimPresetMotions(t *testing.T) {
+	km, err := PresetKeymap("vim")
+	if err != nil {
+		t.Fatalf("PresetKeymap(vim): %v", err)
+	}
+	m := newModel(mustTarget(t, "example.com"), false)
+	m.keys = km
+	tests := []struct {
+		keys []string
+		ctx  keyContext
+		want keyAction
+	}{
+		{[]string{"g", "g"}, ctxViewer, actTop},
+		{[]string{"g", "g"}, ctxList, actTop},
+		{[]string{"G"}, ctxViewer, actBottom},
+		{[]string{"G"}, ctxList, actBottom},
+		{[]string{"ctrl+d"}, ctxViewer, actHalfPageDown},
+		{[]string{"ctrl+u"}, ctxViewer, actHalfPageUp},
+		{[]string{"ctrl+f"}, ctxViewer, actPageDown},
+		{[]string{"ctrl+b"}, ctxViewer, actPageUp},
+		{[]string{"j"}, ctxViewer, actDown},
+		{[]string{"k"}, ctxList, actUp},
+		// Kept, not replaced: the preset adds motions, it doesn't evict the
+		// keys a non-vim user in the same terminal already knows.
+		{[]string{"home"}, ctxList, actTop},
+		{[]string{"end"}, ctxViewer, actBottom},
+		{[]string{"pgdown"}, ctxViewer, actPageDown},
+		{[]string{"down"}, ctxList, actDown},
+		{[]string{"q"}, ctxList, actQuit},
+		{[]string{"/"}, ctxViewer, actFilter},
+	}
+	for _, tt := range tests {
+		m.pendingKeys = nil
+		var act keyAction
+		for _, key := range tt.keys {
+			act, m.pendingKeys = m.resolveKey(tt.ctx, key)
+		}
+		if act != tt.want {
+			t.Errorf("%v in context %d = action %d, want %d", tt.keys, tt.ctx, act, tt.want)
+		}
+	}
+	// The half-page motions have no default binding, so the viewer footer only
+	// offers them once a preset supplies one.
+	m.viewing, m.pendingKeys = true, nil
+	if footer := m.viewerFooter(); !strings.Contains(footer, "half page") {
+		t.Errorf("viewer footer = %q, want a half page chip", footer)
+	}
+	if footer := newModel(nil, false).viewerFooter(); strings.Contains(footer, "half page") {
+		t.Errorf("default viewer footer = %q, want no half page chip", footer)
+	}
+}
+
+// gg has to scroll the viewport, not just resolve: the chord path and the
+// scrolling path are separate pieces of machinery.
+func TestVimChordScrollsTheViewer(t *testing.T) {
+	km, err := PresetKeymap("vim")
+	if err != nil {
+		t.Fatalf("PresetKeymap(vim): %v", err)
+	}
+	m := newModel(nil, false)
+	m.keys, m.width, m.height = km, 80, 24
+	m.cur.name, m.cur.status = "ping the host", JobDone
+	for i := range 200 {
+		m.appendJobLine(fmt.Sprintf("line %d", i))
+	}
+	u, _ := m.handleKey(keyPress("enter"))
+	m = asModel(t, u)
+	if !m.viewing || !m.follow {
+		t.Fatalf("enter did not open the viewer at the tail (viewing=%v follow=%v)", m.viewing, m.follow)
+	}
+	view := func(m model, key string) model {
+		t.Helper()
+		u, _ := m.handleViewKey(keyPress(key))
+		return asModel(t, u)
+	}
+	m = view(m, "g")
+	if m.vp.YOffset == 0 {
+		t.Fatal("the first g scrolled on its own, before the chord finished")
+	}
+	if m = view(m, "g"); m.vp.YOffset != 0 || m.follow {
+		t.Errorf("gg left offset %d follow %v, want the top and no follow", m.vp.YOffset, m.follow)
+	}
+	if m = view(m, "ctrl+d"); m.vp.YOffset == 0 {
+		t.Error("ctrl+d did not scroll down half a page")
+	}
+	if m = view(m, "G"); m.vp.YOffset == 0 || !m.follow {
+		t.Errorf("G left offset %d follow %v, want the bottom and follow back on", m.vp.YOffset, m.follow)
 	}
 }
 
