@@ -265,8 +265,54 @@ keys: vim            # base preset: default (the omitted value) or vim
 bindings:            # per-action overrides, applied on top of the preset
   quit: [q, Q]       # the complete key list for that action
   restart: [ctrl+r]
-  top: ["g g"]       # a chord: its keys separated by spaces
+  copy: ["y y", Y]   # a chord: its keys separated by spaces
   network-map: []    # an empty list unbinds the action outright
+```
+
+`?` shows what that file actually did. The cheatsheet is generated from your bindings rather than written by hand, so it is also how you check them — here it is with exactly the config above in effect, on a run started with no target (so the toolbox lists only the two tools that need none):
+
+```
+Keys
+  ↑/k            previous check — or device on the network map
+  ↓/j            next check — or device on the network map
+  gg/home        first check — or device on the network map
+  G/end          last check — or device on the network map
+  enter          full output — or set target on the network map
+  yy/Y           copy selected portal URL, otherwise report
+  w              save report
+  tab            switch job
+  esc            cancel the focused job
+  ctrl+r         restart with a new target
+  ?              full-screen key cheatsheet
+  q/Q            quit
+  i              run route table
+  s              run open sockets
+
+Output viewer
+  ↑/k            scroll up
+  ↓/j            scroll down
+  gg/home        jump to top
+  G/end          jump to bottom (re-enables follow)
+  ctrl+b/pgup    page up
+  ctrl+f/pgdown  page down
+  ctrl+u         half page up
+  ctrl+d         half page down
+  /              filter lines
+  yy/Y           copy output (filtered if a filter is on)
+  w              save output (filtered if a filter is on)
+  tab            switch job
+  esc            clear the filter, or back when none is set
+  q              back
+
+any key close
+```
+
+`network-map` has no row because the file unbound it, and the help bar drops its chip to match:
+
+```
+Dig deeper  [i] route table  ·  [s] open sockets  ·  [S] SSH login — needs a target
+
+ctrl+r run the checks  ·  letter runs that tool  ·  ? help  ·  q/Q quit
 ```
 
 `--keys` overrides the file's `keys:` for one run; your `bindings:` still apply on top of it. `--no-config` ignores the file entirely, which is the way back in if a keymap locks you out. netdoc only ever reads the file — it is never created, repaired, or rewritten for you.
@@ -275,7 +321,19 @@ Action names are the ones the `?` cheatsheet lists: `up`, `down`, `top`, `bottom
 
 The cheatsheet and the contextual help bar are generated from your bindings, so they always show the keys that actually run, and an action you unbind stops being advertised. Rebinding covers the check list and the output viewer; the restart prompt, SSH form, filter line, and the tool confirm gate keep fixed keys, since every printable key there belongs to what you are typing. Drill-down tool hotkeys are fixed too — a binding that would shadow one is rejected rather than quietly breaking that tool on the targets that offer it.
 
-A config netdoc cannot use is reported, never fatal: it prints every problem to stderr, says so in the TUI, and runs on the built-in keys. `netdoc` is usually started *during* an outage, so refusing to start over a stale dotfile is the one response that helps nobody.
+A config netdoc cannot use is reported, never fatal: it prints every problem to stderr, says so in the TUI, and runs on the built-in keys. `netdoc` is usually started *during* an outage, so refusing to start over a stale dotfile is the one response that helps nobody. A file with `quti:` where you meant `quit:` gets you this, and a working keymap:
+
+```
+netdoc: /home/you/.netdocrc: unknown action "quti"
+```
+
+```
+✗ .netdocrc: unknown action "quti" — using the built-in keys
+
+r run the checks  ·  v network map  ·  letter runs that tool  ·  ? help  ·  q quit
+```
+
+The stderr line is still on your terminal after netdoc exits, which is where the keymap gets fixed; the notice is what says so while the alt screen has the scrollback. Every problem in the file is listed, not just the first, and none of the bindings are applied — a half-applied keymap is a puzzle with nothing on screen to explain it.
 
 ## Drill-down tools
 
