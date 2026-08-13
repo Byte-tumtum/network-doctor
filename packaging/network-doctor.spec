@@ -24,7 +24,9 @@ connection breaks in plain English, instead of a wall of tool output. Probes
 run unprivileged and time-bounded, and form a dependency graph with
 independent branches so an unrelated failure never hides a working path.
 
-The installed binary is named netdoc.
+The installed binaries are netdoc, the diagnostic itself, and netdoc-sim, the
+Linux-only simulator that builds throwaway virtual networks to test netdoc
+against and to play Challenge Mode in.
 
 %prep
 # -a1 unpacks the vendor tarball after entering the source directory.
@@ -37,9 +39,14 @@ export GOFLAGS="-mod=vendor -trimpath -modcacherw"
 export GOPROXY=off
 export GOTOOLCHAIN=local
 go build -ldflags "-s -w -X main.version=%{version}" -o netdoc .
+# Shipped from the same source and version as netdoc, to keep this package's
+# installed binaries identical to the nfpm-built deb/rpm/apk on the release
+# page. netdoc-sim needs a netdoc beside it, which %{_bindir} gives it.
+go build -ldflags "-s -w" -o netdoc-sim ./cmd/netdoc-sim
 
 %install
 install -Dpm0755 netdoc %{buildroot}%{_bindir}/netdoc
+install -Dpm0755 netdoc-sim %{buildroot}%{_bindir}/netdoc-sim
 install -Dpm0644 packaging/netdoc.1 %{buildroot}%{_mandir}/man1/netdoc.1
 install -Dpm0644 packaging/completions/netdoc.bash %{buildroot}%{_datadir}/bash-completion/completions/netdoc
 install -Dpm0644 packaging/completions/netdoc.zsh %{buildroot}%{_datadir}/zsh/site-functions/_netdoc
@@ -49,6 +56,7 @@ install -Dpm0644 packaging/completions/netdoc.fish %{buildroot}%{_datadir}/fish/
 %license LICENSE
 %doc README.md
 %{_bindir}/netdoc
+%{_bindir}/netdoc-sim
 # Glob: brp-compress gzips the page after %install, so the name gains a suffix.
 %{_mandir}/man1/netdoc.1*
 # Not %dir-owned: bash-completion, zsh, and fish are not dependencies, and the

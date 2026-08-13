@@ -94,6 +94,15 @@ sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpin
 
 Because these are downloaded by hand, they do not auto-update — `dnf`/`apt` won't pull the next version for you. COPR does.
 
+Every Linux package — COPR, `.deb`, `.rpm`, `.apk` — installs two commands at the same version: `netdoc`, and `netdoc-sim`, the simulator behind [Challenge Mode](#think-you-can-beat-network-doctor). Confirm both:
+
+```sh
+netdoc --version
+netdoc-sim help
+```
+
+`netdoc-sim` is Linux-only: it builds its networks out of Linux namespaces, so the macOS and Windows downloads ship `netdoc` alone.
+
 ### Everywhere else
 
 Grab a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as a `.zip`, the rest as bare binaries), or install with Go 1.25+:
@@ -442,8 +451,16 @@ generated bug hunts, and triage of reproducible findings. Start with the
 scenario catalog and run any name it prints:
 
 ```sh
+netdoc-sim scenarios
+netdoc-sim run broken-dns
+```
+
+Any [Linux package](#linux) installs `netdoc-sim` beside `netdoc`. Contributors
+testing an unreleased change build both from the clone instead, so the simulator
+runs the netdoc built next to it:
+
+```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
-./netdoc-sim scenarios
 ./netdoc-sim run broken-dns
 ```
 
@@ -461,9 +478,9 @@ diagnosis, then let Network Doctor take a shot at the exact same problem. Both
 answers are judged against the simulator's independently observed ground truth.
 
 ```sh
-./netdoc-sim challenge                  # draw a challenge and play it
-./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V3-8F42C1    # play the one a friend sent you
+netdoc-sim challenge                  # draw a challenge and play it
+netdoc-sim challenge -difficulty hard
+netdoc-sim challenge -id V3-8F42C1    # play the one a friend sent you
 ```
 
 You land in a shell inside the broken machine. Use `ping`, `dig`, `curl`, `ip

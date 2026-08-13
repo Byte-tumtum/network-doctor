@@ -4,25 +4,43 @@
 on purpose, runs the real netdoc binary inside it, and reports whether netdoc's
 diagnosis matched the injected fault.
 
-It is permanent development and regression-testing infrastructure, not an
-end-user product surface. `internal/simulation` is imported by
-`cmd/netdoc-sim` alone and does not ship in the `netdoc` binary. The one part
-meant to be played with rather than scripted is [Challenge
-Mode](#challenge-mode), which is still a `netdoc-sim` command and still ships
-nowhere near the `netdoc` binary.
+It is permanent development and regression-testing infrastructure. It ships as
+its own executable in the Linux packages, so [Challenge
+Mode](#challenge-mode) — the one part meant to be played with rather than
+scripted — is there without a Go toolchain. That is a second binary, not a
+second product: `internal/simulation` is imported by `cmd/netdoc-sim` alone,
+none of it links into `netdoc`, and the maintenance scope below is unchanged by
+being installable.
 
-Use the commands themselves for current inventory and flag details:
+## Getting it
+
+Every Linux package ships `netdoc-sim` beside `netdoc`, from the same release
+and at the same version — see [Install](../README.md#linux). Nothing else to
+fetch:
+
+```sh
+netdoc-sim help
+netdoc-sim capabilities
+netdoc-sim scenarios
+netdoc-sim validate broken-dns
+netdoc-sim run broken-dns
+```
+
+Linux only. The binary is not in the macOS or Windows downloads, because the
+backend is Linux namespaces and there is no other one; see
+[Limitations](#limitations).
+
+Contributors building from a clone still want the pair, so a run grades the
+netdoc that was just changed rather than the installed one — that is what step 2
+of [Which netdoc gets run](#which-netdoc-gets-run) picks up:
 
 ```sh
 CGO_ENABLED=0 go build -o netdoc .
 CGO_ENABLED=0 go build -o netdoc-sim ./cmd/netdoc-sim
-
-./netdoc-sim help
-./netdoc-sim capabilities
-./netdoc-sim scenarios
-./netdoc-sim validate broken-dns
 ./netdoc-sim run broken-dns
 ```
+
+Use the commands themselves for current inventory and flag details.
 
 `netdoc-sim scenarios` is the complete list of built-in scenarios. A scenario
 argument may also be a path to a YAML file.

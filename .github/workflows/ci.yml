@@ -95,3 +95,30 @@ jobs:
         with:
           version: v2.17.1
           args: check
+      # `check` only parses the config. Build the real artifacts too, because
+      # the contract users get is "installing network-doctor installs netdoc and
+      # netdoc-sim" — and that is a property of the package, not of the YAML.
+      # No credentials: a snapshot publishes nothing.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.17.1
+          args: release --snapshot --clean --skip=publish,validate
+      - name: Verify Linux packages install both executables
+        run: |
+          set -euo pipefail
+          deb=$(echo dist/*_linux_amd64.deb)
+          rpm_pkg=$(echo dist/*_linux_amd64.rpm)
+          # Compared as sets, so a binary added to one packaging path and not
+          # the other fails here instead of on someone's machine.
+          # The trailing dot in the pattern drops the /usr/bin/ directory entry
+          # a deb carries and an rpm does not.
+          deb_bins=$(dpkg-deb -c "$deb" | awk '{print $NF}' | sed 's|^\./|/|' \
+            | grep '^/usr/bin/.' | sort)
+          rpm_bins=$(rpm -qlp "$rpm_pkg" | grep '^/usr/bin/.' | sort)
+          printf 'deb: %s\nrpm: %s\n' "$deb_bins" "$rpm_bins"
+          test "$deb_bins" = "$(printf '/usr/bin/netdoc\n/usr/bin/netdoc-sim')"
+          test "$rpm_bins" = "$deb_bins"
+          # Both have to actually run, from the packaged copy, with no privileges.
+          dpkg-deb -x "$deb" pkgroot
+          ./pkgroot/usr/bin/netdoc -version
+          ./pkgroot/usr/bin/netdoc-sim help > /dev/null
