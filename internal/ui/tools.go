@@ -131,6 +131,19 @@ func cacheAvailability(tools []Tool) []Tool {
 	return tools
 }
 
+// allToolKeys is every letter the contextual toolbox can claim, across every
+// target shape and GOOS. Key bindings are validated against it rather than
+// against the toolbox of the moment: a binding on one of these letters would
+// shadow a tool that only some targets offer, so the clash would surface as a
+// tool that mysteriously stopped working on one target instead of as a config
+// error at startup. TestAllToolKeysMatchesTheToolbox walks toolsFor to keep
+// the list honest.
+//
+// lanDiscoveryTool's "v" is deliberately absent: that tool is reached through
+// the network-map action, never by its own key, so the letter is the action's
+// to bind or move.
+func allToolKeys() []string { return []string{"c", "d", "i", "m", "n", "p", "s", "t"} }
+
 // toolsFor returns the drill-down tools for the target on the given GOOS
 // (production passes runtime.GOOS; tests exercise all tables from one OS).
 // Same hotkeys everywhere. The target-independent tools (routes, sockets) are

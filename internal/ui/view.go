@@ -540,56 +540,82 @@ func (m model) helpView(deferred bool) string {
 	if m.networkMap {
 		hosts = len(m.networkHosts())
 	}
+	// Every chip is looked up in the keymap and dropped when the action has no
+	// key: a user who unbinds something should stop being advertised it, not
+	// be pointed at a key that does nothing.
 	var kv []string
+	add := func(label, desc string) {
+		if label != "" {
+			kv = append(kv, label, desc)
+		}
+	}
+	move := m.keys.pairLabel(actUp, actDown)
 	switch {
 	case m.networkMap:
 		if hosts > 0 {
-			kv = []string{"↑/↓", "select device", "enter", "set target"}
+			add(move, "select device")
+			add(m.keys.label(actOpen), "set target")
 		}
-		kv = append(kv, "v", "checks")
+		add(m.keys.label(actNetworkMap), "checks")
 	case deferred:
-		kv = []string{"r", "run the checks", "v", "network map"}
+		add(m.keys.label(actRestart), "run the checks")
+		add(m.keys.label(actNetworkMap), "network map")
 		if len(m.tools) > 0 {
 			kv = append(kv, "letter", "runs that tool")
 		}
 	default:
-		kv = []string{"↑/↓", "scroll", "v", "network map"}
+		add(move, "scroll")
+		add(m.keys.label(actNetworkMap), "network map")
 	}
-	// Enter opens the output viewer whenever a job pane exists (same condition
-	// as jobView), so the hint tracks exactly when the key does something — on
-	// the map with devices listed, enter sets the target instead.
+	// Open works whenever a job pane exists (same condition as jobView), so the
+	// hint tracks exactly when the key does something — on the map with devices
+	// listed, it sets the target instead.
 	if m.hasJob() && (!m.networkMap || hosts == 0) {
-		kv = append(kv, "enter", "full output")
+		add(m.keys.label(actOpen), "full output")
 	}
 	if !deferred && m.cur.active != nil {
-		kv = append(kv, "esc", "cancel job")
+		add(m.keys.label(actCancelJob), "cancel job")
 	}
 	if len(m.otherJobs) > 0 {
-		kv = append(kv, "tab", "switch job")
+		add(m.keys.label(actSwitchJob), "switch job")
 	}
 	if deferred {
 		if m.networkMap {
-			kv = append(kv, "r", "run the checks")
+			add(m.keys.label(actRestart), "run the checks")
 		}
-		return helpKeys(m.width, append(kv, "?", "help", "q", "quit")...)
+		add(m.keys.label(actHelp), "help")
+		add(m.keys.label(actQuit), "quit")
+		return m.chordHint(helpKeys(m.width, kv...))
 	}
 	if m.selectedPortalURL() != "" {
-		kv = append(kv, "y", "copy portal URL")
+		add(m.keys.label(actCopy), "copy portal URL")
 	} else if m.reportReady() {
-		kv = append(kv, "y", "copy report")
+		add(m.keys.label(actCopy), "copy report")
 	}
 	if m.reportReady() {
-		kv = append(kv, "w", "save report")
+		add(m.keys.label(actSave), "save report")
 	}
 	if m.sshDetected() {
-		kv = append(kv, "S", "ssh login")
+		add(m.keys.label(actSSH), "ssh login")
 	}
-	kv = append(kv, "r", "restart", "?", "help", "q", "quit")
-	help := helpKeys(m.width, kv...)
+	add(m.keys.label(actRestart), "restart")
+	add(m.keys.label(actHelp), "help")
+	add(m.keys.label(actQuit), "quit")
+	help := m.chordHint(helpKeys(m.width, kv...))
 	if notice := m.noticeView(); notice != "" {
 		help = notice + "\n" + help
 	}
 	return help
+}
+
+// chordHint prefixes the help bar with the half-typed chord, the way vim's
+// showcmd does. Without it the first key of a chord looks like a keypress the
+// app dropped.
+func (m model) chordHint(help string) string {
+	if len(m.pendingKeys) == 0 {
+		return help
+	}
+	return keyStyle.Render(displaySeq(strings.Join(m.pendingKeys, " "))+"…") + faintStyle.Render("  ·  ") + help
 }
 
 // helpOverlay is the full-screen key cheatsheet (?). It lists every binding
@@ -602,31 +628,29 @@ func (m model) helpOverlay() string {
 		// fmt widths count runes, so ↑/↓ pads the same as ASCII keys.
 		return "  " + keyStyle.Render(fmt.Sprintf("%-10s", k)) + faintStyle.Render(desc) + "\n"
 	}
+	// Both sections are generated from the same table the keys dispatch
+	// through, so a rebound key is documented by the act of rebinding it and
+	// an unbound action stops being listed.
+	section := func(b *strings.Builder, ctx keyContext) {
+		for _, def := range actionDefs {
+			desc, ok := def.desc[ctx]
+			if !ok || !m.keys.bound(def.act) {
+				continue
+			}
+			if def.act == actSSH && !m.sshDetected() {
+				continue
+			}
+			b.WriteString(row(m.keys.label(def.act), desc))
+		}
+	}
 	var b strings.Builder
 	b.WriteString(panelTitleStyle.Render("Keys") + "\n")
-	b.WriteString(row("↑/↓ j/k", "select check — or device on the network map"))
-	b.WriteString(row("enter", "full output — or set target on the network map"))
-	b.WriteString(row("tab", "switch job"))
-	b.WriteString(row("esc", "cancel the focused job"))
-	b.WriteString(row("v", "toggle network map"))
-	b.WriteString(row("r", "restart with a new target"))
-	if m.sshDetected() {
-		b.WriteString(row("S", "ssh to a host — hands the terminal to ssh"))
-	}
-	b.WriteString(row("y", "copy selected portal URL, otherwise report"))
-	b.WriteString(row("w", "save report"))
+	section(&b, ctxList)
 	for _, tool := range m.tools {
 		b.WriteString(row(tool.Key, "run "+tool.Name))
 	}
-	b.WriteString(row("q", "quit"))
 	b.WriteString("\n" + panelTitleStyle.Render("Output viewer") + "\n")
-	b.WriteString(row("↑/↓", "scroll"))
-	b.WriteString(row("pgup/pgdn", "page"))
-	b.WriteString(row("home/end", "jump to top / bottom"))
-	b.WriteString(row("/", "filter lines"))
-	b.WriteString(row("y", "copy output (filtered if a filter is on)"))
-	b.WriteString(row("w", "save output (filtered if a filter is on)"))
-	b.WriteString(row("esc/q", "back"))
+	section(&b, ctxViewer)
 	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
 	if m.height > 0 {
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
@@ -770,14 +794,31 @@ func (m model) viewerFooter() string {
 	if notice := m.noticeView(); notice != "" {
 		return notice
 	}
-	kv := []string{"↑/↓", "scroll", "pgup/pgdn", "page", "home/end", "top/bottom", "/", "filter"}
+	var kv []string
+	add := func(label, desc string) {
+		if label != "" {
+			kv = append(kv, label, desc)
+		}
+	}
+	add(m.keys.pairLabel(actUp, actDown), "scroll")
+	add(m.keys.pairLabel(actPageUp, actPageDown), "page")
+	add(m.keys.pairLabel(actHalfPageUp, actHalfPageDown), "half page")
+	add(m.keys.pairLabel(actTop, actBottom), "top/bottom")
+	add(m.keys.label(actFilter), "filter")
 	if len(m.otherJobs) > 0 {
-		kv = append(kv, "tab", "switch job")
+		add(m.keys.label(actSwitchJob), "switch job")
 	}
+	add(m.keys.label(actCopy), "copy output")
+	add(m.keys.label(actSave), "save output")
+	// With a filter applied the two exits do different things, so they stop
+	// sharing a chip and say which is which.
 	if m.filter != "" {
-		return helpKeys(m.width, append(kv, "y", "copy output", "w", "save output", "esc", "clear filter", "q", "back")...)
+		add(m.keys.label(actClearFilter), "clear filter")
+		add(m.keys.label(actBack), "back")
+		return m.chordHint(helpKeys(m.width, kv...))
 	}
-	return helpKeys(m.width, append(kv, "y", "copy output", "w", "save output", "esc/q", "back")...)
+	add(m.keys.pairLabel(actClearFilter, actBack), "back")
+	return m.chordHint(helpKeys(m.width, kv...))
 }
 
 // vpContext is the viewport position line, in wrapped display-line numbers:

@@ -195,7 +195,14 @@ type model struct {
 	// showing the exact command until 'y' runs it or esc cancels.
 	confirmTool *Tool
 
-	helping bool // ?: full-screen key cheatsheet; any key closes it
+	helping bool // full-screen key cheatsheet; any key closes it
+
+	// keys resolves keypresses to actions. The zero value is the default
+	// keymap, so a model built without one behaves as netdoc always has.
+	// pendingKeys is the unfinished start of a chord ("g" of "gg") waiting
+	// for the key that completes it.
+	keys        Keymap
+	pendingKeys []string
 
 	toolbox    bool // --toolbox: chain deferred until 'r'
 	watch      bool
@@ -412,8 +419,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleConfirmKey(msg)
 		}
 		if msg.Type == tea.KeyCtrlC {
+			// Ctrl+C reaches quit directly rather than through the quit
+			// binding: it is the terminal's own way out, and rebinding quit
+			// must not take it away.
 			if m.notice == ctrlCNotice && time.Now().Before(m.noticeDeadline) {
-				return m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+				return m.quit()
 			}
 			return m, m.setNotice(ctrlCNotice, false)
 		}

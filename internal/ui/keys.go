@@ -9,10 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,17 +20,74 @@ import (
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q":
-		if m.jobsRunning() {
-			m.cancelJobs() // non-blocking; quit after every terminal event
-			m.pending = &pendingAction{kind: pendQuit}
-			return m, m.setNotice("stopping jobs, then quitting", true)
+// resolveKey folds msg into whatever chord is already in flight and resolves
+// the result in ctx. It returns the action to run (actNone for none) and the
+// prefix still waiting for its next key.
+func (m model) resolveKey(ctx keyContext, key string) (keyAction, []string) {
+	key = normalizeKey(key)
+	seq := append(slices.Clone(m.pendingKeys), key)
+	if act, ok := m.keys.lookup(ctx, seq); ok {
+		return act, nil
+	}
+	if m.keys.isPrefix(ctx, seq) {
+		return actNone, seq
+	}
+	// The chord died on this key, but the key itself is innocent: it gets the
+	// turn it would have had on its own, so an abandoned prefix costs the
+	// keystroke after it nothing.
+	if len(m.pendingKeys) > 0 {
+		if act, ok := m.keys.lookup(ctx, []string{key}); ok {
+			return act, nil
 		}
-		m.clearCancel()
-		return m, tea.Quit
-	case "r":
+		if m.keys.isPrefix(ctx, []string{key}) {
+			return actNone, []string{key}
+		}
+	}
+	return actNone, nil
+}
+
+// quit is the stop-everything path, reached by its binding and by the second
+// Ctrl+C. Running jobs are cancelled first and the quit deferred until their
+// terminal events land.
+func (m model) quit() (tea.Model, tea.Cmd) {
+	if m.jobsRunning() {
+		m.cancelJobs() // non-blocking; quit after every terminal event
+		m.pending = &pendingAction{kind: pendQuit}
+		return m, m.setNotice("stopping jobs, then quitting", true)
+	}
+	m.clearCancel()
+	return m, tea.Quit
+}
+
+func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	act, pending := m.resolveKey(ctxList, msg.String())
+	m.pendingKeys = pending
+	if act == actNone {
+		// A chord still waiting for its next key owns the keyboard; letting a
+		// tool hotkey through here would launch a subprocess on the way to a
+		// movement key. A chord that just died is not waiting for anything —
+		// resolveKey has already given the key that killed it its own turn.
+		if len(pending) > 0 {
+			return m, nil
+		}
+		// Tool hotkeys (contextual toolbox). Bindings are validated against
+		// these letters, so this is reached only for keys no action claims.
+		for _, tool := range m.tools {
+			if msg.String() == tool.Key {
+				if tool.Confirm {
+					t := tool // hold for the confirm gate; run happens on 'y'
+					m.confirmTool = &t
+					return m, nil
+				}
+				return m, m.launchTool(tool)
+			}
+		}
+		return m, nil
+	}
+	switch act {
+	case actQuit:
+		return m.quit()
+	case actRestart:
 		// Open the restart prompt; an active job keeps streaming until Enter commits.
 		m.entering, m.sshPrompt, m.inputErr = true, false, ""
 		ti := textinput.New()
@@ -45,7 +102,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ti.CursorEnd()
 		m.input = ti
 		return m, textinput.Blink
-	case "S":
+	case actSSH:
 		// The SSH login form is offered for every target, unlike the 'c'
 		// handshake check, which only fits an SSH one. It logs in to the
 		// machine under test, so it needs a target and takes the host from it.
@@ -57,7 +114,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.sshPrompt, m.ssh = true, newSSHForm(m.target)
 		return m, textinput.Blink
-	case "v":
+	case actNetworkMap:
 		if m.networkMap {
 			m.networkMap = false
 			return m, nil
@@ -89,17 +146,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Same confirm gate as nmap: a /24 sweep is an active scan too.
 		m.confirmTool = &tool
 		return m, nil
-	case "esc":
-		// Cancel only the focused job (tab picks which); q remains the
+	case actCancelJob:
+		// Cancel only the focused job (tab picks which); quit remains the
 		// nuke-everything path. The terminal event arrives as JobCanceled.
 		if m.cur.active != nil && m.cur.active.cancel != nil {
 			m.cur.active.cancel()
 			return m, m.setNotice("canceling "+m.cur.name, true)
 		}
 		return m, nil
-	case "tab":
+	case actSwitchJob:
 		return m, m.switchJob()
-	case "up", "k":
+	case actUp:
 		if m.networkMap {
 			if m.mapSelected > 0 {
 				m.mapSelected--
@@ -111,7 +168,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.selMoved = true
 		return m, nil
-	case "down", "j":
+	case actDown:
 		if m.networkMap {
 			if m.mapSelected < len(m.networkHosts())-1 {
 				m.mapSelected++
@@ -123,7 +180,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.selMoved = true
 		return m, nil
-	case "enter":
+	case actOpen:
 		if hosts := m.networkHosts(); m.networkMap && len(hosts) > 0 {
 			m.mapSelected = min(m.mapSelected, len(hosts)-1)
 			address, _, _ := strings.Cut(hosts[m.mapSelected], " ")
@@ -138,17 +195,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.viewing, m.follow = true, true
 		m.vp = viewport.New(m.width, m.vpHeight())
-		// Zero-value bindings disable everything else (b/f/space, u/d).
-		m.vp.KeyMap = viewport.KeyMap{
-			Up:       key.NewBinding(key.WithKeys("up", "k")),
-			Down:     key.NewBinding(key.WithKeys("down", "j")),
-			PageUp:   key.NewBinding(key.WithKeys("pgup")),
-			PageDown: key.NewBinding(key.WithKeys("pgdown")),
-		}
+		// The viewer's own keys are dispatched by handleViewKey, which the
+		// bindings make rebindable; leaving the viewport's built-in map armed
+		// would give b/f/space/u/d a second, unconfigurable owner.
+		m.vp.KeyMap = viewport.KeyMap{}
 		m.refreshViewport()
 		return m, nil
-	case "y", "w":
-		if portalURL := m.selectedPortalURL(); portalURL != "" && msg.String() == "y" {
+	case actCopy, actSave:
+		if portalURL := m.selectedPortalURL(); portalURL != "" && act == actCopy {
 			notice, ok := "portal URL sent to clipboard (OSC 52)", true
 			if err := copyReport(portalURL); err != nil {
 				notice, ok = "copy failed: "+err.Error(), false
@@ -158,22 +212,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !m.reportReady() {
 			return m, m.setNotice("report not ready until checks finish", false)
 		}
-		notice, ok := exportReport(m.report(), msg.String() == "w")
+		notice, ok := exportReport(m.report(), act == actSave)
 		return m, m.setNotice(notice, ok)
-	case "?":
+	case actHelp:
 		m.helping = true
 		return m, nil
-	}
-	// Tool hotkeys (contextual toolbox).
-	for _, tool := range m.tools {
-		if msg.String() == tool.Key {
-			if tool.Confirm {
-				t := tool // hold for the confirm gate; run happens on 'y'
-				m.confirmTool = &t
-				return m, nil
-			}
-			return m, m.launchTool(tool)
-		}
 	}
 	return m, nil
 }
@@ -213,18 +256,23 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, cmd
 	}
-	switch msg.String() {
-	case "esc", "q":
-		if msg.String() == "esc" && m.filter != "" {
-			// First esc clears the committed filter, second one leaves.
+	act, pending := m.resolveKey(ctxViewer, msg.String())
+	m.pendingKeys = pending
+	switch act {
+	case actClearFilter:
+		if m.filter != "" {
+			// A filter is cleared before the viewer is left, so the key that
+			// removes it doesn't also throw away the output it was hiding.
 			m.filter = ""
 			m.refreshViewport()
 			return m, nil
 		}
+		fallthrough
+	case actBack:
 		m.viewing = false
 		m.filter = "" // a stale filter reopening as a blank screen reads as lost output
 		return m, nil
-	case "/":
+	case actFilter:
 		m.filtering = true
 		ti := textinput.New()
 		ti.Prompt = "/"
@@ -235,31 +283,49 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterInput = ti
 		m.refreshViewport()
 		return m, textinput.Blink
-	case "y":
-		notice, ok := "output sent to clipboard (OSC 52) — w saves a file", true
+	case actCopy:
+		notice, ok := "output sent to clipboard (OSC 52)", true
+		if m.keys.bound(actSave) {
+			notice += " — " + m.keys.label(actSave) + " saves a file"
+		}
 		if err := copyReport(strings.Join(m.visibleJobLines(), "\n")); err != nil {
 			notice, ok = "copy failed: "+err.Error(), false
 		}
 		return m, m.setNotice(notice, ok)
-	case "w":
+	case actSave:
 		notice, ok := exportReport(strings.Join(m.visibleJobLines(), "\n"), true)
 		notice = strings.Replace(notice, "report saved", "output saved", 1)
 		return m, m.setNotice(notice, ok)
-	case "home":
+	case actTop:
 		m.vp.GotoTop()
 		m.follow = false
 		return m, nil
-	case "end":
+	case actBottom:
 		m.vp.GotoBottom()
 		m.follow = true
 		return m, nil
-	case "tab":
+	case actSwitchJob:
 		return m, m.switchJob()
+	// Scrolling reads follow back off the viewport rather than setting it:
+	// any move that happens to land on the last line resumes following, and
+	// the amount a key scrolls is the viewport's business, not this switch's.
+	case actUp:
+		m.vp.LineUp(1)
+	case actDown:
+		m.vp.LineDown(1)
+	case actPageUp:
+		m.vp.ViewUp()
+	case actPageDown:
+		m.vp.ViewDown()
+	case actHalfPageUp:
+		m.vp.HalfViewUp()
+	case actHalfPageDown:
+		m.vp.HalfViewDown()
+	default:
+		return m, nil
 	}
-	var cmd tea.Cmd
-	m.vp, cmd = m.vp.Update(msg)
 	m.follow = m.vp.AtBottom()
-	return m, cmd
+	return m, nil
 }
 
 // handlePromptKey handles keys while the restart prompt is open. Enter parses
