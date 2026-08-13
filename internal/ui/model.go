@@ -198,7 +198,11 @@ type model struct {
 	// showing the exact command until 'y' runs it or esc cancels.
 	confirmTool *Tool
 
-	helping bool // full-screen key cheatsheet; any key closes it
+	// Full-screen key cheatsheet. It outgrows a short terminal, so it scrolls:
+	// helpOffset is the first row on screen, and any key that isn't a motion
+	// still closes the whole thing.
+	helping    bool
+	helpOffset int
 
 	// keys resolves keypresses to actions. The zero value is the default
 	// keymap, so a model built without one behaves as netdoc always has.
@@ -447,9 +451,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Runes read from stdin in one batch arrive as a single KeyMsg
+		// ("jjj"), which matches no binding; replay them one key at a time.
+		// This comes first so that no screen below ever sees a batch: a chord
+		// typed fast is the same two keys as a chord typed slowly, and a
+		// screen that closes on "any key" must not close on a whole handful.
+		if msg.Type == tea.KeyRunes && !msg.Paste && len(msg.Runes) > 1 {
+			var cmds []tea.Cmd
+			cur := tea.Model(m)
+			for _, r := range msg.Runes {
+				var cmd tea.Cmd
+				cur, cmd = cur.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+				cmds = append(cmds, cmd)
+			}
+			return cur, tea.Batch(cmds...)
+		}
 		if m.helping {
-			m.helping = false
-			return m, nil
+			return m.handleHelpKey(msg)
 		}
 		// Ctrl+C while the confirm gate is up cancels the gate, not the app.
 		if msg.Type == tea.KeyCtrlC && m.confirmTool != nil {
@@ -463,18 +481,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.quit()
 			}
 			return m, m.setNotice(ctrlCNotice, false)
-		}
-		// Runes read from stdin in one batch arrive as a single KeyMsg
-		// ("jjj"), which matches no binding; replay them one key at a time.
-		if msg.Type == tea.KeyRunes && !msg.Paste && len(msg.Runes) > 1 {
-			var cmds []tea.Cmd
-			cur := tea.Model(m)
-			for _, r := range msg.Runes {
-				var cmd tea.Cmd
-				cur, cmd = cur.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-				cmds = append(cmds, cmd)
-			}
-			return cur, tea.Batch(cmds...)
 		}
 		if m.confirmTool != nil {
 			return m.handleConfirmKey(msg)

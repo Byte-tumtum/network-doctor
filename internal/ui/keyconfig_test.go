@@ -67,8 +67,15 @@ func TestLoadKeymapFlagOverridesFilePreset(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("LoadKeymap: %v", errs)
 	}
-	if slices := km.keysFor(actBottom); len(slices) != 1 || slices[0] != "end" {
-		t.Errorf("bottom = %v, want the default end only", slices)
+	// half-page has no default binding and is the vim preset's alone, so it is
+	// the honest test of which preset won.
+	if km.bound(actHalfPageDown) {
+		t.Errorf("half-page-down = %v, want unbound under the default preset", km.keysFor(actHalfPageDown))
+	}
+	// Both presets bind the same top/bottom keys; only their order differs, so
+	// the advertised one says which preset is in force.
+	if got := km.label(actBottom); got != "end/G" {
+		t.Errorf("bottom = %q, want the default order end/G", got)
 	}
 	// The file's own bindings still apply on top of the flag's preset.
 	path = writeConfig(t, "keys: vim\nbindings:\n  quit: [Q]\n")

@@ -101,19 +101,19 @@ func TestChordResolution(t *testing.T) {
 // behaves exactly as it would have if the prefix had never been typed — an
 // abandoned chord costs the user nothing, in either direction.
 func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
-	km, errs := buildKeymap("default", map[string][]string{"help": {"g g"}})
+	km, errs := buildKeymap("default", map[string][]string{"help": {"z z"}})
 	if len(errs) > 0 {
 		t.Fatalf("chord binding: %v", errs)
 	}
 	m := newModel(mustTarget(t, "example.com"), true)
 	m.keys = km
-	u, _ := m.handleKey(keyMsg("g"))
+	u, _ := m.handleKey(keyMsg("z"))
 	m = u.(model)
-	if !slices.Equal(m.pendingKeys, []string{"g"}) {
-		t.Fatalf("pendingKeys = %v, want [g]", m.pendingKeys)
+	if !slices.Equal(m.pendingKeys, []string{"z"}) {
+		t.Fatalf("pendingKeys = %v, want [z]", m.pendingKeys)
 	}
 	if m.confirmTool != nil || m.cur.name != "" {
-		t.Fatalf("g started something: confirm=%v job=%q", m.confirmTool, m.cur.name)
+		t.Fatalf("z started something: confirm=%v job=%q", m.confirmTool, m.cur.name)
 	}
 	// "n" is nmap's letter. It does not complete the chord, so the chord ends
 	// and n gets the turn it would have had on its own — the confirm gate,
@@ -127,10 +127,10 @@ func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
 		t.Fatal("n did not reach the port-scan gate after the chord ended")
 	}
 	// The completed chord runs its action instead, and never the tool.
-	m.confirmTool, m.pendingKeys = nil, []string{"g"}
-	u, _ = m.handleKey(keyMsg("g"))
+	m.confirmTool, m.pendingKeys = nil, []string{"z"}
+	u, _ = m.handleKey(keyMsg("z"))
 	if !u.(model).helping {
-		t.Fatal("gg did not open the cheatsheet")
+		t.Fatal("zz did not open the cheatsheet")
 	}
 }
 

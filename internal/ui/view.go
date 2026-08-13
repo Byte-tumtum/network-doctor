@@ -624,12 +624,12 @@ func (m model) chordHint(help string) string {
 	return keyStyle.Render(displaySeq(strings.Join(m.pendingKeys, " "))+"…") + faintStyle.Render("  ·  ") + help
 }
 
-// helpOverlay is the full-screen key cheatsheet (?). It lists every binding
-// unconditionally — simpler than mirroring the help bar's context rules, and
-// a key that currently does nothing is still worth knowing about. The lone
-// exception is S: the form works against any target, but advertising a login
-// to a host with no SSH server on it is a suggestion, not information.
-func (m model) helpOverlay() string {
+// helpBody is the cheatsheet's rows: every binding, unconditionally — simpler
+// than mirroring the help bar's context rules, and a key that currently does
+// nothing is still worth knowing about. The lone exception is S: the form
+// works against any target, but advertising a login to a host with no SSH
+// server on it is a suggestion, not information.
+func (m model) helpBody() []string {
 	// The key column is sized to what is actually bound, not to a constant:
 	// rebinding can make a label as long as "ctrl+b/pgup", which a fixed width
 	// would run straight into its description.
@@ -667,7 +667,48 @@ func (m model) helpOverlay() string {
 	}
 	b.WriteString("\n" + panelTitleStyle.Render("Output viewer") + "\n")
 	section(&b, ctxViewer)
-	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
+	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+}
+
+// helpVisible is how many cheatsheet rows fit on screen, reserving the last
+// two for the blank line and the footer. Before the terminal has introduced
+// itself nothing is clipped, so everything is visible.
+func (m model) helpVisible() int {
+	if m.height <= 0 {
+		return len(m.helpBody())
+	}
+	return max(m.height-2, 1)
+}
+
+// helpMaxOffset is the furthest the sheet can scroll: the last screenful,
+// never past it.
+func (m model) helpMaxOffset() int { return max(len(m.helpBody())-m.helpVisible(), 0) }
+
+// helpOverlay is the full-screen key cheatsheet (?). It is taller than a short
+// terminal — the whole point of it is to be exhaustive — so it scrolls rather
+// than being silently cut off at whatever row the terminal ends on, which is
+// what it used to do to its own second half.
+func (m model) helpOverlay() string {
+	lines := m.helpBody()
+	visible, total := m.helpVisible(), len(lines)
+	footer := helpKeys(m.width, "any key", "close")
+	if total > visible {
+		off := min(max(m.helpOffset, 0), total-visible)
+		lines = lines[off : off+visible]
+		var kv []string
+		if scroll := m.keys.pairLabel(actUp, actDown); scroll != "" {
+			kv = append(kv, scroll, "scroll")
+		}
+		if ends := m.keys.pairLabel(actTop, actBottom); ends != "" {
+			kv = append(kv, ends, "top/bottom")
+		}
+		// "any other key", not "any key": the motions above are the exception
+		// this screen did not used to have.
+		kv = append(kv, "any other key", "close")
+		footer = faintStyle.Render(fmt.Sprintf("%d–%d of %d  ·  ", off+1, off+visible, total)) +
+			helpKeys(m.width, kv...)
+	}
+	out := strings.Join(lines, "\n") + "\n\n" + m.chordHint(footer)
 	if m.height > 0 {
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
 	}
@@ -826,6 +867,7 @@ func (m model) viewerFooter() string {
 	}
 	add(m.keys.label(actCopy), "copy output")
 	add(m.keys.label(actSave), "save output")
+	add(m.keys.label(actHelp), "help")
 	// With a filter applied the two exits do different things, so they stop
 	// sharing a chip and say which is which.
 	if m.filter != "" {

@@ -233,9 +233,45 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		notice, ok := exportReport(m.report(), act == actSave)
 		return m, m.setNotice(notice, ok)
 	case actHelp:
-		m.helping = true
+		m.helping, m.helpOffset = true, 0
 		return m, nil
 	}
+	return m, nil
+}
+
+// handleHelpKey handles keys while the cheatsheet is open. It lists every
+// binding plus the toolbox, which outgrows a short terminal, so the motions
+// that scroll output scroll the sheet as well; everything else still closes
+// it, which is the one thing users already knew about this screen.
+func (m model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	act, pending := m.resolveKey(ctxViewer, msg.String())
+	m.pendingKeys = pending
+	if len(pending) > 0 {
+		return m, nil // half a chord is not "any other key"
+	}
+	page := max(m.helpVisible(), 1)
+	switch act {
+	case actUp:
+		m.helpOffset--
+	case actDown:
+		m.helpOffset++
+	case actTop:
+		m.helpOffset = 0
+	case actBottom:
+		m.helpOffset = m.helpMaxOffset()
+	case actPageUp:
+		m.helpOffset -= page
+	case actPageDown:
+		m.helpOffset += page
+	case actHalfPageUp:
+		m.helpOffset -= max(page/2, 1)
+	case actHalfPageDown:
+		m.helpOffset += max(page/2, 1)
+	default:
+		m.helping, m.helpOffset, m.pendingKeys = false, 0, nil
+		return m, nil
+	}
+	m.helpOffset = min(max(m.helpOffset, 0), m.helpMaxOffset())
 	return m, nil
 }
 
@@ -324,6 +360,11 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case actSwitchJob:
 		return m, m.switchJob()
+	case actHelp:
+		// The viewer stays open underneath, so closing the sheet returns to
+		// the output rather than to the check list.
+		m.helping, m.helpOffset = true, 0
+		return m, nil
 	// Scrolling reads follow back off the viewport rather than setting it:
 	// any move that happens to land on the last line resumes following, and
 	// the amount a key scrolls is the viewport's business, not this switch's.

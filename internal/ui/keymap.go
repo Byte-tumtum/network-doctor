@@ -122,17 +122,29 @@ var actionDefs = []actionDef{
 	// with one still applied, and each stays rebindable on its own.
 	{actClearFilter, "clear-filter", map[keyContext]string{ctxViewer: "clear the filter, or back when none is set"}},
 	{actBack, "back", map[keyContext]string{ctxViewer: "back"}},
-	{actHelp, "help", map[keyContext]string{ctxList: "full-screen key cheatsheet"}},
+	// Reachable from the output viewer too: a tool's full output is exactly
+	// where someone wonders what a key does, and it used to be the one screen
+	// that could not answer.
+	{actHelp, "help", map[keyContext]string{
+		ctxList:   "full-screen key cheatsheet",
+		ctxViewer: "full-screen key cheatsheet",
+	}},
 	{actQuit, "quit", map[keyContext]string{ctxList: "quit"}},
 }
 
 // defaultPreset is the historical keymap: every letter netdoc has ever
-// answered to, plus the list jump keys that had no binding before.
+// answered to, plus the jump keys that had no binding before.
+//
+// gg and G are here rather than in the vim preset because they cost a
+// non-vim user nothing — both keys did nothing at all before, and a lone g
+// still lets the key after it behave exactly as it would have. A jump to the
+// top of a long route table should not require a config file. home and end
+// are listed first, so the help bar advertises the spelling everyone knows.
 var defaultPreset = map[keyAction][]string{
 	actUp:           {"up", "k"},
 	actDown:         {"down", "j"},
-	actTop:          {"home"},
-	actBottom:       {"end"},
+	actTop:          {"home", "g g"},
+	actBottom:       {"end", "G"},
 	actPageUp:       {"pgup"},
 	actPageDown:     {"pgdown"},
 	actHalfPageUp:   nil,
@@ -153,13 +165,15 @@ var defaultPreset = map[keyAction][]string{
 }
 
 // vimOverlay is what `keys: vim` changes, and it is deliberately short: j/k,
-// /, and y were already the vim spelling of themselves, so the preset is the
-// motions the default keymap had no answer for. Nothing is taken away —
-// home/end/pgup/pgdown keep working, because a preset that unbound them would
-// trade one set of habits for another rather than add to it.
+// /, y, gg and G are already in the default keymap, so what is left is the
+// ctrl-motions — the ones that would cost a non-vim user a key they might
+// want for something else. Nothing is taken away: pgup/pgdown keep working,
+// because a preset that unbound them would trade one set of habits for
+// another rather than add to it.
 //
-// gg over g: the chord is what a vim user's fingers already do, and the
-// machinery to resolve it is the same machinery a config file needs anyway.
+// top and bottom are relisted only to reorder them. The keys are the same
+// ones the default binds; putting vim's spelling first is what makes the help
+// bar read gg/G instead of home/end, so the preset says out loud that it is on.
 var vimOverlay = map[keyAction][]string{
 	actTop:          {"g g", "home"},
 	actBottom:       {"G", "end"},
@@ -308,7 +322,10 @@ func validateBindings(bindings map[keyAction][]string) []error {
 		}
 	}
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
-	return errs
+	// One mistake, one sentence. An action that exists on both screens is
+	// checked on both, so a key it collides with produces the same complaint
+	// twice — which reads as two separate problems to fix.
+	return slices.CompactFunc(errs, func(a, b error) bool { return a.Error() == b.Error() })
 }
 
 // buildKeymap resolves a preset name and the user's per-action overrides into
