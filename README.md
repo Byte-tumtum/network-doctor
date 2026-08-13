@@ -231,6 +231,7 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
+| `home`/`end` | jump to the first or last probe row, or device in the network map |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
@@ -243,6 +244,38 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
 | `?` | full-screen key cheatsheet; any key closes it |
 | `q` | quit (cancels running jobs first, then exits) |
+
+### Key bindings
+
+Every key above is an *action*, and both the preset and the individual keys are yours to change. `--keys vim` switches to the vim preset for one run:
+
+| Action | vim keys | still bound |
+|--------|----------|-------------|
+| first / last row | `gg` / `G` | `home`/`end` |
+| page up / down (viewer) | `ctrl+b` / `ctrl+f` | `pgup`/`pgdn` |
+| half page up / down (viewer) | `ctrl+u` / `ctrl+d` | — |
+
+The preset adds motions rather than replacing keys: `j`/`k`, `/`, and `y` were already the vim spelling of themselves, and `home`/`end`/`pgup`/`pgdn` keep working, so a shared terminal stays usable for whoever sits down at it.
+
+To make it permanent, or to move individual keys, write `~/.netdocrc` (or `netdoc/config.yaml` under the config directory that already holds `history` — the dotfile wins if both exist):
+
+```yaml
+keys: vim            # base preset: default (the omitted value) or vim
+
+bindings:            # per-action overrides, applied on top of the preset
+  quit: [q, Q]       # the complete key list for that action
+  restart: [ctrl+r]
+  top: ["g g"]       # a chord: its keys separated by spaces
+  network-map: []    # an empty list unbinds the action outright
+```
+
+`--keys` overrides the file's `keys:` for one run; your `bindings:` still apply on top of it. `--no-config` ignores the file entirely, which is the way back in if a keymap locks you out. netdoc only ever reads the file — it is never created, repaired, or rewritten for you.
+
+Action names are the ones the `?` cheatsheet lists: `up`, `down`, `top`, `bottom`, `page-up`, `page-down`, `half-page-up`, `half-page-down`, `open`, `filter`, `copy`, `save`, `switch-job`, `cancel-job`, `network-map`, `restart`, `ssh`, `clear-filter`, `back`, `help`, `quit`. Key names are the ones your terminal sends — a single character (`q`, `G`, `?`), or a named key in lower case (`enter`, `esc`, `tab`, `space`, `home`, `end`, `pgup`, `pgdown`, `up`, `down`, `left`, `right`, `delete`, `insert`, `f1`–`f12`, `ctrl+a`, `shift+tab`, …).
+
+The cheatsheet and the contextual help bar are generated from your bindings, so they always show the keys that actually run, and an action you unbind stops being advertised. Rebinding covers the check list and the output viewer; the restart prompt, SSH form, filter line, and the tool confirm gate keep fixed keys, since every printable key there belongs to what you are typing. Drill-down tool hotkeys are fixed too — a binding that would shadow one is rejected rather than quietly breaking that tool on the targets that offer it.
+
+A config netdoc cannot use is reported, never fatal: it prints every problem to stderr, says so in the TUI, and runs on the built-in keys. `netdoc` is usually started *during* an outage, so refusing to start over a stale dotfile is the one response that helps nobody.
 
 ## Drill-down tools
 
