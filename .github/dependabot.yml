@@ -19,6 +19,28 @@ updates:
         patterns:
           - "*"
 
+  # The image's base images are pinned by digest, which is what makes a build
+  # reproducible and what stops it drifting silently — so something has to bump
+  # them, or "pinned" becomes "stale".
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: daily
+      time: "09:15"
+      timezone: America/Chicago
+    open-pull-requests-limit: 10
+    groups:
+      non-breaking:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

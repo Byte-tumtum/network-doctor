@@ -4,25 +4,45 @@
 on purpose, runs the real netdoc binary inside it, and reports whether netdoc's
 diagnosis matched the injected fault.
 
-It is permanent development and regression-testing infrastructure, not an
-end-user product surface. `internal/simulation` is imported by
-`cmd/netdoc-sim` alone and does not ship in the `netdoc` binary. The one part
-meant to be played with rather than scripted is [Challenge
-Mode](#challenge-mode), which is still a `netdoc-sim` command and still ships
-nowhere near the `netdoc` binary.
+It is permanent development and regression-testing infrastructure. It ships as
+its own executable in the Linux packages, so [Challenge
+Mode](#challenge-mode) — the one part meant to be played with rather than
+scripted — is there without a Go toolchain. That is a second binary, not a
+second product: `internal/simulation` is imported by `cmd/netdoc-sim` alone,
+none of it links into `netdoc`, and the maintenance scope below is unchanged by
+being installable.
 
-Use the commands themselves for current inventory and flag details:
+## Getting it
+
+Every Linux package ships `netdoc-sim` beside `netdoc`, from the same release
+and at the same version — see [Install](../README.md#linux). Nothing else to
+fetch:
+
+```sh
+netdoc-sim help
+netdoc-sim capabilities
+netdoc-sim scenarios
+netdoc-sim validate broken-dns
+netdoc-sim run broken-dns
+```
+
+Linux only. The binary is not in the macOS or Windows downloads, because the
+backend is Linux namespaces and there is no other one; see
+[Limitations](#limitations). On macOS and Windows, run the published image
+through a Linux container runtime instead — see [Running it in a
+container](#running-it-in-a-container).
+
+Contributors building from a clone still want the pair, so a run grades the
+netdoc that was just changed rather than the installed one — that is what step 2
+of [Which netdoc gets run](#which-netdoc-gets-run) picks up:
 
 ```sh
 CGO_ENABLED=0 go build -o netdoc .
 CGO_ENABLED=0 go build -o netdoc-sim ./cmd/netdoc-sim
-
-./netdoc-sim help
-./netdoc-sim capabilities
-./netdoc-sim scenarios
-./netdoc-sim validate broken-dns
 ./netdoc-sim run broken-dns
 ```
+
+Use the commands themselves for current inventory and flag details.
 
 `netdoc-sim scenarios` is the complete list of built-in scenarios. A scenario
 argument may also be a path to a YAML file.
@@ -100,6 +120,172 @@ director executes them after isolation. Do not copy them into a host shell as a
 substitute for running the simulator. Scenario values never become shell
 strings; the backend constructs argument slices from validated logical names
 and addresses.
+
+## Running it in a container
+
+**Challenge Mode uses the real Linux namespace simulator inside a Linux
+container. macOS and Windows do not emulate the simulator themselves.** The
+image is packaging, not a port: it carries the same `netdoc-sim` the Linux
+packages carry, and that binary builds its network out of the same unprivileged
+user, network and mount namespaces described above. There is one backend, and
+this is it running on the Linux kernel your container runtime already provides.
+
+The portability boundary is therefore the runtime, not the simulator. Docker
+Desktop, Podman Desktop, Rancher Desktop or `podman machine` on macOS and
+Windows, Docker or Podman on Linux — anything that runs a Linux container will
+do, and nothing else is needed. No clone, no Go toolchain, no knowledge of
+namespaces.
+
+```text
+macOS / Windows / Linux host
+  └── Docker / Podman                 Linux kernel, container runtime's own
+        └── netdoc-sim                the released binary, unmodified
+              └── user + net + mount namespaces   the same backend as native
+                    └── netdoc        /usr/bin/netdoc from this same image
+```
+
+### Running it
+
+```sh
+docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest challenge
+```
+
+`podman run` takes the same line, and does not need the capability at all:
+
+```sh
+podman run --rm -it ghcr.io/heymaikol/netdoc-sim:latest challenge
+```
+
+The entrypoint is `netdoc-sim`, so everything after the image name is an
+ordinary `netdoc-sim` command line and nothing re-parses it:
+
+```sh
+IMAGE=ghcr.io/heymaikol/netdoc-sim:latest
+docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -difficulty hard
+docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -id V4-8F42C1
+docker run --rm --cap-add SYS_ADMIN $IMAGE challenge -id V4-8F42C1 -answer dns_failure -json
+docker run --rm --cap-add SYS_ADMIN $IMAGE run broken-dns -json
+docker run --rm --cap-add SYS_ADMIN $IMAGE capabilities
+docker run --rm $IMAGE scenarios
+```
+
+`-it` is for the parts where a person is asked something: the challenge shell,
+and the answer menu. Drop it for automation and pass `-answer` or `-give-up`,
+which is what `-json` requires anyway — a piped stdin is consumed by the shell,
+so a challenge run without a terminal and without a submission scores a give-up.
+Exit codes and stdout are the ones documented for each command; `-json` on
+stdout stays parseable because the session prints to stderr.
+
+Tags are immutable per release — `ghcr.io/heymaikol/netdoc-sim:v1.11.3` — with
+`latest` following the newest release the way the Homebrew cask and the Scoop
+bucket do. Pin the version tag in anything automated.
+
+The image is published for `linux/amd64` and `linux/arm64`, and those two claims
+are not equally strong. Both are built from the same source by the release
+workflow, but CI runs the container tests on `amd64` only, because that is the
+architecture its runners execute. `arm64` is built and not runtime-verified —
+which includes Apple Silicon, where Docker Desktop runs the `arm64` image
+natively. Nothing about the backend is architecture-specific, and reports of it
+failing there are worth filing.
+
+### What the container is allowed to do
+
+The simulator needs **no capability at all**. It creates a user namespace and
+becomes root inside it; on the host side of that namespace the kernel gives it
+nothing, which is the same guarantee a native run has. `--cap-drop ALL` changes
+nothing about a run, and a test in `container_test.go` proves it by taking every
+capability away and running a full simulation.
+
+`--cap-add SYS_ADMIN` is there for Docker's *seccomp* profile, not for the
+simulation. That profile refuses `clone(CLONE_NEWUSER)`, `unshare`, `mount` and
+`setns` unless the container was configured with `CAP_SYS_ADMIN` — so the flag
+is what permits the syscalls, and the image runs as an unprivileged user
+(`netdoc`, uid 1000) so that the capability is not what the work is done with.
+Podman's default profile permits those syscalls already, which is why it needs
+no flag.
+
+If you would rather grant no capability, relax the filter directly instead:
+
+```sh
+docker run --rm -it --cap-drop ALL --security-opt seccomp=unconfined $IMAGE challenge
+```
+
+Both forms are tested. Pick by which you would rather widen: a capability the
+process is not in a position to use, or the syscall filter.
+
+**`--privileged` is not required, and neither is anything else on this list.**
+The image needs no `NET_ADMIN` (all network configuration happens inside the
+namespaces it creates), no host network, no host PID namespace, no bind mounts,
+no Docker socket, and no access to any host path. `--cap-add NET_ADMIN` on its
+own does not even work, which is the clearest statement of what the requirement
+actually is. The simulated topology is built inside the container and disappears
+with it; your machine's real interfaces, routes, resolver and firewall are never
+touched, on any host OS.
+
+Two hosts need more than the flags above, and both are host policy rather than
+anything the image can carry:
+
+- **Docker Engine on a distribution with AppArmor** (Ubuntu, Debian). The
+  `docker-default` profile denies `mount`, which the backend needs inside its
+  own mount namespace: add `--security-opt apparmor=unconfined`.
+- **Ubuntu 24.04 and later**, which restrict unprivileged user namespaces
+  outright. This is the same restriction native runs hit, and
+  `netdoc-sim capabilities` names it; the repository's CI clears it with
+  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
+
+A run that is refused the namespace says so and stops, rather than falling back
+to anything:
+
+```text
+netdoc-sim: cannot create the user, network and mount namespaces a simulation
+runs in: fork/exec /usr/bin/netdoc-sim: operation not permitted.
+```
+
+That message is the one to match against this section. Note that `netdoc-sim
+capabilities` cannot predict it: it reports the host knobs it can read cheaply,
+and a container's seccomp profile is not one of them.
+
+### What is in the image
+
+Alpine, both release binaries at one version, and the tools two different
+parties need: `ip`, `nsenter`, `tc` and `nft` for the backend, and `ping`,
+`dig`, `curl`, `ss`, `traceroute` and `nc` for the person in the challenge
+shell. `netdoc` and `netdoc-sim` sit together in `/usr/bin`, which is what makes
+[step 2 of Which netdoc gets run](#which-netdoc-gets-run) select the image's own
+netdoc — every challenge result records that absolute path and the version that
+binary printed, so a result names the build that produced it:
+
+```json
+"netdoc": {"path": "/usr/bin/netdoc", "version": "netdoc v1.11.3"}
+```
+
+The image sets `NETDOC_SIM_CHALLENGE_COMMAND` so the replay line and the share
+block invite readers with a `docker run` command rather than with a `netdoc-sim`
+they may not have. It changes nothing about the puzzle or the scoring; override
+it with `-e NETDOC_SIM_CHALLENGE_COMMAND=...` for another runtime.
+
+Nothing survives a container: a challenge keeps no simulation, writes no state,
+and an interrupted or failed run leaves neither processes nor namespaces behind
+even in a container that is reused for another run.
+
+### Building and testing it locally
+
+```sh
+docker build --build-arg VERSION=dev -t netdoc-sim:test .
+NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
+The tests run the built image: both binaries at the tag's version, a real
+namespace-backed scenario, a real challenge that stays deterministic across
+runs, exit-code propagation, cleanup after an interrupted run in a reused
+container, and both privilege claims above — including the negative one, which
+denies `clone(CLONE_NEWUSER)` through a seccomp profile and requires the
+controlled failure rather than a silent fallback. They skip without an image or
+an engine unless `NETDOC_REQUIRE_CONTAINER=1` is set, which is what CI sets.
+
+Native Linux stays exactly as it was. The container supplements it: contributors
+and anyone on Linux should keep running `./netdoc-sim` directly, which is faster,
+needs no runtime, and is what the namespace integration suite exercises.
 
 ## How a run is built
 
@@ -223,6 +409,16 @@ node `interfaces`, and validated `routes`; see
 is the focused hunt control for two IPv4 defaults: ordinary traffic selects the
 lower-metric preferred router, while a controlled literal target independently
 proves the higher-metric alternate path.
+[`two-router-healthy.yaml`](../internal/simulation/scenarios/two-router-healthy.yaml)
+is the control for the single-default route faults. Its client LAN carries two
+routers with different jobs — one holds the default out to the internet, the
+other a specific route to the target's subnet — which is what makes "the
+default points at the wrong on-link router" and "the specific route is missing"
+expressible at all, and distinguishable from each other. Its second client test
+is a controlled literal behind the internet router, reached over its own
+specific route: that endpoint keeps answering when the default is repointed,
+which is how a wrong default route is told apart from the network beyond the
+gateway simply being down.
 Dual-stack scenarios use `ipv4` and `ipv6` on the same segment and interface;
 see
 [`dual-stack-healthy.yaml`](../internal/simulation/scenarios/dual-stack-healthy.yaml).
@@ -434,6 +630,45 @@ selected preferred family path to be unreachable and the controlled target on
 the distinct higher-metric alternate path to remain reachable; successful
 link-down application alone is insufficient.
 
+### Generator versions
+
+The mutation registry is versioned, because adding an operator to it changes
+which mutation every existing case number lands on: selection draws from a
+permutation of the applicable operators, so a longer or reordered list repoints
+cases that published artifacts already name. `HuntGeneratorVersion` is the
+current one and `huntGeneratorVersions` lists every version this build can
+still materialize. Each operator carries the version it first appeared in, and
+an older generator is simply the registry truncated there — which is why new
+operators are appended and never interleaved. Case seeds are not versioned:
+`v3` and `v4` draw the same numbers and differ exactly where the operator list
+does. `TestHuntGeneratorVersion3Reproduction` pins the older generator against
+a fixed manifest.
+
+### Route tables, and telling absences apart
+
+Three families are about a route that is not there, and none of them can be
+established from reachability. `RouteEvidence` answers "where does this
+destination go"; `RouteTableEvidence` is the different reading of "what routes
+exist at all", taken with `ip route show` from inside the node at the end of
+the run and recorded for every family the node has an address in. An empty
+`routes` list is therefore the positive statement that the table was read and
+held nothing, which is what `routing.no_default_route` needs — and a record
+being absent means nobody looked, which never establishes anything.
+
+`routing.wrong_default_route` needs one thing more, because a default that goes
+nowhere and a network that is broken past the gateway look identical from the
+client: the control endpoint behind the original next hop, reached over its own
+specific route, has to still answer. That is what says the old gateway still
+forwards and only the choice of default changed.
+
+Two more families are about a port rather than a route, and they are each
+other's negative. `ControlledTargetEvidence` now carries the outcome of the
+simulator's own dial rather than only whether it worked, because a reset and a
+timeout are different faults with different fixes and the dialing end is the
+only place the difference is visible. `service.connection_refused` requires the
+dial to have been refused and no drop counter to have matched; `service.tcp_port_blocked` requires the opposite of both. Neither can be established by
+a dial that merely failed, and a run cannot satisfy both.
+
 ## Challenge Mode
 
 `netdoc-sim challenge` is the hunt with the contestants swapped: instead of the
@@ -442,9 +677,12 @@ answers are graded against the same independently observed truth.
 
 ```sh
 ./netdoc-sim challenge                       # draw one and play it
+./netdoc-sim challenge -daily                # today's, the same one for everybody
+./netdoc-sim challenge -starter fundamentals # a curated one to learn on
+./netdoc-sim challenge -authored no-default-route  # a hand-written case
+./netdoc-sim challenge -id V4-8F42C1         # replay someone else's
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V2-8F42C1          # replay someone else's
-./netdoc-sim challenge -id V2-8F42C1 -answer dns_failure -json
+./netdoc-sim challenge -id V4-8F42C1 -answer dns_failure -json
 ```
 
 One command runs the whole session: it builds the network, opens a shell in the
@@ -455,9 +693,121 @@ simulated network only exists while the process holding its namespaces does —
 pointing at it, and would make it possible for the player and netdoc to be
 handed different networks.
 
+### Playing one
+
+The briefing names the machine you are standing on and the host you were asked
+about. That host is the challenge's own — `invoices-8f42c1.test`, derived from
+the id — and it is a real part of the simulated network: the node's resolver
+answers it, whatever serves it presents a certificate for it, and it is the
+target the graded netdoc run is handed. `.test` is reserved by [RFC
+6761](https://www.rfc-editor.org/rfc/rfc6761), so nothing about it can reach
+public DNS or the internet. In the shell it is also in the environment, as
+`$NETDOC_CHALLENGE_TARGET` and `$NETDOC_CHALLENGE_HOST`.
+
+The name is derived from the id and nothing else, so replaying an id presents the
+same host, and the name says nothing about which fault was set. It deliberately
+carries no `challenge` label: the target is passed to netdoc as its argument, and
+the simulator does not hand that process a token telling it a challenge is
+happening.
+
+Type `exit` in the shell to reach the menu. There, `b` prints the briefing again
+— the same text the session opened with, so you never have to scroll back or
+restart to reread the target — `s` returns to the shell, and `q` gives up.
+
+Answers are picked by number or typed by name. The names are the ones on the
+menu, so nothing has to be memorized: `netdoc-sim challenge -answer "TCP port
+blocked"` and `-answer tcp_port_blocked` and `-answer blocked` are one answer.
+Matching is exact after case, spaces, hyphens and underscores are folded
+together; there is no fuzzy matching, because an answer selected by resemblance
+is a diagnosis nobody committed to. A machine-readable result keeps the stable
+identifier and the display name side by side, so a script keys on `answer` and a
+human reads `label`.
+
+`netdoc-sim challenge` with no arguments is the whole of what a first-time player
+needs; the answer vocabulary is printed by the menu and the packs by
+`netdoc-sim starters`, so neither is duplicated here.
+
+### Elapsed human time
+
+The result reports how long you took. That number is the shell and the menu:
+it starts when the briefing has been printed and you can begin, and stops when
+your answer is accepted. Building the namespaces, injecting the fault, netdoc's
+own run and tearing everything down are all outside it, so it measures you
+rather than the host. Rereading the briefing, going back to the shell and
+retyping a mistaken answer are all inside it, because they are part of solving
+it.
+
+It is measured on a monotonic clock, and it is not part of the matchup — netdoc
+is automated and a person is not. Nothing about it reaches challenge generation,
+the id, the truth, the fingerprint or replay; `timing` in `-json` is where it
+lives, and a submission handed in with `-answer` records zero, which is the
+honest answer for a session no human played.
+
+### The daily challenge
+
+`netdoc-sim challenge -daily` plays today's, and everybody who plays today gets
+the same one:
+
+```sh
+./netdoc-sim challenge -daily                # today, UTC
+./netdoc-sim challenge -daily=2026-03-04     # a particular day
+```
+
+The date is the UTC calendar date, not the local one. Two people whose clocks
+disagree about what day it is have to get the same challenge, and a daily keyed
+to local midnight would give them different ones. The mapping is a pure function
+of that date — no server, no account, no network, no filesystem, and no clock
+beyond the date itself — so it is derivable offline on any machine.
+
+The daily is announced with its date and resolves to an ordinary challenge id.
+That id is the artifact: it replays the challenge forever, with no `-daily` and
+no dependence on today still being that day, and a replay is the same network
+without claiming to be that day's daily. A result played as the daily carries
+`daily` in its JSON and a `Daily <date>` line in the share block, which is what
+makes two people's results comparable as the same day's puzzle.
+
+Which id version a date maps through is frozen per date, in `dailyEpochs`
+alongside the id versions themselves. A future generator version therefore
+applies from its own release date onwards and cannot redefine a day somebody has
+already played and posted.
+
+`-daily` refuses to be combined with anything that would pick a different
+challenge — an explicit id, `-difficulty`, `-starter` — by name rather than by
+inventing a precedence. Silently honouring one of the two would hand somebody a
+result they would post as the day's challenge when it was not.
+
+### Starter packs
+
+```sh
+./netdoc-sim starters                        # the packs, and what each teaches
+./netdoc-sim starters routing                # its challenge ids, in order
+./netdoc-sim challenge -starter routing      # draw one from it
+```
+
+A pack is a curated list of ordinary challenge ids and nothing else. There is no
+second simulator, no second generator and no second scoring path: every entry
+resolves through the same `BuildChallenge`, plays on the same namespaces, is
+graded by the same oracle, and is replayable by its own id. `starters <pack>`
+prints those ids so a pack can be worked through in order; `-starter` draws one,
+because the command keeps no record of what you have played and a progress file
+would be the wrong trade for a game whose appeal is leaving nothing behind.
+
+A pack names the layer you are practising, which is a hint you asked for. Every
+pack still holds at least two possible answers, and one entry per pack is a
+network with nothing wrong with it — a pack with a single possible answer would
+be the answer key rather than a hint. That is why there is no DNS pack: the
+answer vocabulary has exactly one DNS entry on purpose, so "DNS" would be the
+whole answer. DNS is practised inside `fundamentals`, where it is one of four
+things it could be.
+
+The ids are written down in `starterPacks` rather than searched for at run time,
+so a generation change cannot quietly re-point a pack at a different lesson.
+`TestStarterPacksStayPlayable` checks that every entry still sets the condition
+it was curated for and that no pack has collapsed to one answer.
+
 ### Challenge ids
 
-A challenge id is `V2-8F42C1`: a generator version and six hex digits. It
+A challenge id is `V4-8F42C1`: a generator version and six hex digits. It
 resolves with no state on disk and no network, so the same id is the same
 puzzle on anyone's machine. A bare `8F42C1` is accepted and always means `V1`,
 which was the only form the first release printed.
@@ -471,9 +821,43 @@ instead, leaving old ids resolving through the rules they were minted under.
 fails if the chain moves under them.
 
 `V2` exists because the contract below admitted `netem.loss`, a condition V1 had
-excluded. `V1` ids keep resolving through `challengeV1Mutations`, the frozen
-list of conditions V1 was published with, so an id someone shared before the
-change still sets the puzzle they played.
+excluded. `V3` exists because six more conditions were added to the hunt
+registry — a refused port, a filtered one, a certificate name mismatch, and the
+three single-default route faults — along with the `two-router-healthy` control
+two of them need. `V4` exists because of how those versions choose, not what
+they may choose: see below. Each earlier version keeps its own frozen condition
+list and its own hunt generator version, so an id someone shared before a change
+still sets the puzzle they played.
+
+`A1` is the authored namespace. It is an id version like any other and parses,
+resolves, replays and shares identically; its digits name a case somebody wrote
+rather than a seed to search from.
+
+#### V1 to V3, and why V4 chooses differently
+
+V1 to V3 draw a base scenario and a case number, let the hunt generator produce
+whatever single mutation it produces, and retry until one is challenge-capable.
+That works, and it quietly lets three implementation details decide what the
+game is about: how many mutation variants a family has (`dns.servfail` and
+`dns.drop` are one diagnosis to a player but two draws), how many base scenarios
+the family's operator applies to, and which case the scan happens to reach
+first. Measured across 4000 V3 ids, that put DNS at 23.4% and a missing subnet
+route at 1.6% — a sixteenfold spread nobody chose, in a game whose value is
+practising the rare ones.
+
+V4 picks the answer first, uniformly over the playable vocabulary, and only then
+searches for a base and case number that express it. The search still rejects,
+but it can no longer decide what the game is about: rejection changes how long
+an id takes to resolve, never which diagnosis it resolves to. The same 4000-id
+measurement puts every family between 5.9% and 7.1%, with healthy at one draw in
+six as before. `TestV4DistributionIsUniformOverAnswers` guards it with a
+deliberately wide band, because the invariant worth protecting is "every family
+is reachable and none dominates", not a particular percentage.
+
+Uniform over answers rather than over mutations is the deliberate choice. A
+player who diagnoses "DNS resolution" has named one thing, and weighting by
+mutation would hand out twice as much of it for a reason internal to the
+simulator.
 
 ### The challenge contract
 
@@ -540,10 +924,143 @@ above, the difficulty metadata, and the matchup.
 `internal/simulation/challenge.go` is authoritative for all four, and keeps them
 in two tables that never read each other: `challengeConditions` is what the
 simulator can prove, `challengeRecognition` is what netdoc's report has to say.
+The evidence predicates each condition is proved by live next to the first, in
+`challenge_truth.go`; the healthy oracle and the playable answer set are both
+derived from them rather than listed separately.
+A version's whole meaning — controls, hunt generator, admitted conditions —
+lives in one `challengeSelection`, so nothing a version resolves through can
+drift out from under an id that was already shared.
 Protocol meaning stays where it belongs — TCP reset is recognized by netdoc's
 own `connection_reset` cause and nothing looser, because a generic "the run
 failed somehow" comparison would score netdoc correct for naming a different
 fault with a different fix.
+
+### What defines ground truth
+
+Nothing Network Doctor produces. Truth is established from the scenario state,
+the applied mutation, and observations the simulator collected for itself from
+inside the node namespaces — service records, kernel counters, routing tables
+read back with `ip route show`, and the simulator's own TCP dials. The whole
+truth path is `challengeTruth`, which reads `report.Evidence` and the mutation
+manifest and never touches `report.Tests`, so a diagnosis cannot reach it even
+by accident.
+
+A mutation having been generated, applied, or expected to break something
+establishes nothing on its own. It becomes truth only when the executed run left
+independent evidence that it met live traffic.
+
+### Evidence predicates
+
+Every condition Challenge Mode can set carries two predicates over that
+observation, and neither of them can see a diagnosis.
+
+**The scoped predicate** answers "did *this* mutation, on this node and this
+port, meet live traffic". It is `mutationObserved` plus the condition's own
+optional `requires`, and it is what establishes the answer for a challenge that
+injected a fault. It is deliberately narrow: it knows which node was mutated,
+which is what lets a refused port be told apart from a filtered one on the same
+host.
+
+**The evidence signature** answers the different question "does this run show a
+fault of this class *anywhere*, with no mutation to scope it by". It lives on
+the condition row as `signature` and is defined in
+`internal/simulation/challenge_truth.go`. It exists for the healthy challenge,
+where there is no mutation to scope by and the only honest test is that no
+condition's trace is present.
+
+The split is what removed the last hand-maintained list. The healthy verdict
+used to restate every condition's negation in prose, kept in step with the
+condition table by a test that spelled the mapping out a third time; adding a
+playable diagnosis meant editing all three and remembering to. Now
+`healthyObserved` walks `challengeConditions` and consults each signature, so a
+condition added without one fails in `TestEveryChallengeConditionCarriesASignature`
+rather than quietly widening what counts as a healthy network.
+
+A signature may be shared by several conditions, and several are. It names a
+class of trace rather than fingerprinting one mutation — telling neighbouring
+families apart is the scoped predicate's job, and asking the unscoped one to do
+it too would be asking it to name a fault from evidence that does not identify
+one. `TestEvidenceSignaturesDiscriminate` is the table that holds each signature
+to its neighbours: refused against timed-out, expired against name-mismatched, a
+counted drop against an installed rule that matched nothing.
+
+The playable set is derived from the same table. `challengePlayableAnswers`
+reads the conditions rather than listing the answers again, so there is no
+second taxonomy for generation to drift out of sync with.
+
+### Authored and generated challenges
+
+Both kinds are the same challenge. They differ only in how the case is chosen.
+
+A **generated** challenge is a draw: an id seeds a search over base scenarios
+and case numbers. To get one that sets a particular fault you scan ids until one
+falls out — which is how the starter packs were built, and is a poor way to
+write a lesson, because the case you end up teaching is whichever one the search
+reached first.
+
+An **authored** challenge names its base scenario and its fault directly.
+`internal/simulation/challenge_authored.go` holds the table. Everything after
+the choice is shared: the fault is produced by the ordinary hunt mutation
+operator against the ordinary base scenario, so nothing hand-writes a node name,
+a port or an address that could drift out of step with the topology; truth is
+established by the same scoped predicate; and scoring is the same
+`ScoreChallenge`. There is no second correctness path.
+
+Authored cases are deterministic — the fault's parameters come from a seed
+derived from the slug — and validated by
+`TestAuthoredChallengesAreValid`, which builds each one, proves the mutation
+applies to the declared base, proves the declared diagnosis is the one the
+condition table says that mutation establishes, and proves the fault lands on
+the target the briefing names. `TestAuthoredChallengesScoreThroughTheSharedEngine`
+additionally proves no *other* playable answer scores correct, so an authored
+case cannot be accidentally ambiguous. A case with an inconsistent declaration
+fails the build rather than reaching a player.
+
+```sh
+./netdoc-sim authored                                   # the cases and their ids
+./netdoc-sim challenge -authored missing-subnet-route   # play one
+./netdoc-sim challenge -id A1-48CFF9                    # the same case, by id
+```
+
+### Adding a new playable diagnosis
+
+There is one workflow, and no hidden allowlists to remember.
+
+1. **Confirm simulator truth.** The fault needs a hunt mutation operator in
+   `huntMutationRegistry` that a control scenario can express, and the run has to
+   leave independent evidence it met live traffic. If `mutationObserved` has no
+   case for it, add one — that is the scoped predicate.
+2. **Add the condition.** One row in `challengeConditions`: the mutation id, the
+   answer, a difficulty, the reveal explanation, and the evidence `signature`.
+   Add `requires` if the shared per-mutation check would settle for less than
+   proof that live traffic met the fault, and `briefed` if the fault could land
+   on a target the briefing never names. Check the four contract tests above
+   before adding it at all.
+3. **Prove discrimination.** Add the signature to the table in
+   `TestEvidenceSignaturesDiscriminate` with its canonical positive evidence
+   *and* the traces of its nearest neighbours, which must not fire it.
+4. **Decide what netdoc may say.** If its vocabulary can state the condition, add
+   an entry to `challengeRecognition`. If it cannot, add nothing: the condition
+   is still playable and scores `unrecognized`, which is a challenger win and the
+   finding worth having.
+
+Nothing else needs updating. The answer menu entry is the one remaining piece of
+prose, and `TestAdvertisedChallengeAnswersAreProducible` will tell you if you
+forgot it. The healthy oracle, the playable set and V4 generation all derive
+from the row you added. Generation reaches it from V4 onwards; earlier versions
+keep their frozen lists, which is what the id version is for.
+
+### Adding an authored challenge
+
+Append a row to `authoredChallenges` with a stable slug, a name, the base
+scenario, the mutation id, the diagnosis it teaches, and one sentence saying
+what telling it apart requires. Then run the tests: they will build it, check
+the declaration against the condition table, and reject it if the mutation does
+not apply to that base or the fault lands off the briefed target.
+
+The slug derives both the id and the generation seed, so reordering the table is
+safe and renaming a slug mints a different challenge. Once a case is published,
+pin its id in `TestAuthoredChallengeIDsAreFrozen`.
 
 ### Scoring
 
@@ -573,10 +1090,13 @@ demands more — `netem.loss` wants the qdisc's kernel drop counter, because a
 shaper installed with exactly the requested parameters still impaired nobody if
 it matched no traffic. For a challenge that injected nothing it means the
 simulator positively measured health along every dimension a challenge is able
-to break: a reachable family at the client node and no unreachable one, every
-controlled target reached, every selected gateway answering, no failing DNS
-answers, no reset connections, no expired certificate a client refused, no
-downed link, and no shaper counting drops. An empty mutation list is not
+to break. That list is not written down anywhere: `healthyObserved` walks
+`challengeConditions` and asks each condition whether its own evidence signature
+appears in this run, so "healthy" means every fault the game can set was looked
+for with that fault's own predicate and not found. On top of that sits a floor
+of measurements that have to have been taken at all — a reachable family at the
+client node, every selected gateway answering, no downed link — plus the two
+faults no challenge condition covers. An empty mutation list is not
 evidence of anything, the mutation manifest is not evidence of anything, and
 neither is netdoc's verdict — the healthy oracle reads none of them. Anything
 else is `no_result`, for both contestants at once. A mutation that failed to
@@ -589,9 +1109,13 @@ briefing never names, which would be a clue nobody was shown and a question the
 graded netdoc run was never asked; those cases are not challenge-capable.
 
 Elapsed human time is recorded because it is fun to compare, and is deliberately
-not part of the matchup: netdoc is automated and a person is not. In `-json` it
-is the only thing under `timing`, which is also the only part of a result a
-replay of the same id will not reproduce.
+not part of the matchup: netdoc is automated and a person is not. See [Elapsed
+human time](#elapsed-human-time) for exactly what it measures.
+
+Three parts of a result describe the session rather than the challenge, and a
+replay of the same id will not reproduce them: `timing`, `netdoc` (which build
+answered it), and `daily` (the date it was played as the daily for, absent
+otherwise). Everything else in a result is determined by the id and the network.
 
 ### Which Network Doctor a result was scored against
 
@@ -621,11 +1145,23 @@ spoiler-free postable summary.
 
 ### Not spoiling it
 
-The briefing prints the id and the difficulty. The base scenario, seed, case
-number and mutation are the answer, so they appear only in the reveal, and a
-test asserts the briefing contains none of them. The share block carries two
-check marks and the id but never names the fault, so posting a result does not
-spoil the challenge for whoever reads it.
+The briefing prints the id, the difficulty, the node and the host. The base
+scenario, seed, case number and mutation are the answer, so they appear only in
+the reveal, and a test asserts the briefing contains none of them. Rereading the
+briefing with `b` goes through the same renderer, so there is no second, more
+generous version of it to drift.
+
+The host is part of that. Before it was derived from the id, every challenge on a
+given base was presented under that base's own name from the YAML — so
+`secure-target.test` told a returning player they were on `tls-valid`, which is
+most of the way to the answer for two conditions. The name is now a function of
+the id alone, and a test checks that no name is a fingerprint of the base, the
+case or the fault.
+
+The share block carries two check marks, the id, and the date if it was a daily,
+but never names the fault, so posting a result does not spoil the challenge for
+whoever reads it. A starter pack's name is deliberately not in it: the pack names
+a layer, which would narrow the answer for the next player.
 
 `-v`, a JSON report, or reading the source obviously defeats all of this. It is
 a game, not a security boundary.
@@ -634,6 +1170,9 @@ a game, not a security boundary.
 
 Challenge Mode needs exactly what any other run needs — the Linux namespace
 backend, no root — plus a terminal, because a person is being asked a question.
+On macOS or Windows the Linux part comes from a container runtime; see [Running
+it in a container](#running-it-in-a-container), which changes how the simulator
+is reached and nothing about what it does.
 The shell enters the node through the same `nsenter` argument slice the netdoc
 run uses, gains no privilege the simulator did not already have, and is given
 the simulator's trust anchors so a generated certificate verifies for the
@@ -713,13 +1252,23 @@ failure. The tests themselves remain rootless. CI's throwaway Linux runner
 adjusts its host AppArmor setting before this command; `netdoc-sim` never makes
 that change or escalates privileges.
 
+Changes to the `Dockerfile` or to the image's release job additionally need the
+artifact tested, on an engine, rather than the file reviewed:
+
+```sh
+docker build --build-arg VERSION=dev -t netdoc-sim:test .
+NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
 See the repository's [Tests section](../README.md#tests) for the complete
 validation gate. A documentation-only change does not require running namespace
 integration tests unless it exposes a reason to verify namespace behavior.
 
 ## Limitations
 
-- Linux is the only maintained backend.
+- Linux is the only maintained backend. The container image is packaging around
+  that backend, not a second one: it needs a Linux container runtime, and gives
+  macOS and Windows no simulator of their own.
 - Topology is static unicast IPv4/IPv6 over simulator-owned bridges: no NAT,
   address autoconfiguration, dynamic routing, tunnels, ECMP, or VLAN model.
 - Simulator services are deliberately narrow probe fixtures, not general DNS,

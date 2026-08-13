@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,22 @@ const directorCommand = "__director"
 const campaignDirectorCommand = "__campaign_director"
 const huntDirectorCommand = "__hunt_director"
 const challengeDirectorCommand = "__challenge_director"
+
+// version is injected at build time with -X main.version, by the same
+// GoReleaser build that stamps netdoc and by the container image build. Asking
+// netdoc-sim rather than inferring from the package or image tag is the same
+// rule the simulator applies to netdoc: the binary is the only thing that knows
+// which build it is. A local build says "dev", truthfully.
+var version = "dev"
+
+func init() {
+	// A `go install ...@vX.Y.Z` build has no injected version but does carry the
+	// module version, and introducing itself as "dev" there would be a lie.
+	if info, ok := debug.ReadBuildInfo(); ok && version == "dev" &&
+		info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+}
 
 // Exit codes. Separated so a CI job can tell "netdoc diagnosed this wrong"
 // from "the simulator could not run".
@@ -100,6 +117,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, n)
 		}
 		return exitOK
+	case "starters":
+		return starters(args[1:], stdout, stderr)
+	case "authored":
+		return authored(args[1:], stdout, stderr)
 	case "capabilities":
 		return capabilities(ctx, stdout)
 	case "list":
@@ -108,6 +129,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return inspect(args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(args[1:], stdout, stderr)
+	case "version", "-version", "--version":
+		fmt.Fprintln(stdout, "netdoc-sim", version)
+		return exitOK
 	}
 	fmt.Fprintf(stderr, "netdoc-sim: unknown command %q\n", textsafe.Clean(args[0]))
 	fmt.Fprintln(stderr, "run 'netdoc-sim help' for usage")
@@ -128,10 +152,13 @@ Commands:
   challenge [id] [flags]   diagnose a hidden fault yourself, then let netdoc try
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
+  starters [pack]          list the curated starter packs, or one pack's challenges
+  authored                 list the hand-written challenges and their ids
   capabilities             report whether this host can simulate, and what a run does
   list                     list simulations left running by 'run -keep'
   inspect <id>             show a kept simulation's nodes and how to enter them
   cleanup [<id>|-all]      release a kept simulation's namespaces and files
+  version                  print the build version, the same one netdoc reports
 
 A <scenario> is a built-in name or a path to a YAML file.
 
@@ -181,8 +208,24 @@ Flags for triage:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
 
+Ways to play a challenge:
+  netdoc-sim challenge                     draw one and play it
+  netdoc-sim challenge -daily              today's challenge, the same one for
+                                           everybody who plays it today
+  netdoc-sim challenge -starter fundamentals
+                                           a curated challenge to learn on
+  netdoc-sim challenge V3-8F42C1           replay the one a friend sent you
+
+In the session you get a shell in the broken machine, then a menu. Pick a
+diagnosis by number or by name, 'b' rereads the briefing, 's' returns to the
+shell, 'q' gives up. Your solve time is the shell and the menu, not the
+simulator's setup or Network Doctor's own run.
+
 Flags for challenge:
   -id <ID>                 replay a specific challenge instead of drawing one
+  -daily[=YYYY-MM-DD]      play the challenge for today, or for that UTC date
+  -starter <pack>          draw from a starter pack ('netdoc-sim starters')
+  -authored <slug>         play a hand-written challenge ('netdoc-sim authored')
   -difficulty <level>      draw an easy, medium or hard challenge
   -answer <name>           submit this diagnosis without opening a shell
   -give-up                 skip straight to the answer
@@ -833,6 +876,43 @@ func list(stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+// starters is the discovery half of the starter packs: which ones exist, and
+// with a pack named, the challenge ids in it. It prints the ids on purpose —
+// they are ordinary challenge ids, so a beginner can work through a pack in
+// order with -id instead of drawing from it and hoping.
+func starters(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 {
+		fmt.Fprintln(stderr, "netdoc-sim: starters takes one pack name, or none to list them all")
+		return exitUsage
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(stdout, "Starter packs — curated challenges to learn on. Play one with:")
+		fmt.Fprintln(stdout, "  netdoc-sim challenge -starter <pack>")
+		fmt.Fprintln(stdout, "\nA pack names the layer you are practising, which is a hint you asked for.")
+		fmt.Fprintln(stdout, "Which fault it is remains yours to find, and one entry per pack may be")
+		fmt.Fprintln(stdout, "a network with nothing wrong with it at all.")
+		fmt.Fprintln(stdout)
+		for _, pack := range simulation.StarterPacks() {
+			fmt.Fprintf(stdout, "  %-14s %-34s %d challenges\n", pack.ID, pack.Name, len(pack.Challenges))
+			fmt.Fprintf(stdout, "  %-14s %s\n\n", "", pack.Description)
+		}
+		fmt.Fprintln(stdout, "'netdoc-sim starters <pack>' lists a pack's challenge ids in order.")
+		return exitOK
+	}
+	pack, ok := simulation.StarterPackByID(args[0])
+	if !ok {
+		fmt.Fprintf(stderr, "netdoc-sim: unknown starter pack %q (have: %s)\n",
+			textsafe.Clean(args[0]), strings.Join(simulation.StarterPackNames(), ", "))
+		return exitUsage
+	}
+	fmt.Fprintf(stdout, "%s — %s\n%s\n\n", pack.ID, pack.Name, pack.Description)
+	fmt.Fprintln(stdout, "In order, easiest first:")
+	for _, id := range pack.Challenges {
+		fmt.Fprintf(stdout, "  netdoc-sim challenge -id %s\n", id)
+	}
+	return exitOK
+}
+
 var aliveWord = map[bool]string{true: "alive", false: "gone"}
 
 func inspect(args []string, stdout, stderr io.Writer) int {
@@ -982,4 +1062,26 @@ func netdocVersion(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("%s -version: printed no version", path)
 	}
 	return version, nil
+}
+
+// authored is the discovery half of the authored challenges: which ones exist,
+// what each is for, and the ordinary challenge id that plays it. Like a starter
+// pack, it prints the ids rather than hiding them — an authored challenge is a
+// normal shareable id, and printing it is what lets somebody replay or post one
+// without going back through this command.
+func authored(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		fmt.Fprintln(stderr, "netdoc-sim: authored takes no arguments")
+		return exitUsage
+	}
+	fmt.Fprintln(stdout, "Authored challenges — hand-written cases, each setting a chosen fault. Play one with:")
+	fmt.Fprintln(stdout, "  netdoc-sim challenge -authored <slug>")
+	fmt.Fprintln(stdout, "\nEach is an ordinary challenge id, so it can also be replayed or shared with -id.")
+	fmt.Fprintln(stdout, "The line under each name says what telling it apart requires, never what it is.")
+	fmt.Fprintln(stdout)
+	for _, item := range simulation.AuthoredChallenges() {
+		fmt.Fprintf(stdout, "  %-28s %-10s %s\n", item.Slug, item.ID, item.Name)
+		fmt.Fprintf(stdout, "  %-28s %-10s %s\n\n", "", "", item.Teaches)
+	}
+	return exitOK
 }

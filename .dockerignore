@@ -1,0 +1,14 @@
+# Everything the image build does not compile from. Keeping .git out also keeps
+# the build deterministic: with no VCS metadata the Go toolchain stamps none,
+# and --build-arg VERSION stays the only thing that decides what the binaries
+# report for -version.
+.git
+.github
+.gitignore
+assets
+dist
+vendor
+netdoc
+netdoc-sim
+*.tar.gz
+demo.tape

@@ -94,6 +94,15 @@ sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpin
 
 Because these are downloaded by hand, they do not auto-update — `dnf`/`apt` won't pull the next version for you. COPR does.
 
+Every Linux package — COPR, `.deb`, `.rpm`, `.apk` — installs two commands at the same version: `netdoc`, and `netdoc-sim`, the simulator behind [Challenge Mode](#think-you-can-beat-network-doctor). Confirm both:
+
+```sh
+netdoc --version
+netdoc-sim help
+```
+
+`netdoc-sim` is Linux-only: it builds its networks out of Linux namespaces, so the macOS and Windows downloads ship `netdoc` alone. Those hosts run the same simulator from [a container](docs/simulation.md#running-it-in-a-container) instead.
+
 ### Everywhere else
 
 Grab a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as a `.zip`, the rest as bare binaries), or install with Go 1.25+:
@@ -383,6 +392,8 @@ All probes, the diagnosis engine, and the TUI are pure Go and identical on Linux
 
 Windows built-in toolbox commands are decoded from the active OEM code page before their output is sanitized. UTF-8 tools like `curl.exe` and `nmap` are left untouched.
 
+`netdoc-sim` and Challenge Mode are the exception: their backend is Linux namespaces and there is no other one, so macOS and Windows run [the published image](docs/simulation.md#running-it-in-a-container) on a Linux container runtime rather than a port. `netdoc` itself needs no container anywhere — diagnosing your own machine's network from inside one would diagnose the container.
+
 ## Feature summary
 
 Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
@@ -428,6 +439,15 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
 ```
 
+If the change touched the `Dockerfile` or the image's release job, also build the
+image and test the artifact. It needs Docker or Podman, which is why it is not in
+the gate above:
+
+```sh
+docker build --build-arg VERSION=dev -t netdoc-sim:test .
+NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
 If the change touched a build-tagged or `_linux`/`_darwin`/`_windows` suffixed
 file, also compile for macOS and Windows:
 
@@ -454,8 +474,18 @@ generated bug hunts, and triage of reproducible findings. Start with the
 scenario catalog and run any name it prints:
 
 ```sh
+netdoc-sim scenarios
+netdoc-sim run broken-dns
+```
+
+Any [Linux package](#linux) installs `netdoc-sim` beside `netdoc`, and
+`ghcr.io/heymaikol/netdoc-sim` carries the same pair for hosts that are not Linux
+— the container is packaging around the Linux backend, never a second one.
+Contributors testing an unreleased change build both from the clone instead, so
+the simulator runs the netdoc built next to it:
+
+```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
-./netdoc-sim scenarios
 ./netdoc-sim run broken-dns
 ```
 
@@ -472,17 +502,45 @@ what's wrong. Investigate it with the tools you'd normally use, commit to your
 diagnosis, then let Network Doctor take a shot at the exact same problem. Both
 answers are judged against the simulator's independently observed ground truth.
 
+On **macOS, Windows or Linux**, one container image is the whole install — no
+clone, no Go toolchain, no Linux namespace knowledge, and nothing on your real
+network is touched:
+
 ```sh
-./netdoc-sim challenge                  # draw a challenge and play it
-./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V2-8F42C1    # play the one a friend sent you
+docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest challenge
 ```
 
-You land in a shell inside the broken machine. Use `ping`, `dig`, `curl`, `ip
-route`, `ss`, `traceroute`, `nc` — whatever you'd reach for on a real
-call-out. Type `exit` when you're ready, pick your diagnosis from the menu, and
-the reveal shows the ground truth, the evidence behind it, your answer, Network
-Doctor's answer, and who got it right:
+That is the real Linux namespace simulator running inside a Linux container, not
+a macOS or Windows imitation of it. `podman run --rm -it` works too, and does not
+need the capability. See [Running it in a
+container](docs/simulation.md#running-it-in-a-container) for the specific-id,
+JSON and privilege details, and for what that one flag is and is not.
+
+On Linux, any [package](#linux) installs `netdoc-sim` and it runs natively:
+
+```sh
+netdoc-sim challenge                        # draw a challenge and play it
+netdoc-sim challenge -daily                 # today's, the same one for everybody
+netdoc-sim challenge -starter fundamentals  # a curated one to learn on
+netdoc-sim challenge -authored no-default-route  # a hand-written case
+netdoc-sim challenge -id V4-8F42C1          # play the one a friend sent you
+```
+
+`netdoc-sim challenge -daily` is the same broken network for everyone who plays
+it that day, keyed to the UTC date and derived locally — no server and no
+account — so results are comparable. `netdoc-sim starters` lists the curated
+packs for a first run: fundamentals, service, TLS, paths, routing.
+`netdoc-sim authored` lists the hand-written cases, each one written to set a
+chosen fault rather than drawn at random.
+
+You land in a shell inside the broken machine, investigating a host that belongs
+to the challenge — `invoices-8f42c1.test`, resolved by the simulated network and
+by nothing outside it. Use `ping`, `dig`, `curl`, `ip route`, `ss`, `traceroute`,
+`nc` — whatever you'd reach for on a real call-out. Type `exit` when you're
+ready, then pick your diagnosis by number or type it by name (`b` reprints the
+briefing, `q` gives up). The reveal shows the ground truth, the evidence behind
+it, your answer, Network Doctor's answer, how long you took, and who got it
+right:
 
 ```text
 Result
@@ -492,24 +550,29 @@ Human investigation: 1m 47s
 Network Doctor run:  3s
 ```
 
-It ends with a block you can paste anywhere. It carries the challenge id and two
-check marks and never names the fault, so sharing your result doesn't spoil the
-puzzle for whoever plays it next:
+It ends with a block you can paste anywhere. It carries the challenge id, the
+date if it was a daily, and two check marks — and never names the fault, so
+sharing your result doesn't spoil the puzzle for whoever plays it next:
 
 ```text
-Network Doctor Challenge V2-8F42C1 (hard)
+Network Doctor Challenge V4-8F42C1 (hard)
+Daily 2026-08-12
 Me:             ✓
 Network Doctor: ✗
 YOU BEAT NETWORK DOCTOR in 1m 47s
-Your turn: netdoc-sim challenge -id V2-8F42C1
+Your turn: netdoc-sim challenge -id V4-8F42C1
 ```
+
+Your time is the shell and the menu — not the simulator's setup, and not Network
+Doctor's own run.
 
 Everything is local and reproducible: no account, no server, no leaderboard. A
 challenge id is the whole puzzle, so the same id is the same broken network on
-anyone's machine. Same requirements as the rest of the simulator — Linux,
-unprivileged, and nothing on your real network is touched. See the [Challenge
-Mode guide](docs/simulation.md#challenge-mode) for how scoring works and why
-Network Doctor never gets to see the answer either.
+anyone's machine — natively on Linux, or through the image on any host. Same
+requirements as the rest of the simulator: a Linux kernel, unprivileged, and
+nothing on your real network is touched. See the [Challenge Mode
+guide](docs/simulation.md#challenge-mode) for how scoring works and why Network
+Doctor never gets to see the answer either.
 
 ## Development
 

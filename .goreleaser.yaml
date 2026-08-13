@@ -12,7 +12,8 @@ before:
     - tar -czf {{ .ProjectName }}-{{ .Version }}-vendor.tar.gz vendor
 
 builds:
-  - binary: netdoc
+  - id: netdoc
+    binary: netdoc
     env:
       - CGO_ENABLED=0
     goos:
@@ -22,13 +23,37 @@ builds:
     goarch:
       - amd64
       - arm64
+  # Linux only, on purpose. netdoc-sim compiles everywhere — internal/simulation
+  # has a !linux backend that returns ErrUnsupported so the CLI links — but the
+  # only backend that can build a network is Linux namespaces, so a macOS or
+  # Windows artifact would be a binary whose every real command refuses. Same
+  # tag, same version, same release as netdoc; it is a companion, not a product.
+  - id: netdoc-sim
+    binary: netdoc-sim
+    main: ./cmd/netdoc-sim
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
 
+# One archive per build, so the taps below can name the one they publish.
+# Both keep the default binary-format name template, which starts with
+# {{ .Binary }}: netdoc's release filenames are byte-for-byte what they were,
+# and netdoc-sim gets its own rather than colliding with them.
 archives:
-  - formats: [binary]
+  - id: netdoc
+    ids: [netdoc]
+    formats: [binary]
     # winget and Scoop both refuse a bare binary; Windows gets a zip instead.
     format_overrides:
       - goos: windows
         formats: [zip]
+  - id: netdoc-sim
+    ids: [netdoc-sim]
+    formats: [binary]
 
 source:
   enabled: true
@@ -48,6 +73,10 @@ release:
 
 # Distro-agnostic packages installed straight off the release page: apt, dnf,
 # apk. Repo-based installs go through COPR instead, which builds its own.
+#
+# No `ids` filter: every Linux build goes in, so one install puts both
+# /usr/bin/netdoc and /usr/bin/netdoc-sim on the system at the same version.
+# packaging/network-doctor.spec has to keep installing both to match.
 nfpms:
   - package_name: network-doctor
     homepage: https://github.com/heymaikol/network-doctor
@@ -71,8 +100,12 @@ nfpms:
       - src: packaging/completions/netdoc.fish
         dst: /usr/share/fish/vendor_completions.d/netdoc.fish
 
+# netdoc only, in all three. A tap/bucket/manifest accepts one archive per
+# OS+arch, and the simulator is Linux-only anyway: without this filter the
+# extra Linux archives make GoReleaser refuse the whole publish.
 homebrew_casks:
-  - repository:
+  - ids: [netdoc]
+    repository:
       owner: heymaikol
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
@@ -89,7 +122,8 @@ homebrew_casks:
 # Scoop publishes to our own bucket immediately; winget opens a PR upstream that
 # Microsoft reviews, so releases land there some time later.
 scoops:
-  - repository:
+  - ids: [netdoc]
+    repository:
       owner: heymaikol
       name: scoop-bucket
       token: "{{ .Env.WINDOWS_PACKAGES_TOKEN }}"

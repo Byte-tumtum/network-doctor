@@ -74,6 +74,31 @@ jobs:
         run: go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic
       - if: runner.os == 'Linux'
         run: go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic
+  # The container is how macOS and Windows reach Challenge Mode, so the artifact
+  # is tested rather than assumed: this job builds the image and runs a real
+  # namespace-backed simulation and a real challenge inside it. The runner's
+  # Docker is the point — it has the default seccomp profile Docker Desktop
+  # ships, which is what the documented --cap-add SYS_ADMIN exists for.
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # amd64 only: this job proves the image works, and it can only prove it on
+      # the architecture it can execute. The release builds arm64 as well.
+      - run: docker build --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" -t netdoc-sim:ci .
+      # NETDOC_REQUIRE_CONTAINER turns "no image or no engine" from a skip into a
+      # failure, so this job cannot go green without having run the container.
+      - run: go test -tags container -count=1 -v .
+        env:
+          NETDOC_CONTAINER_IMAGE: netdoc-sim:ci
+          NETDOC_CONTAINER_ENGINE: docker
+          NETDOC_REQUIRE_CONTAINER: "1"
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -95,3 +120,30 @@ jobs:
         with:
           version: v2.17.1
           args: check
+      # `check` only parses the config. Build the real artifacts too, because
+      # the contract users get is "installing network-doctor installs netdoc and
+      # netdoc-sim" — and that is a property of the package, not of the YAML.
+      # No credentials: a snapshot publishes nothing.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.17.1
+          args: release --snapshot --clean --skip=publish,validate
+      - name: Verify Linux packages install both executables
+        run: |
+          set -euo pipefail
+          deb=$(echo dist/*_linux_amd64.deb)
+          rpm_pkg=$(echo dist/*_linux_amd64.rpm)
+          # Compared as sets, so a binary added to one packaging path and not
+          # the other fails here instead of on someone's machine.
+          # The trailing dot in the pattern drops the /usr/bin/ directory entry
+          # a deb carries and an rpm does not.
+          deb_bins=$(dpkg-deb -c "$deb" | awk '{print $NF}' | sed 's|^\./|/|' \
+            | grep '^/usr/bin/.' | sort)
+          rpm_bins=$(rpm -qlp "$rpm_pkg" | grep '^/usr/bin/.' | sort)
+          printf 'deb: %s\nrpm: %s\n' "$deb_bins" "$rpm_bins"
+          test "$deb_bins" = "$(printf '/usr/bin/netdoc\n/usr/bin/netdoc-sim')"
+          test "$rpm_bins" = "$deb_bins"
+          # Both have to actually run, from the packaged copy, with no privileges.
+          dpkg-deb -x "$deb" pkgroot
+          ./pkgroot/usr/bin/netdoc -version
+          ./pkgroot/usr/bin/netdoc-sim help > /dev/null

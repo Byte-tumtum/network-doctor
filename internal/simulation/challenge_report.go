@@ -12,15 +12,28 @@ import (
 // answer; the menu, which is the structured vocabulary; and the reveal, which
 // may say everything.
 
-// WriteBriefing prints what the player is told before they start. Everything
-// here is either the id, the difficulty, or something the netdoc run is also
-// given — the node it stands in and the target it is asked about. The base
-// scenario, the seed, the case and the mutation stay out of it.
+// WriteBriefing prints what the player is told before they start, and prints it
+// again whenever they ask for it mid-session. It is the only briefing renderer
+// there is, deliberately: a separate "recall" format would be a second thing to
+// keep truthful, and the one that drifted would be the one nobody reread.
+//
+// Everything here is either the id, the difficulty, or something the netdoc run
+// is also given — the node it stands in and the target it is asked about. The
+// base scenario, the seed, the case and the mutation stay out of it.
 func (c *Challenge) WriteBriefing(w io.Writer) {
-	fmt.Fprintf(w, "\nNETWORK DOCTOR CHALLENGE\nChallenge %s\nDifficulty: %s\n",
-		c.ID, c.Difficulty)
+	fmt.Fprintf(w, "\nNETWORK DOCTOR CHALLENGE\nChallenge %s   Difficulty: %s\n", c.ID, c.Difficulty)
+	if c.Daily != "" {
+		// The date is what makes a daily comparable, so it is stated where the
+		// player will read it rather than only in the result.
+		fmt.Fprintf(w, "Daily challenge for %s (UTC)\n", c.Daily)
+	}
 	fmt.Fprintln(w, "\nSomething may be wrong with this network. Your job is to say what.")
-	fmt.Fprintf(w, "\nYou are on:  %s\n", challengeSessionLabel(c))
+	fmt.Fprintf(w, "\nYou are on:   %s\n", textsafe.Clean(c.Node))
+	if c.Target == "" {
+		fmt.Fprintln(w, "Investigate:  this machine's own connectivity — no specific target")
+	} else {
+		fmt.Fprintf(w, "Investigate:  %s\n", textsafe.Clean(c.Target))
+	}
 	fmt.Fprintln(w, "\nInvestigate with whatever you would normally reach for — ping, dig, curl,")
 	fmt.Fprintln(w, "ip route, ss, traceroute, nc. Commit to a diagnosis when you are ready.")
 	fmt.Fprintln(w, "Network Doctor then gets the same network, and has not seen the answer either.")
@@ -34,7 +47,7 @@ func WriteAnswerMenu(w io.Writer) {
 	for i, item := range ChallengeAnswerMenu {
 		fmt.Fprintf(w, "%3d. %-38s %s\n", i+1, item.Label, item.Help)
 	}
-	fmt.Fprintln(w, "\n  s. back to the shell        q. give up and reveal the answer")
+	fmt.Fprintln(w, "\n  s. back to the shell   b. read the briefing again   q. give up and reveal")
 }
 
 func (r *ChallengeResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) }
@@ -42,6 +55,9 @@ func (r *ChallengeResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) 
 // WriteText is the reveal. It runs only after both answers are in.
 func (r *ChallengeResult) WriteText(w io.Writer) {
 	fmt.Fprintf(w, "\nRESULT — CHALLENGE %s\n", r.ChallengeID)
+	if r.Daily != "" {
+		fmt.Fprintf(w, "Daily challenge for %s (UTC)\n", r.Daily)
+	}
 
 	fmt.Fprintln(w, "\nGround truth")
 	if r.Truth.Scoreable {
@@ -143,10 +159,17 @@ func challengeResultLine(result string) string {
 func (r *ChallengeResult) Share() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Network Doctor Challenge %s (%s)\n", r.ChallengeID, r.Difficulty)
+	if r.Daily != "" {
+		// The date is the thing people compare a daily on, and it names no fault,
+		// so it belongs in the block that gets posted.
+		fmt.Fprintf(&b, "Daily %s\n", r.Daily)
+	}
 	fmt.Fprintf(&b, "Me:             %s\n", shareMark(r.Human.Score))
 	fmt.Fprintf(&b, "Network Doctor: %s\n", shareMark(r.NetworkDoctor.Score))
 	fmt.Fprintf(&b, "%s in %s\n", challengeResultLine(r.Result), formatElapsed(msDuration(r.Timing.HumanMS)))
-	fmt.Fprintf(&b, "Your turn: netdoc-sim challenge -id %s\n", r.ChallengeID)
+	// The same invitation the reveal prints, so a reader of the share block and
+	// a reader of the full result are told to run the same thing.
+	fmt.Fprintf(&b, "Your turn: %s\n", r.Replay)
 	return b.String()
 }
 

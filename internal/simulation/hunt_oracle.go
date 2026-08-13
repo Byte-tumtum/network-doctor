@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"net/netip"
 	"slices"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
@@ -23,6 +24,7 @@ const (
 	ConditionIPv4InternetUnreachable NetworkCondition = "ipv4_internet_unreachable"
 	ConditionIPv6InternetUnreachable NetworkCondition = "ipv6_internet_unreachable"
 	ConditionTLSCertificateExpired   NetworkCondition = "tls_certificate_expired"
+	ConditionTLSHostnameMismatch     NetworkCondition = "tls_hostname_mismatch"
 	ConditionProxyDestinationRefused NetworkCondition = "proxy_destination_refused"
 	ConditionQUICUDP443Blocked       NetworkCondition = "quic_udp_443_blocked"
 )
@@ -97,6 +99,21 @@ var conditionOracle = []conditionRule{
 		// for a certificate whose dates are readable on the wire.
 		recognized: func(d *Diagnosis) bool {
 			return flaggedCause(d, nil, diagnostic.TLSCauseCertificateExpired)
+		},
+	},
+	{
+		condition: ConditionTLSHostnameMismatch,
+		summary:   "a target serving a certificate issued for a different name",
+		evidence:  "a controlled TLS service was asked for a name its certificate does not carry and watched the client refuse it",
+		observed: func(evidence Evidence, _ ObservedTruth) bool {
+			return anyMismatchedCertificateRejected(evidence)
+		},
+		// Deliberately not interchangeable with the expired rule next door. The
+		// dates on this certificate are fine and the issuer is trusted; what is
+		// wrong is the name, and netdoc has its own cause and its own fix for
+		// that. Naming the wrong one sends the user to check a clock.
+		recognized: func(d *Diagnosis) bool {
+			return flaggedCause(d, nil, diagnostic.TLSCauseHostnameMismatch)
 		},
 	},
 	{
@@ -267,12 +284,28 @@ func refusedCONNECT(request SOCKSEvidence) bool {
 		request.Result == "connection_refused" && request.Count > 0
 }
 
-// droppedInboundUDP reports the rule's own kernel counter, not the fault record
+// droppedInbound reports the rule's own kernel counter, not the fault record
 // that installed it: an installed rule that never matched a packet blocked
 // nothing.
-func droppedInboundUDP(drop PacketDropEvidence, port int) bool {
-	return drop.Node != "" && drop.Protocol == "udp" && drop.Direction == DirectionInbound &&
+func droppedInbound(drop PacketDropEvidence, protocol string, port int) bool {
+	return drop.Node != "" && drop.Protocol == protocol && drop.Direction == DirectionInbound &&
 		drop.Packets > 0 && sameNumber(port, drop.Port)
+}
+
+// rejectedMismatchedCertificate is the mismatch condition read off the
+// handshake rather than off the service's configured mode, and it wants the two
+// halves that make it that fault and not another: the client asked for a name,
+// and the certificate it was shown does not carry it. A certificate that does
+// cover the requested name and was still refused failed for some other reason.
+func rejectedMismatchedCertificate(handshake TLSEvidence) bool {
+	if handshake.Node == "" || handshake.CertificateMode != TLSCertificateHostnameMismatch ||
+		!handshake.CertificatePresented || handshake.Result != "client_rejected_certificate" ||
+		handshake.Count == 0 || handshake.RequestedServer == "" {
+		return false
+	}
+	return !slices.ContainsFunc(handshake.CertificateDNS, func(name string) bool {
+		return dnsKey(name) == dnsKey(handshake.RequestedServer)
+	})
 }
 
 // resetConnection is the reset service's own record of having torn a connection
@@ -327,8 +360,12 @@ func anyProxyCONNECTRefused(evidence Evidence) bool {
 
 func anyUDPPortDropped(evidence Evidence, port int) bool {
 	return slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
-		return droppedInboundUDP(drop, port)
+		return droppedInbound(drop, "udp", port)
 	})
+}
+
+func anyMismatchedCertificateRejected(evidence Evidence) bool {
+	return slices.ContainsFunc(evidence.TLS, rejectedMismatchedCertificate)
 }
 
 func anyConnectionReset(evidence Evidence) bool {
@@ -366,8 +403,77 @@ func proxyCONNECTRefusedAt(evidence Evidence, node, service, destination string,
 
 func udpPortDroppedAt(evidence Evidence, node string, port int) bool {
 	return slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
-		return sameName(node, drop.Node) && droppedInboundUDP(drop, port)
+		return sameName(node, drop.Node) && droppedInbound(drop, "udp", port)
 	})
+}
+
+func tcpPortDroppedAt(evidence Evidence, node string, port int) bool {
+	return slices.ContainsFunc(evidence.PacketDrops, func(drop PacketDropEvidence) bool {
+		return sameName(node, drop.Node) && droppedInbound(drop, "tcp", port)
+	})
+}
+
+func mismatchedCertificateRejectedAt(evidence Evidence, node, service string) bool {
+	return slices.ContainsFunc(evidence.TLS, func(handshake TLSEvidence) bool {
+		return sameName(node, handshake.Node) && sameName(service, handshake.Service) &&
+			rejectedMismatchedCertificate(handshake)
+	})
+}
+
+// controlledTargetOutcome is what the simulator's own dial of one endpoint did.
+// It is the only reading that separates a port that answered with a reset from
+// one that swallowed the packet, so it returns the outcome rather than a bool,
+// and reports whether the observation was taken at all: no dial is not the same
+// as a dial that failed.
+func controlledTargetOutcome(evidence Evidence, from, endpoint string) (string, bool) {
+	for _, item := range evidence.ControlledTargets {
+		if sameName(from, item.From) && sameName(endpoint, item.To) && item.Outcome != "" {
+			return item.Outcome, true
+		}
+	}
+	return "", false
+}
+
+// kernelRouteTable is the table one node's kernel held for one family. The bool
+// is load-bearing: an absent record means nobody read that table, and a route
+// family cannot be called empty on the strength of never having been looked at.
+func kernelRouteTable(evidence Evidence, node, family string) ([]KernelRoute, bool) {
+	for _, table := range evidence.RouteTables {
+		if sameName(node, table.Node) && sameName(family, table.Family) {
+			return table.Routes, true
+		}
+	}
+	return nil, false
+}
+
+func defaultRoutesIn(routes []KernelRoute) []KernelRoute {
+	var out []KernelRoute
+	for _, route := range routes {
+		if defaultDestination(route.Destination) {
+			out = append(out, route)
+		}
+	}
+	return out
+}
+
+// specificRouteCovering reports whether the table carries a non-default route
+// that would carry traffic to this address. Non-default because a default route
+// covers everything and would answer every question with yes, which is exactly
+// the distinction a missing subnet route is made of.
+func specificRouteCovering(routes []KernelRoute, address string) bool {
+	addr, err := netip.ParseAddr(address)
+	if err != nil {
+		return false
+	}
+	for _, route := range routes {
+		if defaultDestination(route.Destination) {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(route.Destination); err == nil && prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func shapedPacketsDroppedAt(evidence Evidence, node, segment string) bool {

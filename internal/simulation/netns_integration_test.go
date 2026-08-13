@@ -934,6 +934,117 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("HTTP 503 diagnosis = %+v", out)
 			}
 		}},
+		// The two target-port families, run against real kernels because that is
+		// the only place the distinction exists: one host resets the SYN, the
+		// other counts it and says nothing. Each case checks that it produced its
+		// own evidence and that it did not produce the other's.
+		{"service.connection_refused", "healthy", true, "", func(t *testing.T, control, rep Report) {
+			if tcp := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("working target control = %+v", tcp)
+			}
+			out := rep.Tests[0]
+			if diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "FAIL" ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" ||
+				diagnosisCheck(out, string(diagnostic.ProbeDNS)).Status != "PASS" {
+				t.Errorf("a closed port took more than the target down: %+v", out)
+			}
+			if outcome, ok := controlledTargetOutcome(rep.Evidence, "client", "10.77.0.20:80"); !ok ||
+				outcome != TargetStateRefused {
+				t.Errorf("the closed port did not answer with a refusal: %+v", rep.Evidence.ControlledTargets)
+			}
+			if len(rep.Evidence.PacketDrops) != 0 {
+				t.Errorf("a refusal counted discarded packets: %+v", rep.Evidence.PacketDrops)
+			}
+		}},
+		{"service.tcp_port_blocked", "healthy", true, "", func(t *testing.T, control, rep Report) {
+			if tcp := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("working target control = %+v", tcp)
+			}
+			out := rep.Tests[0]
+			if diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "FAIL" ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" {
+				t.Errorf("a filtered port took more than the target down: %+v", out)
+			}
+			if !tcpPortDroppedAt(rep.Evidence, "server", 80) {
+				t.Errorf("the filter's own counter stayed at zero: %+v", rep.Evidence.PacketDrops)
+			}
+			// The half that keeps it out of the refusal family: the dial timed
+			// out, it was not answered.
+			if outcome, ok := controlledTargetOutcome(rep.Evidence, "client", "10.77.0.20:80"); !ok ||
+				outcome != FamilyStateUnreachable {
+				t.Errorf("a filtered port answered: %+v", rep.Evidence.ControlledTargets)
+			}
+		}},
+		{"service.tls_hostname_mismatch", "tls-valid", true, ConditionTLSHostnameMismatch, func(t *testing.T, control, rep Report) {
+			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" {
+				t.Errorf("valid TLS control = %+v", tls)
+			}
+			out := rep.Tests[0]
+			if tls := diagnosisCheck(out, string(diagnostic.ProbeTLS)); tls.Status != "FAIL" ||
+				tls.Cause != diagnostic.TLSCauseHostnameMismatch {
+				t.Errorf("name-mismatch diagnosis = %+v", tls)
+			}
+			if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("the certificate change also broke TCP: %+v", tcp)
+			}
+			if !hasTLSEvidence(rep, TLSCertificateHostnameMismatch, "secure-target.test", tlsMismatchedDNSName,
+				true, "client_rejected_certificate") {
+				t.Errorf("no name-mismatch rejection evidence: %+v", rep.Evidence.TLS)
+			}
+			if anyExpiredCertificateRejected(rep.Evidence) {
+				t.Error("a name mismatch also established the expired condition")
+			}
+		}},
+		// The three routing families, on the control that can express all of
+		// them. Each one is checked against the kernel's own route table, which
+		// is the only reading that can show a route is absent.
+		{"routing.no_default_route", "two-router-healthy", true, ConditionIPv4InternetUnreachable, func(t *testing.T, control, rep Report) {
+			if before, ok := kernelRouteTable(control.Evidence, "client", "ipv4"); !ok || len(defaultRoutesIn(before)) != 1 {
+				t.Errorf("the control did not start with one default route: %+v", before)
+			}
+			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
+			if !ok || len(defaultRoutesIn(after)) != 0 {
+				t.Errorf("the default route survived: %+v", after)
+			}
+			if len(after) == 0 {
+				t.Error("the whole table went, which is a dead link rather than a missing default")
+			}
+			if internet := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)); internet.Cause != diagnostic.RouteCauseNoDefaultRoute {
+				t.Errorf("no-default-route diagnosis = %+v", internet)
+			}
+		}},
+		{"routing.wrong_default_route", "two-router-healthy", true, ConditionIPv4InternetUnreachable, func(t *testing.T, control, rep Report) {
+			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
+			defaults := defaultRoutesIn(after)
+			if !ok || len(defaults) != 1 || defaults[0].Via != "10.80.1.254" {
+				t.Errorf("the default route did not move to the on-link router that goes nowhere: %+v", after)
+			}
+			// The control that separates this from an outage past the gateway.
+			if outcome, ok := controlledTargetOutcome(rep.Evidence, "client", "10.80.2.20:80"); !ok ||
+				outcome != FamilyStateReachable {
+				t.Errorf("the original next hop stopped forwarding, so this run is an outage: %+v",
+					rep.Evidence.ControlledTargets)
+			}
+			if internet := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)); internet.Cause != diagnostic.RouteCauseSelectedPathFailed {
+				t.Errorf("wrong-default-route diagnosis = %+v", internet)
+			}
+		}},
+		{"routing.missing_subnet_route", "two-router-healthy", true, "", func(t *testing.T, control, rep Report) {
+			if before, ok := kernelRouteTable(control.Evidence, "client", "ipv4"); !ok ||
+				!specificRouteCovering(before, "10.80.3.20") {
+				t.Errorf("the control did not start with the specific route: %+v", before)
+			}
+			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
+			if !ok || specificRouteCovering(after, "10.80.3.20") || len(defaultRoutesIn(after)) != 1 {
+				t.Errorf("the route-shaped hole is not what the table shows: %+v", after)
+			}
+			out := rep.Tests[0]
+			if diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "FAIL" ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" ||
+				diagnosisCheck(out, string(diagnostic.ProbeDNS)).Status != "PASS" {
+				t.Errorf("a missing subnet route took the internet with it: %+v", out)
+			}
+		}},
 	}
 	controls := map[string]Report{}
 	for _, tc := range tests {
@@ -2531,6 +2642,91 @@ func TestChallengeReplayIsStableAndHumanAnswerMovesNothingElse(t *testing.T) {
 		t.Fatalf("one id ran two cases: %s/%d and %s/%d",
 			right.BaseScenario, right.Case, wrong.BaseScenario, wrong.Case)
 	}
+}
+
+// The hostname in the briefing has to be a real part of the simulated network,
+// answered by real DNS over real sockets from inside the node — not a label
+// printed beside a topology that knows it by another name. A player who is
+// handed a name they cannot resolve is debugging the game.
+//
+// This runs the challenge's own scenario through the ordinary run path, so the
+// diagnosis it checks is netdoc resolving the renamed name through the node's own
+// /etc/resolv.conf against the simulator's own DNS service.
+func TestChallengeHostnameResolvesInsideTheNamespaces(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	// A healthy challenge on each base that briefs a hostname, one with plain HTTP
+	// and one with TLS: the TLS case additionally proves the renamed name is the
+	// name the certificate was issued for, since the handshake verifies it.
+	for _, id := range []string{"V3-022CCE", "V3-01EEF0", "V3-013556"} {
+		challenge, err := BuildChallenge(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(id+"/"+challenge.Base, func(t *testing.T) {
+			host := challengeTargetHost(challenge.Target)
+			if host == "" || !strings.HasSuffix(host, challengeHostSuffix) {
+				t.Fatalf("challenge %s does not brief a hostname (target %q)", id, challenge.Target)
+			}
+			rep := runScenarioDefinition(t, sim, netdoc, challenge.Scenario)
+			var primary *TestOutcome
+			for i := range rep.Tests {
+				if rep.Tests[i].Node == challenge.Node {
+					primary = &rep.Tests[i]
+					break
+				}
+			}
+			if primary == nil || primary.Diagnosis == nil {
+				t.Fatalf("no diagnosis for the challenge node: %+v", rep.Tests)
+			}
+			// The target netdoc was actually pointed at is the briefed name, so both
+			// contestants are answering about the same host.
+			if !strings.Contains(primary.Target, host) {
+				t.Fatalf("netdoc was pointed at %q, not the briefed host %q", primary.Target, host)
+			}
+			// And it resolved. A DNS row that passed is the simulated resolver
+			// answering a name that only exists inside this simulation; a failing one
+			// would mean the rename reached the briefing and not the zone.
+			for _, want := range []string{"dns", "target_tcp"} {
+				check, ok := findCheck(primary.Diagnosis.Checks, want)
+				if !ok {
+					t.Fatalf("the diagnosis has no %s row: %+v", want, primary.Diagnosis.Checks)
+				}
+				if check.Status != "PASS" {
+					t.Fatalf("%s on the briefed host %q is %s (%s); the name is not answerable in the simulation",
+						want, host, check.Status, check.Detail)
+				}
+			}
+			if primary.Diagnosis.Verdict != diagnostic.VerdictOK {
+				t.Fatalf("a healthy challenge on %q reached verdict %q: %s",
+					host, primary.Diagnosis.Verdict, primary.Diagnosis.Summary)
+			}
+			// Nothing left the namespace to make that work: the name is under the
+			// reserved TLD no public resolver may answer, and the resolver the node
+			// was given is an address this scenario owns.
+			client := challenge.Scenario.Topology.node(challenge.Node)
+			if client == nil || client.Resolver == "" {
+				t.Fatalf("the challenge node has no scenario resolver to have asked")
+			}
+			owned := false
+			for _, node := range challenge.Scenario.Topology.Nodes {
+				owned = owned || nodeOwnsAddress(node, client.Resolver)
+			}
+			if !owned {
+				t.Fatalf("the node's resolver %q is not an address this simulation owns", client.Resolver)
+			}
+		})
+	}
+}
+
+// findCheck is one row of a diagnosis by its stable probe id.
+func findCheck(checks []DiagnosisCheck, id string) (DiagnosisCheck, bool) {
+	for _, check := range checks {
+		if check.ID == id {
+			return check, true
+		}
+	}
+	return DiagnosisCheck{}, false
 }
 
 // A challenge is not a kept simulation: when the command returns, the

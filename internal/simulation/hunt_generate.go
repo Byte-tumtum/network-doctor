@@ -10,6 +10,7 @@ import (
 	mathrand "math/rand"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,16 +21,39 @@ import (
 const (
 	// HuntGeneratorVersion is part of every manifest and seed domain. A future
 	// algorithm change must increment it instead of silently changing old cases.
-	HuntGeneratorVersion = "v3"
+	HuntGeneratorVersion = "v4"
 	huntSeedDomain       = "netdoc-sim-hunt-v3"
 	HuntMaxFaults        = 3
 	HuntMaxCases         = 500
 	HuntMaxCaseNumber    = 999999
 )
 
+// huntGeneratorVersions is every generator this build can still materialize a
+// case for, oldest first. A version is the set of mutation operators that were
+// available when it was published: adding an operator changes which mutation
+// every case number lands on, so it adds a version here rather than editing
+// one, and anything holding an old case — a shared challenge id, a filed triage
+// finding — keeps resolving through the rules it was minted under.
+//
+// The seed domain is deliberately not versioned. A case seed depends on the
+// base and the case number only, so v3 and v4 draw the same numbers and differ
+// exactly where the operator list differs, which is the smallest possible
+// difference between two generators.
+var huntGeneratorVersions = []string{"v3", HuntGeneratorVersion}
+
+// huntGeneratorIndex places a version on that list. An operator with no `since`
+// belongs to the first version, which is where all of them started.
+func huntGeneratorIndex(version string) int {
+	if version == "" {
+		return 0
+	}
+	return slices.Index(huntGeneratorVersions, version)
+}
+
 // Sorted: validHuntBase binary-searches this list.
 var huntBaseNames = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
-	"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy", "two-path-ipv6-healthy"}
+	"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy", "two-path-ipv6-healthy",
+	"two-router-healthy"}
 
 // HuntBaseNames returns the deliberately small set of known-good controls the
 // first generator is allowed to mutate.
@@ -43,20 +67,31 @@ func validHuntBase(name string) bool {
 // GeneratedMutation is a completely materialized semantic operation. It has
 // no command strings, kernel interface names, paths, or deferred randomness.
 type GeneratedMutation struct {
-	ID               string  `json:"id"`
-	Description      string  `json:"description"`
-	Node             string  `json:"node,omitempty"`
-	TargetNode       string  `json:"target_node,omitempty"`
-	Segment          string  `json:"segment,omitempty"`
-	Service          string  `json:"service,omitempty"`
-	Family           string  `json:"family,omitempty"`
-	PreferredVia     string  `json:"preferred_via,omitempty"`
-	PreferredSegment string  `json:"preferred_segment,omitempty"`
-	PreferredMetric  int     `json:"preferred_metric,omitempty"`
-	AlternateVia     string  `json:"alternate_via,omitempty"`
-	AlternateSegment string  `json:"alternate_segment,omitempty"`
-	AlternateMetric  int     `json:"alternate_metric,omitempty"`
-	ControlTarget    string  `json:"control_target,omitempty"`
+	ID               string `json:"id"`
+	Description      string `json:"description"`
+	Node             string `json:"node,omitempty"`
+	TargetNode       string `json:"target_node,omitempty"`
+	Segment          string `json:"segment,omitempty"`
+	Service          string `json:"service,omitempty"`
+	Family           string `json:"family,omitempty"`
+	PreferredVia     string `json:"preferred_via,omitempty"`
+	PreferredSegment string `json:"preferred_segment,omitempty"`
+	PreferredMetric  int    `json:"preferred_metric,omitempty"`
+	AlternateVia     string `json:"alternate_via,omitempty"`
+	AlternateSegment string `json:"alternate_segment,omitempty"`
+	AlternateMetric  int    `json:"alternate_metric,omitempty"`
+	ControlTarget    string `json:"control_target,omitempty"`
+	// TargetEndpoint is the address:port the client's primary test dials, which
+	// is what a simulator-side dial of that endpoint is matched against. It is
+	// the endpoint a mutation is about; ControlTarget stays what it has always
+	// been, the endpoint whose reachability proves some other path still works.
+	TargetEndpoint string `json:"target_endpoint,omitempty"`
+	// RouteDestination and RouteVia describe the route a routing family acts on:
+	// which route, and the next hop it ends up with. An empty RouteVia means the
+	// route was taken away rather than repointed. The next hop it had before is
+	// PreferredVia, which already means exactly that.
+	RouteDestination string  `json:"route_destination,omitempty"`
+	RouteVia         string  `json:"route_via,omitempty"`
 	LossPercent      float64 `json:"loss_percent,omitempty"`
 	LatencyMS        int64   `json:"latency_ms,omitempty"`
 	JitterMS         int64   `json:"jitter_ms,omitempty"`
@@ -87,7 +122,12 @@ type GeneratedCase struct {
 }
 
 type mutationOperator struct {
-	id           string
+	id string
+	// since is the generator version this operator first appeared in. Empty
+	// means the first one. An older generator does not see it at all, which is
+	// what lets a new family be added without moving any case a published
+	// artifact already names.
+	since        string
 	description  string
 	conflictTags []string
 	applicable   func(*Scenario) bool
@@ -114,6 +154,29 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "family.ipv6_drop", description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
 	{id: "link.transient_down", description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
 	{id: "routing.preferred_path_failure", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasPreferredPathFailureCandidate, generate: generatePreferredPathFailure},
+	// v4. Appended, never interleaved: an older generator is exactly this list
+	// truncated at its own version, so where a v3 case landed cannot move.
+	{id: "service.connection_refused", since: "v4", description: "nothing listens on the target port", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateConnectionRefused},
+	{id: "service.tcp_port_blocked", since: "v4", description: "the target port silently discards inbound connections", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateTCPPortBlocked},
+	{id: "service.tls_hostname_mismatch", since: "v4", description: "target presents a certificate for a different name", conflictTags: []string{"target-service"}, applicable: hasValidTLSTestTarget, generate: generateTLSHostnameMismatch},
+	{id: "routing.no_default_route", since: "v4", description: "the client's only default route is deleted", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasSoleDefaultRoute, generate: generateNoDefaultRoute},
+	{id: "routing.wrong_default_route", since: "v4", description: "the default route is repointed at an on-link router that goes nowhere", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWrongDefaultRouteCandidate, generate: generateWrongDefaultRoute},
+	{id: "routing.missing_subnet_route", since: "v4", description: "the specific route to the target's subnet is removed", conflictTags: []string{"route-choice"}, applicable: hasMissingSubnetRouteCandidate, generate: generateMissingSubnetRoute},
+}
+
+// huntOperators is the operator list one generator version sees: this registry
+// truncated at that version. Order and length are preserved, which is the whole
+// point — selection draws from a permutation of the applicable list, so an
+// operator appearing earlier or a list growing longer would move every case.
+func huntOperators(version string) []mutationOperator {
+	want := huntGeneratorIndex(version)
+	out := make([]mutationOperator, 0, len(huntMutationRegistry))
+	for _, op := range huntMutationRegistry {
+		if index := huntGeneratorIndex(op.since); index >= 0 && index <= want {
+			out = append(out, op)
+		}
+	}
+	return out
 }
 
 // DeriveHuntCaseSeed makes case N independent of every earlier PRNG stream.
@@ -132,9 +195,18 @@ func DeriveHuntCaseSeed(seed int64, base string, caseNumber int) int64 {
 	return int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]))
 }
 
-// GenerateHuntCase materializes and validates one immutable case. No random
-// value is drawn after this function returns.
+// GenerateHuntCase materializes and validates one immutable case at the current
+// generator version. No random value is drawn after this function returns.
 func GenerateHuntCase(baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {
+	return generateHuntCase(HuntGeneratorVersion, baseID, base, huntSeed, caseNumber, maxFaults)
+}
+
+// generateHuntCase is the same thing at a named version, which is what an
+// artifact minted under an older generator has to be replayed through.
+func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {
+	if huntGeneratorIndex(version) < 0 {
+		return nil, fmt.Errorf("unknown hunt generator version %q (have: %s)", version, strings.Join(huntGeneratorVersions, ", "))
+	}
 	if !validHuntBase(baseID) {
 		return nil, fmt.Errorf("unsupported hunt base %q (have: %s)", baseID, strings.Join(huntBaseNames, ", "))
 	}
@@ -155,7 +227,7 @@ func GenerateHuntCase(baseID string, base *Scenario, huntSeed int64, caseNumber,
 	caseSeed := DeriveHuntCaseSeed(huntSeed, baseID, caseNumber)
 	rng := mathrand.New(mathrand.NewSource(caseSeed))
 	var applicable []mutationOperator
-	for _, op := range huntMutationRegistry {
+	for _, op := range huntOperators(version) {
 		if op.applicable(validatedBase) {
 			applicable = append(applicable, op)
 		}
@@ -199,12 +271,12 @@ func GenerateHuntCase(baseID string, base *Scenario, huntSeed int64, caseNumber,
 		}
 	}
 	generated.Name = fmt.Sprintf("hunt-%s-%d", baseID, caseNumber)
-	generated.Description = fmt.Sprintf("Generated by netdoc-sim hunt %s from %s case %d.", HuntGeneratorVersion, baseID, caseNumber)
+	generated.Description = fmt.Sprintf("Generated by netdoc-sim hunt %s from %s case %d.", version, baseID, caseNumber)
 	canonicalScenarioInput(generated)
 	if err := generated.Validate(); err != nil {
 		return nil, fmt.Errorf("generated scenario validation: %w", err)
 	}
-	manifest := GeneratedCaseManifest{GeneratorVersion: HuntGeneratorVersion, BaseScenario: baseID,
+	manifest := GeneratedCaseManifest{GeneratorVersion: version, BaseScenario: baseID,
 		HuntSeed: huntSeed, Case: caseNumber, CaseSeed: caseSeed, Mutations: mutations}
 	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
 	return &GeneratedCase{Manifest: manifest, Scenario: generated}, nil
@@ -853,6 +925,389 @@ func generatePreferredPathFailure(rng *mathrand.Rand, s *Scenario) (GeneratedMut
 		Description: fmt.Sprintf("disable %s preferred router %s upstream %s while retaining the alternate default", candidate.family, candidate.preferredRouter, candidate.upstream)}, nil
 }
 
+// --- v4 families: the target's own port, and the client's own route table ---
+
+// briefedHTTPTarget is the HTTP service the client's primary test names, which
+// is the only target a fault may be placed on: a fault on some other test's
+// target is a clue the briefing never showed and a question the graded netdoc
+// run never asked. Asking the primary test directly is what makes these
+// families fair by construction rather than by a later eligibility check.
+func briefedHTTPTarget(s *Scenario) (httpTarget, bool) {
+	primary, ok := primaryTest(s)
+	if !ok {
+		return httpTarget{}, false
+	}
+	return findHTTPTestTarget(s, []Test{primary})
+}
+
+func hasBriefedHTTPTarget(s *Scenario) bool {
+	_, ok := briefedHTTPTarget(s)
+	return ok && briefedTargetEndpoint(s) != ""
+}
+
+// briefedTargetEndpoint is the address:port the client dials for the primary
+// test, resolved from the scenario's own zone. It is what the simulator's
+// independent dial of that endpoint is matched against, so it uses the same
+// rule that dial does: scenario-owned addresses only, lowest sorted first.
+func briefedTargetEndpoint(s *Scenario) string {
+	primary, ok := primaryTest(s)
+	if !ok {
+		return ""
+	}
+	target, err := diagnostic.ParseTarget(primary.Target)
+	if err != nil {
+		return ""
+	}
+	var owned []string
+	for _, raw := range scenarioTargetAddresses(s, target) {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			continue
+		}
+		owned = append(owned, netip.AddrPortFrom(addr, uint16(target.Port)).String())
+	}
+	if len(owned) == 0 {
+		return ""
+	}
+	sort.Strings(owned)
+	return owned[0]
+}
+
+// scenarioTargetAddresses resolves a target to every address a scenario node
+// owns for it, sorted. Names are looked up in the scenario's own zone rather
+// than through anybody's resolver.
+func scenarioTargetAddresses(s *Scenario, target *diagnostic.Target) []string {
+	var found []string
+	if target.IP != nil {
+		found = []string{target.IP.String()}
+	} else {
+		for _, node := range s.Topology.Nodes {
+			for _, service := range node.Services {
+				if service.Type != ServiceDNS {
+					continue
+				}
+				for name, raw := range service.Zone {
+					if dnsKey(name) == dnsKey(target.Host) {
+						found = append(found, raw)
+					}
+				}
+				for _, record := range service.Records {
+					if dnsKey(record.Name) == dnsKey(target.Host) {
+						found = append(found, record.Address)
+					}
+				}
+			}
+		}
+	}
+	owned := make([]string, 0, len(found))
+	for _, raw := range found {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil || slices.Contains(owned, addr.String()) {
+			continue
+		}
+		for _, node := range s.Topology.Nodes {
+			if nodeOwnsAddress(node, addr.String()) {
+				owned = append(owned, addr.String())
+				break
+			}
+		}
+	}
+	sort.Strings(owned)
+	return owned
+}
+
+func generateConnectionRefused(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, ok := briefedHTTPTarget(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("the briefed HTTP target disappeared")
+	}
+	return GeneratedMutation{Node: target.node, TargetPort: target.port, TargetEndpoint: briefedTargetEndpoint(s),
+		Description: fmt.Sprintf("take the listener off %s TCP port %d so the host answers connections with a refusal",
+			target.node, target.port)}, nil
+}
+
+func generateTCPPortBlocked(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, ok := briefedHTTPTarget(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("the briefed HTTP target disappeared")
+	}
+	return GeneratedMutation{Node: target.node, TargetPort: target.port, TargetEndpoint: briefedTargetEndpoint(s),
+		Description: fmt.Sprintf("silently discard inbound TCP port %d at %s while the host stays up",
+			target.port, target.node)}, nil
+}
+
+// tlsMismatchedDNSName is the name a mismatched certificate is reissued for. It
+// is a fixed non-name so the certificate cannot accidentally cover anything the
+// scenario resolves, which is the whole condition being generated.
+const tlsMismatchedDNSName = "not-the-requested-name.test"
+
+func generateTLSHostnameMismatch(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	target, ok := findValidTLSTestTarget(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("valid TLS target disappeared")
+	}
+	return GeneratedMutation{Node: target.node, Service: target.service,
+		Description: "reissue TLS service " + target.service + " for " + tlsMismatchedDNSName +
+			", a name the client is not asking for"}, nil
+}
+
+// clientDefaults reports the client's default next hops per address family,
+// covering both spellings a scenario may use: explicit default routes, and the
+// single-segment `gateway:` shorthand that never becomes one.
+func clientDefaults(s *Scenario) (string, map[routeFamily][]string) {
+	client := clientNode(s)
+	out := map[routeFamily][]string{}
+	if client == "" {
+		return "", out
+	}
+	for _, route := range s.Topology.Routes {
+		if route.Node == client && route.Default {
+			family := routeFamily(route.Family)
+			out[family] = append(out[family], route.Via)
+		}
+	}
+	if len(out) > 0 {
+		return client, out
+	}
+	if node := s.Topology.node(client); node != nil && node.Gateway != "" {
+		if addr, err := netip.ParseAddr(node.Gateway); err == nil {
+			out[routeFamily(addressFamily(addr))] = []string{addr.String()}
+		}
+	}
+	return client, out
+}
+
+// soleDefaultRoute is the client's one default route in the one family it has
+// defaults in. Both halves matter. A client with defaults in two families that
+// loses one has lost a family, not its way out, and a client with two defaults
+// in one family that loses one still has the other — either would be a
+// different fault wearing this one's name.
+func soleDefaultRoute(s *Scenario) (client string, family routeFamily, via, segment string, ok bool) {
+	client, defaults := clientDefaults(s)
+	if len(defaults) != 1 {
+		return "", "", "", "", false
+	}
+	for candidateFamily, vias := range defaults {
+		if len(vias) != 1 {
+			return "", "", "", "", false
+		}
+		addr, err := netip.ParseAddr(vias[0])
+		if err != nil {
+			return "", "", "", "", false
+		}
+		segment, ok := nodeSegmentForAddress(s.Topology.node(client), addr)
+		if !ok {
+			return "", "", "", "", false
+		}
+		return client, candidateFamily, vias[0], segment, true
+	}
+	return "", "", "", "", false
+}
+
+func hasSoleDefaultRoute(s *Scenario) bool {
+	_, _, _, _, ok := soleDefaultRoute(s)
+	return ok
+}
+
+func generateNoDefaultRoute(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	client, family, via, segment, ok := soleDefaultRoute(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("the client's single default route disappeared")
+	}
+	return GeneratedMutation{Node: client, Family: string(family), RouteDestination: "default",
+		PreferredVia: via, PreferredSegment: segment,
+		Description: "delete the " + string(family) + " default route on " + client}, nil
+}
+
+// routerReachesPrefix reports whether this router has any configured way to a
+// prefix: an interface on it, or a route covering it. It is a question about
+// the scenario rather than about a run, and it is what makes "wrong" mean
+// something — a next hop that does reach the destination is a working gateway,
+// however unusual a choice it would be.
+func routerReachesPrefix(s *Scenario, router string, prefix netip.Prefix) bool {
+	node := s.Topology.node(router)
+	if node == nil {
+		return false
+	}
+	for _, iface := range node.Interfaces {
+		for _, family := range []string{"ipv4", "ipv6"} {
+			if owned, ok := iface.addressForFamily(family); ok && prefixesOverlap(owned.Masked(), prefix) {
+				return true
+			}
+		}
+	}
+	for _, route := range s.Topology.Routes {
+		if route.Node != router {
+			continue
+		}
+		if route.Default {
+			return true
+		}
+		if configured, err := netip.ParsePrefix(route.Destination); err == nil && prefixesOverlap(configured, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func routerReachesInternet(s *Scenario, router string, family routeFamily) bool {
+	for _, endpoint := range internetEndpointsForFamily(string(family)) {
+		addr, err := netip.ParseAddr(endpoint)
+		if err != nil {
+			continue
+		}
+		if routerReachesPrefix(s, router, netip.PrefixFrom(addr, addr.BitLen())) {
+			return true
+		}
+	}
+	return false
+}
+
+// controlOnSpecificRoute is a client test target that a non-default route
+// carries through the named next hop. Non-default is the point: it is the one
+// endpoint whose reachability survives the default being taken away or
+// repointed, so it can prove that next hop still forwards while the default's
+// own path does not.
+func controlOnSpecificRoute(s *Scenario, client string, family routeFamily, via string) (string, bool) {
+	for _, test := range s.Tests {
+		target, err := diagnostic.ParseTarget(test.Target)
+		if err != nil || test.Node != client || target.IP == nil {
+			continue
+		}
+		addr, err := netip.ParseAddr(target.IP.String())
+		if err != nil || addressFamily(addr) != string(family) || !scenarioControlledTCPPort(s, addr.String(), target.Port) {
+			continue
+		}
+		selected, ok := configuredRouteTo(s.Topology.Routes, client, addr)
+		if ok && !selected.Default && selected.Via == via {
+			return netip.AddrPortFrom(addr, uint16(target.Port)).String(), true
+		}
+	}
+	return "", false
+}
+
+type wrongDefaultRouteCandidate struct {
+	client, segment, control string
+	family                   routeFamily
+	correctVia, wrongVia     string
+}
+
+// findWrongDefaultRouteCandidate looks for a second router on the client's own
+// link that answers but cannot reach the internet. The router the default
+// already names is skipped, and so is any router that can reach the internet
+// endpoints — a default pointed at those would still work, which is not this
+// fault.
+func findWrongDefaultRouteCandidate(s *Scenario) (wrongDefaultRouteCandidate, bool) {
+	client, family, via, segment, ok := soleDefaultRoute(s)
+	if !ok {
+		return wrongDefaultRouteCandidate{}, false
+	}
+	control, ok := controlOnSpecificRoute(s, client, family, via)
+	if !ok {
+		return wrongDefaultRouteCandidate{}, false
+	}
+	for _, node := range s.Topology.Nodes {
+		if node.Role != "router" {
+			continue
+		}
+		for _, iface := range node.Interfaces {
+			owned, hasAddress := iface.addressForFamily(string(family))
+			if iface.Segment != segment || !hasAddress || owned.Addr().String() == via ||
+				routerReachesInternet(s, node.Name, family) {
+				continue
+			}
+			return wrongDefaultRouteCandidate{client: client, segment: segment, control: control,
+				family: family, correctVia: via, wrongVia: owned.Addr().String()}, true
+		}
+	}
+	return wrongDefaultRouteCandidate{}, false
+}
+
+func hasWrongDefaultRouteCandidate(s *Scenario) bool {
+	_, ok := findWrongDefaultRouteCandidate(s)
+	return ok
+}
+
+func generateWrongDefaultRoute(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	candidate, ok := findWrongDefaultRouteCandidate(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("an on-link router that goes nowhere disappeared")
+	}
+	return GeneratedMutation{Node: candidate.client, Family: string(candidate.family), RouteDestination: "default",
+		PreferredVia: candidate.correctVia, PreferredSegment: candidate.segment, RouteVia: candidate.wrongVia,
+		ControlTarget: candidate.control,
+		Description: fmt.Sprintf("repoint the %s default route on %s from %s to on-link router %s, which goes nowhere",
+			candidate.family, candidate.client, candidate.correctVia, candidate.wrongVia)}, nil
+}
+
+type missingSubnetRouteCandidate struct {
+	client, segment, control string
+	family                   routeFamily
+	destination, via         string
+}
+
+// findMissingSubnetRouteCandidate looks for a specific route the briefed target
+// genuinely depends on: one the client needs because its default gateway has no
+// way to that prefix. A route whose destination the default would reach anyway
+// is not a route anything depends on, and removing it would change nothing.
+func findMissingSubnetRouteCandidate(s *Scenario) (missingSubnetRouteCandidate, bool) {
+	client, family, defaultVia, segment, ok := soleDefaultRoute(s)
+	if !ok {
+		return missingSubnetRouteCandidate{}, false
+	}
+	control, ok := controlOnSpecificRoute(s, client, family, defaultVia)
+	if !ok {
+		return missingSubnetRouteCandidate{}, false
+	}
+	defaultRouter, ok := routerOwning(s, defaultVia)
+	if !ok {
+		return missingSubnetRouteCandidate{}, false
+	}
+	endpoint := briefedTargetEndpoint(s)
+	target, err := netip.ParseAddrPort(endpoint)
+	if err != nil || addressFamily(target.Addr()) != string(family) {
+		return missingSubnetRouteCandidate{}, false
+	}
+	for _, route := range s.Topology.Routes {
+		if route.Node != client || route.Default || route.Via == defaultVia {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(route.Destination)
+		if err != nil || !prefix.Contains(target.Addr()) || routerReachesPrefix(s, defaultRouter, prefix) {
+			continue
+		}
+		return missingSubnetRouteCandidate{client: client, segment: segment, control: control, family: family,
+			destination: route.Destination, via: route.Via}, true
+	}
+	return missingSubnetRouteCandidate{}, false
+}
+
+func routerOwning(s *Scenario, address string) (string, bool) {
+	for _, node := range s.Topology.Nodes {
+		if node.Role == "router" && nodeOwnsAddress(node, address) {
+			return node.Name, true
+		}
+	}
+	return "", false
+}
+
+func hasMissingSubnetRouteCandidate(s *Scenario) bool {
+	_, ok := findMissingSubnetRouteCandidate(s)
+	return ok
+}
+
+func generateMissingSubnetRoute(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	candidate, ok := findMissingSubnetRouteCandidate(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("the briefed target's specific route disappeared")
+	}
+	return GeneratedMutation{Node: candidate.client, Family: string(candidate.family),
+		RouteDestination: candidate.destination, PreferredVia: candidate.via, PreferredSegment: candidate.segment,
+		ControlTarget: candidate.control, TargetEndpoint: briefedTargetEndpoint(s),
+		Description: fmt.Sprintf("remove the %s route to %s via %s on %s, leaving only a default that cannot reach it",
+			candidate.family, candidate.destination, candidate.via, candidate.client)}, nil
+}
+
 func applyGeneratedMutation(s *Scenario, m GeneratedMutation) error {
 	switch m.ID {
 	case "netem.loss", "netem.latency", "netem.jitter":
@@ -977,6 +1432,57 @@ func applyGeneratedMutation(s *Scenario, m GeneratedMutation) error {
 		}})
 	case "routing.preferred_path_failure":
 		s.Faults = append(s.Faults, Fault{Type: FaultLinkDown, Node: m.Node, Segment: m.Segment})
+	// A refusal is the absence of a listener, not a rule that rejects: the host
+	// is up and its kernel answers the SYN with a reset because nothing is bound
+	// there. Anything else would be a filter wearing a refusal's clothes.
+	case "service.connection_refused":
+		for ni := range s.Topology.Nodes {
+			if s.Topology.Nodes[ni].Name != m.Node {
+				continue
+			}
+			for si, service := range s.Topology.Nodes[ni].Services {
+				if service.Type == ServiceHTTP && service.Port == m.TargetPort {
+					s.Topology.Nodes[ni].Services = append(s.Topology.Nodes[ni].Services[:si], s.Topology.Nodes[ni].Services[si+1:]...)
+					return nil
+				}
+			}
+		}
+		return errors.New("HTTP target disappeared")
+	// Inbound at the target, and deliberately not scoped to one address: the
+	// port is filtered for every family the host answers on, so a dual-stack
+	// name cannot be half blocked.
+	case "service.tcp_port_blocked":
+		s.Faults = append(s.Faults, Fault{Type: FaultDrop, Node: m.Node, Direction: DirectionInbound,
+			Protocol: "tcp", Port: m.TargetPort})
+	case "service.tls_hostname_mismatch":
+		for ni := range s.Topology.Nodes {
+			for si := range s.Topology.Nodes[ni].Services {
+				service := &s.Topology.Nodes[ni].Services[si]
+				if s.Topology.Nodes[ni].Name == m.Node && service.Name == m.Service && service.Type == ServiceTLS &&
+					service.Certificate != nil && service.Certificate.Mode == TLSCertificateValid {
+					service.Certificate.Mode = TLSCertificateHostnameMismatch
+					service.Certificate.DNSNames = []string{tlsMismatchedDNSName}
+					return nil
+				}
+			}
+		}
+		return errors.New("valid TLS target disappeared")
+	case "routing.no_default_route":
+		s.Faults = append(s.Faults, Fault{Type: FaultNoDefaultRoute, Node: m.Node, Family: m.Family})
+	case "routing.wrong_default_route":
+		s.Faults = append(s.Faults, Fault{Type: FaultReplaceDefaultRoute, Node: m.Node, Via: m.RouteVia, Family: m.Family})
+	// Removed from the topology rather than deleted by a fault: there is no
+	// route the client ever had, which is what a machine that was configured
+	// without one looks like. The kernel table read back at the end is what
+	// proves it, either way.
+	case "routing.missing_subnet_route":
+		for i, route := range s.Topology.Routes {
+			if route.Node == m.Node && route.Destination == m.RouteDestination && route.Via == m.PreferredVia {
+				s.Topology.Routes = append(s.Topology.Routes[:i], s.Topology.Routes[i+1:]...)
+				return nil
+			}
+		}
+		return errors.New("the briefed target's specific route disappeared")
 	default:
 		return fmt.Errorf("unknown generated mutation %q", m.ID)
 	}

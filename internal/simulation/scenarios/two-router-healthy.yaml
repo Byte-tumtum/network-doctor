@@ -1,0 +1,93 @@
+name: two-router-healthy
+description: >-
+  The client LAN has two routers with different jobs: one carries the default
+  route out to the simulated internet, the other carries a specific route to
+  the subnet the target lives on. Everything works. It is the control for the
+  routing faults that need a wrong turn to be possible — a second on-link next
+  hop that answers but goes somewhere else, and a specific route whose absence
+  is not the same fault as having no default at all.
+
+topology:
+  segments:
+    - {name: client-lan, subnet: 10.80.1.0/24}
+    - {name: internet-lan, subnet: 10.80.2.0/24}
+    - {name: target-lan, subnet: 10.80.3.0/24}
+  nodes:
+    - name: client
+      role: client
+      resolver: 10.80.2.20
+      interfaces:
+        - {segment: client-lan, address: 10.80.1.10/24}
+
+    - name: internet-gateway
+      role: router
+      interfaces:
+        - {segment: client-lan, address: 10.80.1.1/24}
+        - {segment: internet-lan, address: 10.80.2.1/24}
+
+    - name: target-gateway
+      role: router
+      interfaces:
+        - {segment: client-lan, address: 10.80.1.254/24}
+        - {segment: target-lan, address: 10.80.3.1/24}
+
+    - name: internet
+      interfaces:
+        - {segment: internet-lan, address: 10.80.2.20/24}
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - name: routed-resolver
+          type: dns
+          zone:
+            subnet-target.test: 10.80.3.20
+            connectivitycheck.gstatic.com: 10.80.2.20
+        - {name: routed-http, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.80.2.20}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    - name: target
+      interfaces:
+        - {segment: target-lan, address: 10.80.3.20/24}
+      services:
+        - {name: subnet-http, type: http, port: 80}
+
+  routes:
+    # The default goes out through the internet router. The resolver keeps its
+    # own specific route through that same router, so a fault that repoints the
+    # default is a routing fault rather than a name-resolution one.
+    - {node: client, destination: default, via: 10.80.1.1}
+    - {node: client, destination: 10.80.2.0/24, via: 10.80.1.1}
+    - {node: client, destination: 10.80.3.0/24, via: 10.80.1.254}
+    - {node: internet-gateway, destination: 1.1.1.1/32, via: 10.80.2.20}
+    - {node: internet-gateway, destination: 8.8.8.8/32, via: 10.80.2.20}
+    - {node: internet, destination: 10.80.1.0/24, via: 10.80.2.1}
+    - {node: target, destination: 10.80.1.0/24, via: 10.80.3.1}
+
+tests:
+  - name: the target subnet and the internet are both routed
+    node: client
+    target: subnet-target.test:80
+  # A controlled literal behind the internet router, reached over its own
+  # specific route rather than over the default. It is the control that tells a
+  # repointed default apart from the network beyond the client being broken:
+  # this endpoint keeps answering through the original next hop either way.
+  - name: the internet-lan target is reached over its own specific route
+    node: client
+    target: http://10.80.2.20:80
+    expect:
+      verdict: ok
+      checks:
+        - {id: iface, status: PASS}
+        - {id: internet_tcp, status: PASS}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+
+expect:
+  verdict: ok
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}

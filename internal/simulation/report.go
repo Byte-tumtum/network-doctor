@@ -165,6 +165,9 @@ func (r *Report) finish() {
 	if r.Evidence.Routes == nil {
 		r.Evidence.Routes = []RouteEvidence{}
 	}
+	if r.Evidence.RouteTables == nil {
+		r.Evidence.RouteTables = []RouteTableEvidence{}
+	}
 	if r.Evidence.Routers == nil {
 		r.Evidence.Routers = []RouterEvidence{}
 	}
@@ -368,7 +371,8 @@ func (r *Report) WriteText(w io.Writer) {
 
 	if len(r.Evidence.DNS) > 0 || len(r.Evidence.DNSQueries) > 0 || len(r.Evidence.SOCKSRequests) > 0 || len(r.Evidence.TLS) > 0 || len(r.Evidence.TCPResets) > 0 || len(r.Evidence.PacketConditions) > 0 ||
 		len(r.Evidence.Links) > 0 || len(r.Evidence.Routes) > 0 || len(r.Evidence.Routers) > 0 || len(r.Evidence.ControlledTargets) > 0 ||
-		len(r.Evidence.FamilyReachability) > 0 || len(r.Evidence.ServiceReplies) > 0 || len(r.Evidence.PacketDrops) > 0 {
+		len(r.Evidence.FamilyReachability) > 0 || len(r.Evidence.ServiceReplies) > 0 || len(r.Evidence.PacketDrops) > 0 ||
+		len(r.Evidence.RouteTables) > 0 {
 		p("Structured evidence")
 		for _, e := range r.Evidence.Links {
 			p("  LINK  %-10s %-16s %-18s up=%t", e.Node, e.Segment, e.Address, e.Up)
@@ -392,8 +396,18 @@ func (r *Report) WriteText(w io.Writer) {
 			p("  ROUTE %-10s %-15s via %-15s %-16s metric=%d %s %s gateway=%s", e.Node, e.Destination,
 				e.Via, e.Segment, e.Metric, e.Family, selected, gateway)
 		}
+		for _, e := range r.Evidence.RouteTables {
+			if len(e.Routes) == 0 {
+				p("  TABLE %-10s %-4s (empty)", e.Node, e.Family)
+				continue
+			}
+			for _, route := range e.Routes {
+				p("  TABLE %-10s %-4s %-15s via %-15s %-16s metric=%d", e.Node, e.Family,
+					route.Destination, route.Via, route.Segment, route.Metric)
+			}
+		}
 		for _, e := range r.Evidence.ControlledTargets {
-			p("  PATH  %-10s -> %-24s via %-32s reachable=%t", e.From, e.To, strings.Join(e.Via, " -> "), e.Reachable)
+			p("  PATH  %-10s -> %-24s via %-32s %s", e.From, e.To, strings.Join(e.Via, " -> "), e.Outcome)
 		}
 		for _, e := range r.Evidence.FamilyReachability {
 			p("  FAMILY %-10s %-4s %-12s via %s", e.Node, e.Family, e.State, strings.Join(e.Via, " -> "))

@@ -164,8 +164,14 @@ func answersQuery(response, query []byte) bool {
 
 // TestHolderProbeReplyObservesRealSockets covers the holder end of the
 // simulator's independent reachability observation over loopback: a listening
-// port answers reachable, a closed one answers unreachable, and neither answer
+// port answers reachable, a closed one answers refused, and neither answer
 // comes from anything netdoc reported.
+//
+// A closed port on a live host is refused, not unreachable, and the difference
+// is the whole point of the third answer: a kernel that sends a reset is a
+// different fault from a filter that sends nothing. The unreachable half needs
+// a packet to be discarded on a path, which loopback has none of; the namespace
+// integration tests cover it against a real filter.
 func TestHolderProbeReplyObservesRealSockets(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -196,7 +202,7 @@ func TestHolderProbeReplyObservesRealSockets(t *testing.T) {
 		want string
 	}{
 		{"listening port", open, "probe-result reachable"},
-		{"closed port", shut, "probe-result unreachable"},
+		{"closed port", shut, "probe-result refused"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			line := fmt.Sprintf("probe 127.0.0.1 %d 2000", tc.port)

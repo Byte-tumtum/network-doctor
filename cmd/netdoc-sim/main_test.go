@@ -229,6 +229,22 @@ func TestRunDispatchKeepsArgvAligned(t *testing.T) {
 	}
 }
 
+// netdoc-sim answers for its own build, the way netdoc does. Anything that
+// packages the two together — a Linux package, the container image — has to be
+// able to prove it shipped one release rather than two, and asking each binary
+// is the only check that reads the binaries instead of the packaging.
+func TestRunDispatchVersion(t *testing.T) {
+	for _, arg := range []string{"version", "-version", "--version"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{arg}, &stdout, &stderr); code != exitOK {
+			t.Errorf("%s returned %d, stderr = %q", arg, code, stderr.String())
+		}
+		if got, want := stdout.String(), "netdoc-sim "+version+"\n"; got != want {
+			t.Errorf("%s printed %q, want %q", arg, got, want)
+		}
+	}
+}
+
 func TestRunDispatchCapabilities(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"capabilities"}, &stdout, &stderr)
