@@ -417,7 +417,7 @@ func TestFindNetdocSearchOrder(t *testing.T) {
 	// A bare name has no directory in it, so it means what it means to a shell:
 	// look it up on $PATH. This is why the flag is documented as a path.
 	t.Run("explicit bare name is a $PATH lookup", func(t *testing.T) {
-		t.Chdir(elsewhere)
+		t.Chdir(t.TempDir())
 		got, err := findNetdoc(filepath.Base(onPath), self)
 		if err != nil || got != onPath {
 			t.Fatalf("findNetdoc(%q) = %q, %v, want %q", filepath.Base(onPath), got, err, onPath)
