@@ -82,8 +82,14 @@ var actionDefs = []actionDef{
 		ctxList:   "next check — or device on the network map",
 		ctxViewer: "scroll down",
 	}},
-	{actTop, "top", map[keyContext]string{ctxViewer: "jump to top"}},
-	{actBottom, "bottom", map[keyContext]string{ctxViewer: "jump to bottom (re-enables follow)"}},
+	{actTop, "top", map[keyContext]string{
+		ctxList:   "first check — or device on the network map",
+		ctxViewer: "jump to top",
+	}},
+	{actBottom, "bottom", map[keyContext]string{
+		ctxList:   "last check — or device on the network map",
+		ctxViewer: "jump to bottom (re-enables follow)",
+	}},
 	// Paging is viewer-only on purpose: the check list is rendered whole, so
 	// there is no page below the fold to move by — top/bottom already reach
 	// everything a page key could.

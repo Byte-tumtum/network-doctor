@@ -71,11 +71,15 @@ func TestChordResolution(t *testing.T) {
 	if act, pending := m.resolveKey(ctxViewer, "/"); act != actFilter || pending != nil {
 		t.Fatalf("g then / = (%d, %v), want (filter, nil)", act, pending)
 	}
-	// The chord belongs to the viewer, so the same keys in the check list
-	// resolve to nothing at all rather than to a prefix that waits forever.
+	// top exists in both screens, so its chord is live in both.
 	m.pendingKeys = nil
-	if act, pending := m.resolveKey(ctxList, "g"); act != actNone || pending != nil {
-		t.Fatalf("g in the list = (%d, %v), want (none, nil)", act, pending)
+	act, pending = m.resolveKey(ctxList, "g")
+	if act != actNone || !slices.Equal(pending, []string{"g"}) {
+		t.Fatalf("first g in the list = (%d, %v), want (none, [g])", act, pending)
+	}
+	m.pendingKeys = pending
+	if act, pending := m.resolveKey(ctxList, "g"); act != actTop || pending != nil {
+		t.Fatalf("gg in the list = (%d, %v), want (top, nil)", act, pending)
 	}
 }
 

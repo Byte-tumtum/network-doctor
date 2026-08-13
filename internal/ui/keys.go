@@ -180,6 +180,24 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.selMoved = true
 		return m, nil
+	case actTop:
+		if m.networkMap {
+			m.mapSelected = 0
+			return m, nil
+		}
+		m.selected = 0
+		m.selMoved = true
+		return m, nil
+	case actBottom:
+		if m.networkMap {
+			m.mapSelected = max(len(m.networkHosts())-1, 0)
+			return m, nil
+		}
+		// max, not len-1: an empty list would otherwise select row -1, and the
+		// check list is empty for as long as the first probe takes to arrive.
+		m.selected = max(len(m.probes)-1, 0)
+		m.selMoved = true
+		return m, nil
 	case actOpen:
 		if hosts := m.networkHosts(); m.networkMap && len(hosts) > 0 {
 			m.mapSelected = min(m.mapSelected, len(hosts)-1)
