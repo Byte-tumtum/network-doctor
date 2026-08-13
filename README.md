@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/heymaikol/network-doctor)](https://github.com/heymaikol/network-doctor/releases/latest)
-[![License: GPL-3.0-or-later](https://img.shields.io/github/license/heymaikol/network-doctor)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/github/license/heymaikol/network-doctor)](LICENSE)
 
 **Find exactly where your connection breaks.** Network Doctor is a
 cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
@@ -581,7 +581,7 @@ in [CONTRIBUTING.md](CONTRIBUTING.md#development).
 
 ## License
 
-Network Doctor is free software under the [GNU General Public License](LICENSE), either version 3 of the License, or (at your option) any later version. Package metadata declares this as `GPL-3.0-or-later`.
+Network Doctor is licensed under the [Apache License, Version 2.0](LICENSE). Package metadata declares this as `Apache-2.0`.
 
 ## Star History
 

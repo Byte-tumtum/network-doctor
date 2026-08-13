@@ -82,7 +82,7 @@ nfpms:
     homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
     maintainer: Michael Placzek <heymaikol@proton.me>
-    license: GPL-3.0-or-later
+    license: Apache-2.0
     formats: [deb, rpm, apk]
     bindir: /usr/bin
     contents:
@@ -129,7 +129,7 @@ scoops:
       token: "{{ .Env.WINDOWS_PACKAGES_TOKEN }}"
     homepage: https://github.com/heymaikol/network-doctor
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
-    license: GPL-3.0-or-later
+    license: Apache-2.0
 
 winget:
   - package_name: Network Doctor
@@ -139,7 +139,7 @@ winget:
     publisher_support_url: https://github.com/heymaikol/network-doctor/issues
     short_description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
     homepage: https://github.com/heymaikol/network-doctor
-    license: GPL-3.0-or-later
+    license: Apache-2.0
     tags:
       - cli
       - network

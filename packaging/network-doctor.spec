@@ -11,7 +11,7 @@ Version:        1.10.8
 Release:        1%{?dist}
 Summary:        Terminal UI that diagnoses network connectivity and explains where the connection breaks
 
-License:        GPL-3.0-or-later
+License:        Apache-2.0
 URL:            https://github.com/heymaikol/network-doctor
 Source0:        %{url}/releases/download/v%{version}/%{name}-%{version}.tar.gz
 Source1:        %{url}/releases/download/v%{version}/%{name}-%{version}-vendor.tar.gz

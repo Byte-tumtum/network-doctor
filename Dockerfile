@@ -81,7 +81,7 @@ LABEL org.opencontainers.image.title="netdoc-sim" \
       org.opencontainers.image.url="https://github.com/heymaikol/network-doctor" \
       org.opencontainers.image.source="https://github.com/heymaikol/network-doctor" \
       org.opencontainers.image.documentation="https://github.com/heymaikol/network-doctor/blob/main/docs/simulation.md#running-it-in-a-container" \
-      org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 
