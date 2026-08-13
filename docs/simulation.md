@@ -677,8 +677,10 @@ answers are graded against the same independently observed truth.
 
 ```sh
 ./netdoc-sim challenge                       # draw one and play it
+./netdoc-sim challenge -daily                # today's, the same one for everybody
+./netdoc-sim challenge -starter fundamentals # a curated one to learn on
+./netdoc-sim challenge -id V3-8F42C1         # replay someone else's
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V3-8F42C1          # replay someone else's
 ./netdoc-sim challenge -id V3-8F42C1 -answer dns_failure -json
 ```
 
@@ -689,6 +691,118 @@ simulated network only exists while the process holding its namespaces does —
 `start`/`shell`/`diagnose` subcommands would need a daemon and a state file
 pointing at it, and would make it possible for the player and netdoc to be
 handed different networks.
+
+### Playing one
+
+The briefing names the machine you are standing on and the host you were asked
+about. That host is the challenge's own — `invoices-8f42c1.test`, derived from
+the id — and it is a real part of the simulated network: the node's resolver
+answers it, whatever serves it presents a certificate for it, and it is the
+target the graded netdoc run is handed. `.test` is reserved by [RFC
+6761](https://www.rfc-editor.org/rfc/rfc6761), so nothing about it can reach
+public DNS or the internet. In the shell it is also in the environment, as
+`$NETDOC_CHALLENGE_TARGET` and `$NETDOC_CHALLENGE_HOST`.
+
+The name is derived from the id and nothing else, so replaying an id presents the
+same host, and the name says nothing about which fault was set. It deliberately
+carries no `challenge` label: the target is passed to netdoc as its argument, and
+the simulator does not hand that process a token telling it a challenge is
+happening.
+
+Type `exit` in the shell to reach the menu. There, `b` prints the briefing again
+— the same text the session opened with, so you never have to scroll back or
+restart to reread the target — `s` returns to the shell, and `q` gives up.
+
+Answers are picked by number or typed by name. The names are the ones on the
+menu, so nothing has to be memorized: `netdoc-sim challenge -answer "TCP port
+blocked"` and `-answer tcp_port_blocked` and `-answer blocked` are one answer.
+Matching is exact after case, spaces, hyphens and underscores are folded
+together; there is no fuzzy matching, because an answer selected by resemblance
+is a diagnosis nobody committed to. A machine-readable result keeps the stable
+identifier and the display name side by side, so a script keys on `answer` and a
+human reads `label`.
+
+`netdoc-sim challenge` with no arguments is the whole of what a first-time player
+needs; the answer vocabulary is printed by the menu and the packs by
+`netdoc-sim starters`, so neither is duplicated here.
+
+### Elapsed human time
+
+The result reports how long you took. That number is the shell and the menu:
+it starts when the briefing has been printed and you can begin, and stops when
+your answer is accepted. Building the namespaces, injecting the fault, netdoc's
+own run and tearing everything down are all outside it, so it measures you
+rather than the host. Rereading the briefing, going back to the shell and
+retyping a mistaken answer are all inside it, because they are part of solving
+it.
+
+It is measured on a monotonic clock, and it is not part of the matchup — netdoc
+is automated and a person is not. Nothing about it reaches challenge generation,
+the id, the truth, the fingerprint or replay; `timing` in `-json` is where it
+lives, and a submission handed in with `-answer` records zero, which is the
+honest answer for a session no human played.
+
+### The daily challenge
+
+`netdoc-sim challenge -daily` plays today's, and everybody who plays today gets
+the same one:
+
+```sh
+./netdoc-sim challenge -daily                # today, UTC
+./netdoc-sim challenge -daily=2026-03-04     # a particular day
+```
+
+The date is the UTC calendar date, not the local one. Two people whose clocks
+disagree about what day it is have to get the same challenge, and a daily keyed
+to local midnight would give them different ones. The mapping is a pure function
+of that date — no server, no account, no network, no filesystem, and no clock
+beyond the date itself — so it is derivable offline on any machine.
+
+The daily is announced with its date and resolves to an ordinary challenge id.
+That id is the artifact: it replays the challenge forever, with no `-daily` and
+no dependence on today still being that day, and a replay is the same network
+without claiming to be that day's daily. A result played as the daily carries
+`daily` in its JSON and a `Daily <date>` line in the share block, which is what
+makes two people's results comparable as the same day's puzzle.
+
+Which id version a date maps through is frozen per date, in `dailyEpochs`
+alongside the id versions themselves. A future generator version therefore
+applies from its own release date onwards and cannot redefine a day somebody has
+already played and posted.
+
+`-daily` refuses to be combined with anything that would pick a different
+challenge — an explicit id, `-difficulty`, `-starter` — by name rather than by
+inventing a precedence. Silently honouring one of the two would hand somebody a
+result they would post as the day's challenge when it was not.
+
+### Starter packs
+
+```sh
+./netdoc-sim starters                        # the packs, and what each teaches
+./netdoc-sim starters routing                # its challenge ids, in order
+./netdoc-sim challenge -starter routing      # draw one from it
+```
+
+A pack is a curated list of ordinary challenge ids and nothing else. There is no
+second simulator, no second generator and no second scoring path: every entry
+resolves through the same `BuildChallenge`, plays on the same namespaces, is
+graded by the same oracle, and is replayable by its own id. `starters <pack>`
+prints those ids so a pack can be worked through in order; `-starter` draws one,
+because the command keeps no record of what you have played and a progress file
+would be the wrong trade for a game whose appeal is leaving nothing behind.
+
+A pack names the layer you are practising, which is a hint you asked for. Every
+pack still holds at least two possible answers, and one entry per pack is a
+network with nothing wrong with it — a pack with a single possible answer would
+be the answer key rather than a hint. That is why there is no DNS pack: the
+answer vocabulary has exactly one DNS entry on purpose, so "DNS" would be the
+whole answer. DNS is practised inside `fundamentals`, where it is one of four
+things it could be.
+
+The ids are written down in `starterPacks` rather than searched for at run time,
+so a generation change cannot quietly re-point a pack at a different lesson.
+`TestStarterPacksStayPlayable` checks that every entry still sets the condition
+it was curated for and that no pack has collapsed to one answer.
 
 ### Challenge ids
 
@@ -830,9 +944,13 @@ briefing never names, which would be a clue nobody was shown and a question the
 graded netdoc run was never asked; those cases are not challenge-capable.
 
 Elapsed human time is recorded because it is fun to compare, and is deliberately
-not part of the matchup: netdoc is automated and a person is not. In `-json` it
-is the only thing under `timing`, which is also the only part of a result a
-replay of the same id will not reproduce.
+not part of the matchup: netdoc is automated and a person is not. See [Elapsed
+human time](#elapsed-human-time) for exactly what it measures.
+
+Three parts of a result describe the session rather than the challenge, and a
+replay of the same id will not reproduce them: `timing`, `netdoc` (which build
+answered it), and `daily` (the date it was played as the daily for, absent
+otherwise). Everything else in a result is determined by the id and the network.
 
 ### Which Network Doctor a result was scored against
 
@@ -862,11 +980,23 @@ spoiler-free postable summary.
 
 ### Not spoiling it
 
-The briefing prints the id and the difficulty. The base scenario, seed, case
-number and mutation are the answer, so they appear only in the reveal, and a
-test asserts the briefing contains none of them. The share block carries two
-check marks and the id but never names the fault, so posting a result does not
-spoil the challenge for whoever reads it.
+The briefing prints the id, the difficulty, the node and the host. The base
+scenario, seed, case number and mutation are the answer, so they appear only in
+the reveal, and a test asserts the briefing contains none of them. Rereading the
+briefing with `b` goes through the same renderer, so there is no second, more
+generous version of it to drift.
+
+The host is part of that. Before it was derived from the id, every challenge on a
+given base was presented under that base's own name from the YAML — so
+`secure-target.test` told a returning player they were on `tls-valid`, which is
+most of the way to the answer for two conditions. The name is now a function of
+the id alone, and a test checks that no name is a fingerprint of the base, the
+case or the fault.
+
+The share block carries two check marks, the id, and the date if it was a daily,
+but never names the fault, so posting a result does not spoil the challenge for
+whoever reads it. A starter pack's name is deliberately not in it: the pack names
+a layer, which would narrow the answer for the next player.
 
 `-v`, a JSON report, or reading the source obviously defeats all of this. It is
 a game, not a security boundary.

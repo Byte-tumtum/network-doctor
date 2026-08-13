@@ -507,16 +507,25 @@ JSON and privilege details, and for what that one flag is and is not.
 On Linux, any [package](#linux) installs `netdoc-sim` and it runs natively:
 
 ```sh
-netdoc-sim challenge                  # draw a challenge and play it
-netdoc-sim challenge -difficulty hard
-netdoc-sim challenge -id V3-8F42C1    # play the one a friend sent you
+netdoc-sim challenge                        # draw a challenge and play it
+netdoc-sim challenge -daily                 # today's, the same one for everybody
+netdoc-sim challenge -starter fundamentals  # a curated one to learn on
+netdoc-sim challenge -id V3-8F42C1          # play the one a friend sent you
 ```
 
-You land in a shell inside the broken machine. Use `ping`, `dig`, `curl`, `ip
-route`, `ss`, `traceroute`, `nc` — whatever you'd reach for on a real
-call-out. Type `exit` when you're ready, pick your diagnosis from the menu, and
-the reveal shows the ground truth, the evidence behind it, your answer, Network
-Doctor's answer, and who got it right:
+`netdoc-sim challenge -daily` is the same broken network for everyone who plays
+it that day, keyed to the UTC date and derived locally — no server and no
+account — so results are comparable. `netdoc-sim starters` lists the curated
+packs for a first run: fundamentals, service, TLS, paths, routing.
+
+You land in a shell inside the broken machine, investigating a host that belongs
+to the challenge — `invoices-8f42c1.test`, resolved by the simulated network and
+by nothing outside it. Use `ping`, `dig`, `curl`, `ip route`, `ss`, `traceroute`,
+`nc` — whatever you'd reach for on a real call-out. Type `exit` when you're
+ready, then pick your diagnosis by number or type it by name (`b` reprints the
+briefing, `q` gives up). The reveal shows the ground truth, the evidence behind
+it, your answer, Network Doctor's answer, how long you took, and who got it
+right:
 
 ```text
 Result
@@ -526,17 +535,21 @@ Human investigation: 1m 47s
 Network Doctor run:  3s
 ```
 
-It ends with a block you can paste anywhere. It carries the challenge id and two
-check marks and never names the fault, so sharing your result doesn't spoil the
-puzzle for whoever plays it next:
+It ends with a block you can paste anywhere. It carries the challenge id, the
+date if it was a daily, and two check marks — and never names the fault, so
+sharing your result doesn't spoil the puzzle for whoever plays it next:
 
 ```text
 Network Doctor Challenge V3-8F42C1 (hard)
+Daily 2026-08-12
 Me:             ✓
 Network Doctor: ✗
 YOU BEAT NETWORK DOCTOR in 1m 47s
 Your turn: netdoc-sim challenge -id V3-8F42C1
 ```
+
+Your time is the shell and the menu — not the simulator's setup, and not Network
+Doctor's own run.
 
 Everything is local and reproducible: no account, no server, no leaderboard. A
 challenge id is the whole puzzle, so the same id is the same broken network on
