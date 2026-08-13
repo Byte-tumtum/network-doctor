@@ -231,31 +231,34 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
-| `home`/`end` | jump to the first or last probe row, or device in the network map |
+| `home`/`end` (`gg`/`G`) | jump to the first or last probe row, or device in the network map |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
-| `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
+| `home`/`end` (`gg`/`G`), `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` and `G` re-enable follow) or page through the output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart with a new target |
 | `S` | SSH login — a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
 | `tab` | switch between running tool jobs |
 | `esc` | cancel the focused job only (`tab` picks which); `q` is the stop-everything path |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
-| `?` | full-screen key cheatsheet; any key closes it |
+| `?` | full-screen key cheatsheet, from the check list, the network map, or a tool's full output; it scrolls when your terminal is too short for it, and any key that isn't a motion closes it |
 | `q` | quit (cancels running jobs first, then exits) |
 
 ### Key bindings
 
-Every key above is an *action*, and both the preset and the individual keys are yours to change. `--keys vim` switches to the vim preset for one run:
+Every key above is an *action*, and both the preset and the individual keys are yours to change.
+
+`gg` and `G` need no preset and no config: they jump to the top and bottom of whatever you are looking at — the check list, the network map, and the full output of any tool, `route table` and `open sockets` included. They are in the default keymap because they cost a non-vim user nothing, both keys having previously done nothing at all, and because reaching the top of a long route table should not require a config file.
+
+`--keys vim` adds the motions that would have cost something:
 
 | Action | vim keys | still bound |
 |--------|----------|-------------|
-| first / last row | `gg` / `G` | `home`/`end` |
 | page up / down (viewer) | `ctrl+b` / `ctrl+f` | `pgup`/`pgdn` |
 | half page up / down (viewer) | `ctrl+u` / `ctrl+d` | — |
 
-The preset adds motions rather than replacing keys: `j`/`k`, `/`, and `y` were already the vim spelling of themselves, and `home`/`end`/`pgup`/`pgdn` keep working, so a shared terminal stays usable for whoever sits down at it.
+The preset adds motions rather than replacing keys: `j`/`k`, `/`, and `y` were already the vim spelling of themselves, and `home`/`end`/`pgup`/`pgdn` keep working, so a shared terminal stays usable for whoever sits down at it. What it does change is billing: `gg`/`G` are listed ahead of `home`/`end` in the help bar, so the preset says out loud that it is on.
 
 To make it permanent, or to move individual keys, write `~/.netdocrc` (or `netdoc/config.yaml` under the config directory that already holds `history` — the dotfile wins if both exist):
 
@@ -303,8 +306,21 @@ Output viewer
   tab            switch job
   esc            clear the filter, or back when none is set
   q              back
+  ?              full-screen key cheatsheet
 
 any key close
+```
+
+The sheet is exhaustive, which makes it taller than a short terminal, so it scrolls with the same motions that scroll output — and only those keys; everything else still closes it:
+
+```
+  ctrl+r         restart with a new target
+  ?              full-screen key cheatsheet
+  q/Q            quit
+  i              run route table
+  s              run open sockets
+
+1–16 of 32  ·  ↑/↓ scroll  ·  gg/G top/bottom  ·  any other key close
 ```
 
 `network-map` has no row because the file unbound it, and the help bar drops its chip to match:
