@@ -33,11 +33,17 @@ type challengeFlags struct {
 	fs         *flag.FlagSet
 	id         *string
 	difficulty *string
+	daily      *dailyFlag
 	starter    *string
 	answer     *string
 	giveUp     *bool
 	json       *bool
 	netdoc     *string
+	// dailyDate is not for people to set either. -daily is resolved out in the
+	// launcher, where the clock is; the director is handed the id it resolved to
+	// plus the date it was the daily for, so the result can say which day it was
+	// without the director having to read a clock of its own.
+	dailyDate *string
 	// netdocVersion is not for people to set. The launcher resolves the binary
 	// and asks it for its version out here, where $PATH and the working
 	// directory still mean what the user meant, and hands both to the director
@@ -52,11 +58,14 @@ func newChallengeFlags(out io.Writer) *challengeFlags {
 	f.fs.SetOutput(out)
 	f.id = f.fs.String("id", "", "replay a specific challenge")
 	f.difficulty = f.fs.String("difficulty", "", "draw an easy, medium or hard challenge")
+	f.daily = &dailyFlag{}
+	f.fs.Var(f.daily, "daily", "play today's challenge, or -daily=YYYY-MM-DD for another day (UTC)")
 	f.starter = f.fs.String("starter", "", "draw from a curated starter pack; 'netdoc-sim starters' lists them")
 	f.answer = f.fs.String("answer", "", "submit this diagnosis without opening a shell")
 	f.giveUp = f.fs.Bool("give-up", false, "skip straight to the answer")
 	f.json = f.fs.Bool("json", false, "print the machine-readable result")
 	f.netdoc = f.fs.String("netdoc", "", "path to the netdoc binary")
+	f.dailyDate = f.fs.String("daily-date", "", "internal: the UTC date this challenge was drawn as the daily for")
 	f.netdocVersion = f.fs.String("netdoc-version", "", "internal: what the resolved netdoc binary reports for -version")
 	f.timeout = f.fs.Duration("timeout", 4*time.Second, "netdoc per-probe timeout")
 	f.verbose = f.fs.Bool("v", false, "log each privileged command as it runs")
@@ -77,6 +86,30 @@ func (f *challengeFlags) parse(args []string) error {
 	}
 	if *f.id != "" && *f.difficulty != "" {
 		return errors.New("-id names one challenge, so -difficulty has nothing to choose")
+	}
+	// A daily is the same challenge for everybody who asks for that date. Every
+	// other way of choosing one contradicts that outright, so each combination is
+	// refused by name rather than resolved by some invented precedence — silently
+	// honouring one of the two would hand somebody a result they would post as
+	// the day's challenge when it was not.
+	if f.daily.set {
+		// Resolved first: `-daily=false` clears the flag, so the conflict checks
+		// below have to look at what it resolved to rather than at it having
+		// appeared on the command line.
+		if err := f.daily.resolve(); err != nil {
+			return err
+		}
+	}
+	if f.daily.set {
+		switch {
+		case *f.id != "":
+			return errors.New("-daily and a challenge id each pick a different challenge; " +
+				"play the daily, or replay the id on its own")
+		case *f.difficulty != "":
+			return errors.New("-daily is the same challenge for everyone that day, so it has no difficulty to choose")
+		case *f.starter != "":
+			return errors.New("-daily and -starter each pick a different challenge; pick one")
+		}
 	}
 	if *f.starter != "" {
 		if *f.id != "" {
@@ -144,7 +177,7 @@ func launchChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitUsage
 	}
-	code, err := launchDirector(ctx, self, challengeDirectorArgv(f, challenge.ID, netdoc), stdin, stdout, stderr)
+	code, err := launchDirector(ctx, self, challengeDirectorArgv(f, challenge, netdoc), stdin, stdout, stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitError
@@ -152,22 +185,79 @@ func launchChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 	return code
 }
 
+// nowUTC is the clock the daily reads, and the only clock any of this reads.
+// Kept as a variable so tests can pin a date instead of asking what day it is
+// where the test happens to be running.
+var nowUTC = func() time.Time { return time.Now().UTC() }
+
+// dailyFlag is `-daily` with an optional value: bare for today, `-daily=DATE`
+// for another day. IsBoolFlag is what makes the bare form legal — without it,
+// `-daily` would swallow the next argument, and `netdoc-sim challenge -daily`
+// with nothing after it would be a usage error rather than the shortest way to
+// play. It also means `-daily V3-8F42C1` leaves the id as a positional argument,
+// which the parser then refuses as two challenges at once.
+type dailyFlag struct {
+	set  bool
+	raw  string
+	date string
+}
+
+func (d *dailyFlag) String() string { return d.date }
+
+func (d *dailyFlag) IsBoolFlag() bool { return true }
+
+// Set only records what was typed. A bool flag's Set error is reported by the
+// flag package as `invalid boolean value`, which is the wrong sentence to show
+// somebody who mistyped a date, so the date is resolved in resolve() where the
+// error can say what it means.
+func (d *dailyFlag) Set(raw string) error {
+	d.set, d.raw = true, raw
+	return nil
+}
+
+// resolve turns what was typed into the UTC date this daily is for. The bare
+// form arrives as flag's own "true" and means today; "false" is `-daily=false`
+// and means the flag was not asked for.
+func (d *dailyFlag) resolve() error {
+	switch d.raw {
+	case "false":
+		d.set, d.date = false, ""
+		return nil
+	case "true":
+		d.date = simulation.DailyDate(nowUTC())
+		return nil
+	}
+	date, err := simulation.ParseDailyDate(d.raw)
+	if err != nil {
+		return err
+	}
+	d.date = date
+	return nil
+}
+
 func resolveChallenge(f *challengeFlags) (*simulation.Challenge, error) {
 	switch {
 	case *f.id != "":
 		return simulation.BuildChallenge(*f.id)
+	case f.daily.set:
+		return simulation.DailyChallenge(f.daily.date)
 	case *f.starter != "":
 		return simulation.StarterChallenge(*f.starter)
 	}
 	return simulation.FindChallenge(*f.difficulty)
 }
 
-func challengeDirectorArgv(f *challengeFlags, id string, netdoc netdocIdentity) []string {
+// challengeDirectorArgv hands the director the resolved id rather than the way
+// it was chosen. -daily and -starter exist out here, where the clock and the
+// draw are; by the time the director runs there is one challenge and one id, so
+// nothing inside the namespaces can pick a different one.
+func challengeDirectorArgv(f *challengeFlags, challenge *simulation.Challenge, netdoc netdocIdentity) []string {
 	return []string{challengeDirectorCommand,
 		"-netdoc", netdoc.path,
 		"-netdoc-version", netdoc.version,
 		"-timeout", f.timeout.String(),
-		"-id", id,
+		"-id", challenge.ID,
+		"-daily-date", challenge.Daily,
 		"-answer", *f.answer,
 		fmt.Sprintf("-give-up=%t", *f.giveUp),
 		fmt.Sprintf("-json=%t", *f.json),
@@ -196,6 +286,16 @@ func directChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitUsage
+	}
+	// A label on how the player arrived, applied after the challenge is built:
+	// the id decided the puzzle, and this decides nothing.
+	if *f.dailyDate != "" {
+		date, err := simulation.ParseDailyDate(*f.dailyDate)
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
+			return exitUsage
+		}
+		challenge.Daily = date
 	}
 	var log io.Writer
 	if *f.verbose {

@@ -207,6 +207,8 @@ Flags for triage:
 
 Ways to play a challenge:
   netdoc-sim challenge                     draw one and play it
+  netdoc-sim challenge -daily              today's challenge, the same one for
+                                           everybody who plays it today
   netdoc-sim challenge -starter fundamentals
                                            a curated challenge to learn on
   netdoc-sim challenge V3-8F42C1           replay the one a friend sent you
@@ -218,6 +220,7 @@ simulator's setup or Network Doctor's own run.
 
 Flags for challenge:
   -id <ID>                 replay a specific challenge instead of drawing one
+  -daily[=YYYY-MM-DD]      play the challenge for today, or for that UTC date
   -starter <pack>          draw from a starter pack ('netdoc-sim starters')
   -difficulty <level>      draw an easy, medium or hard challenge
   -answer <name>           submit this diagnosis without opening a shell

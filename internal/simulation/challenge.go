@@ -534,6 +534,11 @@ type Challenge struct {
 	// neither is a hint the netdoc run does not also get.
 	Node   string `json:"node"`
 	Target string `json:"target,omitempty"`
+	// Daily is the UTC calendar date this challenge is the daily for, set only
+	// when it was selected that way. It is a label on how the player arrived,
+	// never an input to generation: the id alone decides the puzzle, and the same
+	// id played without -daily is the same network.
+	Daily string `json:"daily,omitempty"`
 
 	Base     string                `json:"base_scenario"`
 	Seed     int64                 `json:"seed"`
@@ -913,8 +918,13 @@ type NetdocIdentity struct {
 
 // ChallengeResult is the whole matchup, and the machine-readable artifact.
 type ChallengeResult struct {
-	ChallengeID      string              `json:"challenge_id"`
-	Difficulty       string              `json:"difficulty"`
+	ChallengeID string `json:"challenge_id"`
+	Difficulty  string `json:"difficulty"`
+	// Daily is the UTC date this was played as the daily for, and is what makes
+	// two people's results comparable as the same day's puzzle. Like netdoc and
+	// timing, it records the session rather than the challenge: a replay by id
+	// reproduces the network and not the way somebody arrived at it.
+	Daily            string              `json:"daily,omitempty"`
 	IDVersion        string              `json:"id_version"`
 	GeneratorVersion string              `json:"generator_version"`
 	BaseScenario     string              `json:"base_scenario"`
@@ -944,7 +954,7 @@ func ScoreChallenge(c *Challenge, report *Report, submission ChallengeSubmission
 	result := &ChallengeResult{
 		// The version this id carries, not the one this build mints: a V1 id
 		// resolved by a later build is still a V1 challenge.
-		ChallengeID: c.ID, Difficulty: c.Difficulty, IDVersion: challengeIDVersionOf(c.ID),
+		ChallengeID: c.ID, Difficulty: c.Difficulty, Daily: c.Daily, IDVersion: challengeIDVersionOf(c.ID),
 		GeneratorVersion: c.Manifest.GeneratorVersion, BaseScenario: c.Base, Seed: c.Seed, Case: c.Case,
 		CaseFingerprint: c.Manifest.CaseFingerprint, Node: c.Node, Target: c.Target,
 		Timing: ChallengeTiming{HumanMS: submission.Elapsed.Milliseconds()}, Replay: c.Replay(),

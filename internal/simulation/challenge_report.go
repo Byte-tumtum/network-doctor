@@ -22,6 +22,11 @@ import (
 // base scenario, the seed, the case and the mutation stay out of it.
 func (c *Challenge) WriteBriefing(w io.Writer) {
 	fmt.Fprintf(w, "\nNETWORK DOCTOR CHALLENGE\nChallenge %s   Difficulty: %s\n", c.ID, c.Difficulty)
+	if c.Daily != "" {
+		// The date is what makes a daily comparable, so it is stated where the
+		// player will read it rather than only in the result.
+		fmt.Fprintf(w, "Daily challenge for %s (UTC)\n", c.Daily)
+	}
 	fmt.Fprintln(w, "\nSomething may be wrong with this network. Your job is to say what.")
 	fmt.Fprintf(w, "\nYou are on:   %s\n", textsafe.Clean(c.Node))
 	if c.Target == "" {
@@ -50,6 +55,9 @@ func (r *ChallengeResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) 
 // WriteText is the reveal. It runs only after both answers are in.
 func (r *ChallengeResult) WriteText(w io.Writer) {
 	fmt.Fprintf(w, "\nRESULT — CHALLENGE %s\n", r.ChallengeID)
+	if r.Daily != "" {
+		fmt.Fprintf(w, "Daily challenge for %s (UTC)\n", r.Daily)
+	}
 
 	fmt.Fprintln(w, "\nGround truth")
 	if r.Truth.Scoreable {
@@ -151,6 +159,11 @@ func challengeResultLine(result string) string {
 func (r *ChallengeResult) Share() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Network Doctor Challenge %s (%s)\n", r.ChallengeID, r.Difficulty)
+	if r.Daily != "" {
+		// The date is the thing people compare a daily on, and it names no fault,
+		// so it belongs in the block that gets posted.
+		fmt.Fprintf(&b, "Daily %s\n", r.Daily)
+	}
 	fmt.Fprintf(&b, "Me:             %s\n", shareMark(r.Human.Score))
 	fmt.Fprintf(&b, "Network Doctor: %s\n", shareMark(r.NetworkDoctor.Score))
 	fmt.Fprintf(&b, "%s in %s\n", challengeResultLine(r.Result), formatElapsed(msDuration(r.Timing.HumanMS)))
