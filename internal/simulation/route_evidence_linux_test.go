@@ -5,6 +5,7 @@ package simulation
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -210,5 +211,46 @@ func TestDualStackDryPlanUsesOneInterfaceAndFamilyRoutes(t *testing.T) {
 		if !strings.Contains(plan, want) {
 			t.Errorf("dual-stack plan missing %q:\n%s", want, plan)
 		}
+	}
+}
+
+// The route table is the one piece of evidence that has to be able to say
+// "nothing", so the parser is graded on what it refuses to invent as much as on
+// what it reads. A line whose destination it cannot name is dropped rather than
+// guessed at: a wrong row here would make a missing route look present.
+func TestParseRouteTableReadsWhatTheKernelHolds(t *testing.T) {
+	np := &nodeProc{ifaces: []*interfaceProc{{logical: &Interface{Segment: "client-lan"}, iface: "neabc1230"}}}
+	got, err := parseRouteTable([]byte(
+		"default via 10.80.1.1 dev neabc1230 \n"+
+			"10.80.1.0/24 dev neabc1230 proto kernel scope link src 10.80.1.10 \n"+
+			"10.80.3.0/24 via 10.80.1.254 dev neabc1230 metric 200 \n"+
+			"10.80.9.9 via 10.80.1.1 dev neabc1230 \n"+
+			"multicast ff00::/8 dev neabc1230 table local proto kernel metric 256 pref medium\n"+
+			"unreachable fc00::/7 dev lo metric 1024 pref medium\n"), np)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []KernelRoute{
+		{Destination: "default", Via: "10.80.1.1", Segment: "client-lan"},
+		{Destination: "10.80.1.0/24", Segment: "client-lan"},
+		{Destination: "10.80.3.0/24", Via: "10.80.1.254", Segment: "client-lan", Metric: 200},
+		// A host route prints as a bare address and has to come back as a prefix,
+		// or a route covering the target would read as no route at all.
+		{Destination: "10.80.9.9/32", Via: "10.80.1.1", Segment: "client-lan"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("route table = %+v, want %+v", got, want)
+	}
+	if empty, err := parseRouteTable(nil, np); err != nil || len(empty) != 0 || empty == nil {
+		t.Fatalf("an empty table = %+v, %v; want an empty list rather than nothing", empty, err)
+	}
+	if _, err := parseRouteTable([]byte("default via 10.80.1.1 dev neabc1230 metric nonsense\n"), np); err == nil {
+		t.Fatal("a malformed metric parsed anyway")
+	}
+	if _, err := parseRouteTable([]byte("default via not-an-address dev neabc1230\n"), np); err == nil {
+		t.Fatal("a malformed next hop parsed anyway")
+	}
+	if _, err := parseRouteTable(make([]byte, maxRouteTableOutput+1), np); err == nil {
+		t.Fatal("an oversized listing was accepted")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -40,7 +41,12 @@ const (
 	holderProbeResult   = "probe-result"
 	holderProbeReached  = "reachable"
 	holderProbeFailed   = "unreachable"
-	holderProbeError    = "error"
+	// holderProbeRefused is the answer to a SYN that got a reset back rather than
+	// silence. An older director that does not know the word treats it as an
+	// unparseable reply and fails loudly, which is the safe direction: a refusal
+	// silently read as a timeout would make two different faults one observation.
+	holderProbeRefused = "refused"
+	holderProbeError   = "error"
 )
 
 // nodeConfig is what the director hands a holder.
@@ -828,6 +834,13 @@ func holderProbeReply(fields []string) string {
 	dialer := net.Dialer{Timeout: time.Duration(ms) * time.Millisecond}
 	conn, err := dialer.Dial("tcp", netip.AddrPortFrom(addr, uint16(port)).String())
 	if err != nil {
+		// Only an actual reset from the far end is a refusal. Anything the local
+		// kernel decided on its own — no route, an administrative reject on the
+		// way out — is the path failing, not the target answering, so it stays
+		// unreachable rather than being promoted to a statement about a service.
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			return holderProbeResult + " " + holderProbeRefused
+		}
 		return holderProbeResult + " " + holderProbeFailed
 	}
 	conn.Close()

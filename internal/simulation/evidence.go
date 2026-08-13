@@ -28,6 +28,7 @@ type Evidence struct {
 	PacketDrops      []PacketDropEvidence      `json:"packet_drops"`
 	Links            []LinkEvidence            `json:"links"`
 	Routes           []RouteEvidence           `json:"routes"`
+	RouteTables      []RouteTableEvidence      `json:"route_tables"`
 	Routers          []RouterEvidence          `json:"routers"`
 	// ControlledTargets and FamilyReachability are both measured, never
 	// derived. See their type comments.
@@ -89,6 +90,34 @@ type RouteEvidence struct {
 	GatewayReachable *bool  `json:"gateway_reachable,omitempty"`
 }
 
+// RouteTableEvidence is the routing table one node's kernel actually held when
+// the run ended, read back with `ip route show` from inside that node's own
+// namespace. RouteEvidence answers "where does this destination go"; this
+// answers the different question of "what routes exist at all", which is the
+// only thing that can establish an absence — a route that was deleted, or one
+// that was never installed, leaves no trace in a per-destination lookup beyond
+// the lookup failing, and a failed lookup is not the same claim as a missing
+// route.
+//
+// A record exists for every family the node has an address in, so an empty
+// Routes list is the positive statement "this table was read and held nothing",
+// not "nobody looked". Families the node has no address in get no record.
+type RouteTableEvidence struct {
+	Node   string        `json:"node"`
+	Family string        `json:"family"`
+	Routes []KernelRoute `json:"routes"`
+}
+
+// KernelRoute is one line of a node's real routing table, in the simulator's
+// logical vocabulary: interfaces are named by topology segment rather than by
+// the kernel name the run happened to allocate.
+type KernelRoute struct {
+	Destination string `json:"destination"`
+	Via         string `json:"via,omitempty"`
+	Segment     string `json:"segment,omitempty"`
+	Metric      int    `json:"metric,omitempty"`
+}
+
 type RouterEvidence struct {
 	Node           string `json:"node"`
 	IPv4Forwarding bool   `json:"ipv4_forwarding"`
@@ -108,16 +137,27 @@ type ControlledTargetEvidence struct {
 	Family    string   `json:"family"`
 	Via       []string `json:"via"`
 	Reachable bool     `json:"reachable"`
+	// Outcome is what the dial did, not merely whether it worked. A port that
+	// answered a SYN with a reset and a port that swallowed it are both
+	// unreachable and are different faults with different fixes, and the dialing
+	// end is the only place that difference is visible. Reachable is the same
+	// observation narrowed to a bool, kept because most readers only want that.
+	Outcome string `json:"outcome"`
 }
 
 // Address family states a FamilyReachabilityEvidence can carry. Unavailable and
 // unreachable are deliberately distinct: a family the node was never given an
 // address in was not tested, which is not the same claim as a family that was
 // dialed and did not answer.
+//
+// TargetStateRefused is a third outcome only a dial of one specific port can
+// produce, so it is not a family state: a family is reachable when any endpoint
+// answers, and "refused" is a fact about a port.
 const (
 	FamilyStateReachable   = "reachable"
 	FamilyStateUnreachable = "unreachable"
 	FamilyStateUnavailable = "unavailable"
+	TargetStateRefused     = "refused"
 )
 
 // FamilyReachabilityEvidence is the simulator's own point-in-time answer to one
@@ -521,6 +561,7 @@ func aggregateEvidence(events []evidenceEvent) Evidence {
 	out.PacketDrops = []PacketDropEvidence{}
 	out.Links = []LinkEvidence{}
 	out.Routes = []RouteEvidence{}
+	out.RouteTables = []RouteTableEvidence{}
 	out.Routers = []RouterEvidence{}
 	out.ControlledTargets = []ControlledTargetEvidence{}
 	out.FamilyReachability = []FamilyReachabilityEvidence{}

@@ -162,6 +162,9 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 	if err := e.observeControlledTargetReachability(ctx, &out); err != nil {
 		return Evidence{}, err
 	}
+	if err := e.observeRouteTables(ctx, &out); err != nil {
+		return Evidence{}, err
+	}
 	return out, nil
 }
 
@@ -209,49 +212,78 @@ func (e *netnsEnv) observeFamilyReachability(ctx context.Context, out *Evidence)
 	return nil
 }
 
-// observeControlledTargetReachability proves a multipath scenario's alternate
-// path using a literal target owned by a simulator TCP fixture. Single-path,
-// hostname and arbitrary external targets remain diagnosis concerns.
+// observeControlledTargetReachability dials, from inside each test node, the
+// address and port that node's test names — but only when the scenario owns
+// that address, which is what keeps this an observation of the simulated
+// network rather than a claim about the internet. A hostname is resolved from
+// the scenario's own zone rather than through the node's resolver, so a broken
+// resolver cannot silence the observation.
+//
+// It deliberately does not require a service on the port. A port with nothing
+// behind it is exactly the case this evidence exists to tell apart from a port
+// whose packets are discarded, and demanding a listener would make the two
+// indistinguishable by refusing to look at either.
 func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out *Evidence) error {
-	if !hasPreferredPathFailureCandidate(e.scenario) {
-		return nil
-	}
 	seen := map[string]bool{}
 	for _, test := range e.scenario.Tests {
 		target, err := diagnostic.ParseTarget(test.Target)
-		if err != nil || target.IP == nil || !e.controlledTCPPort(target.IP.String(), target.Port) {
+		if err != nil || e.byName[test.Node] == nil {
 			continue
 		}
-		addr := target.IP.String()
-		key := test.Node + "\x00" + addr + "\x00" + strconv.Itoa(target.Port)
-		if seen[key] {
-			continue
+		for _, addr := range scenarioTargetAddresses(e.scenario, target) {
+			key := test.Node + "\x00" + addr + "\x00" + strconv.Itoa(target.Port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			outcome, err := e.byName[test.Node].probeTCP(ctx, addr, target.Port, internetObservationTimeout)
+			if err != nil {
+				return fmt.Errorf("observe controlled target %s from %s: %w", target.Raw, test.Node, err)
+			}
+			out.ControlledTargets = append(out.ControlledTargets, ControlledTargetEvidence{
+				From: test.Node, To: netip.AddrPortFrom(netip.MustParseAddr(addr), uint16(target.Port)).String(),
+				Family: addressFamily(netip.MustParseAddr(addr)), Via: selectedDestinationPath(out.Routes, test.Node, addr),
+				Reachable: outcome == FamilyStateReachable, Outcome: outcome,
+			})
 		}
-		seen[key] = true
-		reachable, err := e.byName[test.Node].probeTCP(ctx, addr, target.Port, internetObservationTimeout)
-		if err != nil {
-			return fmt.Errorf("observe controlled target %s from %s: %w", target.Raw, test.Node, err)
-		}
-		out.ControlledTargets = append(out.ControlledTargets, ControlledTargetEvidence{
-			From: test.Node, To: netip.AddrPortFrom(netip.MustParseAddr(addr), uint16(target.Port)).String(),
-			Family: addressFamily(netip.MustParseAddr(addr)), Via: selectedDestinationPath(out.Routes, test.Node, addr), Reachable: reachable,
-		})
 	}
 	return nil
 }
 
-func (e *netnsEnv) controlledTCPPort(address string, port int) bool {
-	for _, node := range e.scenario.Topology.Nodes {
-		if !nodeOwnsAddress(node, address) {
+// observeRouteTables reads back the routing table each test node's kernel
+// actually holds, for every family that node has an address in. It is the one
+// observation that can establish an absence — no default route at all, or a
+// specific route that is no longer installed — which a per-destination lookup
+// cannot: a lookup that fails says the kernel found nothing, not what the table
+// contained.
+func (e *netnsEnv) observeRouteTables(ctx context.Context, out *Evidence) error {
+	seen := map[string]bool{}
+	for _, test := range e.scenario.Tests {
+		np := e.byName[test.Node]
+		if np == nil || seen[test.Node] {
 			continue
 		}
-		for _, service := range node.Services {
-			if service.Port == port && service.Type != ServiceQUIC {
-				return true
+		seen[test.Node] = true
+		for _, probe := range internetFamilyProbes(np.node) {
+			if !probe.available {
+				continue
 			}
+			flag := "-6"
+			if probe.family == string(familyIPv4) {
+				flag = "-4"
+			}
+			res := e.Exec(ctx, test.Node, []string{"ip", flag, "route", "show"}, nil)
+			if res.Err != nil || res.ExitCode != 0 {
+				return fmt.Errorf("read %s route table for %s: %w", probe.family, test.Node, execResultError(res))
+			}
+			routes, parseErr := parseRouteTable(res.Stdout, np)
+			if parseErr != nil {
+				return fmt.Errorf("parse %s route table for %s: %w", probe.family, test.Node, parseErr)
+			}
+			out.RouteTables = append(out.RouteTables, RouteTableEvidence{Node: test.Node, Family: probe.family, Routes: routes})
 		}
 	}
-	return false
+	return nil
 }
 
 func selectedDestinationPath(routes []RouteEvidence, node, destination string) []string {
@@ -272,15 +304,83 @@ func selectedDestinationPath(routes []RouteEvidence, node, destination string) [
 // independently, by connecting, not by reading what netdoc concluded.
 func (e *netnsEnv) observeFamily(ctx context.Context, np *nodeProc, endpoints []string) (bool, error) {
 	for _, endpoint := range endpoints {
-		reachable, err := np.probeTCP(ctx, endpoint, internetProbePort, internetObservationTimeout)
+		outcome, err := np.probeTCP(ctx, endpoint, internetProbePort, internetObservationTimeout)
 		if err != nil {
 			return false, err
 		}
-		if reachable {
+		if outcome == FamilyStateReachable {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+// maxRouteTableOutput bounds one `ip route show` listing. A simulated node has
+// a handful of routes; anything near this is a table nobody meant to produce.
+const maxRouteTableOutput = 64 << 10
+
+// parseRouteTable reads one `ip route show` listing into the simulator's
+// logical vocabulary. Lines it cannot name a destination for — multicast,
+// unreachable and the other type-prefixed forms — are skipped rather than
+// guessed at: this evidence is used to establish that a route is absent, so
+// inventing a row from a line nobody understood is the one mistake it must not
+// make.
+func parseRouteTable(raw []byte, np *nodeProc) ([]KernelRoute, error) {
+	if len(raw) > maxRouteTableOutput {
+		return nil, errors.New("route table output is oversized")
+	}
+	out := []KernelRoute{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		route := KernelRoute{Destination: fields[0]}
+		if fields[0] != "default" {
+			prefix, err := parseRoutePrefix(fields[0])
+			if err != nil {
+				continue
+			}
+			route.Destination = prefix.String()
+		}
+		for i := 1; i+1 < len(fields); i++ {
+			switch fields[i] {
+			case "via":
+				_, canonical, err := parseAddr(fields[i+1])
+				if err != nil {
+					return nil, fmt.Errorf("invalid via %q", fields[i+1])
+				}
+				route.Via = canonical
+			case "dev":
+				for _, iface := range np.ifaces {
+					if iface.iface == fields[i+1] {
+						route.Segment = iface.logical.Segment
+					}
+				}
+			case "metric":
+				metric, err := strconv.Atoi(fields[i+1])
+				if err != nil || metric < 0 || metric > maxRouteMetric {
+					return nil, fmt.Errorf("invalid metric %q", fields[i+1])
+				}
+				route.Metric = metric
+			}
+		}
+		out = append(out, route)
+	}
+	return out, nil
+}
+
+// parseRoutePrefix accepts both forms `ip route show` prints a destination in:
+// a prefix, and a bare address for a host route.
+func parseRoutePrefix(raw string) (netip.Prefix, error) {
+	if prefix, err := netip.ParsePrefix(raw); err == nil {
+		return prefix.Masked(), nil
+	}
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
 // parseNftCounterPackets reads the packet total out of one `nft list counter`

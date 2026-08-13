@@ -29,7 +29,7 @@ const (
 	// the id itself, not a note about it: an id names the generation rules that
 	// resolve it, so a future change to selection adds a version instead of
 	// quietly repointing every id that has already been shared.
-	ChallengeIDVersion = "V2"
+	ChallengeIDVersion = "V3"
 	challengeIDDomain  = "netdoc-sim-challenge"
 	// challengeIDDigits is the width of a shareable challenge id, in hex digits.
 	challengeIDDigits = 6
@@ -64,20 +64,23 @@ var ChallengeDifficulties = []string{DifficultyEasy, DifficultyMedium, Difficult
 type ChallengeAnswer string
 
 const (
-	AnswerHealthy        ChallengeAnswer = "healthy"
-	AnswerDNSFailure     ChallengeAnswer = "dns_failure"
-	AnswerNoDefaultRoute ChallengeAnswer = "no_default_route"
-	AnswerPreferredRoute ChallengeAnswer = "preferred_route_failure"
-	AnswerIPv4Failure    ChallengeAnswer = "ipv4_failure"
-	AnswerIPv6Failure    ChallengeAnswer = "ipv6_failure"
-	AnswerPortBlocked    ChallengeAnswer = "tcp_port_blocked"
-	AnswerRefused        ChallengeAnswer = "connection_refused"
-	AnswerReset          ChallengeAnswer = "connection_reset"
-	AnswerTLSCertificate ChallengeAnswer = "tls_certificate"
-	AnswerHTTPService    ChallengeAnswer = "http_service"
-	AnswerProxy          ChallengeAnswer = "proxy_failure"
-	AnswerQUICBlocked    ChallengeAnswer = "quic_udp_blocked"
-	AnswerPacketLoss     ChallengeAnswer = "packet_loss"
+	AnswerHealthy           ChallengeAnswer = "healthy"
+	AnswerDNSFailure        ChallengeAnswer = "dns_failure"
+	AnswerNoDefaultRoute    ChallengeAnswer = "no_default_route"
+	AnswerWrongDefaultRoute ChallengeAnswer = "wrong_default_route"
+	AnswerMissingRoute      ChallengeAnswer = "missing_subnet_route"
+	AnswerPreferredRoute    ChallengeAnswer = "preferred_route_failure"
+	AnswerIPv4Failure       ChallengeAnswer = "ipv4_failure"
+	AnswerIPv6Failure       ChallengeAnswer = "ipv6_failure"
+	AnswerPortBlocked       ChallengeAnswer = "tcp_port_blocked"
+	AnswerRefused           ChallengeAnswer = "connection_refused"
+	AnswerReset             ChallengeAnswer = "connection_reset"
+	AnswerTLSCertificate    ChallengeAnswer = "tls_certificate"
+	AnswerTLSHostname       ChallengeAnswer = "tls_hostname_mismatch"
+	AnswerHTTPService       ChallengeAnswer = "http_service"
+	AnswerProxy             ChallengeAnswer = "proxy_failure"
+	AnswerQUICBlocked       ChallengeAnswer = "quic_udp_blocked"
+	AnswerPacketLoss        ChallengeAnswer = "packet_loss"
 )
 
 // ChallengeAnswerInfo is one menu entry.
@@ -87,20 +90,29 @@ type ChallengeAnswerInfo struct {
 	Help  string          `json:"help,omitempty"`
 }
 
-// ChallengeAnswerMenu is ordered API, and is deliberately wider than the set of
-// faults a challenge can currently inject: a menu listing only the possible
-// faults would be most of the answer.
+// ChallengeAnswerMenu is ordered API. Every entry but the last three is a fault
+// a challenge can be set on; those three stay listed because a menu of only the
+// possible faults would be most of the answer, and each one is excluded for a
+// reason written down next to challengeConditions.
+//
+// The help text is the part a player actually reads, so where two answers sit
+// next to each other it says what separates them rather than what they have in
+// common: refused against blocked, no default route against a wrong one,
+// expired against a name mismatch.
 var ChallengeAnswerMenu = []ChallengeAnswerInfo{
 	{AnswerHealthy, "Nothing is wrong with this network", "every layer works; the reported problem is elsewhere"},
 	{AnswerDNSFailure, "DNS resolution", "names do not resolve, or the resolver refuses"},
-	{AnswerNoDefaultRoute, "No default route", "the client has no way out of its own subnet"},
-	{AnswerPreferredRoute, "Wrong or failed preferred route", "a route is selected whose path cannot reach the target, while another one can"},
+	{AnswerNoDefaultRoute, "No default route", "the routing table has no default at all, so nothing off-link can be reached"},
+	{AnswerWrongDefaultRoute, "Wrong default route", "there is exactly one default route, its gateway answers, and it goes somewhere that cannot reach the internet"},
+	{AnswerMissingRoute, "Missing route to the target's subnet", "the internet is fine; what is missing is the specific route the target's network needs"},
+	{AnswerPreferredRoute, "Failed preferred route", "two defaults exist and the lower-metric one is selected, but only the other one's path works"},
 	{AnswerIPv4Failure, "IPv4 connectivity", "the IPv4 path is down while IPv6 works"},
 	{AnswerIPv6Failure, "IPv6 connectivity", "the IPv6 path is down while IPv4 works"},
-	{AnswerPortBlocked, "TCP port blocked", "connections to the target port are silently discarded"},
-	{AnswerRefused, "Connection refused", "the target answers the connection with a refusal"},
+	{AnswerPortBlocked, "TCP port blocked", "connections to the target port are silently discarded, so they time out"},
+	{AnswerRefused, "Connection refused", "the host answers the connection immediately with a refusal, because nothing is listening"},
 	{AnswerReset, "Connection reset by the service", "the target accepts the connection and then tears it down"},
-	{AnswerTLSCertificate, "TLS certificate", "the handshake fails on the certificate itself"},
+	{AnswerTLSCertificate, "Expired TLS certificate", "the handshake fails because the certificate is outside its validity dates"},
+	{AnswerTLSHostname, "TLS certificate name mismatch", "the certificate is valid and trusted, but not for the name that was requested"},
 	{AnswerHTTPService, "HTTP service error", "the server answers, with an error status"},
 	{AnswerProxy, "Proxy", "the configured proxy is the thing that fails"},
 	{AnswerQUICBlocked, "QUIC / UDP 443", "UDP/443 is filtered while TCP/443 is not"},
@@ -253,6 +265,36 @@ var challengeConditions = []challengeCondition{
 			return shapedPacketsDroppedAt(evidence, m.Node, m.Segment)
 		},
 	},
+	{
+		mutation: "service.connection_refused", answer: AnswerRefused, difficulty: DifficultyEasy,
+		explanation: "The target host is up and its port is closed, so it answers the connection with a refusal rather than swallowing it. " +
+			"The path is intact — a refusal is something only a reachable host can send.",
+	},
+	{
+		mutation: "service.tcp_port_blocked", answer: AnswerPortBlocked, difficulty: DifficultyMedium,
+		explanation: "A filter at the target discarded inbound connections to the port, so they timed out instead of being refused. " +
+			"The host itself is up and every other port on it kept working, which is what separates a filtered port from a dead one.",
+	},
+	{
+		mutation: "service.tls_hostname_mismatch", answer: AnswerTLSHostname, difficulty: DifficultyMedium,
+		explanation: "The target served a certificate that is currently valid and signed by a trusted issuer, but issued for a different name than the one requested. " +
+			"TCP and the handshake up to certificate verification both succeed.",
+	},
+	{
+		mutation: "routing.no_default_route", answer: AnswerNoDefaultRoute, difficulty: DifficultyEasy,
+		explanation: "The client's default route was deleted. Its link, its address and anything on its own segment still work; " +
+			"what it has lost is any way to a destination that is not on-link.",
+	},
+	{
+		mutation: "routing.wrong_default_route", answer: AnswerWrongDefaultRoute, difficulty: DifficultyHard,
+		explanation: "The default route was repointed at a second router on the same LAN. That router answers, so the gateway is not unreachable, " +
+			"but it has no path to the internet. The original gateway is still up and still forwarding, which a controlled target reached over its own specific route proves.",
+	},
+	{
+		mutation: "routing.missing_subnet_route", answer: AnswerMissingRoute, difficulty: DifficultyHard,
+		explanation: "The specific route to the target's subnet is gone, so traffic for it falls back to a default route that has no way there. " +
+			"Everything the default does cover — the internet, name resolution — kept working, which is what makes this a route-shaped hole rather than an outage.",
+	},
 }
 
 // challengeRecognition is the contestant's half: what Network Doctor's own
@@ -276,6 +318,23 @@ var challengeRecognition = map[ChallengeAnswer]func(*Diagnosis) bool{
 	AnswerIPv4Failure:    conditionRecognizer(ConditionIPv4InternetUnreachable),
 	AnswerIPv6Failure:    conditionRecognizer(ConditionIPv6InternetUnreachable),
 	AnswerPreferredRoute: causeRecognizer(diagnostic.RouteCausePreferredPathFailed),
+	AnswerTLSHostname:    conditionRecognizer(ConditionTLSHostnameMismatch),
+	AnswerNoDefaultRoute: causeRecognizer(diagnostic.RouteCauseNoDefaultRoute),
+	// The four route causes are one closed vocabulary and each one carries a
+	// different fix, so a wrong default is recognized by its own word and not by
+	// any of the neighbours: no_default_route means there is nothing to point
+	// at, gateway_unreachable means the next hop is dead, preferred_route_failed
+	// means a better route exists to be un-preferred. selected_path_failed is
+	// the only one that says the single route in place has a live gateway and
+	// still goes nowhere.
+	AnswerWrongDefaultRoute: causeRecognizer(diagnostic.RouteCauseSelectedPathFailed),
+	// AnswerRefused, AnswerPortBlocked and AnswerMissingRoute have no entries,
+	// for the same reason AnswerPacketLoss does not. netdoc's target row fails
+	// all three the same way and carries no cause: a refused port, a filtered
+	// one and a target with no route to it are one sentence to it, and there is
+	// no report it could produce that would name any of them. Three challenges
+	// it is going to lose, stated as the vocabulary gap it is.
+	//
 	// AnswerPacketLoss has no entry on purpose. netdoc's cause vocabulary
 	// carries no impairment verdict at all, so there is no report it could
 	// produce that would name observed packet loss — the `packet-loss` control
@@ -360,10 +419,17 @@ func healthyChallengeCondition() challengeCondition {
 // through the environment and an investigator's shell is not, so the two
 // contestants would not be looking at the same network.
 //
-// V1 ids select through this list. Reordering or changing it is a new id
+// V1 and V2 ids select through this list. Reordering or changing it is a new id
 // version — see challengeGenerators.
 var challengeBases = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
 	"tls-valid", "two-path-healthy", "two-path-ipv6-healthy"}
+
+// challengeBasesV3 adds the two-router control. Its client LAN carries a second
+// router that answers but goes nowhere, and a target subnet that only a
+// specific route reaches, which is what a wrong default route and a missing
+// subnet route need to exist at all — no earlier base could express either.
+var challengeBasesV3 = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
+	"tls-valid", "two-path-healthy", "two-path-ipv6-healthy", "two-router-healthy"}
 
 // Challenge is one reproducible puzzle. Everything the player may see before
 // they answer is above the line; Base, Seed, Case and Manifest name the case
@@ -402,6 +468,7 @@ func (c *Challenge) Replay() string { return "netdoc-sim challenge -id " + c.ID 
 var challengeGenerators = map[string]func(id, digits string) (*Challenge, error){
 	"V1": buildChallengeV1,
 	"V2": buildChallengeV2,
+	"V3": buildChallengeV3,
 }
 
 // challengeV1Mutations freezes the conditions V1 ids select through. V1 ids are
@@ -411,6 +478,13 @@ var challengeGenerators = map[string]func(id, digits string) (*Challenge, error)
 // onwards, which is what the version in an id is for.
 var challengeV1Mutations = []string{"dns.drop", "dns.servfail", "family.ipv4_drop", "family.ipv6_drop",
 	"routing.preferred_path_failure", "service.tcp_reset", "service.tls_expired"}
+
+// challengeV2Mutations is the same freeze one version on: V1 plus netem.loss,
+// which is what V2 was published for. It is belt as well as braces — V2 also
+// resolves through the v3 hunt generator, which cannot produce a later family
+// at all — but the freeze is written down rather than inferred, so a future
+// change to either list fails loudly instead of quietly repointing ids.
+var challengeV2Mutations = append([]string{"netem.loss"}, challengeV1Mutations...)
 
 func challengeIDVersions() []string {
 	out := make([]string, 0, len(challengeGenerators))
@@ -483,33 +557,60 @@ func BuildChallenge(raw string) (*Challenge, error) {
 	return challengeGenerators[version](id, digits)
 }
 
+// challengeSelection is everything one id version means: which controls it may
+// draw from, which hunt generator materializes the case, and which conditions
+// it is allowed to set. All three decide what a shared id resolves to, so all
+// three are frozen together per version rather than read from whatever the
+// current build happens to have.
+type challengeSelection struct {
+	bases            []string
+	generatorVersion string
+	selectable       func(string) bool
+}
+
 // buildChallengeV1 is the V1 selection. Frozen — see challengeGenerators. It
 // sees only the conditions that existed when V1 ids were first published.
 func buildChallengeV1(id, digits string) (*Challenge, error) {
-	return buildChallengeCase(id, "V1", digits, func(mutation string) bool {
-		return slices.Contains(challengeV1Mutations, mutation)
+	return buildChallengeCase(id, "V1", digits, challengeSelection{
+		bases: challengeBases, generatorVersion: "v3",
+		selectable: func(mutation string) bool { return slices.Contains(challengeV1Mutations, mutation) },
 	})
 }
 
-// buildChallengeV2 is the current selection: every condition the challenge
-// contract admits, including the ones netdoc has no vocabulary for.
+// buildChallengeV2 is V1 plus netem.loss, on the same controls and the same
+// hunt generator. Frozen for the same reason.
 func buildChallengeV2(id, digits string) (*Challenge, error) {
-	return buildChallengeCase(id, "V2", digits, func(string) bool { return true })
+	return buildChallengeCase(id, "V2", digits, challengeSelection{
+		bases: challengeBases, generatorVersion: "v3",
+		selectable: func(mutation string) bool { return slices.Contains(challengeV2Mutations, mutation) },
+	})
 }
 
-// buildChallengeCase is the selection every version shares. selectable is the
-// only thing a version varies, and it is a question about mutation ids —
-// nothing in this function, or in anything it calls, can reach a diagnosis or
-// challengeRecognition. Eligibility is settled before Network Doctor exists.
-func buildChallengeCase(id, version, digits string, selectable func(string) bool) (*Challenge, error) {
+// buildChallengeV3 is the current selection: the v4 hunt generator, the
+// two-router control, and every condition the challenge contract admits —
+// including the ones netdoc has no vocabulary for.
+func buildChallengeV3(id, digits string) (*Challenge, error) {
+	return buildChallengeCase(id, "V3", digits, challengeSelection{
+		bases: challengeBasesV3, generatorVersion: HuntGeneratorVersion,
+		selectable: func(string) bool { return true },
+	})
+}
+
+// buildChallengeCase is the selection every version shares. The selection is
+// the only thing a version varies, and every part of it is a question about
+// bases and mutation ids — nothing in this function, or in anything it calls,
+// can reach a diagnosis or challengeRecognition. Eligibility is settled before
+// Network Doctor exists.
+func buildChallengeCase(id, version, digits string, selection challengeSelection) (*Challenge, error) {
 	seed := challengeSeed(version, digits)
 	rng := mathrand.New(mathrand.NewSource(seed))
 	if rng.Intn(challengeHealthyOdds) == 0 {
-		base := challengeBases[rng.Intn(len(challengeBases))]
-		return healthyChallenge(id, base, seed, ChallengeDifficulties[rng.Intn(len(ChallengeDifficulties))])
+		base := selection.bases[rng.Intn(len(selection.bases))]
+		return healthyChallenge(id, base, seed, selection.generatorVersion,
+			ChallengeDifficulties[rng.Intn(len(ChallengeDifficulties))])
 	}
 	for attempt := 0; attempt < challengeSearchLimit; attempt++ {
-		base := challengeBases[rng.Intn(len(challengeBases))]
+		base := selection.bases[rng.Intn(len(selection.bases))]
 		caseNumber := rng.Intn(HuntMaxCaseNumber + 1)
 		scenario, err := LibraryScenario(base)
 		if err != nil {
@@ -517,12 +618,12 @@ func buildChallengeCase(id, version, digits string, selectable func(string) bool
 		}
 		// One mutation, always: a challenge with two faults would have two
 		// defensible answers and no honest way to score either.
-		generated, err := GenerateHuntCase(base, scenario, seed, caseNumber, 1)
+		generated, err := generateHuntCase(selection.generatorVersion, base, scenario, seed, caseNumber, 1)
 		if err != nil || len(generated.Manifest.Mutations) != 1 {
 			continue
 		}
 		condition, ok := challengeConditionFor(generated.Manifest.Mutations[0].ID)
-		if !ok || !selectable(condition.mutation) {
+		if !ok || !selection.selectable(condition.mutation) {
 			continue
 		}
 		// Asked of the unmutated base, which is where the target the fault
@@ -538,7 +639,7 @@ func buildChallengeCase(id, version, digits string, selectable func(string) bool
 // healthyChallenge is the base scenario with nothing done to it. It carries an
 // ordinary manifest with an empty mutation list so the reproduction artifact,
 // the fingerprint and the truth rules stay one shape.
-func healthyChallenge(id, base string, seed int64, difficulty string) (*Challenge, error) {
+func healthyChallenge(id, base string, seed int64, generatorVersion, difficulty string) (*Challenge, error) {
 	scenario, err := LibraryScenario(base)
 	if err != nil {
 		return nil, err
@@ -547,7 +648,7 @@ func healthyChallenge(id, base string, seed int64, difficulty string) (*Challeng
 	if err := scenario.Validate(); err != nil {
 		return nil, fmt.Errorf("challenge base %s: %w", base, err)
 	}
-	manifest := GeneratedCaseManifest{GeneratorVersion: HuntGeneratorVersion, BaseScenario: base,
+	manifest := GeneratedCaseManifest{GeneratorVersion: generatorVersion, BaseScenario: base,
 		HuntSeed: seed, Case: -1, CaseSeed: seed, Mutations: []GeneratedMutation{}}
 	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
 	return newChallenge(id, base, seed, -1, difficulty, manifest, scenario, healthyChallengeCondition())
@@ -857,7 +958,13 @@ func challengeTruth(c *Challenge, report *Report) ChallengeTruth {
 //	dns.servfail, dns.drop              → the resolver's own per-query outcomes
 //	service.tcp_reset                   → the target service's own reset records
 //	service.tls_expired                 → the TLS services' own handshake records
+//	service.tls_hostname_mismatch       → the same handshake records, name half
 //	netem.loss                          → the path shapers' own drop counters
+//	service.connection_refused          → the client's own dial of the target
+//	service.tcp_port_blocked            → the filter's own kernel drop counter
+//	routing.missing_subnet_route        → the client's own dial of the target
+//	routing.no_default_route            → the client's own kernel route table
+//	routing.wrong_default_route         → family reachability, measured at this node
 //
 // TestHealthyChallengeCoversEveryCondition keeps that list and
 // challengeConditions in step.
@@ -881,8 +988,20 @@ func healthyObserved(c *Challenge, report *Report, observed ObservedTruth) (stri
 		return "the simulator took no reachability measurement it could call healthy", false
 	}
 	for _, item := range report.Evidence.ControlledTargets {
-		if item.From == c.Node && !item.Reachable {
-			return "the simulator could not reach its controlled target " + item.To + ", so this network was not healthy", false
+		if item.From != c.Node || item.Reachable {
+			continue
+		}
+		if item.Outcome == TargetStateRefused {
+			return "the simulator's own connection to " + item.To + " was refused, so this network was not healthy", false
+		}
+		return "the simulator could not reach its controlled target " + item.To + ", so this network was not healthy", false
+	}
+	// Every family the client has an address in has to still have a way out. A
+	// table that was read and holds no default is the no_default_route condition
+	// exactly, and reading it here is what stops that fault passing for health.
+	for _, table := range report.Evidence.RouteTables {
+		if table.Node == c.Node && len(defaultRoutesIn(table.Routes)) == 0 {
+			return "the client's " + table.Family + " routing table held no default route, so this network was not healthy", false
 		}
 	}
 	for _, route := range report.Evidence.Routes {
@@ -902,6 +1021,16 @@ func healthyObserved(c *Challenge, report *Report, observed ObservedTruth) (stri
 	// would make a working network unscoreable.
 	if anyExpiredCertificateRejected(report.Evidence) {
 		return "the simulator observed a client refusing an expired certificate, so this network was not healthy", false
+	}
+	if anyMismatchedCertificateRejected(report.Evidence) {
+		return "the simulator observed a client refusing a certificate issued for another name, so this network was not healthy", false
+	}
+	// A counted TCP drop is the tcp_port_blocked condition itself. Same reading,
+	// so the two cannot disagree about one run.
+	for _, drop := range report.Evidence.PacketDrops {
+		if droppedInbound(drop, "tcp", drop.Port) {
+			return "the simulator counted discarded inbound TCP packets at " + drop.Node + ", so this network was not healthy", false
+		}
 	}
 	if observed.Link == "down" {
 		return "the simulator observed a link that was down, so this network was not healthy", false
@@ -931,7 +1060,27 @@ func challengeEvidence(c *Challenge, report *Report, observed ObservedTruth) []s
 		if item.From != c.Node {
 			continue
 		}
-		out = append(out, "controlled target "+item.To+": "+reachableWord(item.Reachable)+viaSuffix(item.Via))
+		// The dial's own word, not the bool: "refused" and "unreachable" are the
+		// two answers this block exists to keep apart, and collapsing them here
+		// would hide the difference the scoring turned on.
+		out = append(out, "controlled target "+item.To+": "+item.Outcome+viaSuffix(item.Via))
+	}
+	// The client's real routing table, which is the only line that can show an
+	// absence — no default at all, or no specific route to where the target is.
+	for _, table := range report.Evidence.RouteTables {
+		if table.Node != c.Node {
+			continue
+		}
+		defaults := defaultRoutesIn(table.Routes)
+		line := table.Family + " default routes in the client's own table: none"
+		if len(defaults) > 0 {
+			var vias []string
+			for _, route := range defaults {
+				vias = append(vias, route.Via)
+			}
+			line = table.Family + " default routes in the client's own table: " + strings.Join(vias, ", ")
+		}
+		out = append(out, line, fmt.Sprintf("%s routes in the client's own table: %d", table.Family, len(table.Routes)))
 	}
 	// One line per gateway, not per destination: the client selects the same
 	// route for every controlled endpoint, and repeating it reads as two

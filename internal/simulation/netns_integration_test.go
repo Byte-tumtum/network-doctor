@@ -934,6 +934,117 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("HTTP 503 diagnosis = %+v", out)
 			}
 		}},
+		// The two target-port families, run against real kernels because that is
+		// the only place the distinction exists: one host resets the SYN, the
+		// other counts it and says nothing. Each case checks that it produced its
+		// own evidence and that it did not produce the other's.
+		{"service.connection_refused", "healthy", true, "", func(t *testing.T, control, rep Report) {
+			if tcp := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("working target control = %+v", tcp)
+			}
+			out := rep.Tests[0]
+			if diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "FAIL" ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" ||
+				diagnosisCheck(out, string(diagnostic.ProbeDNS)).Status != "PASS" {
+				t.Errorf("a closed port took more than the target down: %+v", out)
+			}
+			if outcome, ok := controlledTargetOutcome(rep.Evidence, "client", "10.77.0.20:80"); !ok ||
+				outcome != TargetStateRefused {
+				t.Errorf("the closed port did not answer with a refusal: %+v", rep.Evidence.ControlledTargets)
+			}
+			if len(rep.Evidence.PacketDrops) != 0 {
+				t.Errorf("a refusal counted discarded packets: %+v", rep.Evidence.PacketDrops)
+			}
+		}},
+		{"service.tcp_port_blocked", "healthy", true, "", func(t *testing.T, control, rep Report) {
+			if tcp := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("working target control = %+v", tcp)
+			}
+			out := rep.Tests[0]
+			if diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "FAIL" ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" {
+				t.Errorf("a filtered port took more than the target down: %+v", out)
+			}
+			if !tcpPortDroppedAt(rep.Evidence, "server", 80) {
+				t.Errorf("the filter's own counter stayed at zero: %+v", rep.Evidence.PacketDrops)
+			}
+			// The half that keeps it out of the refusal family: the dial timed
+			// out, it was not answered.
+			if outcome, ok := controlledTargetOutcome(rep.Evidence, "client", "10.77.0.20:80"); !ok ||
+				outcome != FamilyStateUnreachable {
+				t.Errorf("a filtered port answered: %+v", rep.Evidence.ControlledTargets)
+			}
+		}},
+		{"service.tls_hostname_mismatch", "tls-valid", true, ConditionTLSHostnameMismatch, func(t *testing.T, control, rep Report) {
+			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" {
+				t.Errorf("valid TLS control = %+v", tls)
+			}
+			out := rep.Tests[0]
+			if tls := diagnosisCheck(out, string(diagnostic.ProbeTLS)); tls.Status != "FAIL" ||
+				tls.Cause != diagnostic.TLSCauseHostnameMismatch {
+				t.Errorf("name-mismatch diagnosis = %+v", tls)
+			}
+			if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+				t.Errorf("the certificate change also broke TCP: %+v", tcp)
+			}
+			if !hasTLSEvidence(rep, TLSCertificateHostnameMismatch, "secure-target.test", tlsMismatchedDNSName,
+				true, "client_rejected_certificate") {
+				t.Errorf("no name-mismatch rejection evidence: %+v", rep.Evidence.TLS)
+			}
+			if anyExpiredCertificateRejected(rep.Evidence) {
+				t.Error("a name mismatch also established the expired condition")
+			}
+		}},
+		// The three routing families, on the control that can express all of
+		// them. Each one is checked against the kernel's own route table, which
+		// is the only reading that can show a route is absent.
+		{"routing.no_default_route", "two-router-healthy", true, ConditionIPv4InternetUnreachable, func(t *testing.T, control, rep Report) {
+			if before, ok := kernelRouteTable(control.Evidence, "client", "ipv4"); !ok || len(defaultRoutesIn(before)) != 1 {
+				t.Errorf("the control did not start with one default route: %+v", before)
+			}
+			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
+			if !ok || len(defaultRoutesIn(after)) != 0 {
+				t.Errorf("the default route survived: %+v", after)
+			}
+			if len(after) == 0 {
+				t.Error("the whole table went, which is a dead link rather than a missing default")
+			}
+			if internet := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)); internet.Cause != diagnostic.RouteCauseNoDefaultRoute {
+				t.Errorf("no-default-route diagnosis = %+v", internet)
+			}
+		}},
+		{"routing.wrong_default_route", "two-router-healthy", true, ConditionIPv4InternetUnreachable, func(t *testing.T, control, rep Report) {
+			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
+			defaults := defaultRoutesIn(after)
+			if !ok || len(defaults) != 1 || defaults[0].Via != "10.80.1.254" {
+				t.Errorf("the default route did not move to the on-link router that goes nowhere: %+v", after)
+			}
+			// The control that separates this from an outage past the gateway.
+			if outcome, ok := controlledTargetOutcome(rep.Evidence, "client", "10.80.2.20:80"); !ok ||
+				outcome != FamilyStateReachable {
+				t.Errorf("the original next hop stopped forwarding, so this run is an outage: %+v",
+					rep.Evidence.ControlledTargets)
+			}
+			if internet := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeInternet)); internet.Cause != diagnostic.RouteCauseSelectedPathFailed {
+				t.Errorf("wrong-default-route diagnosis = %+v", internet)
+			}
+		}},
+		{"routing.missing_subnet_route", "two-router-healthy", true, "", func(t *testing.T, control, rep Report) {
+			if before, ok := kernelRouteTable(control.Evidence, "client", "ipv4"); !ok ||
+				!specificRouteCovering(before, "10.80.3.20") {
+				t.Errorf("the control did not start with the specific route: %+v", before)
+			}
+			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
+			if !ok || specificRouteCovering(after, "10.80.3.20") || len(defaultRoutesIn(after)) != 1 {
+				t.Errorf("the route-shaped hole is not what the table shows: %+v", after)
+			}
+			out := rep.Tests[0]
+			if diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)).Status != "FAIL" ||
+				diagnosisCheck(out, string(diagnostic.ProbeInternet)).Status != "PASS" ||
+				diagnosisCheck(out, string(diagnostic.ProbeDNS)).Status != "PASS" {
+				t.Errorf("a missing subnet route took the internet with it: %+v", out)
+			}
+		}},
 	}
 	controls := map[string]Report{}
 	for _, tc := range tests {

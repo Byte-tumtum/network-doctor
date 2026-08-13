@@ -565,6 +565,31 @@ func TestHealthyChallengeCoversEveryCondition(t *testing.T) {
 			r.Evidence.PacketConditions = []PacketConditionEvidence{{Node: "gateway", Segment: "upstream",
 				LossPercent: 12, Active: true, DroppedPackets: 7}}
 		},
+		"service.connection_refused": func(r *Report) {
+			r.Evidence.ControlledTargets = []ControlledTargetEvidence{
+				{From: challenge.Node, To: "10.77.0.20:80", Family: "ipv4", Outcome: TargetStateRefused}}
+		},
+		"service.tcp_port_blocked": func(r *Report) {
+			r.Evidence.PacketDrops = []PacketDropEvidence{{Node: "target", Protocol: "tcp", Port: 80,
+				Direction: DirectionInbound, Packets: 3}}
+		},
+		"service.tls_hostname_mismatch": func(r *Report) {
+			r.Evidence.TLS = []TLSEvidence{{Node: "target", Service: "tls-target",
+				CertificateMode: TLSCertificateHostnameMismatch, RequestedServer: "secure-target.test",
+				CertificateDNS: []string{"somewhere-else.test"}, CertificatePresented: true,
+				Result: "client_rejected_certificate", Count: 1}}
+		},
+		"routing.no_default_route": func(r *Report) {
+			r.Evidence.RouteTables = []RouteTableEvidence{{Node: challenge.Node, Family: "ipv4",
+				Routes: []KernelRoute{{Destination: "10.77.0.0/24", Segment: "client-lan"}}}}
+		},
+		"routing.wrong_default_route": func(r *Report) {
+			r.Evidence.FamilyReachability[0].State = FamilyStateUnreachable
+		},
+		"routing.missing_subnet_route": func(r *Report) {
+			r.Evidence.ControlledTargets = []ControlledTargetEvidence{
+				{From: challenge.Node, To: "10.77.3.20:80", Family: "ipv4", Outcome: FamilyStateUnreachable}}
+		},
 	}
 	for _, condition := range challengeConditions {
 		if condition.mutation == "" {
@@ -637,6 +662,28 @@ func TestChallengeRecognizesNetdocsOwnVocabulary(t *testing.T) {
 		{"routing.preferred_path_failure",
 			[]*Diagnosis{fail("route", "preferred_route_failed")},
 			[]*Diagnosis{healthy, fail("route", "gateway_unreachable"), fail("route", "no_default_route")}},
+		// The name half of a certificate failure, and deliberately not the date
+		// half: an expired-certificate verdict sends the user to check a clock
+		// for a certificate whose dates are fine.
+		{"service.tls_hostname_mismatch",
+			[]*Diagnosis{fail("tls", "hostname_mismatch"), fail("https", "hostname_mismatch")},
+			[]*Diagnosis{healthy, fail("tls", "certificate_expired"), fail("tls", "untrusted_issuer"),
+				fail("tls", "tls_handshake_failure"), fail("tls", "tcp_unreachable")}},
+		// The four route causes are one closed vocabulary, so each of these
+		// rejects the other three by name rather than by being merely different.
+		{"routing.no_default_route",
+			[]*Diagnosis{fail("internet_tcp", "no_default_route"), fail("route", "no_default_route")},
+			[]*Diagnosis{healthy, fail("internet_tcp", "selected_path_failed"),
+				fail("internet_tcp", "preferred_route_failed"), fail("internet_tcp", "gateway_unreachable"),
+				fail("internet_tcp", "")}},
+		{"routing.wrong_default_route",
+			[]*Diagnosis{fail("internet_tcp", "selected_path_failed"),
+				{Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "WARN", Cause: "selected_path_failed"}}}},
+			[]*Diagnosis{healthy, fail("internet_tcp", "no_default_route"),
+				fail("internet_tcp", "preferred_route_failed"), fail("internet_tcp", "gateway_unreachable"),
+				fail("internet_tcp", "ipv4_unreachable"), fail("internet_tcp", ""),
+				// A cause on a passing row is context, not a diagnosis.
+				{Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "PASS", Cause: "selected_path_failed"}}}}},
 	} {
 		condition, ok := challengeConditionFor(tt.mutation)
 		if !ok {

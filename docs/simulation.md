@@ -223,6 +223,16 @@ node `interfaces`, and validated `routes`; see
 is the focused hunt control for two IPv4 defaults: ordinary traffic selects the
 lower-metric preferred router, while a controlled literal target independently
 proves the higher-metric alternate path.
+[`two-router-healthy.yaml`](../internal/simulation/scenarios/two-router-healthy.yaml)
+is the control for the single-default route faults. Its client LAN carries two
+routers with different jobs — one holds the default out to the internet, the
+other a specific route to the target's subnet — which is what makes "the
+default points at the wrong on-link router" and "the specific route is missing"
+expressible at all, and distinguishable from each other. Its second client test
+is a controlled literal behind the internet router, reached over its own
+specific route: that endpoint keeps answering when the default is repointed,
+which is how a wrong default route is told apart from the network beyond the
+gateway simply being down.
 Dual-stack scenarios use `ipv4` and `ipv6` on the same segment and interface;
 see
 [`dual-stack-healthy.yaml`](../internal/simulation/scenarios/dual-stack-healthy.yaml).
@@ -434,6 +444,45 @@ selected preferred family path to be unreachable and the controlled target on
 the distinct higher-metric alternate path to remain reachable; successful
 link-down application alone is insufficient.
 
+### Generator versions
+
+The mutation registry is versioned, because adding an operator to it changes
+which mutation every existing case number lands on: selection draws from a
+permutation of the applicable operators, so a longer or reordered list repoints
+cases that published artifacts already name. `HuntGeneratorVersion` is the
+current one and `huntGeneratorVersions` lists every version this build can
+still materialize. Each operator carries the version it first appeared in, and
+an older generator is simply the registry truncated there — which is why new
+operators are appended and never interleaved. Case seeds are not versioned:
+`v3` and `v4` draw the same numbers and differ exactly where the operator list
+does. `TestHuntGeneratorVersion3Reproduction` pins the older generator against
+a fixed manifest.
+
+### Route tables, and telling absences apart
+
+Three families are about a route that is not there, and none of them can be
+established from reachability. `RouteEvidence` answers "where does this
+destination go"; `RouteTableEvidence` is the different reading of "what routes
+exist at all", taken with `ip route show` from inside the node at the end of
+the run and recorded for every family the node has an address in. An empty
+`routes` list is therefore the positive statement that the table was read and
+held nothing, which is what `routing.no_default_route` needs — and a record
+being absent means nobody looked, which never establishes anything.
+
+`routing.wrong_default_route` needs one thing more, because a default that goes
+nowhere and a network that is broken past the gateway look identical from the
+client: the control endpoint behind the original next hop, reached over its own
+specific route, has to still answer. That is what says the old gateway still
+forwards and only the choice of default changed.
+
+Two more families are about a port rather than a route, and they are each
+other's negative. `ControlledTargetEvidence` now carries the outcome of the
+simulator's own dial rather than only whether it worked, because a reset and a
+timeout are different faults with different fixes and the dialing end is the
+only place the difference is visible. `service.connection_refused` requires the
+dial to have been refused and no drop counter to have matched; `service.tcp_port_blocked` requires the opposite of both. Neither can be established by
+a dial that merely failed, and a run cannot satisfy both.
+
 ## Challenge Mode
 
 `netdoc-sim challenge` is the hunt with the contestants swapped: instead of the
@@ -443,8 +492,8 @@ answers are graded against the same independently observed truth.
 ```sh
 ./netdoc-sim challenge                       # draw one and play it
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V2-8F42C1          # replay someone else's
-./netdoc-sim challenge -id V2-8F42C1 -answer dns_failure -json
+./netdoc-sim challenge -id V3-8F42C1          # replay someone else's
+./netdoc-sim challenge -id V3-8F42C1 -answer dns_failure -json
 ```
 
 One command runs the whole session: it builds the network, opens a shell in the
@@ -457,7 +506,7 @@ handed different networks.
 
 ### Challenge ids
 
-A challenge id is `V2-8F42C1`: a generator version and six hex digits. It
+A challenge id is `V3-8F42C1`: a generator version and six hex digits. It
 resolves with no state on disk and no network, so the same id is the same
 puzzle on anyone's machine. A bare `8F42C1` is accepted and always means `V1`,
 which was the only form the first release printed.
@@ -471,9 +520,12 @@ instead, leaving old ids resolving through the rules they were minted under.
 fails if the chain moves under them.
 
 `V2` exists because the contract below admitted `netem.loss`, a condition V1 had
-excluded. `V1` ids keep resolving through `challengeV1Mutations`, the frozen
-list of conditions V1 was published with, so an id someone shared before the
-change still sets the puzzle they played.
+excluded. `V3` exists because six more conditions were added to the hunt
+registry — a refused port, a filtered one, a certificate name mismatch, and the
+three single-default route faults — along with the `two-router-healthy` control
+two of them need. Each earlier version keeps its own frozen condition list and
+its own hunt generator version, so an id someone shared before a change still
+sets the puzzle they played.
 
 ### The challenge contract
 
@@ -540,6 +592,9 @@ above, the difficulty metadata, and the matchup.
 `internal/simulation/challenge.go` is authoritative for all four, and keeps them
 in two tables that never read each other: `challengeConditions` is what the
 simulator can prove, `challengeRecognition` is what netdoc's report has to say.
+A version's whole meaning — controls, hunt generator, admitted conditions —
+lives in one `challengeSelection`, so nothing a version resolves through can
+drift out from under an id that was already shared.
 Protocol meaning stays where it belongs — TCP reset is recognized by netdoc's
 own `connection_reset` cause and nothing looser, because a generic "the run
 failed somehow" comparison would score netdoc correct for naming a different

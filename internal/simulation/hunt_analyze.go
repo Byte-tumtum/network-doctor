@@ -354,8 +354,120 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 		})
 	case "routing.preferred_path_failure":
 		return preferredPathFailureObserved(mutation, report)
+	// The refusal and the filter are one another's negative. Each demands the
+	// evidence that rules the other out, so no run can satisfy both and neither
+	// can be established by a dial that merely failed.
+	case "service.connection_refused":
+		outcome, observed := controlledTargetOutcome(report.Evidence, observedClient(report), mutation.TargetEndpoint)
+		return observed && outcome == TargetStateRefused && !tcpPortDroppedAt(report.Evidence, mutation.Node, mutation.TargetPort)
+	case "service.tcp_port_blocked":
+		outcome, observed := controlledTargetOutcome(report.Evidence, observedClient(report), mutation.TargetEndpoint)
+		return observed && outcome == FamilyStateUnreachable && tcpPortDroppedAt(report.Evidence, mutation.Node, mutation.TargetPort)
+	case "service.tls_hostname_mismatch":
+		return mismatchedCertificateRejectedAt(report.Evidence, mutation.Node, mutation.Service)
+	case "routing.no_default_route":
+		return noDefaultRouteObserved(mutation, report)
+	case "routing.wrong_default_route":
+		return wrongDefaultRouteObserved(mutation, report)
+	case "routing.missing_subnet_route":
+		return missingSubnetRouteObserved(mutation, report)
 	}
 	return false
+}
+
+// noDefaultRouteObserved wants the table to be empty of defaults and the family
+// those defaults served to be dead. The table alone is a configuration reading;
+// the reachability alongside it is what says the missing route mattered.
+func noDefaultRouteObserved(mutation GeneratedMutation, report *Report) bool {
+	routes, read := kernelRouteTable(report.Evidence, mutation.Node, mutation.Family)
+	return read && len(defaultRoutesIn(routes)) == 0 &&
+		familyStateAt(report, mutation.Node, mutation.Family) == FamilyStateUnreachable
+}
+
+// wrongDefaultRouteObserved is the one family where "the family is unreachable"
+// is nowhere near enough: a downstream outage looks identical from the client.
+// What makes it a wrong turn rather than a broken path is the control endpoint
+// — reached over its own specific route through the next hop the default used
+// to name — still answering. That proves the original gateway forwards, the
+// network beyond it works, and the only thing that changed is where the default
+// points.
+func wrongDefaultRouteObserved(mutation GeneratedMutation, report *Report) bool {
+	if mutation.RouteVia == "" || mutation.PreferredVia == "" || mutation.RouteVia == mutation.PreferredVia ||
+		mutation.ControlTarget == "" {
+		return false
+	}
+	routes, read := kernelRouteTable(report.Evidence, mutation.Node, mutation.Family)
+	if !read {
+		return false
+	}
+	defaults := defaultRoutesIn(routes)
+	if len(defaults) != 1 || defaults[0].Via != mutation.RouteVia || !sameName(mutation.PreferredSegment, defaults[0].Segment) {
+		return false
+	}
+	// A next hop that does not answer is an unreachable gateway, which is a
+	// different fault with a different fix.
+	if !selectedGatewayReachable(report, mutation.Node, mutation.Family, mutation.RouteVia) {
+		return false
+	}
+	outcome, observed := controlledTargetOutcome(report.Evidence, mutation.Node, mutation.ControlTarget)
+	return observed && outcome == FamilyStateReachable &&
+		controlReachedVia(report, mutation.Node, mutation.ControlTarget, mutation.PreferredVia) &&
+		familyStateAt(report, mutation.Node, mutation.Family) == FamilyStateUnreachable
+}
+
+// missingSubnetRouteObserved proves the route-specific defect rather than the
+// target simply being unreachable: no route but the default covers the briefed
+// address, that address does not answer, and the internet the default carries
+// is still fine. The last clause is what stops a dead default from wearing this
+// name.
+func missingSubnetRouteObserved(mutation GeneratedMutation, report *Report) bool {
+	if mutation.TargetEndpoint == "" || mutation.RouteDestination == "" || defaultDestination(mutation.RouteDestination) {
+		return false
+	}
+	routes, read := kernelRouteTable(report.Evidence, mutation.Node, mutation.Family)
+	if !read || len(defaultRoutesIn(routes)) == 0 {
+		return false
+	}
+	address, _, found := strings.Cut(mutation.TargetEndpoint, ":")
+	if !found || specificRouteCovering(routes, address) {
+		return false
+	}
+	outcome, observed := controlledTargetOutcome(report.Evidence, mutation.Node, mutation.TargetEndpoint)
+	if !observed || outcome == FamilyStateReachable {
+		return false
+	}
+	control, controlObserved := controlledTargetOutcome(report.Evidence, mutation.Node, mutation.ControlTarget)
+	return controlObserved && control == FamilyStateReachable &&
+		familyStateAt(report, mutation.Node, mutation.Family) == FamilyStateReachable
+}
+
+// familyStateAt repeats the one measured record for this node and family, and
+// invents nothing: no record, or two that disagree, is unknown.
+func familyStateAt(report *Report, node, family string) string {
+	state := ""
+	for _, item := range report.Evidence.FamilyReachability {
+		if !sameName(node, item.Node) || !sameName(family, item.Family) {
+			continue
+		}
+		if state != "" {
+			return ""
+		}
+		state = item.State
+	}
+	return state
+}
+
+func selectedGatewayReachable(report *Report, node, family, via string) bool {
+	return slices.ContainsFunc(report.Evidence.Routes, func(route RouteEvidence) bool {
+		return sameName(node, route.Node) && sameName(family, route.Family) && route.Selected &&
+			sameName(via, route.Via) && route.GatewayReachable != nil && *route.GatewayReachable
+	})
+}
+
+func controlReachedVia(report *Report, node, endpoint, via string) bool {
+	return slices.ContainsFunc(report.Evidence.ControlledTargets, func(item ControlledTargetEvidence) bool {
+		return sameName(node, item.From) && sameName(endpoint, item.To) && slices.Contains(item.Via, via)
+	})
 }
 
 func preferredPathFailureObserved(mutation GeneratedMutation, report *Report) bool {

@@ -812,11 +812,12 @@ func TestScheduledFaultThatReachedNobodyIsNotObserved(t *testing.T) {
 var huntFamilyPath = map[string]string{
 	// Generic: independently observed truth reconciled against one diagnosis by
 	// the condition oracle, with no protocol code in the comparison itself.
-	"family.ipv4_drop":      "generic",
-	"family.ipv6_drop":      "generic",
-	"service.tls_expired":   "generic",
-	"proxy.connect_refused": "generic",
-	"quic.udp_443_block":    "generic",
+	"family.ipv4_drop":              "generic",
+	"family.ipv6_drop":              "generic",
+	"service.tls_expired":           "generic",
+	"service.tls_hostname_mismatch": "generic",
+	"proxy.connect_refused":         "generic",
+	"quic.udp_443_block":            "generic",
 	// Bespoke: the finding depends on meaning a state comparison cannot carry —
 	// DNS needs the last query per service rather than any query, and a reset
 	// is a coverage gap about classification rather than a missed fault.
@@ -834,6 +835,25 @@ var huntFamilyPath = map[string]string{
 	"routing.preferred_path_failure": "no_finding",
 	"encrypted_dns.doh_invalid":      "no_finding",
 	"http.status_503":                "no_finding",
+	// The three families netdoc has no vocabulary for. Its target row fails the
+	// same way with no cause for a refused port, a filtered one and a target
+	// with no route, so there is nothing for a finding to accuse it of missing;
+	// Challenge Mode scores them unrecognized instead, which is where that gap
+	// is reported.
+	"service.connection_refused":   "no_finding",
+	"service.tcp_port_blocked":     "no_finding",
+	"routing.missing_subnet_route": "no_finding",
+	// The two default-route families have no finding of their own, and stay out
+	// of the oracle, because neither condition is establishable from unscoped
+	// evidence: a client with no default and a client whose one default goes
+	// nowhere are facts about a route table that only the mutation's own scope
+	// can tie to the route that changed. What the hunt notices about them is
+	// the family-reachability condition, which is the family drops' rule and
+	// fires here for the same honest reason — the internet really is gone.
+	// Challenge Mode is where the route distinction is graded, against netdoc's
+	// own route causes.
+	"routing.no_default_route":    "no_finding",
+	"routing.wrong_default_route": "no_finding",
 }
 
 // TestEveryMutationFamilyDeclaresItsHuntPath keeps the classification honest in
@@ -871,6 +891,7 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 		{"family.ipv4_drop", ConditionIPv4InternetUnreachable},
 		{"family.ipv6_drop", ConditionIPv6InternetUnreachable},
 		{"service.tls_expired", ConditionTLSCertificateExpired},
+		{"service.tls_hostname_mismatch", ConditionTLSHostnameMismatch},
 		{"proxy.connect_refused", ConditionProxyDestinationRefused},
 		{"quic.udp_443_block", ConditionQUICUDP443Blocked},
 	} {
@@ -885,7 +906,7 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 	for condition := range conditions {
 		t.Errorf("oracle condition %q is claimed by no mutation family", condition)
 	}
-	if len(generic) != 5 {
-		t.Errorf("generic families = %v, want the five the oracle defines conditions for", generic)
+	if len(generic) != 6 {
+		t.Errorf("generic families = %v, want the six the oracle defines conditions for", generic)
 	}
 }

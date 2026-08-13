@@ -744,31 +744,36 @@ func (np *nodeProc) setDNSOutcome(ctx context.Context, service, outcome string, 
 // namespace. The holder is simulator-owned and never sees netdoc's report, so
 // what it answers is an observation of the simulated network rather than a
 // restatement of the diagnosis.
-func (np *nodeProc) probeTCP(ctx context.Context, address string, port int, timeout time.Duration) (bool, error) {
+// It answers with one of FamilyStateReachable, TargetStateRefused or
+// FamilyStateUnreachable — the three outcomes a TCP connection attempt can
+// actually have, kept apart because a reset and a timeout are different faults.
+func (np *nodeProc) probeTCP(ctx context.Context, address string, port int, timeout time.Duration) (string, error) {
 	if np.stdin == nil || np.stdout == nil {
-		return false, errors.New("node holder is not running")
+		return "", errors.New("node holder is not running")
 	}
 	np.mu.Lock()
 	defer np.mu.Unlock()
 	if np.stopped {
-		return false, errors.New("node holder has already stopped")
+		return "", errors.New("node holder has already stopped")
 	}
 	request := strings.Join([]string{holderProbeCommand, address, strconv.Itoa(port),
 		strconv.FormatInt(timeout.Milliseconds(), 10)}, " ")
 	if _, err := io.WriteString(np.stdin, request+"\n"); err != nil {
-		return false, err
+		return "", err
 	}
 	got, err := np.reply(ctx, holderProbeResult)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	switch got {
 	case holderProbeResult + " " + holderProbeReached:
-		return true, nil
+		return FamilyStateReachable, nil
+	case holderProbeResult + " " + holderProbeRefused:
+		return TargetStateRefused, nil
 	case holderProbeResult + " " + holderProbeFailed:
-		return false, nil
+		return FamilyStateUnreachable, nil
 	}
-	return false, fmt.Errorf("holder answered %q to a reachability probe", got)
+	return "", fmt.Errorf("holder answered %q to a reachability probe", got)
 }
 
 func (np *nodeProc) checkEvidence(ctx context.Context) error {

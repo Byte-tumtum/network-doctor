@@ -20,7 +20,8 @@ func loadHuntBase(t testing.TB, name string) *Scenario {
 
 func TestHuntMutationRegistryOrder(t *testing.T) {
 	wantBases := []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
-		"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy", "two-path-ipv6-healthy"}
+		"socks5h-remote-dns-succeeds", "tls-valid", "two-path-healthy", "two-path-ipv6-healthy",
+		"two-router-healthy"}
 	if got := HuntBaseNames(); !reflect.DeepEqual(got, wantBases) {
 		t.Fatalf("hunt bases = %v, want sorted %v", got, wantBases)
 	}
@@ -31,6 +32,10 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 		"encrypted_dns.doh_invalid", "http.status_503",
 		"family.ipv4_drop", "family.ipv6_drop", "link.transient_down",
 		"routing.preferred_path_failure",
+		// v4, appended. Order is the contract: an older generator is this list
+		// truncated at its own version, so a new id may only ever go last.
+		"service.connection_refused", "service.tcp_port_blocked", "service.tls_hostname_mismatch",
+		"routing.no_default_route", "routing.wrong_default_route", "routing.missing_subnet_route",
 	}
 	got := make([]string, len(huntMutationRegistry))
 	for i := range huntMutationRegistry {
@@ -352,7 +357,7 @@ func TestHuntCaseGenerationIsIndependentAndDeterministic(t *testing.T) {
 }
 
 func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
-	generated, err := GenerateHuntCase("healthy-routed-network", loadHuntBase(t, "healthy-routed-network"), 12345, 76, 2)
+	generated, err := generateHuntCase("v3", "healthy-routed-network", loadHuntBase(t, "healthy-routed-network"), 12345, 76, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

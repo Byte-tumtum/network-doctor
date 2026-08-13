@@ -463,7 +463,7 @@ answers are judged against the simulator's independently observed ground truth.
 ```sh
 ./netdoc-sim challenge                  # draw a challenge and play it
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V2-8F42C1    # play the one a friend sent you
+./netdoc-sim challenge -id V3-8F42C1    # play the one a friend sent you
 ```
 
 You land in a shell inside the broken machine. Use `ping`, `dig`, `curl`, `ip
@@ -485,11 +485,11 @@ check marks and never names the fault, so sharing your result doesn't spoil the
 puzzle for whoever plays it next:
 
 ```text
-Network Doctor Challenge V2-8F42C1 (hard)
+Network Doctor Challenge V3-8F42C1 (hard)
 Me:             ✓
 Network Doctor: ✗
 YOU BEAT NETWORK DOCTOR in 1m 47s
-Your turn: netdoc-sim challenge -id V2-8F42C1
+Your turn: netdoc-sim challenge -id V3-8F42C1
 ```
 
 Everything is local and reproducible: no account, no server, no leaderboard. A
