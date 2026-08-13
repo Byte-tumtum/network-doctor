@@ -85,11 +85,25 @@ const (
 	AnswerPacketLoss        ChallengeAnswer = "packet_loss"
 )
 
-// ChallengeAnswerInfo is one menu entry.
+// ChallengeAnswerInfo is one menu entry: the internal identity, the name a
+// person reads, and the words a person is allowed to type for it.
+//
+// ID and Label are deliberately separate. ID is what a saved result, a
+// recognizer table and a script are keyed by, so it may never change; Label is
+// prose aimed at whoever is reading the menu, so it may be reworded whenever it
+// reads badly. Using the label as the key would make every wording improvement a
+// breaking change to the JSON.
 type ChallengeAnswerInfo struct {
 	ID    ChallengeAnswer `json:"id"`
 	Label string          `json:"label"`
 	Help  string          `json:"help,omitempty"`
+	// Aliases are the extra spellings ChallengeAnswerByName accepts. Each one is
+	// a deliberate choice, not a fuzzy match: the shorthand a person types at a
+	// terminal, and the term they would have used if this taxonomy had split the
+	// condition more finely than it does. They are matched whole, never as a
+	// prefix or a substring, because an answer selected by resemblance is a
+	// diagnosis nobody committed to.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // ChallengeAnswerMenu is ordered API. Every entry but the last three is a fault
@@ -102,26 +116,60 @@ type ChallengeAnswerInfo struct {
 // common: refused against blocked, no default route against a wrong one,
 // expired against a name mismatch.
 var ChallengeAnswerMenu = []ChallengeAnswerInfo{
-	{AnswerHealthy, "Nothing is wrong with this network", "every layer works; the reported problem is elsewhere"},
-	{AnswerDNSFailure, "DNS resolution", "names do not resolve, or the resolver refuses"},
-	{AnswerNoDefaultRoute, "No default route", "the routing table has no default at all, so nothing off-link can be reached"},
-	{AnswerWrongDefaultRoute, "Wrong default route", "there is exactly one default route, its gateway answers, and it goes somewhere that cannot reach the internet"},
-	{AnswerMissingRoute, "Missing route to the target's subnet", "the internet is fine; what is missing is the specific route the target's network needs"},
-	{AnswerPreferredRoute, "Failed preferred route", "two defaults exist and the lower-metric one is selected, but only the other one's path works"},
-	{AnswerIPv4Failure, "IPv4 connectivity", "the IPv4 path is down while IPv6 works"},
-	{AnswerIPv6Failure, "IPv6 connectivity", "the IPv6 path is down while IPv4 works"},
-	{AnswerPortBlocked, "TCP port blocked", "connections to the target port are silently discarded, so they time out"},
-	{AnswerRefused, "Connection refused", "the host answers the connection immediately with a refusal, because nothing is listening"},
-	{AnswerReset, "Connection reset by the service", "the target accepts the connection and then tears it down"},
-	{AnswerTLSCertificate, "Expired TLS certificate", "the handshake fails because the certificate is outside its validity dates"},
-	{AnswerTLSHostname, "TLS certificate name mismatch", "the certificate is valid and trusted, but not for the name that was requested"},
-	{AnswerHTTPService, "HTTP service error", "the server answers, with an error status"},
-	{AnswerProxy, "Proxy", "the configured proxy is the thing that fails"},
-	{AnswerQUICBlocked, "QUIC / UDP 443", "UDP/443 is filtered while TCP/443 is not"},
-	{AnswerPacketLoss, "Packet loss or latency", "the path works but drops or delays traffic"},
+	{ID: AnswerHealthy, Label: "Nothing is wrong with this network",
+		Help: "every layer works; the reported problem is elsewhere", Aliases: []string{"ok", "none", "nothing"}},
+	{ID: AnswerDNSFailure, Label: "DNS resolution",
+		Help: "names do not resolve, or the resolver refuses",
+		// One answer covers a refusing resolver and a silent one, because
+		// challengeRecognition asks netdoc one question about both — see the note
+		// there. A player who reasoned their way to either specific spelling has
+		// named this condition, so both spellings are accepted for it rather than
+		// rejected for being more precise than the taxonomy.
+		Aliases: []string{"dns", "nxdomain", "dns_timeout", "servfail"}},
+	{ID: AnswerNoDefaultRoute, Label: "No default route",
+		Help:    "the routing table has no default at all, so nothing off-link can be reached",
+		Aliases: []string{"no_route"}},
+	{ID: AnswerWrongDefaultRoute, Label: "Wrong default route",
+		Help:    "there is exactly one default route, its gateway answers, and it goes somewhere that cannot reach the internet",
+		Aliases: []string{"bad_gateway", "wrong_gateway"}},
+	{ID: AnswerMissingRoute, Label: "Missing route to the target's subnet",
+		Help:    "the internet is fine; what is missing is the specific route the target's network needs",
+		Aliases: []string{"missing_route"}},
+	{ID: AnswerPreferredRoute, Label: "Failed preferred route",
+		Help:    "two defaults exist and the lower-metric one is selected, but only the other one's path works",
+		Aliases: []string{"preferred_route"}},
+	{ID: AnswerIPv4Failure, Label: "IPv4 connectivity",
+		Help: "the IPv4 path is down while IPv6 works", Aliases: []string{"ipv4"}},
+	{ID: AnswerIPv6Failure, Label: "IPv6 connectivity",
+		Help: "the IPv6 path is down while IPv4 works", Aliases: []string{"ipv6"}},
+	{ID: AnswerPortBlocked, Label: "TCP port blocked",
+		Help:    "connections to the target port are silently discarded, so they time out",
+		Aliases: []string{"port_blocked", "blocked", "filtered"}},
+	{ID: AnswerRefused, Label: "Connection refused",
+		Help:    "the host answers the connection immediately with a refusal, because nothing is listening",
+		Aliases: []string{"refused"}},
+	{ID: AnswerReset, Label: "Connection reset by the service",
+		Help: "the target accepts the connection and then tears it down", Aliases: []string{"reset"}},
+	{ID: AnswerTLSCertificate, Label: "Expired TLS certificate",
+		Help:    "the handshake fails because the certificate is outside its validity dates",
+		Aliases: []string{"tls_expired", "expired_certificate"}},
+	{ID: AnswerTLSHostname, Label: "TLS certificate name mismatch",
+		Help:    "the certificate is valid and trusted, but not for the name that was requested",
+		Aliases: []string{"tls_hostname", "hostname_mismatch"}},
+	{ID: AnswerHTTPService, Label: "HTTP service error",
+		Help: "the server answers, with an error status", Aliases: []string{"http_error"}},
+	{ID: AnswerProxy, Label: "Proxy", Help: "the configured proxy is the thing that fails",
+		Aliases: []string{"proxy"}},
+	{ID: AnswerQUICBlocked, Label: "QUIC / UDP 443",
+		Help: "UDP/443 is filtered while TCP/443 is not", Aliases: []string{"quic"}},
+	{ID: AnswerPacketLoss, Label: "Packet loss or latency",
+		Help: "the path works but drops or delays traffic", Aliases: []string{"loss", "packet_loss"}},
 }
 
-// ChallengeAnswerByID resolves a submitted answer name.
+// ChallengeAnswerByID resolves an answer by its internal identity, and only
+// that. It is the lookup for a stored answer — a result being reread, a
+// recognizer being consulted — where accepting a display name or a shorthand
+// would let one answer arrive under two spellings.
 func ChallengeAnswerByID(raw string) (ChallengeAnswerInfo, bool) {
 	want := ChallengeAnswer(strings.ToLower(strings.TrimSpace(raw)))
 	for _, item := range ChallengeAnswerMenu {
@@ -132,7 +180,49 @@ func ChallengeAnswerByID(raw string) (ChallengeAnswerInfo, bool) {
 	return ChallengeAnswerInfo{}, false
 }
 
-// ChallengeAnswerNames lists every accepted answer id, for a usage message.
+// ChallengeAnswerByName resolves what a person typed: the id, one of the
+// deliberate aliases, or the display name itself. Every comparison is on the
+// whole string after case and separator normalization, so `dns` selects the DNS
+// answer and `dns thing` selects nothing. There is no prefix or substring
+// matching on purpose — a diagnosis chosen by resemblance is one the player
+// never made, and silently scoring it would be worse than asking again.
+func ChallengeAnswerByName(raw string) (ChallengeAnswerInfo, bool) {
+	want := normalizeAnswerName(raw)
+	if want == "" {
+		return ChallengeAnswerInfo{}, false
+	}
+	for _, item := range ChallengeAnswerMenu {
+		if normalizeAnswerName(string(item.ID)) == want || normalizeAnswerName(item.Label) == want {
+			return item, true
+		}
+		for _, alias := range item.Aliases {
+			if normalizeAnswerName(alias) == want {
+				return item, true
+			}
+		}
+	}
+	return ChallengeAnswerInfo{}, false
+}
+
+// normalizeAnswerName folds the differences nobody means: case, surrounding
+// space, and whether the words were joined with spaces, hyphens or underscores.
+// `tcp_port_blocked`, `TCP port blocked` and `tcp-port-blocked` are one answer.
+func normalizeAnswerName(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
+		switch r {
+		case ' ', '-', '_':
+			b.WriteByte('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// ChallengeAnswerNames lists every accepted answer id, for a usage message. The
+// ids rather than the labels: a message telling somebody what to pass to a flag
+// has to name the things that flag accepts unquoted.
 func ChallengeAnswerNames() []string {
 	out := make([]string, 0, len(ChallengeAnswerMenu))
 	for _, item := range ChallengeAnswerMenu {

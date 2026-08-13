@@ -80,7 +80,7 @@ func (f *challengeFlags) parse(args []string) error {
 		return errors.New("-answer and -give-up are two different submissions")
 	}
 	if *f.answer != "" {
-		if _, ok := simulation.ChallengeAnswerByID(*f.answer); !ok {
+		if _, ok := simulation.ChallengeAnswerByName(*f.answer); !ok {
 			return fmt.Errorf("unknown answer %q (have: %s)", textsafe.Clean(*f.answer),
 				strings.Join(simulation.ChallengeAnswerNames(), ", "))
 		}
@@ -241,7 +241,7 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 		return simulation.ChallengeSubmission{GaveUp: true}, nil
 	}
 	if p.answer != "" {
-		info, _ := simulation.ChallengeAnswerByID(p.answer)
+		info, _ := simulation.ChallengeAnswerByName(p.answer)
 		return simulation.ChallengeSubmission{Answer: info.ID}, nil
 	}
 	started := time.Now()
@@ -289,17 +289,31 @@ func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
 		case "q", "quit", "":
 			return simulation.ChallengeSubmission{GaveUp: true}, false, nil
 		}
-		number, convErr := strconv.Atoi(choice)
-		if convErr != nil || number < 1 || number > len(simulation.ChallengeAnswerMenu) {
-			fmt.Fprintf(p.out, "\nPick a number between 1 and %d, `s` for the shell, or `q` to give up.\n",
+		picked, ok := pickAnswer(choice)
+		if !ok {
+			fmt.Fprintf(p.out, "\nPick a number between 1 and %d or type the diagnosis by name;"+
+				" `s` for the shell, `q` to give up.\n",
 				len(simulation.ChallengeAnswerMenu))
 			continue
 		}
-		picked := simulation.ChallengeAnswerMenu[number-1]
 		fmt.Fprintf(p.out, "\nYou answered: %s\nWhy? (optional, one line)\n> ", picked.Label)
 		note, _ := p.in.ReadString('\n')
 		return simulation.ChallengeSubmission{Answer: picked.ID, Note: clipNote(note)}, false, nil
 	}
+}
+
+// pickAnswer resolves what the player typed at the menu: the number next to an
+// entry, or the diagnosis by name. Both are exact — the number has to be in
+// range and the name has to match an id, an alias or a label whole — so a
+// mistyped answer is asked again rather than resolved to whatever it resembled.
+func pickAnswer(choice string) (simulation.ChallengeAnswerInfo, bool) {
+	if number, err := strconv.Atoi(choice); err == nil {
+		if number < 1 || number > len(simulation.ChallengeAnswerMenu) {
+			return simulation.ChallengeAnswerInfo{}, false
+		}
+		return simulation.ChallengeAnswerMenu[number-1], true
+	}
+	return simulation.ChallengeAnswerByName(choice)
 }
 
 func clipNote(raw string) string {
