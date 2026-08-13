@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -838,7 +837,7 @@ func holderProbeReply(fields []string) string {
 		// kernel decided on its own — no route, an administrative reject on the
 		// way out — is the path failing, not the target answering, so it stays
 		// unreachable rather than being promoted to a statement about a service.
-		if errors.Is(err, syscall.ECONNREFUSED) {
+		if isConnectionRefused(err) {
 			return holderProbeResult + " " + holderProbeRefused
 		}
 		return holderProbeResult + " " + holderProbeFailed
