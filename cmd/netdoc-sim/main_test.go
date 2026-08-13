@@ -325,9 +325,10 @@ func writeFakeNetdoc(t *testing.T, dir, version string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, name)
-	// A link when the filesystem allows one, a copy when it does not: t.TempDir
-	// and the test binary do not always live on the same device.
-	if err := os.Link(self, path); err != nil {
+	// Windows cannot remove a hard link to this running test executable, so copy
+	// there. Elsewhere, link when the filesystems allow it and copy when not.
+	linked := runtime.GOOS != "windows" && os.Link(self, path) == nil
+	if !linked {
 		body, err := os.ReadFile(self)
 		if err != nil {
 			t.Fatal(err)
@@ -416,7 +417,7 @@ func TestFindNetdocSearchOrder(t *testing.T) {
 	// A bare name has no directory in it, so it means what it means to a shell:
 	// look it up on $PATH. This is why the flag is documented as a path.
 	t.Run("explicit bare name is a $PATH lookup", func(t *testing.T) {
-		t.Chdir(elsewhere)
+		t.Chdir(t.TempDir())
 		got, err := findNetdoc(filepath.Base(onPath), self)
 		if err != nil || got != onPath {
 			t.Fatalf("findNetdoc(%q) = %q, %v, want %q", filepath.Base(onPath), got, err, onPath)

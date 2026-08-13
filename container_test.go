@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -114,6 +115,9 @@ func runImageWith(t *testing.T, opts, args []string) result {
 	t.Helper()
 	engine, image := engineAndImage(t)
 	argv := append([]string{"run", "--rm"}, opts...)
+	if runtime.GOOS == "linux" && engine == "docker" {
+		argv = append(argv, "--security-opt", "apparmor=unconfined")
+	}
 	argv = append(argv, image)
 	argv = append(argv, args...)
 

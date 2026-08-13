@@ -88,6 +88,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # amd64 only: this job proves the image works, and it can only prove it on
       # the architecture it can execute. The release builds arm64 as well.
       - run: docker build --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" -t netdoc-sim:ci .

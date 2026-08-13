@@ -2582,6 +2582,9 @@ func TestChallengeConditionsAreScoreableEndToEnd(t *testing.T) {
 			name = "healthy"
 		}
 		t.Run(name, func(t *testing.T) {
+			if condition.mutation == "netem.loss" {
+				requireNetemSeed(t)
+			}
 			challenge := challengeWithMutation(t, condition.mutation)
 			result := runChallenge(t, sim, netdoc, "-id", challenge.ID, "-answer", string(condition.answer))
 			if !result.Truth.Scoreable {
