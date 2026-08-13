@@ -24,7 +24,6 @@ import (
 // the result in ctx. It returns the action to run (actNone for none) and the
 // prefix still waiting for its next key.
 func (m model) resolveKey(ctx keyContext, key string) (keyAction, []string) {
-	key = normalizeKey(key)
 	seq := append(slices.Clone(m.pendingKeys), key)
 	if act, ok := m.keys.lookup(ctx, seq); ok {
 		return act, nil
@@ -67,8 +66,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(pending) > 0 {
 			return m, nil
 		}
-		// Tool hotkeys (contextual toolbox). Bindings are validated against
-		// these letters, so this is reached only for keys no action claims.
+		// Tool hotkeys are checked after built-in actions.
 		for _, tool := range m.tools {
 			if msg.String() == tool.Key {
 				if tool.Confirm {
@@ -229,43 +227,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		notice, ok := exportReport(m.report(), act == actSave)
 		return m, m.setNotice(notice, ok)
 	case actHelp:
-		m.helping, m.helpOffset = true, 0
+		m.helping = true
 		return m, nil
 	}
-	return m, nil
-}
-
-// handleHelpKey handles keys while the cheatsheet is open. It outgrows a short
-// terminal, so the motions that scroll output scroll it; anything else closes it.
-func (m model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	act, pending := m.resolveKey(ctxViewer, msg.String())
-	m.pendingKeys = pending
-	if len(pending) > 0 {
-		return m, nil // half a chord is not "any other key"
-	}
-	page := max(m.helpVisible(), 1)
-	switch act {
-	case actUp:
-		m.helpOffset--
-	case actDown:
-		m.helpOffset++
-	case actTop:
-		m.helpOffset = 0
-	case actBottom:
-		m.helpOffset = m.helpMaxOffset()
-	case actPageUp:
-		m.helpOffset -= page
-	case actPageDown:
-		m.helpOffset += page
-	case actHalfPageUp:
-		m.helpOffset -= max(page/2, 1)
-	case actHalfPageDown:
-		m.helpOffset += max(page/2, 1)
-	default:
-		m.helping, m.helpOffset, m.pendingKeys = false, 0, nil
-		return m, nil
-	}
-	m.helpOffset = min(max(m.helpOffset, 0), m.helpMaxOffset())
 	return m, nil
 }
 
@@ -333,8 +297,8 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case actCopy:
 		notice, ok := "output sent to clipboard (OSC 52)", true
-		if m.keys.bound(actSave) {
-			notice += " — " + m.keys.label(actSave) + " saves a file"
+		if m.keys.bound(ctxViewer, actSave) {
+			notice += " — " + m.keys.label(ctxViewer, actSave) + " saves a file"
 		}
 		if err := copyReport(strings.Join(m.visibleJobLines(), "\n")); err != nil {
 			notice, ok = "copy failed: "+err.Error(), false
@@ -354,11 +318,6 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case actSwitchJob:
 		return m, m.switchJob()
-	case actHelp:
-		// The viewer stays open underneath, so closing the sheet returns to
-		// the output rather than to the check list.
-		m.helping, m.helpOffset = true, 0
-		return m, nil
 	// Scrolling reads follow back off the viewport rather than setting it:
 	// any move that happens to land on the last line resumes following, and
 	// the amount a key scrolls is the viewport's business, not this switch's.

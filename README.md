@@ -231,84 +231,30 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
-| `home`/`end` (`gg`/`G`) | jump to the first or last probe row, or device in the network map |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
-| `home`/`end` (`gg`/`G`), `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` and `G` re-enable follow) or page through the output |
+| `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart with a new target |
 | `S` | SSH login — a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
 | `tab` | switch between running tool jobs |
 | `esc` | cancel the focused job only (`tab` picks which); `q` is the stop-everything path |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
-| `?` | full-screen key cheatsheet, from the check list, the network map, or a tool's full output; it scrolls when your terminal is too short for it, and any key that isn't a motion closes it |
+| `?` | full-screen key cheatsheet; any key closes it |
 | `q` | quit (cancels running jobs first, then exits) |
 
-### Key bindings
+### Vim keybindings
 
-Every key above is an *action*, and both the preset and the individual keys are yours to change.
+Use Vim-style navigation with:
 
-`gg` and `G` jump to the top and bottom of whatever is on screen — the check list, the network map, and any tool's full output — with no configuration. `--keys vim` adds `ctrl+b`/`ctrl+f` (page) and `ctrl+u`/`ctrl+d` (half page) in the viewer, and lists `gg`/`G` ahead of `home`/`end` in the help bar. `home`/`end`/`pgup`/`pgdn` work under both.
-
-For a permanent change, or to move individual keys, write `~/.netdocrc` (or `netdoc/config.yaml` under the config directory that holds `history`; the dotfile wins if both exist):
-
-```yaml
-keys: vim            # base preset: default (the omitted value) or vim
-
-bindings:            # per-action overrides, applied on top of the preset
-  quit: [q, Q]       # the complete key list for that action
-  restart: [ctrl+r]
-  copy: ["y y", Y]   # a chord: its keys separated by spaces
-  network-map: []    # an empty list unbinds the action outright
+```sh
+netdoc --keys vim
 ```
 
-`--keys` overrides the file's `keys:` for one run, and your `bindings:` still apply on top. `--no-config` ignores the file. netdoc only ever reads it.
-
-Action names are the ones `?` lists: `up`, `down`, `top`, `bottom`, `page-up`, `page-down`, `half-page-up`, `half-page-down`, `open`, `filter`, `copy`, `save`, `switch-job`, `cancel-job`, `network-map`, `restart`, `ssh`, `clear-filter`, `back`, `help`, `quit`. Key names are the ones your terminal sends — a single character (`q`, `G`, `?`), or a named key in lower case (`enter`, `esc`, `tab`, `space`, `home`, `end`, `pgup`, `pgdown`, `up`, `down`, `left`, `right`, `delete`, `insert`, `f1`–`f12`, `ctrl+a`, `shift+tab`, …).
-
-`?` lists the keys that are actually bound, so it doubles as a check on the file. With the config above in effect, on a run started with no target:
-
-```
-Keys
-  ↑/k            previous check — or device on the network map
-  ↓/j            next check — or device on the network map
-  gg/home        first check — or device on the network map
-  G/end          last check — or device on the network map
-  enter          full output — or set target on the network map
-  yy/Y           copy selected portal URL, otherwise report
-  w              save report
-  tab            switch job
-  esc            cancel the focused job
-  ctrl+r         restart with a new target
-  ?              full-screen key cheatsheet
-  q/Q            quit
-  i              run route table
-  s              run open sockets
-
-Output viewer
-  ↑/k            scroll up
-  ↓/j            scroll down
-  gg/home        jump to top
-  G/end          jump to bottom (re-enables follow)
-  ctrl+b/pgup    page up
-  ctrl+f/pgdown  page down
-  ctrl+u         half page up
-  ctrl+d         half page down
-  /              filter lines
-  yy/Y           copy output (filtered if a filter is on)
-  w              save output (filtered if a filter is on)
-  tab            switch job
-  esc            clear the filter, or back when none is set
-  q              back
-  ?              full-screen key cheatsheet
-
-any key close
-```
-
-Rebinding covers the check list and the output viewer. The restart prompt, SSH form, filter line, and tool confirm gate keep fixed keys, as do drill-down tool hotkeys — a binding that would shadow one is rejected.
-
-A config netdoc cannot use is reported on stderr and in the TUI, and the run continues on the built-in keys. Every problem in the file is listed, and none of the bindings are applied.
+The Vim preset adds `gg`/`G` for first/last, `ctrl+b`/`ctrl+f` for page
+up/down, and `ctrl+u`/`ctrl+d` for half-page up/down. Existing keys continue
+to work.
 
 ## Drill-down tools
 
@@ -494,20 +440,7 @@ Race, fuzz, and network-namespace checks run only on Linux in CI. The
 `netns_integration` tests skip themselves on a host without unprivileged user
 namespaces; they never need root. That gate keeps `-v` because a skipped run and
 a real one both print just `ok` otherwise, and `-count=1` because a cached
-result would not have exercised any namespace at all. Off Linux those tests are
-absent, so the step passes without exercising a namespace.
-
-`golangci-lint` analyses one build configuration and CI lints on Linux, so
-running it on macOS or Windows reports the helpers only Linux-tagged code calls
-as `unused` — around forty in `internal/simulation`, none of them real. Point a
-host-built linter at the Linux configuration to get CI's result (`GOOS=linux go
-run …` cross-builds the linter itself and then cannot execute it):
-
-```sh
-tools=$(mktemp -d)
-GOBIN=$tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-GOOS=linux $tools/golangci-lint run ./...
-```
+result would not have exercised any namespace at all.
 
 ## Testing Network Doctor against broken networks
 

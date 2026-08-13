@@ -1,311 +1,263 @@
-// Structural invariants of the keymap: one action per key per screen, no
-// binding buried under a chord, nothing shadowing a tool hotkey.
-
 package ui
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
-// keyPress builds the message a real terminal would send for a binding's key
-// name, so a test that says ctrl+d exercises the same path ctrl+d takes.
 func keyPress(name string) tea.KeyMsg {
-	for _, kt := range bindableKeyTypes {
-		if (tea.Key{Type: kt}).String() == name {
-			return tea.KeyMsg{Type: kt}
-		}
+	types := map[string]tea.KeyType{
+		"up": tea.KeyUp, "down": tea.KeyDown, "enter": tea.KeyEnter,
+		"esc": tea.KeyEsc, "tab": tea.KeyTab, "home": tea.KeyHome,
+		"end": tea.KeyEnd, "pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
+		"ctrl+b": tea.KeyCtrlB, "ctrl+d": tea.KeyCtrlD,
+		"ctrl+f": tea.KeyCtrlF, "ctrl+u": tea.KeyCtrlU,
+	}
+	if typ, ok := types[name]; ok {
+		return tea.KeyMsg{Type: typ}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
 }
 
-// A preset that could not be written by hand would be one the validator
-// calls impossible.
-func TestPresetsValidate(t *testing.T) {
-	for name, preset := range presets {
-		if errs := validateBindings(preset); len(errs) > 0 {
-			t.Errorf("preset %q: %v", name, errs)
+func resolvedAction(km Keymap, ctx keyContext, keys ...string) (keyAction, []string) {
+	m := model{keys: km}
+	var act keyAction
+	for _, key := range keys {
+		act, m.pendingKeys = m.resolveKey(ctx, key)
+	}
+	return act, m.pendingKeys
+}
+
+func TestDefaultPresetKeepsHistoricalBindings(t *testing.T) {
+	km, err := PresetKeymap("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		ctx  keyContext
+		key  string
+		want keyAction
+	}{
+		{ctxList, "up", actUp}, {ctxList, "k", actUp},
+		{ctxList, "down", actDown}, {ctxList, "j", actDown},
+		{ctxList, "enter", actOpen}, {ctxList, "esc", actCancelJob},
+		{ctxList, "tab", actSwitchJob}, {ctxList, "y", actCopy},
+		{ctxList, "w", actSave}, {ctxList, "r", actRestart},
+		{ctxList, "S", actSSH}, {ctxList, "v", actNetworkMap},
+		{ctxList, "?", actHelp}, {ctxList, "q", actQuit},
+		{ctxViewer, "up", actUp}, {ctxViewer, "k", actUp},
+		{ctxViewer, "down", actDown}, {ctxViewer, "j", actDown},
+		{ctxViewer, "home", actTop}, {ctxViewer, "end", actBottom},
+		{ctxViewer, "pgup", actPageUp}, {ctxViewer, "pgdown", actPageDown},
+		{ctxViewer, "esc", actClearFilter}, {ctxViewer, "q", actBack},
+		{ctxViewer, "tab", actSwitchJob}, {ctxViewer, "y", actCopy},
+		{ctxViewer, "w", actSave}, {ctxViewer, "/", actFilter},
+		// Vim-only keys must not change default behavior.
+		{ctxList, "home", actNone}, {ctxList, "end", actNone},
+		{ctxList, "g", actNone}, {ctxList, "G", actNone},
+		{ctxViewer, "g", actNone}, {ctxViewer, "G", actNone},
+		{ctxViewer, "ctrl+b", actNone}, {ctxViewer, "ctrl+d", actNone},
+		{ctxViewer, "ctrl+f", actNone}, {ctxViewer, "ctrl+u", actNone},
+		{ctxViewer, "?", actNone},
+	}
+	for _, tt := range tests {
+		act, pending := resolvedAction(km, tt.ctx, tt.key)
+		if act != tt.want || pending != nil {
+			t.Errorf("context %d key %q = (%d, %v), want (%d, nil)", tt.ctx, tt.key, act, pending, tt.want)
+		}
+	}
+
+	named, err := PresetKeymap("default")
+	if err != nil || !reflect.DeepEqual(km.keys, named.keys) {
+		t.Errorf("empty and named default differ: err=%v", err)
+	}
+}
+
+func TestVimPresetMotions(t *testing.T) {
+	km, err := PresetKeymap("vim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		ctx  keyContext
+		keys []string
+		want keyAction
+	}{
+		{ctxList, []string{"g", "g"}, actTop},
+		{ctxList, []string{"G"}, actBottom},
+		{ctxViewer, []string{"g", "g"}, actTop},
+		{ctxViewer, []string{"G"}, actBottom},
+		{ctxViewer, []string{"ctrl+b"}, actPageUp},
+		{ctxViewer, []string{"ctrl+f"}, actPageDown},
+		{ctxViewer, []string{"ctrl+u"}, actHalfPageUp},
+		{ctxViewer, []string{"ctrl+d"}, actHalfPageDown},
+		// The preset adds Vim motions without removing familiar keys.
+		{ctxList, []string{"down"}, actDown},
+		{ctxViewer, []string{"home"}, actTop},
+		{ctxViewer, []string{"pgdown"}, actPageDown},
+		{ctxList, []string{"q"}, actQuit},
+	}
+	for _, tt := range tests {
+		act, pending := resolvedAction(km, tt.ctx, tt.keys...)
+		if act != tt.want || pending != nil {
+			t.Errorf("context %d keys %v = (%d, %v), want (%d, nil)", tt.ctx, tt.keys, act, pending, tt.want)
 		}
 	}
 }
 
-// An action missing from actionDefs is one nobody can discover.
-func TestEveryActionIsDescribed(t *testing.T) {
-	seen := map[keyAction]bool{}
-	for _, def := range actionDefs {
-		if seen[def.act] {
-			t.Errorf("action %q listed twice", def.name)
-		}
-		if len(def.desc) == 0 {
-			t.Errorf("action %q describes no context", def.name)
-		}
-		seen[def.act] = true
-	}
-	for act := range defaultPreset {
-		if !seen[act] {
-			t.Errorf("action %d is bound by the default preset but has no actionDef", act)
-		}
-	}
-	for act := actNone + 1; act <= actQuit; act++ {
-		if !seen[act] {
-			t.Errorf("action %d has no actionDef", act)
-		}
-	}
-}
-
-// A chord resolves key by key, and the key that ends a dead one still gets its
-// own turn — otherwise a stray prefix eats the keystroke after it.
-func TestChordResolution(t *testing.T) {
-	km, errs := buildKeymap("default", map[string][]string{"top": {"g g"}})
-	if len(errs) > 0 {
-		t.Fatalf("chord binding: %v", errs)
-	}
-	m := newModel(nil, false)
-	m.keys = km
-
-	act, pending := m.resolveKey(ctxViewer, "g")
+func TestChordResolutionAndReplay(t *testing.T) {
+	km, _ := PresetKeymap("vim")
+	m := model{keys: km}
+	act, pending := m.resolveKey(ctxList, "g")
 	if act != actNone || !slices.Equal(pending, []string{"g"}) {
 		t.Fatalf("first g = (%d, %v), want (none, [g])", act, pending)
 	}
 	m.pendingKeys = pending
-	if act, pending := m.resolveKey(ctxViewer, "g"); act != actTop || pending != nil {
+	if act, pending = m.resolveKey(ctxList, "j"); act != actDown || pending != nil {
+		t.Fatalf("g then j = (%d, %v), want (down, nil)", act, pending)
+	}
+	m.pendingKeys = []string{"g"}
+	if act, pending = m.resolveKey(ctxList, "g"); act != actTop || pending != nil {
 		t.Fatalf("gg = (%d, %v), want (top, nil)", act, pending)
 	}
-	// g then an unrelated key: the chord dies, the key still runs.
-	if act, pending := m.resolveKey(ctxViewer, "/"); act != actFilter || pending != nil {
-		t.Fatalf("g then / = (%d, %v), want (filter, nil)", act, pending)
-	}
-	// top exists in both screens, so its chord is live in both.
-	m.pendingKeys = nil
-	act, pending = m.resolveKey(ctxList, "g")
-	if act != actNone || !slices.Equal(pending, []string{"g"}) {
-		t.Fatalf("first g in the list = (%d, %v), want (none, [g])", act, pending)
-	}
-	m.pendingKeys = pending
-	if act, pending := m.resolveKey(ctxList, "g"); act != actTop || pending != nil {
-		t.Fatalf("gg in the list = (%d, %v), want (top, nil)", act, pending)
-	}
-}
 
-// A chord in flight launches nothing, and the key that ends an unfinished one
-// behaves as it would have if the prefix had never been typed.
-func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
-	km, errs := buildKeymap("default", map[string][]string{"help": {"z z"}})
-	if len(errs) > 0 {
-		t.Fatalf("chord binding: %v", errs)
-	}
-	m := newModel(mustTarget(t, "example.com"), true)
+	// A tool key that kills a chord still reaches the toolbox.
+	m = newModel(mustTarget(t, "example.com"), true)
 	m.keys = km
-	u, _ := m.handleKey(keyMsg("z"))
-	m = u.(model)
-	if !slices.Equal(m.pendingKeys, []string{"z"}) {
-		t.Fatalf("pendingKeys = %v, want [z]", m.pendingKeys)
+	m = pressed(t, m, keyPress("g"))
+	if !slices.Equal(m.pendingKeys, []string{"g"}) {
+		t.Fatalf("pendingKeys = %v, want [g]", m.pendingKeys)
 	}
-	if m.confirmTool != nil || m.cur.name != "" {
-		t.Fatalf("z started something: confirm=%v job=%q", m.confirmTool, m.cur.name)
-	}
-	// n is nmap's letter: it does not complete the chord, so the chord ends and n
-	// gets its own turn — the confirm gate, never a launch.
-	u, _ = m.handleKey(keyMsg("n"))
-	m = u.(model)
-	if m.pendingKeys != nil {
-		t.Fatalf("pendingKeys = %v after the chord died, want nil", m.pendingKeys)
-	}
-	if m.confirmTool == nil {
-		t.Fatal("n did not reach the port-scan gate after the chord ended")
-	}
-	// The completed chord runs its action instead, and never the tool.
-	m.confirmTool, m.pendingKeys = nil, []string{"z"}
-	u, _ = m.handleKey(keyMsg("z"))
-	if !u.(model).helping {
-		t.Fatal("zz did not open the cheatsheet")
+	m = pressed(t, m, keyPress("n"))
+	if m.pendingKeys != nil || m.confirmTool == nil {
+		t.Fatalf("g then n left pending=%v confirm=%v", m.pendingKeys, m.confirmTool)
 	}
 }
 
-// Each motion is pinned against the screen it moves, and against the default
-// keys the preset must not have taken away.
-func TestVimPresetMotions(t *testing.T) {
-	km, err := PresetKeymap("vim")
-	if err != nil {
-		t.Fatalf("PresetKeymap(vim): %v", err)
-	}
+func TestVimMotionsDispatch(t *testing.T) {
+	km, _ := PresetKeymap("vim")
 	m := newModel(mustTarget(t, "example.com"), false)
 	m.keys = km
-	tests := []struct {
-		keys []string
-		ctx  keyContext
-		want keyAction
-	}{
-		{[]string{"g", "g"}, ctxViewer, actTop},
-		{[]string{"g", "g"}, ctxList, actTop},
-		{[]string{"G"}, ctxViewer, actBottom},
-		{[]string{"G"}, ctxList, actBottom},
-		{[]string{"ctrl+d"}, ctxViewer, actHalfPageDown},
-		{[]string{"ctrl+u"}, ctxViewer, actHalfPageUp},
-		{[]string{"ctrl+f"}, ctxViewer, actPageDown},
-		{[]string{"ctrl+b"}, ctxViewer, actPageUp},
-		{[]string{"j"}, ctxViewer, actDown},
-		{[]string{"k"}, ctxList, actUp},
-		// Kept, not replaced: the preset adds motions, it doesn't evict the
-		// keys a non-vim user in the same terminal already knows.
-		{[]string{"home"}, ctxList, actTop},
-		{[]string{"end"}, ctxViewer, actBottom},
-		{[]string{"pgdown"}, ctxViewer, actPageDown},
-		{[]string{"down"}, ctxList, actDown},
-		{[]string{"q"}, ctxList, actQuit},
-		{[]string{"/"}, ctxViewer, actFilter},
+	m.selected = len(m.probes) - 1
+	m = pressed(t, pressed(t, m, keyPress("g")), keyPress("g"))
+	if m.selected != 0 {
+		t.Errorf("gg selected row %d, want 0", m.selected)
 	}
-	for _, tt := range tests {
-		m.pendingKeys = nil
-		var act keyAction
-		for _, key := range tt.keys {
-			act, m.pendingKeys = m.resolveKey(tt.ctx, key)
-		}
-		if act != tt.want {
-			t.Errorf("%v in context %d = action %d, want %d", tt.keys, tt.ctx, act, tt.want)
-		}
+	m = pressed(t, m, keyPress("G"))
+	if m.selected != len(m.probes)-1 {
+		t.Errorf("G selected row %d, want %d", m.selected, len(m.probes)-1)
 	}
-	// The half-page motions have no default binding, so the viewer footer only
-	// offers them once a preset supplies one.
-	m.viewing, m.pendingKeys = true, nil
-	if footer := m.viewerFooter(); !strings.Contains(footer, "half page") {
-		t.Errorf("viewer footer = %q, want a half page chip", footer)
-	}
-	if footer := newModel(nil, false).viewerFooter(); strings.Contains(footer, "half page") {
-		t.Errorf("default viewer footer = %q, want no half page chip", footer)
-	}
-}
 
-// The chord path and the scrolling path are separate machinery.
-func TestVimChordScrollsTheViewer(t *testing.T) {
-	km, err := PresetKeymap("vim")
-	if err != nil {
-		t.Fatalf("PresetKeymap(vim): %v", err)
-	}
-	m := newModel(nil, false)
-	m.keys, m.width, m.height = km, 80, 24
-	m.cur.name, m.cur.status = "ping the host", JobDone
+	m.width, m.height = 80, 24
+	m.cur.name, m.cur.status = "tool", JobDone
 	for i := range 200 {
 		m.appendJobLine(fmt.Sprintf("line %d", i))
 	}
-	u, _ := m.handleKey(keyPress("enter"))
-	m = asModel(t, u)
-	if !m.viewing || !m.follow {
-		t.Fatalf("enter did not open the viewer at the tail (viewing=%v follow=%v)", m.viewing, m.follow)
-	}
-	view := func(m model, key string) model {
+	m = pressed(t, m, keyPress("enter"))
+	view := func(key string) {
 		t.Helper()
 		u, _ := m.handleViewKey(keyPress(key))
-		return asModel(t, u)
+		m = asModel(t, u)
 	}
-	m = view(m, "g")
+	view("g")
 	if m.vp.YOffset == 0 {
-		t.Fatal("the first g scrolled on its own, before the chord finished")
+		t.Fatal("the first g moved before the chord completed")
 	}
-	if m = view(m, "g"); m.vp.YOffset != 0 || m.follow {
-		t.Errorf("gg left offset %d follow %v, want the top and no follow", m.vp.YOffset, m.follow)
+	view("g")
+	if m.vp.YOffset != 0 || m.follow {
+		t.Errorf("gg left offset %d follow=%v", m.vp.YOffset, m.follow)
 	}
-	if m = view(m, "ctrl+d"); m.vp.YOffset == 0 {
-		t.Error("ctrl+d did not scroll down half a page")
+	view("ctrl+d")
+	if m.vp.YOffset == 0 {
+		t.Error("ctrl+d did not scroll")
 	}
-	if m = view(m, "G"); m.vp.YOffset == 0 || !m.follow {
-		t.Errorf("G left offset %d follow %v, want the bottom and follow back on", m.vp.YOffset, m.follow)
-	}
-}
-
-// The help must show the keys that run, not the ones the defaults used.
-func TestHelpFollowsRebinding(t *testing.T) {
-	km, errs := buildKeymap("default", map[string][]string{"quit": {"Q"}, "restart": {"R"}})
-	if len(errs) > 0 {
-		t.Fatalf("rebind: %v", errs)
-	}
-	m := newModel(mustTarget(t, "example.com"), false)
-	m.keys = km
-	help := m.helpView(false)
-	if !strings.Contains(help, "Q") || !strings.Contains(help, "R") {
-		t.Errorf("help bar = %q, want the rebound keys", help)
-	}
-	m.helping = true
-	if overlay := m.View(); !strings.Contains(overlay, "Q") || !strings.Contains(overlay, "R") {
-		t.Errorf("cheatsheet = %q, want the rebound keys", overlay)
-	}
-	// And the rebound key has to work.
-	u, _ := m.handleKey(keyMsg("R"))
-	if !u.(model).entering {
-		t.Error("R did not open the restart prompt")
+	view("G")
+	if m.vp.YOffset == 0 || !m.follow {
+		t.Errorf("G left offset %d follow=%v", m.vp.YOffset, m.follow)
 	}
 }
 
-// A rebound key can be longer than the one it replaced, so the cheatsheet's
-// key column has to grow rather than run the label into its description.
-func TestCheatsheetKeyColumnFitsLongLabels(t *testing.T) {
-	km, errs := buildKeymap("default", map[string][]string{"help": {"ctrl+x", "f12", "?"}})
-	if len(errs) > 0 {
-		t.Fatalf("rebind: %v", errs)
+func TestBuiltInPresetsHaveNoConflicts(t *testing.T) {
+	for _, name := range []string{"default", "vim"} {
+		t.Run(name, func(t *testing.T) {
+			preset := presets[name]
+			for ctx := range numContexts {
+				owner := map[string]string{}
+				for _, def := range actionDefs {
+					for _, seq := range preset[ctx][def.act] {
+						if held := owner[seq]; held != "" {
+							t.Errorf("%q is bound to both %s and %s", seq, held, def.name)
+						}
+						owner[seq] = def.name
+					}
+				}
+				for seq, action := range owner {
+					for other, otherAction := range owner {
+						if seq != other && strings.HasPrefix(other, seq+" ") {
+							t.Errorf("%s's %q hides %s's %q", action, seq, otherAction, other)
+						}
+					}
+				}
+			}
+			if len(preset[ctxList][actQuit]) == 0 ||
+				(len(preset[ctxViewer][actBack]) == 0 && len(preset[ctxViewer][actClearFilter]) == 0) {
+				t.Error("preset is missing an exit")
+			}
+		})
 	}
+}
+
+func TestActionMetadataMatchesDispatchAndHelp(t *testing.T) {
+	km, _ := PresetKeymap("vim")
 	m := newModel(nil, false)
-	m.keys, m.width, m.height = km, 100, 40
-	m.helping = true
-	want := km.label(actHelp)
-	for _, line := range strings.Split(m.View(), "\n") {
-		if !strings.Contains(line, want) {
-			continue
+	m.keys, m.width = km, 200
+	help := m.helpOverlay()
+	seen := map[keyAction]bool{}
+	for _, def := range actionDefs {
+		if seen[def.act] || len(def.help) == 0 {
+			t.Errorf("invalid metadata for action %q", def.name)
 		}
-		if !strings.Contains(line, want+"  ") {
-			t.Errorf("cheatsheet row %q runs the key label into its description", line)
-		}
-		return
-	}
-	t.Errorf("no cheatsheet row for %q:\n%s", want, m.View())
-}
-
-// An unbound action is not advertised.
-func TestUnboundActionsVanishFromHelp(t *testing.T) {
-	km, errs := buildKeymap("default", map[string][]string{"network-map": {}})
-	if len(errs) > 0 {
-		t.Fatalf("unbind: %v", errs)
-	}
-	m := newModel(nil, false)
-	m.keys = km
-	if help := m.helpView(false); strings.Contains(help, "network map") {
-		t.Errorf("help bar = %q, want no network map chip", help)
-	}
-	if km.bound(actNetworkMap) {
-		t.Error("network-map still reports as bound")
-	}
-}
-
-// allToolKeys is hand-written, so a guard walks the real toolbox.
-func TestAllToolKeysMatchesTheToolbox(t *testing.T) {
-	targets := []*diagnostic.Target{
-		nil,
-		mustTarget(t, "example.com"),
-		mustTarget(t, "example.com:22"),
-		mustTarget(t, "example.com:25"),
-		mustTarget(t, "example.com:80"),
-		mustTarget(t, "1.1.1.1:443"),
-	}
-	found := map[string]bool{}
-	for _, goos := range []string{"linux", "darwin", "windows"} {
-		for _, tgt := range targets {
-			for _, tool := range toolsFor(tgt, goos, toolBind{}) {
-				found[tool.Key] = true
+		seen[def.act] = true
+		for ctx, metadata := range def.help {
+			for _, seq := range km.keysFor(ctx, def.act) {
+				parts := strings.Fields(seq)
+				if act, ok := km.lookup(ctx, parts); !ok || act != def.act {
+					t.Errorf("%s %q dispatches to %d, ok=%v", def.name, seq, act, ok)
+				}
+			}
+			if km.bound(ctx, def.act) && def.act != actSSH &&
+				(!strings.Contains(help, km.label(ctx, def.act)) || !strings.Contains(help, metadata.details)) {
+				t.Errorf("help is missing %s in context %d", def.name, ctx)
 			}
 		}
 	}
-	for _, key := range allToolKeys() {
-		if !found[key] {
-			t.Errorf("allToolKeys lists %q, which no tool uses", key)
+	for act := actNone + 1; act <= actQuit; act++ {
+		if !seen[act] {
+			t.Errorf("action %d has no metadata", act)
 		}
-		delete(found, key)
 	}
-	for key := range found {
-		t.Errorf("tool key %q is missing from allToolKeys, so a binding could shadow it", key)
+	bar := m.helpView(false)
+	if !strings.Contains(bar, "gg/G") {
+		t.Errorf("vim help bar = %q, want gg/G", bar)
 	}
+	if bar := newModel(nil, false).helpView(false); strings.Contains(bar, "gg/G") {
+		t.Errorf("default help bar advertises Vim keys: %q", bar)
+	}
+}
+
+func TestPresetKeymapRejectsUnknownName(t *testing.T) {
+	if _, err := PresetKeymap("emacs"); err == nil || !strings.Contains(err.Error(), "default, vim") {
+		t.Fatalf("PresetKeymap(emacs) error = %v", err)
+	}
+}
+
+func pressed(t *testing.T, m model, msg tea.KeyMsg) model {
+	t.Helper()
+	u, _ := m.handleKey(msg)
+	return asModel(t, u)
 }

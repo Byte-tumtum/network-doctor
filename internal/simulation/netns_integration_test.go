@@ -1,4 +1,4 @@
-//go:build netns_integration && linux
+//go:build netns_integration
 
 // Opt-in (-tags netns_integration) tests that build real network namespaces.
 //
@@ -7,10 +7,6 @@
 // No root needed: the simulator runs in an unprivileged user namespace. The
 // tests skip themselves on a host where that is unavailable, and nothing they
 // create is reachable from — or visible to — the host network.
-//
-// The linux term is required: these tests read the backend's own internals
-// (ipv4ForwardPath, nftTable) from netns_linux.go, so without it the tag
-// selects this file on macOS and Windows without the code it calls.
 
 package simulation
 

@@ -106,11 +106,8 @@ const (
 	maxParkedJobs = 12
 	ctrlCWindow   = 2 * time.Second
 	noticeWindow  = 4 * time.Second
-	// startupNoticeWindow holds a pre-TUI complaint long enough to be read by
-	// someone who was looking at the banner, not waiting for a reply.
-	startupNoticeWindow = 12 * time.Second
-	watchRuns           = 20
-	ctrlCNotice         = "Press Ctrl+C again to quit"
+	watchRuns     = 20
+	ctrlCNotice   = "Press Ctrl+C again to quit"
 )
 
 // WatchEvery is the gap between repeat passes in watch mode, shared so the TUI
@@ -198,11 +195,7 @@ type model struct {
 	// showing the exact command until 'y' runs it or esc cancels.
 	confirmTool *Tool
 
-	// Full-screen key cheatsheet. It outgrows a short terminal, so it scrolls:
-	// helpOffset is the first row on screen, and any key that isn't a motion
-	// still closes the whole thing.
-	helping    bool
-	helpOffset int
+	helping bool // ?: full-screen key cheatsheet; any key closes it
 
 	// keys resolves keypresses to actions. The zero value is the default
 	// keymap, so a model built without one behaves as netdoc always has.
@@ -248,23 +241,12 @@ var (
 	}
 )
 
-// Option adjusts a new model. Everything the TUI needs to run is positional;
-// options are for what the user configured.
+// Option adjusts a new model without growing its positional constructor.
 type Option func(*model)
 
 // WithKeymap runs the TUI on a resolved keymap instead of the default one.
 func WithKeymap(km Keymap) Option {
 	return func(m *model) { m.keys = km }
-}
-
-// WithStartupNotice opens the run with one line of feedback about something
-// that went wrong before the TUI existed. It holds longer than an ordinary
-// notice, since nothing the user did triggered it.
-func WithStartupNotice(msg string) Option {
-	return func(m *model) {
-		m.notice, m.noticeOK = textsafe.Clean(msg), false
-		m.noticeDeadline = time.Now().Add(startupNoticeWindow)
-	}
 }
 
 // NewWithSelection applies a validated CLI probe policy to this run and every
@@ -369,20 +351,10 @@ func saveHistory(path string, hist []string) {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.spinner.Tick} // chain deferred until 'r' in toolbox mode; tick drives the job timer
-	if !m.toolbox {
-		cmds = append(cmds, func() tea.Msg { return scheduleMsg{gen: 0} })
+	if m.toolbox {
+		return m.spinner.Tick // chain deferred until 'r'; tick drives the job timer
 	}
-	// A notice set before the program started has its deadline but not yet the
-	// tick that clears it; setNotice can't run here, since Init's mutations
-	// are discarded.
-	if !m.noticeDeadline.IsZero() {
-		deadline := m.noticeDeadline
-		cmds = append(cmds, tea.Tick(time.Until(deadline), func(time.Time) tea.Msg {
-			return noticeDoneMsg{deadline: deadline}
-		}))
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(m.spinner.Tick, func() tea.Msg { return scheduleMsg{gen: 0} })
 }
 
 // chainRan reports whether the diagnostic chain has been started this session.
@@ -449,9 +421,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.helping {
+			m.helping = false
+			return m, nil
+		}
 		// Runes read from stdin in one batch arrive as a single KeyMsg ("jjj"), which
-		// matches no binding; replay them one at a time. First, so no screen below sees
-		// a batch: a chord typed fast must be the same two keys as one typed slowly.
+		// matches no binding; replay them one at a time, so a fast chord and a
+		// slow chord behave identically.
 		if msg.Type == tea.KeyRunes && !msg.Paste && len(msg.Runes) > 1 {
 			var cmds []tea.Cmd
 			cur := tea.Model(m)
@@ -461,9 +437,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			return cur, tea.Batch(cmds...)
-		}
-		if m.helping {
-			return m.handleHelpKey(msg)
 		}
 		// Ctrl+C while the confirm gate is up cancels the gate, not the app.
 		if msg.Type == tea.KeyCtrlC && m.confirmTool != nil {

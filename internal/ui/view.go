@@ -540,44 +540,55 @@ func (m model) helpView(deferred bool) string {
 	if m.networkMap {
 		hosts = len(m.networkHosts())
 	}
-	// Every chip is looked up in the keymap and dropped when the action has no
-	// key: a user who unbinds something should stop being advertised it, not
-	// be pointed at a key that does nothing.
+	// Every chip is looked up in the selected preset.
 	var kv []string
 	add := func(label, desc string) {
 		if label != "" {
 			kv = append(kv, label, desc)
 		}
 	}
-	move := m.keys.pairLabel(actUp, actDown)
+	addAction := func(ctx keyContext, act keyAction) {
+		help, ok := actionHelpFor(ctx, act)
+		if ok {
+			add(m.keys.label(ctx, act), help.bar)
+		}
+	}
+	addPair := func(ctx keyContext, a, b keyAction) {
+		help, ok := actionHelpFor(ctx, a)
+		if ok {
+			add(m.keys.pairLabel(ctx, a, b), help.bar)
+		}
+	}
 	switch {
 	case m.networkMap:
 		if hosts > 0 {
-			add(move, "select device")
-			add(m.keys.label(actOpen), "set target")
+			add(m.keys.pairLabel(ctxList, actUp, actDown), "select device")
+			addPair(ctxList, actTop, actBottom)
+			add(m.keys.label(ctxList, actOpen), "set target")
 		}
-		add(m.keys.label(actNetworkMap), "checks")
+		add(m.keys.label(ctxList, actNetworkMap), "checks")
 	case deferred:
-		add(m.keys.label(actRestart), "run the checks")
-		add(m.keys.label(actNetworkMap), "network map")
+		add(m.keys.label(ctxList, actRestart), "run the checks")
+		addAction(ctxList, actNetworkMap)
 		if len(m.tools) > 0 {
 			kv = append(kv, "letter", "runs that tool")
 		}
 	default:
-		add(move, "scroll")
-		add(m.keys.label(actNetworkMap), "network map")
+		add(m.keys.pairLabel(ctxList, actUp, actDown), "scroll")
+		addPair(ctxList, actTop, actBottom)
+		addAction(ctxList, actNetworkMap)
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
 	// hint tracks exactly when the key does something — on the map with devices
 	// listed, it sets the target instead.
 	if m.hasJob() && (!m.networkMap || hosts == 0) {
-		add(m.keys.label(actOpen), "full output")
+		add(m.keys.label(ctxList, actOpen), "full output")
 	}
 	if !deferred && m.cur.active != nil {
-		add(m.keys.label(actCancelJob), "cancel job")
+		addAction(ctxList, actCancelJob)
 	}
 	if len(m.otherJobs) > 0 {
-		add(m.keys.label(actSwitchJob), "switch job")
+		addAction(ctxList, actSwitchJob)
 	}
 	// Applied to every exit, including the deferred one: a notice raised before
 	// the chain has run has nothing else on screen to explain it.
@@ -589,26 +600,26 @@ func (m model) helpView(deferred bool) string {
 	}
 	if deferred {
 		if m.networkMap {
-			add(m.keys.label(actRestart), "run the checks")
+			add(m.keys.label(ctxList, actRestart), "run the checks")
 		}
-		add(m.keys.label(actHelp), "help")
-		add(m.keys.label(actQuit), "quit")
+		addAction(ctxList, actHelp)
+		addAction(ctxList, actQuit)
 		return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 	}
 	if m.selectedPortalURL() != "" {
-		add(m.keys.label(actCopy), "copy portal URL")
+		add(m.keys.label(ctxList, actCopy), "copy portal URL")
 	} else if m.reportReady() {
-		add(m.keys.label(actCopy), "copy report")
+		add(m.keys.label(ctxList, actCopy), "copy report")
 	}
 	if m.reportReady() {
-		add(m.keys.label(actSave), "save report")
+		addAction(ctxList, actSave)
 	}
 	if m.sshDetected() {
-		add(m.keys.label(actSSH), "ssh login")
+		addAction(ctxList, actSSH)
 	}
-	add(m.keys.label(actRestart), "restart")
-	add(m.keys.label(actHelp), "help")
-	add(m.keys.label(actQuit), "quit")
+	addAction(ctxList, actRestart)
+	addAction(ctxList, actHelp)
+	addAction(ctxList, actQuit)
 	return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 }
 
@@ -621,15 +632,12 @@ func (m model) chordHint(help string) string {
 	return keyStyle.Render(displaySeq(strings.Join(m.pendingKeys, " "))+"…") + faintStyle.Render("  ·  ") + help
 }
 
-// helpBody is the cheatsheet's rows: every binding, unconditionally. The lone
-// exception is S, which advertises a login only once one is known to be there.
-func (m model) helpBody() []string {
-	// The key column is sized to what is bound: rebinding can make a label as long
-	// as "ctrl+b/pgup", which a fixed width would run into its description.
+// helpOverlay is generated from the same actions and bindings used by dispatch.
+func (m model) helpOverlay() string {
 	keyWidth := 8
 	for _, def := range actionDefs {
-		if m.keys.bound(def.act) {
-			keyWidth = max(keyWidth, lipgloss.Width(m.keys.label(def.act)))
+		for ctx := range def.help {
+			keyWidth = max(keyWidth, lipgloss.Width(m.keys.label(ctx, def.act)))
 		}
 	}
 	row := func(k, desc string) string {
@@ -637,19 +645,17 @@ func (m model) helpBody() []string {
 			strings.Repeat(" ", max(keyWidth-lipgloss.Width(k), 0)+2) +
 			faintStyle.Render(desc) + "\n"
 	}
-	// Both sections are generated from the same table the keys dispatch
-	// through, so a rebound key is documented by the act of rebinding it and
-	// an unbound action stops being listed.
+	// Both sections are generated from the same table dispatch indexes.
 	section := func(b *strings.Builder, ctx keyContext) {
 		for _, def := range actionDefs {
-			desc, ok := def.desc[ctx]
-			if !ok || !m.keys.bound(def.act) {
+			help, ok := def.help[ctx]
+			if !ok || !m.keys.bound(ctx, def.act) {
 				continue
 			}
 			if def.act == actSSH && !m.sshDetected() {
 				continue
 			}
-			b.WriteString(row(m.keys.label(def.act), desc))
+			b.WriteString(row(m.keys.label(ctx, def.act), help.details))
 		}
 	}
 	var b strings.Builder
@@ -660,46 +666,7 @@ func (m model) helpBody() []string {
 	}
 	b.WriteString("\n" + panelTitleStyle.Render("Output viewer") + "\n")
 	section(&b, ctxViewer)
-	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
-}
-
-// helpVisible is how many cheatsheet rows fit on screen, reserving the last
-// two for the blank line and the footer. Before the terminal has introduced
-// itself nothing is clipped, so everything is visible.
-func (m model) helpVisible() int {
-	if m.height <= 0 {
-		return len(m.helpBody())
-	}
-	return max(m.height-2, 1)
-}
-
-// helpMaxOffset is the furthest the sheet can scroll: the last screenful,
-// never past it.
-func (m model) helpMaxOffset() int { return max(len(m.helpBody())-m.helpVisible(), 0) }
-
-// helpOverlay is the full-screen key cheatsheet (?). It scrolls rather than
-// being cut off at whatever row a short terminal ends on.
-func (m model) helpOverlay() string {
-	lines := m.helpBody()
-	visible, total := m.helpVisible(), len(lines)
-	footer := helpKeys(m.width, "any key", "close")
-	if total > visible {
-		off := min(max(m.helpOffset, 0), total-visible)
-		lines = lines[off : off+visible]
-		var kv []string
-		if scroll := m.keys.pairLabel(actUp, actDown); scroll != "" {
-			kv = append(kv, scroll, "scroll")
-		}
-		if ends := m.keys.pairLabel(actTop, actBottom); ends != "" {
-			kv = append(kv, ends, "top/bottom")
-		}
-		// "any other key", not "any key": the motions above are the exception
-		// this screen did not used to have.
-		kv = append(kv, "any other key", "close")
-		footer = faintStyle.Render(fmt.Sprintf("%d–%d of %d  ·  ", off+1, off+visible, total)) +
-			helpKeys(m.width, kv...)
-	}
-	out := strings.Join(lines, "\n") + "\n\n" + m.chordHint(footer)
+	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
 	if m.height > 0 {
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
 	}
@@ -848,25 +815,34 @@ func (m model) viewerFooter() string {
 			kv = append(kv, label, desc)
 		}
 	}
-	add(m.keys.pairLabel(actUp, actDown), "scroll")
-	add(m.keys.pairLabel(actPageUp, actPageDown), "page")
-	add(m.keys.pairLabel(actHalfPageUp, actHalfPageDown), "half page")
-	add(m.keys.pairLabel(actTop, actBottom), "top/bottom")
-	add(m.keys.label(actFilter), "filter")
-	if len(m.otherJobs) > 0 {
-		add(m.keys.label(actSwitchJob), "switch job")
+	addAction := func(act keyAction) {
+		if help, ok := actionHelpFor(ctxViewer, act); ok {
+			add(m.keys.label(ctxViewer, act), help.bar)
+		}
 	}
-	add(m.keys.label(actCopy), "copy output")
-	add(m.keys.label(actSave), "save output")
-	add(m.keys.label(actHelp), "help")
+	addPair := func(a, b keyAction) {
+		if help, ok := actionHelpFor(ctxViewer, a); ok {
+			add(m.keys.pairLabel(ctxViewer, a, b), help.bar)
+		}
+	}
+	addPair(actUp, actDown)
+	addPair(actPageUp, actPageDown)
+	addPair(actHalfPageUp, actHalfPageDown)
+	addPair(actTop, actBottom)
+	addAction(actFilter)
+	if len(m.otherJobs) > 0 {
+		addAction(actSwitchJob)
+	}
+	addAction(actCopy)
+	addAction(actSave)
 	// With a filter applied the two exits do different things, so they stop
 	// sharing a chip and say which is which.
 	if m.filter != "" {
-		add(m.keys.label(actClearFilter), "clear filter")
-		add(m.keys.label(actBack), "back")
+		addAction(actClearFilter)
+		addAction(actBack)
 		return m.chordHint(helpKeys(m.width, kv...))
 	}
-	add(m.keys.pairLabel(actClearFilter, actBack), "back")
+	addPair(actClearFilter, actBack)
 	return m.chordHint(helpKeys(m.width, kv...))
 }
 
