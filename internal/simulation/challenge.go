@@ -6,12 +6,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	mathrand "math/rand"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
 // Challenge Mode is the human-facing counterpart to the hunt. The simulator
@@ -453,7 +455,31 @@ type Challenge struct {
 }
 
 // Replay is the command that reproduces this exact challenge.
-func (c *Challenge) Replay() string { return "netdoc-sim challenge -id " + c.ID }
+func (c *Challenge) Replay() string { return challengeCommand() + " -id " + c.ID }
+
+// challengeCommandEnv lets the packaging around this binary say how someone
+// should run a challenge. Only the printed invitation changes; nothing here is
+// ever executed, and the id, the puzzle and the scoring are untouched by it.
+//
+// The container image sets it, because a result posted from the image is read
+// by people who may have no netdoc-sim and no Linux — telling them to run
+// `netdoc-sim challenge` would be telling them to go install one.
+const challengeCommandEnv = "NETDOC_SIM_CHALLENGE_COMMAND"
+
+const defaultChallengeCommand = "netdoc-sim challenge"
+
+// challengeCommandLimit keeps the invitation a one-line command. It is external
+// input printed to a terminal and pasted into forums, so it is sanitized and
+// bounded like every other untrusted string this package prints.
+const challengeCommandLimit = 200
+
+func challengeCommand() string {
+	custom := textsafe.Clean(strings.TrimSpace(os.Getenv(challengeCommandEnv)))
+	if custom == "" || len(custom) > challengeCommandLimit {
+		return defaultChallengeCommand
+	}
+	return custom
+}
 
 // challengeGenerators maps an id version to the selection rules that version
 // means. An entry is frozen the moment ids carrying it have been shared:

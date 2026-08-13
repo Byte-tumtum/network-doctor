@@ -146,7 +146,9 @@ func (r *ChallengeResult) Share() string {
 	fmt.Fprintf(&b, "Me:             %s\n", shareMark(r.Human.Score))
 	fmt.Fprintf(&b, "Network Doctor: %s\n", shareMark(r.NetworkDoctor.Score))
 	fmt.Fprintf(&b, "%s in %s\n", challengeResultLine(r.Result), formatElapsed(msDuration(r.Timing.HumanMS)))
-	fmt.Fprintf(&b, "Your turn: netdoc-sim challenge -id %s\n", r.ChallengeID)
+	// The same invitation the reveal prints, so a reader of the share block and
+	// a reader of the full result are told to run the same thing.
+	fmt.Fprintf(&b, "Your turn: %s\n", r.Replay)
 	return b.String()
 }
 

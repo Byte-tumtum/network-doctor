@@ -892,6 +892,40 @@ func TestChallengeWithoutEvidenceIsInconclusiveNotAWin(t *testing.T) {
 	}
 }
 
+// The packaging around this binary decides how a reader of a result should run
+// it: the container image sets its own `docker run …` line, because whoever
+// reads a posted result may have no netdoc-sim and no Linux. Only the printed
+// invitation moves — the id, and therefore the puzzle, is untouched — and the
+// value is external input on its way to a terminal and a forum post, so it is
+// sanitized and bounded like everything else this package prints.
+func TestChallengeCommandComesFromTheEnvironment(t *testing.T) {
+	challenge, err := BuildChallenge("V3-8F42C1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := challenge.Replay(), "netdoc-sim challenge -id V3-8F42C1"; got != want {
+		t.Fatalf("default replay = %q, want %q", got, want)
+	}
+	for _, tt := range []struct {
+		name, env, want string
+	}{
+		{"a container invocation", "docker run --rm -it netdoc-sim challenge",
+			"docker run --rm -it netdoc-sim challenge -id V3-8F42C1"},
+		{"unset falls back", "", "netdoc-sim challenge -id V3-8F42C1"},
+		{"terminal escapes are stripped", "docker \x1b]0;pwned\x07run",
+			"docker run -id V3-8F42C1"},
+		{"an overlong value falls back", strings.Repeat("x", challengeCommandLimit+1),
+			"netdoc-sim challenge -id V3-8F42C1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(challengeCommandEnv, tt.env)
+			if got := challenge.Replay(); got != tt.want {
+				t.Errorf("replay = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // 6. A netdoc loss is worth nothing if it cannot be handed to somebody else.
 // The id is the whole reproduction contract, so rebuilding from the result's
 // own identity fields has to produce the same case and the same verdict.
