@@ -28,7 +28,9 @@ netdoc-sim run broken-dns
 
 Linux only. The binary is not in the macOS or Windows downloads, because the
 backend is Linux namespaces and there is no other one; see
-[Limitations](#limitations).
+[Limitations](#limitations). On macOS and Windows, run the published image
+through a Linux container runtime instead — see [Running it in a
+container](#running-it-in-a-container).
 
 Contributors building from a clone still want the pair, so a run grades the
 netdoc that was just changed rather than the installed one — that is what step 2
@@ -118,6 +120,172 @@ director executes them after isolation. Do not copy them into a host shell as a
 substitute for running the simulator. Scenario values never become shell
 strings; the backend constructs argument slices from validated logical names
 and addresses.
+
+## Running it in a container
+
+**Challenge Mode uses the real Linux namespace simulator inside a Linux
+container. macOS and Windows do not emulate the simulator themselves.** The
+image is packaging, not a port: it carries the same `netdoc-sim` the Linux
+packages carry, and that binary builds its network out of the same unprivileged
+user, network and mount namespaces described above. There is one backend, and
+this is it running on the Linux kernel your container runtime already provides.
+
+The portability boundary is therefore the runtime, not the simulator. Docker
+Desktop, Podman Desktop, Rancher Desktop or `podman machine` on macOS and
+Windows, Docker or Podman on Linux — anything that runs a Linux container will
+do, and nothing else is needed. No clone, no Go toolchain, no knowledge of
+namespaces.
+
+```text
+macOS / Windows / Linux host
+  └── Docker / Podman                 Linux kernel, container runtime's own
+        └── netdoc-sim                the released binary, unmodified
+              └── user + net + mount namespaces   the same backend as native
+                    └── netdoc        /usr/bin/netdoc from this same image
+```
+
+### Running it
+
+```sh
+docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest challenge
+```
+
+`podman run` takes the same line, and does not need the capability at all:
+
+```sh
+podman run --rm -it ghcr.io/heymaikol/netdoc-sim:latest challenge
+```
+
+The entrypoint is `netdoc-sim`, so everything after the image name is an
+ordinary `netdoc-sim` command line and nothing re-parses it:
+
+```sh
+IMAGE=ghcr.io/heymaikol/netdoc-sim:latest
+docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -difficulty hard
+docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -id V3-8F42C1
+docker run --rm --cap-add SYS_ADMIN $IMAGE challenge -id V3-8F42C1 -answer dns_failure -json
+docker run --rm --cap-add SYS_ADMIN $IMAGE run broken-dns -json
+docker run --rm --cap-add SYS_ADMIN $IMAGE capabilities
+docker run --rm $IMAGE scenarios
+```
+
+`-it` is for the parts where a person is asked something: the challenge shell,
+and the answer menu. Drop it for automation and pass `-answer` or `-give-up`,
+which is what `-json` requires anyway — a piped stdin is consumed by the shell,
+so a challenge run without a terminal and without a submission scores a give-up.
+Exit codes and stdout are the ones documented for each command; `-json` on
+stdout stays parseable because the session prints to stderr.
+
+Tags are immutable per release — `ghcr.io/heymaikol/netdoc-sim:v1.11.3` — with
+`latest` following the newest release the way the Homebrew cask and the Scoop
+bucket do. Pin the version tag in anything automated.
+
+The image is published for `linux/amd64` and `linux/arm64`, and those two claims
+are not equally strong. Both are built from the same source by the release
+workflow, but CI runs the container tests on `amd64` only, because that is the
+architecture its runners execute. `arm64` is built and not runtime-verified —
+which includes Apple Silicon, where Docker Desktop runs the `arm64` image
+natively. Nothing about the backend is architecture-specific, and reports of it
+failing there are worth filing.
+
+### What the container is allowed to do
+
+The simulator needs **no capability at all**. It creates a user namespace and
+becomes root inside it; on the host side of that namespace the kernel gives it
+nothing, which is the same guarantee a native run has. `--cap-drop ALL` changes
+nothing about a run, and a test in `container_test.go` proves it by taking every
+capability away and running a full simulation.
+
+`--cap-add SYS_ADMIN` is there for Docker's *seccomp* profile, not for the
+simulation. That profile refuses `clone(CLONE_NEWUSER)`, `unshare`, `mount` and
+`setns` unless the container was configured with `CAP_SYS_ADMIN` — so the flag
+is what permits the syscalls, and the image runs as an unprivileged user
+(`netdoc`, uid 1000) so that the capability is not what the work is done with.
+Podman's default profile permits those syscalls already, which is why it needs
+no flag.
+
+If you would rather grant no capability, relax the filter directly instead:
+
+```sh
+docker run --rm -it --cap-drop ALL --security-opt seccomp=unconfined $IMAGE challenge
+```
+
+Both forms are tested. Pick by which you would rather widen: a capability the
+process is not in a position to use, or the syscall filter.
+
+**`--privileged` is not required, and neither is anything else on this list.**
+The image needs no `NET_ADMIN` (all network configuration happens inside the
+namespaces it creates), no host network, no host PID namespace, no bind mounts,
+no Docker socket, and no access to any host path. `--cap-add NET_ADMIN` on its
+own does not even work, which is the clearest statement of what the requirement
+actually is. The simulated topology is built inside the container and disappears
+with it; your machine's real interfaces, routes, resolver and firewall are never
+touched, on any host OS.
+
+Two hosts need more than the flags above, and both are host policy rather than
+anything the image can carry:
+
+- **Docker Engine on a distribution with AppArmor** (Ubuntu, Debian). The
+  `docker-default` profile denies `mount`, which the backend needs inside its
+  own mount namespace: add `--security-opt apparmor=unconfined`.
+- **Ubuntu 24.04 and later**, which restrict unprivileged user namespaces
+  outright. This is the same restriction native runs hit, and
+  `netdoc-sim capabilities` names it; the repository's CI clears it with
+  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
+
+A run that is refused the namespace says so and stops, rather than falling back
+to anything:
+
+```text
+netdoc-sim: cannot create the user, network and mount namespaces a simulation
+runs in: fork/exec /usr/bin/netdoc-sim: operation not permitted.
+```
+
+That message is the one to match against this section. Note that `netdoc-sim
+capabilities` cannot predict it: it reports the host knobs it can read cheaply,
+and a container's seccomp profile is not one of them.
+
+### What is in the image
+
+Alpine, both release binaries at one version, and the tools two different
+parties need: `ip`, `nsenter`, `tc` and `nft` for the backend, and `ping`,
+`dig`, `curl`, `ss`, `traceroute` and `nc` for the person in the challenge
+shell. `netdoc` and `netdoc-sim` sit together in `/usr/bin`, which is what makes
+[step 2 of Which netdoc gets run](#which-netdoc-gets-run) select the image's own
+netdoc — every challenge result records that absolute path and the version that
+binary printed, so a result names the build that produced it:
+
+```json
+"netdoc": {"path": "/usr/bin/netdoc", "version": "netdoc v1.11.3"}
+```
+
+The image sets `NETDOC_SIM_CHALLENGE_COMMAND` so the replay line and the share
+block invite readers with a `docker run` command rather than with a `netdoc-sim`
+they may not have. It changes nothing about the puzzle or the scoring; override
+it with `-e NETDOC_SIM_CHALLENGE_COMMAND=...` for another runtime.
+
+Nothing survives a container: a challenge keeps no simulation, writes no state,
+and an interrupted or failed run leaves neither processes nor namespaces behind
+even in a container that is reused for another run.
+
+### Building and testing it locally
+
+```sh
+docker build --build-arg VERSION=dev -t netdoc-sim:test .
+NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
+The tests run the built image: both binaries at the tag's version, a real
+namespace-backed scenario, a real challenge that stays deterministic across
+runs, exit-code propagation, cleanup after an interrupted run in a reused
+container, and both privilege claims above — including the negative one, which
+denies `clone(CLONE_NEWUSER)` through a seccomp profile and requires the
+controlled failure rather than a silent fallback. They skip without an image or
+an engine unless `NETDOC_REQUIRE_CONTAINER=1` is set, which is what CI sets.
+
+Native Linux stays exactly as it was. The container supplements it: contributors
+and anyone on Linux should keep running `./netdoc-sim` directly, which is faster,
+needs no runtime, and is what the namespace integration suite exercises.
 
 ## How a run is built
 
@@ -707,6 +875,9 @@ a game, not a security boundary.
 
 Challenge Mode needs exactly what any other run needs — the Linux namespace
 backend, no root — plus a terminal, because a person is being asked a question.
+On macOS or Windows the Linux part comes from a container runtime; see [Running
+it in a container](#running-it-in-a-container), which changes how the simulator
+is reached and nothing about what it does.
 The shell enters the node through the same `nsenter` argument slice the netdoc
 run uses, gains no privilege the simulator did not already have, and is given
 the simulator's trust anchors so a generated certificate verifies for the
@@ -786,13 +957,23 @@ failure. The tests themselves remain rootless. CI's throwaway Linux runner
 adjusts its host AppArmor setting before this command; `netdoc-sim` never makes
 that change or escalates privileges.
 
+Changes to the `Dockerfile` or to the image's release job additionally need the
+artifact tested, on an engine, rather than the file reviewed:
+
+```sh
+docker build --build-arg VERSION=dev -t netdoc-sim:test .
+NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
 See the repository's [Tests section](../README.md#tests) for the complete
 validation gate. A documentation-only change does not require running namespace
 integration tests unless it exposes a reason to verify namespace behavior.
 
 ## Limitations
 
-- Linux is the only maintained backend.
+- Linux is the only maintained backend. The container image is packaging around
+  that backend, not a second one: it needs a Linux container runtime, and gives
+  macOS and Windows no simulator of their own.
 - Topology is static unicast IPv4/IPv6 over simulator-owned bridges: no NAT,
   address autoconfiguration, dynamic routing, tunnels, ECMP, or VLAN model.
 - Simulator services are deliberately narrow probe fixtures, not general DNS,

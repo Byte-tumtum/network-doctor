@@ -26,6 +26,7 @@ import (
 var optInTags = map[string]bool{
 	"integration":       true,
 	"netns_integration": true,
+	"container":         true,
 }
 
 // hostCalls names the calls that reach the machine running the test. It is

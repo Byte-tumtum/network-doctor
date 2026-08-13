@@ -101,7 +101,7 @@ netdoc --version
 netdoc-sim help
 ```
 
-`netdoc-sim` is Linux-only: it builds its networks out of Linux namespaces, so the macOS and Windows downloads ship `netdoc` alone.
+`netdoc-sim` is Linux-only: it builds its networks out of Linux namespaces, so the macOS and Windows downloads ship `netdoc` alone. Those hosts run the same simulator from [a container](docs/simulation.md#running-it-in-a-container) instead.
 
 ### Everywhere else
 
@@ -380,6 +380,8 @@ All probes, the diagnosis engine, and the TUI are pure Go and identical on Linux
 
 Windows built-in toolbox commands are decoded from the active OEM code page before their output is sanitized. UTF-8 tools like `curl.exe` and `nmap` are left untouched.
 
+`netdoc-sim` and Challenge Mode are the exception: their backend is Linux namespaces and there is no other one, so macOS and Windows run [the published image](docs/simulation.md#running-it-in-a-container) on a Linux container runtime rather than a port. `netdoc` itself needs no container anywhere — diagnosing your own machine's network from inside one would diagnose the container.
+
 ## Feature summary
 
 Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
@@ -425,6 +427,15 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
 ```
 
+If the change touched the `Dockerfile` or the image's release job, also build the
+image and test the artifact. It needs Docker or Podman, which is why it is not in
+the gate above:
+
+```sh
+docker build --build-arg VERSION=dev -t netdoc-sim:test .
+NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
 If the change touched a build-tagged or `_linux`/`_darwin`/`_windows` suffixed
 file, also compile for macOS and Windows:
 
@@ -455,9 +466,11 @@ netdoc-sim scenarios
 netdoc-sim run broken-dns
 ```
 
-Any [Linux package](#linux) installs `netdoc-sim` beside `netdoc`. Contributors
-testing an unreleased change build both from the clone instead, so the simulator
-runs the netdoc built next to it:
+Any [Linux package](#linux) installs `netdoc-sim` beside `netdoc`, and
+`ghcr.io/heymaikol/netdoc-sim` carries the same pair for hosts that are not Linux
+— the container is packaging around the Linux backend, never a second one.
+Contributors testing an unreleased change build both from the clone instead, so
+the simulator runs the netdoc built next to it:
 
 ```sh
 go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
@@ -476,6 +489,22 @@ Challenge Mode drops you into a deliberately broken network without telling you
 what's wrong. Investigate it with the tools you'd normally use, commit to your
 diagnosis, then let Network Doctor take a shot at the exact same problem. Both
 answers are judged against the simulator's independently observed ground truth.
+
+On **macOS, Windows or Linux**, one container image is the whole install — no
+clone, no Go toolchain, no Linux namespace knowledge, and nothing on your real
+network is touched:
+
+```sh
+docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest challenge
+```
+
+That is the real Linux namespace simulator running inside a Linux container, not
+a macOS or Windows imitation of it. `podman run --rm -it` works too, and does not
+need the capability. See [Running it in a
+container](docs/simulation.md#running-it-in-a-container) for the specific-id,
+JSON and privilege details, and for what that one flag is and is not.
+
+On Linux, any [package](#linux) installs `netdoc-sim` and it runs natively:
 
 ```sh
 netdoc-sim challenge                  # draw a challenge and play it
@@ -511,10 +540,11 @@ Your turn: netdoc-sim challenge -id V3-8F42C1
 
 Everything is local and reproducible: no account, no server, no leaderboard. A
 challenge id is the whole puzzle, so the same id is the same broken network on
-anyone's machine. Same requirements as the rest of the simulator — Linux,
-unprivileged, and nothing on your real network is touched. See the [Challenge
-Mode guide](docs/simulation.md#challenge-mode) for how scoring works and why
-Network Doctor never gets to see the answer either.
+anyone's machine — natively on Linux, or through the image on any host. Same
+requirements as the rest of the simulator: a Linux kernel, unprivileged, and
+nothing on your real network is touched. See the [Challenge Mode
+guide](docs/simulation.md#challenge-mode) for how scoring works and why Network
+Doctor never gets to see the answer either.
 
 ## Development
 

@@ -74,6 +74,31 @@ jobs:
         run: go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic
       - if: runner.os == 'Linux'
         run: go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic
+  # The container is how macOS and Windows reach Challenge Mode, so the artifact
+  # is tested rather than assumed: this job builds the image and runs a real
+  # namespace-backed simulation and a real challenge inside it. The runner's
+  # Docker is the point — it has the default seccomp profile Docker Desktop
+  # ships, which is what the documented --cap-add SYS_ADMIN exists for.
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # amd64 only: this job proves the image works, and it can only prove it on
+      # the architecture it can execute. The release builds arm64 as well.
+      - run: docker build --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" -t netdoc-sim:ci .
+      # NETDOC_REQUIRE_CONTAINER turns "no image or no engine" from a skip into a
+      # failure, so this job cannot go green without having run the container.
+      - run: go test -tags container -count=1 -v .
+        env:
+          NETDOC_CONTAINER_IMAGE: netdoc-sim:ci
+          NETDOC_CONTAINER_ENGINE: docker
+          NETDOC_REQUIRE_CONTAINER: "1"
+
   lint:
     runs-on: ubuntu-latest
     steps:

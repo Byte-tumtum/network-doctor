@@ -110,6 +110,69 @@ func TestLinuxPackagesShipEveryLinuxBuild(t *testing.T) {
 	}
 }
 
+// The container image is the third install path, and it owes the user the same
+// pair of executables the packages do — from one build, at one version, in one
+// directory, because that is what makes netdoc-sim find the netdoc beside it.
+// container_test.go proves this against a built image; this proves it against
+// the file, in the ordinary gate, where nobody needs a container engine.
+func TestDockerfileShipsTheSameBinariesAsTheLinuxPackages(t *testing.T) {
+	data, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(data)
+
+	for _, binary := range loadGoreleaserConfig(t).linuxBinaries() {
+		if !strings.Contains(dockerfile, "-o /out/"+binary+" ") {
+			t.Errorf("the image never builds %s, which the Linux packages ship", binary)
+		}
+		if !strings.Contains(dockerfile, "COPY --from=build /out/"+binary+" /usr/bin/"+binary) {
+			t.Errorf("the image never installs %s into /usr/bin, where netdoc-sim looks for its sibling", binary)
+		}
+	}
+	// One version string for both, injected the same way GoReleaser injects it.
+	// An image whose netdoc and netdoc-sim disagreed would make every recorded
+	// challenge result ambiguous about which build it graded.
+	if got := strings.Count(dockerfile, "-X main.version=${VERSION}"); got != 2 {
+		t.Errorf("%d builds stamp -X main.version, want 2", got)
+	}
+	// Digest-pinned bases: a floating tag would make two builds of one commit
+	// different images, and dependabot keeps the pins current.
+	for _, line := range strings.Split(dockerfile, "\n") {
+		if !strings.HasPrefix(line, "FROM ") {
+			continue
+		}
+		if !strings.Contains(line, "@sha256:") {
+			t.Errorf("base image is not pinned by digest: %s", line)
+		}
+	}
+	// netdoc-sim owns the argument parsing. An entrypoint that re-parsed
+	// anything would be a second CLI to keep in step with this one.
+	if !strings.Contains(dockerfile, `ENTRYPOINT ["/usr/bin/netdoc-sim"]`) {
+		t.Error("the image entrypoint is not netdoc-sim")
+	}
+}
+
+// The release publishes the image from the tag it is building, with that tag as
+// the version the binaries report. Reading it from the workflow keeps the two
+// halves of "the image tag names the build inside it" from drifting apart.
+func TestReleaseWorkflowPublishesTheImageAtTheTag(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	for _, want := range []string{
+		"VERSION=${{ github.ref_name }}",
+		"ghcr.io/${{ github.repository_owner }}/netdoc-sim:${{ github.ref_name }}",
+		"platforms: linux/amd64,linux/arm64",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("the release workflow does not contain %q", want)
+		}
+	}
+}
+
 // specSection returns the lines of one %section of an RPM spec, so an assertion
 // can tell "installed and listed" from "mentioned in a comment somewhere".
 func specSection(t *testing.T, spec, name string) []string {
