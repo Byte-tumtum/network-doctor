@@ -119,6 +119,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	case "starters":
 		return starters(args[1:], stdout, stderr)
+	case "authored":
+		return authored(args[1:], stdout, stderr)
 	case "capabilities":
 		return capabilities(ctx, stdout)
 	case "list":
@@ -151,6 +153,7 @@ Commands:
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
   starters [pack]          list the curated starter packs, or one pack's challenges
+  authored                 list the hand-written challenges and their ids
   capabilities             report whether this host can simulate, and what a run does
   list                     list simulations left running by 'run -keep'
   inspect <id>             show a kept simulation's nodes and how to enter them
@@ -222,6 +225,7 @@ Flags for challenge:
   -id <ID>                 replay a specific challenge instead of drawing one
   -daily[=YYYY-MM-DD]      play the challenge for today, or for that UTC date
   -starter <pack>          draw from a starter pack ('netdoc-sim starters')
+  -authored <slug>         play a hand-written challenge ('netdoc-sim authored')
   -difficulty <level>      draw an easy, medium or hard challenge
   -answer <name>           submit this diagnosis without opening a shell
   -give-up                 skip straight to the answer
@@ -1058,4 +1062,26 @@ func netdocVersion(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("%s -version: printed no version", path)
 	}
 	return version, nil
+}
+
+// authored is the discovery half of the authored challenges: which ones exist,
+// what each is for, and the ordinary challenge id that plays it. Like a starter
+// pack, it prints the ids rather than hiding them — an authored challenge is a
+// normal shareable id, and printing it is what lets somebody replay or post one
+// without going back through this command.
+func authored(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		fmt.Fprintln(stderr, "netdoc-sim: authored takes no arguments")
+		return exitUsage
+	}
+	fmt.Fprintln(stdout, "Authored challenges — hand-written cases, each setting a chosen fault. Play one with:")
+	fmt.Fprintln(stdout, "  netdoc-sim challenge -authored <slug>")
+	fmt.Fprintln(stdout, "\nEach is an ordinary challenge id, so it can also be replayed or shared with -id.")
+	fmt.Fprintln(stdout, "The line under each name says what telling it apart requires, never what it is.")
+	fmt.Fprintln(stdout)
+	for _, item := range simulation.AuthoredChallenges() {
+		fmt.Fprintf(stdout, "  %-28s %-10s %s\n", item.Slug, item.ID, item.Name)
+		fmt.Fprintf(stdout, "  %-28s %-10s %s\n\n", "", "", item.Teaches)
+	}
+	return exitOK
 }

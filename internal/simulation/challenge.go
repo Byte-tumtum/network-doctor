@@ -31,7 +31,7 @@ const (
 	// the id itself, not a note about it: an id names the generation rules that
 	// resolve it, so a future change to selection adds a version instead of
 	// quietly repointing every id that has already been shared.
-	ChallengeIDVersion = "V3"
+	ChallengeIDVersion = "V4"
 	challengeIDDomain  = "netdoc-sim-challenge"
 	// challengeIDDigits is the width of a shareable challenge id, in hex digits.
 	challengeIDDigits = 6
@@ -268,6 +268,17 @@ type challengeCondition struct {
 	// fault on a target the briefing never names — a clue nobody was shown, and a
 	// question the graded netdoc run was never asked.
 	briefed func(*Scenario, GeneratedMutation) bool
+	// signature is this condition's unscoped evidence trace: does the run show a
+	// fault of this class anywhere, with no mutation to scope it by. It is
+	// required on every condition but the healthy one, and it is what the healthy
+	// verdict is derived from — see challenge_truth.go, and
+	// TestEveryChallengeConditionCarriesASignature.
+	//
+	// It is deliberately not the thing that establishes a fault challenge's
+	// answer. That stays the scoped pair, mutationObserved plus requires, which
+	// knows which node and port were mutated. A signature only has to be
+	// sensitive enough that no run carrying this fault can pass for healthy.
+	signature challengeSignature
 }
 
 // challengeConditions is the challenge contract: the hunt mutations Challenge
@@ -320,35 +331,43 @@ var challengeConditions = []challengeCondition{
 	},
 	{
 		mutation: "dns.servfail", answer: AnswerDNSFailure, difficulty: DifficultyEasy,
+		signature:   signatureDNSFailing,
 		explanation: "The client's resolver answered queries with SERVFAIL. Nothing below DNS was touched: the link, the gateway and the path to the target's address kept working.",
 	},
 	{
 		mutation: "dns.drop", answer: AnswerDNSFailure, difficulty: DifficultyEasy,
+		signature:   signatureDNSFailing,
 		explanation: "The client's resolver silently discarded queries, so name resolution timed out rather than failing fast. Nothing below DNS was touched.",
 	},
 	{
 		mutation: "service.tcp_reset", answer: AnswerReset, difficulty: DifficultyEasy,
+		signature:   signatureTCPReset,
 		explanation: "The target's service accepted the TCP connection and then reset it. The path to the target is intact — the connection completes before it is torn down.",
 		briefed:     resetTargetIsBriefed,
 	},
 	{
 		mutation: "service.tls_expired", answer: AnswerTLSCertificate, difficulty: DifficultyMedium,
+		signature:   signatureExpiredCertificate,
 		explanation: "The target served an expired certificate and the client refused it. TCP to the port succeeds, so everything below TLS is healthy.",
 	},
 	{
 		mutation: "family.ipv4_drop", answer: AnswerIPv4Failure, difficulty: DifficultyMedium,
+		signature:   signatureFamilyUnreachable("ipv4"),
 		explanation: "IPv4 forwarding was dropped at the gateway while IPv6 kept working. The client still has an IPv4 address and an IPv4 route — what it does not have is an IPv4 path.",
 	},
 	{
 		mutation: "family.ipv6_drop", answer: AnswerIPv6Failure, difficulty: DifficultyHard,
+		signature:   signatureFamilyUnreachable("ipv6"),
 		explanation: "IPv6 forwarding was dropped at the gateway while IPv4 kept working. Most traffic still succeeds by falling back to IPv4, which is what makes this one quiet.",
 	},
 	{
 		mutation: "routing.preferred_path_failure", answer: AnswerPreferredRoute, difficulty: DifficultyHard,
+		signature:   signatureControlledTargetUnreachable,
 		explanation: "The client's lower-metric default route is still selected and its gateway still answers, but that router's own upstream link is down. The higher-metric alternate default remains healthy, which a controlled target on that path proves.",
 	},
 	{
 		mutation: "netem.loss", answer: AnswerPacketLoss, difficulty: DifficultyMedium,
+		signature:   signaturePacketDrops,
 		explanation: "A shaper on the path to the internet discarded a percentage of the packets crossing it. Nothing is misconfigured — addresses, routes, name resolution and every service are intact — and connections that survive the loss still work, which is what makes it read as flaky rather than broken.",
 		// The qdisc's own drop counter, not the qdisc being installed with the
 		// requested parameters. A shaper that matched no traffic impaired
@@ -359,31 +378,37 @@ var challengeConditions = []challengeCondition{
 	},
 	{
 		mutation: "service.connection_refused", answer: AnswerRefused, difficulty: DifficultyEasy,
+		signature: signatureControlledTargetRefused,
 		explanation: "The target host is up and its port is closed, so it answers the connection with a refusal rather than swallowing it. " +
 			"The path is intact — a refusal is something only a reachable host can send.",
 	},
 	{
 		mutation: "service.tcp_port_blocked", answer: AnswerPortBlocked, difficulty: DifficultyMedium,
+		signature: signatureInboundTCPDropped,
 		explanation: "A filter at the target discarded inbound connections to the port, so they timed out instead of being refused. " +
 			"The host itself is up and every other port on it kept working, which is what separates a filtered port from a dead one.",
 	},
 	{
 		mutation: "service.tls_hostname_mismatch", answer: AnswerTLSHostname, difficulty: DifficultyMedium,
+		signature: signatureMismatchedCertificate,
 		explanation: "The target served a certificate that is currently valid and signed by a trusted issuer, but issued for a different name than the one requested. " +
 			"TCP and the handshake up to certificate verification both succeed.",
 	},
 	{
 		mutation: "routing.no_default_route", answer: AnswerNoDefaultRoute, difficulty: DifficultyEasy,
+		signature: signatureNoDefaultRoute,
 		explanation: "The client's default route was deleted. Its link, its address and anything on its own segment still work; " +
 			"what it has lost is any way to a destination that is not on-link.",
 	},
 	{
 		mutation: "routing.wrong_default_route", answer: AnswerWrongDefaultRoute, difficulty: DifficultyHard,
+		signature: signatureFamilyUnreachable(""),
 		explanation: "The default route was repointed at a second router on the same LAN. That router answers, so the gateway is not unreachable, " +
 			"but it has no path to the internet. The original gateway is still up and still forwarding, which a controlled target reached over its own specific route proves.",
 	},
 	{
 		mutation: "routing.missing_subnet_route", answer: AnswerMissingRoute, difficulty: DifficultyHard,
+		signature: signatureControlledTargetUnreachable,
 		explanation: "The specific route to the target's subnet is gone, so traffic for it falls back to a default route that has no way there. " +
 			"Everything the default does cover — the internet, name resolution — kept working, which is what makes this a route-shaped hole rather than an outage.",
 	},
@@ -516,7 +541,8 @@ func healthyChallengeCondition() challengeCondition {
 var challengeBases = []string{"dual-stack-healthy", "healthy", "healthy-routed-network",
 	"tls-valid", "two-path-healthy", "two-path-ipv6-healthy"}
 
-// challengeBasesV3 adds the two-router control. Its client LAN carries a second
+// challengeBasesV3 adds the two-router control. V4 and the authored challenges
+// draw from it too, so it is the current control set rather than V3's alone. Its client LAN carries a second
 // router that answers but goes nowhere, and a target subnet that only a
 // specific route reaches, which is what a wrong default route and a missing
 // subnet route need to exist at all — no earlier base could express either.
@@ -590,6 +616,11 @@ var challengeGenerators = map[string]func(id, digits string) (*Challenge, error)
 	"V1": buildChallengeV1,
 	"V2": buildChallengeV2,
 	"V3": buildChallengeV3,
+	"V4": buildChallengeV4,
+	// Authored ids are a version like any other, so they parse, resolve, replay
+	// and share through exactly the same path. Their digits name a case somebody
+	// wrote rather than a seed to search from — see challenge_authored.go.
+	AuthoredIDVersion: buildChallengeAuthored,
 }
 
 // challengeV1Mutations freezes the conditions V1 ids select through. V1 ids are
@@ -715,6 +746,96 @@ func buildChallengeV3(id, digits string) (*Challenge, error) {
 		bases: challengeBasesV3, generatorVersion: HuntGeneratorVersion,
 		selectable: func(string) bool { return true },
 	})
+}
+
+// buildChallengeV4 is the current selection, and the first one that chooses what
+// the challenge is about before it goes looking for a case to express it.
+//
+// V1 to V3 draw a base and a case number and accept whatever single mutation
+// the hunt generator produces, retrying until one is challenge-capable. That
+// makes the distribution of diagnoses an accident of three unrelated things:
+// how many mutation variants a family has, how many bases the operator applies
+// to, and how often the case scan reaches it first. Measured over V3, it puts
+// DNS at roughly 23% and a missing subnet route at under 2% — a sixteenfold
+// spread nobody chose, in a game whose whole point is practising the rare ones.
+//
+// V4 picks the answer first, uniformly over the playable vocabulary, and only
+// then looks for a case that sets it. The search is still a search, but it can
+// no longer decide what the game is about: it chooses which base and which case
+// number express an answer that was already fixed. Rejection affects how long
+// resolution takes, never the distribution.
+//
+// Uniform over answers rather than over mutations, deliberately. dns.servfail
+// and dns.drop are one diagnosis to a player, and weighting by mutation is
+// exactly the accident this version exists to remove.
+func buildChallengeV4(id, digits string) (*Challenge, error) {
+	seed := challengeSeed("V4", digits)
+	rng := mathrand.New(mathrand.NewSource(seed))
+	if rng.Intn(challengeHealthyOdds) == 0 {
+		base := challengeBasesV3[rng.Intn(len(challengeBasesV3))]
+		return healthyChallenge(id, base, seed, HuntGeneratorVersion,
+			ChallengeDifficulties[rng.Intn(len(ChallengeDifficulties))])
+	}
+	answers := challengePlayableAnswers()
+	answer := answers[rng.Intn(len(answers))]
+	conditions := challengeConditionsFor(answer)
+	condition := conditions[rng.Intn(len(conditions))]
+	// Only the bases this condition's operator applies to. Drawing from all of
+	// them would spend the search budget on combinations that can never produce
+	// the wanted mutation, and would make resolution failure depend on how many
+	// unrelated bases happen to exist.
+	bases, err := challengeBasesForMutation(condition.mutation)
+	if err != nil {
+		return nil, fmt.Errorf("challenge %s: %w", id, err)
+	}
+	if len(bases) == 0 {
+		return nil, fmt.Errorf("challenge %s: no challenge base scenario can express %s", id, condition.mutation)
+	}
+	for attempt := 0; attempt < challengeSearchLimit; attempt++ {
+		base := bases[rng.Intn(len(bases))]
+		caseNumber := rng.Intn(HuntMaxCaseNumber + 1)
+		scenario, err := LibraryScenario(base)
+		if err != nil {
+			return nil, err
+		}
+		generated, err := generateHuntCase(HuntGeneratorVersion, base, scenario, seed, caseNumber, 1)
+		if err != nil || len(generated.Manifest.Mutations) != 1 {
+			continue
+		}
+		if generated.Manifest.Mutations[0].ID != condition.mutation {
+			continue
+		}
+		if condition.briefed != nil && !condition.briefed(scenario, generated.Manifest.Mutations[0]) {
+			continue
+		}
+		return newChallenge(id, base, seed, caseNumber, condition.difficulty,
+			generated.Manifest, generated.Scenario, condition)
+	}
+	return nil, fmt.Errorf("challenge %s: no case setting %s within %d candidates",
+		id, condition.mutation, challengeSearchLimit)
+}
+
+// challengeBasesForMutation lists the challenge controls this mutation's
+// operator applies to, in challengeBasesV3 order. Derived by asking the
+// operator itself, so it cannot fall out of step with the hunt registry the way
+// a written-down compatibility list would.
+func challengeBasesForMutation(mutation string) ([]string, error) {
+	operator, ok := huntOperatorByID(HuntGeneratorVersion, mutation)
+	if !ok {
+		return nil, fmt.Errorf("hunt generator %s has no %q operator", HuntGeneratorVersion, mutation)
+	}
+	var out []string
+	for _, name := range challengeBasesV3 {
+		scenario, err := LibraryScenario(name)
+		if err != nil {
+			return nil, err
+		}
+		canonicalScenarioInput(scenario)
+		if operator.applicable(scenario) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 // buildChallengeCase is the selection every version shares. The selection is
@@ -1077,107 +1198,6 @@ func challengeTruth(c *Challenge, report *Report) ChallengeTruth {
 	truth.Answer, truth.Scoreable = c.condition.answer, true
 	truth.Label = challengeAnswerLabel(c.condition.answer)
 	return truth
-}
-
-// healthyObserved requires positive evidence that the network worked, not the
-// absence of evidence that it did not. An empty mutation list establishes
-// nothing, and neither does netdoc's verdict — this function never reads
-// either. A run whose measurements never happened must not be scored as a
-// healthy network.
-//
-// The checks below cover every dimension a challenge is able to break, so
-// "healthy" means the same measurements that would have caught each family
-// were taken and came back clean:
-//
-//	family.ipv4_drop, family.ipv6_drop  → family reachability, measured at this node
-//	routing.preferred_path_failure      → family reachability and controlled targets
-//	dns.servfail, dns.drop              → the resolver's own per-query outcomes
-//	service.tcp_reset                   → the target service's own reset records
-//	service.tls_expired                 → the TLS services' own handshake records
-//	service.tls_hostname_mismatch       → the same handshake records, name half
-//	netem.loss                          → the path shapers' own drop counters
-//	service.connection_refused          → the client's own dial of the target
-//	service.tcp_port_blocked            → the filter's own kernel drop counter
-//	routing.missing_subnet_route        → the client's own dial of the target
-//	routing.no_default_route            → the client's own kernel route table
-//	routing.wrong_default_route         → family reachability, measured at this node
-//
-// TestHealthyChallengeCoversEveryCondition keeps that list and
-// challengeConditions in step.
-func healthyObserved(c *Challenge, report *Report, observed ObservedTruth) (string, bool) {
-	if len(observed.ObservedFaults) > 0 {
-		return "the simulator observed a fault in a challenge that injected none", false
-	}
-	reachable := 0
-	for _, item := range report.Evidence.FamilyReachability {
-		if item.Node != c.Node {
-			continue
-		}
-		switch item.State {
-		case FamilyStateReachable:
-			reachable++
-		case FamilyStateUnreachable:
-			return "the simulator could not reach the " + item.Family + " internet endpoints, so this network was not healthy", false
-		}
-	}
-	if reachable == 0 {
-		return "the simulator took no reachability measurement it could call healthy", false
-	}
-	for _, item := range report.Evidence.ControlledTargets {
-		if item.From != c.Node || item.Reachable {
-			continue
-		}
-		if item.Outcome == TargetStateRefused {
-			return "the simulator's own connection to " + item.To + " was refused, so this network was not healthy", false
-		}
-		return "the simulator could not reach its controlled target " + item.To + ", so this network was not healthy", false
-	}
-	// Every family the client has an address in has to still have a way out. A
-	// table that was read and holds no default is the no_default_route condition
-	// exactly, and reading it here is what stops that fault passing for health.
-	for _, table := range report.Evidence.RouteTables {
-		if table.Node == c.Node && len(defaultRoutesIn(table.Routes)) == 0 {
-			return "the client's " + table.Family + " routing table held no default route, so this network was not healthy", false
-		}
-	}
-	for _, route := range report.Evidence.Routes {
-		if route.Node == c.Node && route.Selected && route.GatewayReachable != nil && !*route.GatewayReachable {
-			return "the simulator's selected " + route.Family + " gateway did not answer, so this network was not healthy", false
-		}
-	}
-	if observed.DNS == "unavailable" || observed.DNS == "mixed" {
-		return "the simulator observed failing DNS answers, so this network was not healthy", false
-	}
-	if observed.TCP == "reset" {
-		return "the simulator observed a service resetting connections, so this network was not healthy", false
-	}
-	// The precise predicate the tls_expired family is observed by, not the
-	// coarse TLS aggregate: a handshake record that is merely not "passed" is
-	// ordinary traffic on a healthy TLS scenario, and reading it as a fault
-	// would make a working network unscoreable.
-	if anyExpiredCertificateRejected(report.Evidence) {
-		return "the simulator observed a client refusing an expired certificate, so this network was not healthy", false
-	}
-	if anyMismatchedCertificateRejected(report.Evidence) {
-		return "the simulator observed a client refusing a certificate issued for another name, so this network was not healthy", false
-	}
-	// A counted TCP drop is the tcp_port_blocked condition itself. Same reading,
-	// so the two cannot disagree about one run.
-	for _, drop := range report.Evidence.PacketDrops {
-		if droppedInbound(drop, "tcp", drop.Port) {
-			return "the simulator counted discarded inbound TCP packets at " + drop.Node + ", so this network was not healthy", false
-		}
-	}
-	if observed.Link == "down" {
-		return "the simulator observed a link that was down, so this network was not healthy", false
-	}
-	// The drop counter, not merely an installed shaper: the same reading the
-	// netem.loss condition is established by, so "healthy" and "impaired" are
-	// decided from one measurement rather than two that could disagree.
-	if observed.Packet == "drops_observed" {
-		return "the simulator observed a path shaper discarding packets, so this network was not healthy", false
-	}
-	return "", true
 }
 
 // challengeEvidence is the reveal's evidence block: what the simulator measured

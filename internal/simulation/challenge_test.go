@@ -83,6 +83,39 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 		{"V2-00F778", "tls-valid", 342609, "dns.servfail", "easy", "ebe836dc0861aa5b"},
 		{"V2-017334", "dual-stack-healthy", 589641, "service.tcp_reset", "easy", "059f3d44d5c36606"},
 		{"V2-04F447", "tls-valid", 992337, "service.tls_expired", "medium", "46d2b0f2b4af38d5"},
+		// V3 ids are published too: the starter packs are written in them and the
+		// daily epoch table resolves through V3. Every starter entry is pinned
+		// here, so a change that repoints one fails as an id change rather than
+		// as a pack quietly teaching a different lesson.
+		{"V3-000000", "dual-stack-healthy", 47865, "family.ipv4_drop", "medium", "231095f63e19ed50"},
+		{"V3-001EEF", "healthy-routed-network", 113244, "service.tcp_port_blocked", "medium", "34d875982cc4a92c"},
+		{"V3-005CCD", "healthy-routed-network", 823920, "service.tcp_reset", "easy", "6831d5c06db1a57a"},
+		{"V3-009AAB", "two-router-healthy", 506479, "routing.no_default_route", "easy", "4ac68ae4c8186287"},
+		{"V3-00D889", "dual-stack-healthy", 226736, "service.connection_refused", "easy", "ba11b14d2cba16f9"},
+		{"V3-011667", "two-router-healthy", 735550, "routing.wrong_default_route", "hard", "aa3ac7ef97ab1bd4"},
+		{"V3-019223", "healthy", 698901, "routing.no_default_route", "easy", "4215c4009595e7c5"},
+		{"V3-01B112", "healthy", 493581, "service.connection_refused", "easy", "d4b7091d411a156f"},
+		{"V3-01EEF0", "tls-valid", -1, "", "easy", "f20e7492fcfcb216"},
+		{"V3-020DDF", "two-router-healthy", 678808, "routing.missing_subnet_route", "hard", "a4417bcf09ae330d"},
+		{"V3-022CCE", "two-router-healthy", -1, "", "easy", "c9d19d64d6021c04"},
+		{"V3-02E668", "healthy-routed-network", 712638, "dns.servfail", "easy", "9f7d85c4ce3a63bd"},
+		{"V3-034335", "healthy-routed-network", 920724, "netem.loss", "medium", "0418beda7947c876"},
+		{"V3-04599C", "two-path-healthy", 624898, "routing.preferred_path_failure", "hard", "c9d15493189fc1b8"},
+		{"V3-058EF2", "tls-valid", 424504, "service.tls_expired", "medium", "d43e003da7792e6f"},
+		{"V3-05EBBF", "tls-valid", 855224, "service.tls_hostname_mismatch", "medium", "eb280cd235bfcadc"},
+		{"V3-07F99E", "dual-stack-healthy", 457722, "family.ipv6_drop", "hard", "7716ddb93d3c01c6"},
+		// V4 is the version this build mints, so it is frozen from its first
+		// release rather than after somebody notices an id has moved.
+		{"V4-000000", "healthy-routed-network", -1, "", "hard", "5ce33998b441f040"},
+		{"V4-001EEF", "two-path-ipv6-healthy", -1, "", "easy", "06ee298e2e9c6d81"},
+		{"V4-003DDE", "tls-valid", 844771, "routing.no_default_route", "easy", "a5b4405fa620ba15"},
+		{"V4-005CCD", "healthy", 393985, "service.tcp_port_blocked", "medium", "e501938e58f8e4b8"},
+		{"V4-007BBC", "dual-stack-healthy", 858566, "dns.drop", "easy", "22bc3963a5306280"},
+		{"V4-009AAB", "tls-valid", 422849, "service.tls_expired", "medium", "d43e003da7792e6f"},
+		{"V4-00B99A", "tls-valid", 830741, "service.tls_hostname_mismatch", "medium", "eb280cd235bfcadc"},
+		{"V4-00D889", "tls-valid", 809946, "service.tls_expired", "medium", "d43e003da7792e6f"},
+		{"V4-00F778", "two-path-ipv6-healthy", 751460, "routing.preferred_path_failure", "hard", "cea184054ba16e4d"},
+		{"V4-011667", "dual-stack-healthy", 584555, "family.ipv4_drop", "medium", "231095f63e19ed50"},
 	} {
 		t.Run(tt.id, func(t *testing.T) {
 			challenge, err := BuildChallenge(tt.id)
@@ -98,7 +131,7 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 				challenge.Manifest.CaseFingerprint != tt.fingerprint {
 				t.Fatalf("%s now resolves to base %s case %d mutation %q %s fingerprint %s;"+
 					" it was shared as base %s case %d mutation %q %s fingerprint %s."+
-					" Add a V2 generator instead of changing what V1 means.",
+					" Add a new generator version instead of changing what an existing one means.",
 					tt.id, challenge.Base, challenge.Case, mutation, challenge.Difficulty,
 					challenge.Manifest.CaseFingerprint, tt.base, tt.caseNumber, tt.mutation,
 					tt.difficulty, tt.fingerprint)
@@ -107,7 +140,7 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 	}
 	// The version an id carries is the version it is resolved by, whatever this
 	// build happens to mint.
-	for _, version := range []string{"V1", "V2"} {
+	for _, version := range []string{"V1", "V2", "V3", "V4"} {
 		if _, ok := challengeGenerators[version]; !ok {
 			t.Fatalf("%s ids have been published; this build can no longer resolve them", version)
 		}

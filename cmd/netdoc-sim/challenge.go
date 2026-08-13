@@ -35,6 +35,7 @@ type challengeFlags struct {
 	difficulty *string
 	daily      *dailyFlag
 	starter    *string
+	authored   *string
 	answer     *string
 	giveUp     *bool
 	json       *bool
@@ -61,6 +62,7 @@ func newChallengeFlags(out io.Writer) *challengeFlags {
 	f.daily = &dailyFlag{}
 	f.fs.Var(f.daily, "daily", "play today's challenge, or -daily=YYYY-MM-DD for another day (UTC)")
 	f.starter = f.fs.String("starter", "", "draw from a curated starter pack; 'netdoc-sim starters' lists them")
+	f.authored = f.fs.String("authored", "", "play a hand-written challenge by slug; 'netdoc-sim authored' lists them")
 	f.answer = f.fs.String("answer", "", "submit this diagnosis without opening a shell")
 	f.giveUp = f.fs.Bool("give-up", false, "skip straight to the answer")
 	f.json = f.fs.Bool("json", false, "print the machine-readable result")
@@ -121,6 +123,24 @@ func (f *challengeFlags) parse(args []string) error {
 		if _, ok := simulation.StarterPackByID(*f.starter); !ok {
 			return fmt.Errorf("unknown starter pack %q (have: %s)", textsafe.Clean(*f.starter),
 				strings.Join(simulation.StarterPackNames(), ", "))
+		}
+	}
+	if *f.authored != "" {
+		// An authored challenge is one named case, so everything that would pick a
+		// different one is refused by name rather than resolved by precedence.
+		switch {
+		case *f.id != "":
+			return errors.New("-id names one challenge, so -authored has nothing to choose")
+		case *f.difficulty != "":
+			return errors.New("an authored challenge carries its own difficulty, so -difficulty has nothing to choose")
+		case *f.starter != "":
+			return errors.New("-authored and -starter each pick a different challenge; pick one")
+		case f.daily.set:
+			return errors.New("-daily and -authored each pick a different challenge; pick one")
+		}
+		if _, ok := simulation.AuthoredChallengeBySlug(*f.authored); !ok {
+			return fmt.Errorf("unknown authored challenge %q (have: %s)", textsafe.Clean(*f.authored),
+				strings.Join(simulation.AuthoredChallengeSlugs(), ", "))
 		}
 	}
 	if *f.answer != "" && *f.giveUp {
@@ -243,6 +263,8 @@ func resolveChallenge(f *challengeFlags) (*simulation.Challenge, error) {
 		return simulation.DailyChallenge(f.daily.date)
 	case *f.starter != "":
 		return simulation.StarterChallenge(*f.starter)
+	case *f.authored != "":
+		return simulation.AuthoredChallengeByID(*f.authored)
 	}
 	return simulation.FindChallenge(*f.difficulty)
 }

@@ -284,3 +284,71 @@ func TestUsageShowsTheWaysToPlay(t *testing.T) {
 		}
 	}
 }
+
+// -authored is a third way of choosing one, so it is refused alongside every
+// other way and checked before a network is built. Resolving it has to reach
+// the case the slug names, by the same id anybody else would replay.
+func TestAuthoredFlagIsValidatedAndResolvesTheNamedCase(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"an id", []string{"-authored", "reset-after-accept", "-id", "V4-8F42C1"}, "has nothing to choose"},
+		{"a difficulty", []string{"-authored", "reset-after-accept", "-difficulty", "hard"}, "has nothing to choose"},
+		{"a starter pack", []string{"-authored", "reset-after-accept", "-starter", "routing"}, "each pick a different challenge"},
+		{"the daily", []string{"-authored", "reset-after-accept", "-daily"}, "each pick a different challenge"},
+	} {
+		if _, err := parseChallengeArgs(t, tt.args...); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%v with %s was refused with %v", tt.args, tt.name, err)
+		}
+	}
+	if _, err := parseChallengeArgs(t, "-authored", "no-such-case"); err == nil ||
+		!strings.Contains(err.Error(), "unknown authored challenge") {
+		t.Fatalf("an unknown authored slug was accepted or misreported: %v", err)
+	}
+	f, err := parseChallengeArgs(t, "-authored", "Certificate-Expired")
+	if err != nil {
+		t.Fatalf("a slug named in capitals was refused: %v", err)
+	}
+	want, ok := simulation.AuthoredChallengeBySlug("certificate-expired")
+	if !ok {
+		t.Fatal("no certificate-expired authored challenge")
+	}
+	// Deterministic, unlike a starter draw: the same slug is the same case every
+	// time, which is the whole reason for authoring one.
+	for range 5 {
+		challenge, err := resolveChallenge(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if challenge.ID != want.ID {
+			t.Fatalf("-authored certificate-expired resolved to %s, not %s", challenge.ID, want.ID)
+		}
+		if challenge.Daily != "" {
+			t.Fatalf("an authored challenge claims to be the daily for %q", challenge.Daily)
+		}
+	}
+}
+
+// The authored listing has to print the ids, because an authored challenge is
+// an ordinary shareable id and hiding it would make this command the only way
+// to reach one.
+func TestAuthoredListingPrintsSlugsAndIDs(t *testing.T) {
+	var out bytes.Buffer
+	if code := authored(nil, &out, io.Discard); code != exitOK {
+		t.Fatalf("authored exited %d", code)
+	}
+	listing := out.String()
+	for _, item := range simulation.AuthoredChallenges() {
+		if !strings.Contains(listing, item.Slug) {
+			t.Errorf("the listing does not name %q", item.Slug)
+		}
+		if !strings.Contains(listing, item.ID) {
+			t.Errorf("the listing does not print %s, so it could not be replayed or shared", item.ID)
+		}
+	}
+	if code := authored([]string{"extra"}, io.Discard, io.Discard); code != exitUsage {
+		t.Fatalf("authored accepted an argument, exited %d", code)
+	}
+}

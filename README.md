@@ -510,13 +510,16 @@ On Linux, any [package](#linux) installs `netdoc-sim` and it runs natively:
 netdoc-sim challenge                        # draw a challenge and play it
 netdoc-sim challenge -daily                 # today's, the same one for everybody
 netdoc-sim challenge -starter fundamentals  # a curated one to learn on
-netdoc-sim challenge -id V3-8F42C1          # play the one a friend sent you
+netdoc-sim challenge -authored no-default-route  # a hand-written case
+netdoc-sim challenge -id V4-8F42C1          # play the one a friend sent you
 ```
 
 `netdoc-sim challenge -daily` is the same broken network for everyone who plays
 it that day, keyed to the UTC date and derived locally — no server and no
 account — so results are comparable. `netdoc-sim starters` lists the curated
 packs for a first run: fundamentals, service, TLS, paths, routing.
+`netdoc-sim authored` lists the hand-written cases, each one written to set a
+chosen fault rather than drawn at random.
 
 You land in a shell inside the broken machine, investigating a host that belongs
 to the challenge — `invoices-8f42c1.test`, resolved by the simulated network and
@@ -540,12 +543,12 @@ date if it was a daily, and two check marks — and never names the fault, so
 sharing your result doesn't spoil the puzzle for whoever plays it next:
 
 ```text
-Network Doctor Challenge V3-8F42C1 (hard)
+Network Doctor Challenge V4-8F42C1 (hard)
 Daily 2026-08-12
 Me:             ✓
 Network Doctor: ✗
 YOU BEAT NETWORK DOCTOR in 1m 47s
-Your turn: netdoc-sim challenge -id V3-8F42C1
+Your turn: netdoc-sim challenge -id V4-8F42C1
 ```
 
 Your time is the shell and the menu — not the simulator's setup, and not Network

@@ -162,8 +162,8 @@ ordinary `netdoc-sim` command line and nothing re-parses it:
 ```sh
 IMAGE=ghcr.io/heymaikol/netdoc-sim:latest
 docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -difficulty hard
-docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -id V3-8F42C1
-docker run --rm --cap-add SYS_ADMIN $IMAGE challenge -id V3-8F42C1 -answer dns_failure -json
+docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -id V4-8F42C1
+docker run --rm --cap-add SYS_ADMIN $IMAGE challenge -id V4-8F42C1 -answer dns_failure -json
 docker run --rm --cap-add SYS_ADMIN $IMAGE run broken-dns -json
 docker run --rm --cap-add SYS_ADMIN $IMAGE capabilities
 docker run --rm $IMAGE scenarios
@@ -679,9 +679,10 @@ answers are graded against the same independently observed truth.
 ./netdoc-sim challenge                       # draw one and play it
 ./netdoc-sim challenge -daily                # today's, the same one for everybody
 ./netdoc-sim challenge -starter fundamentals # a curated one to learn on
-./netdoc-sim challenge -id V3-8F42C1         # replay someone else's
+./netdoc-sim challenge -authored no-default-route  # a hand-written case
+./netdoc-sim challenge -id V4-8F42C1         # replay someone else's
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V3-8F42C1 -answer dns_failure -json
+./netdoc-sim challenge -id V4-8F42C1 -answer dns_failure -json
 ```
 
 One command runs the whole session: it builds the network, opens a shell in the
@@ -806,7 +807,7 @@ it was curated for and that no pack has collapsed to one answer.
 
 ### Challenge ids
 
-A challenge id is `V3-8F42C1`: a generator version and six hex digits. It
+A challenge id is `V4-8F42C1`: a generator version and six hex digits. It
 resolves with no state on disk and no network, so the same id is the same
 puzzle on anyone's machine. A bare `8F42C1` is accepted and always means `V1`,
 which was the only form the first release printed.
@@ -823,9 +824,40 @@ fails if the chain moves under them.
 excluded. `V3` exists because six more conditions were added to the hunt
 registry — a refused port, a filtered one, a certificate name mismatch, and the
 three single-default route faults — along with the `two-router-healthy` control
-two of them need. Each earlier version keeps its own frozen condition list and
-its own hunt generator version, so an id someone shared before a change still
-sets the puzzle they played.
+two of them need. `V4` exists because of how those versions choose, not what
+they may choose: see below. Each earlier version keeps its own frozen condition
+list and its own hunt generator version, so an id someone shared before a change
+still sets the puzzle they played.
+
+`A1` is the authored namespace. It is an id version like any other and parses,
+resolves, replays and shares identically; its digits name a case somebody wrote
+rather than a seed to search from.
+
+#### V1 to V3, and why V4 chooses differently
+
+V1 to V3 draw a base scenario and a case number, let the hunt generator produce
+whatever single mutation it produces, and retry until one is challenge-capable.
+That works, and it quietly lets three implementation details decide what the
+game is about: how many mutation variants a family has (`dns.servfail` and
+`dns.drop` are one diagnosis to a player but two draws), how many base scenarios
+the family's operator applies to, and which case the scan happens to reach
+first. Measured across 4000 V3 ids, that put DNS at 23.4% and a missing subnet
+route at 1.6% — a sixteenfold spread nobody chose, in a game whose value is
+practising the rare ones.
+
+V4 picks the answer first, uniformly over the playable vocabulary, and only then
+searches for a base and case number that express it. The search still rejects,
+but it can no longer decide what the game is about: rejection changes how long
+an id takes to resolve, never which diagnosis it resolves to. The same 4000-id
+measurement puts every family between 5.9% and 7.1%, with healthy at one draw in
+six as before. `TestV4DistributionIsUniformOverAnswers` guards it with a
+deliberately wide band, because the invariant worth protecting is "every family
+is reachable and none dominates", not a particular percentage.
+
+Uniform over answers rather than over mutations is the deliberate choice. A
+player who diagnoses "DNS resolution" has named one thing, and weighting by
+mutation would hand out twice as much of it for a reason internal to the
+simulator.
 
 ### The challenge contract
 
@@ -892,6 +924,9 @@ above, the difficulty metadata, and the matchup.
 `internal/simulation/challenge.go` is authoritative for all four, and keeps them
 in two tables that never read each other: `challengeConditions` is what the
 simulator can prove, `challengeRecognition` is what netdoc's report has to say.
+The evidence predicates each condition is proved by live next to the first, in
+`challenge_truth.go`; the healthy oracle and the playable answer set are both
+derived from them rather than listed separately.
 A version's whole meaning — controls, hunt generator, admitted conditions —
 lives in one `challengeSelection`, so nothing a version resolves through can
 drift out from under an id that was already shared.
@@ -899,6 +934,133 @@ Protocol meaning stays where it belongs — TCP reset is recognized by netdoc's
 own `connection_reset` cause and nothing looser, because a generic "the run
 failed somehow" comparison would score netdoc correct for naming a different
 fault with a different fix.
+
+### What defines ground truth
+
+Nothing Network Doctor produces. Truth is established from the scenario state,
+the applied mutation, and observations the simulator collected for itself from
+inside the node namespaces — service records, kernel counters, routing tables
+read back with `ip route show`, and the simulator's own TCP dials. The whole
+truth path is `challengeTruth`, which reads `report.Evidence` and the mutation
+manifest and never touches `report.Tests`, so a diagnosis cannot reach it even
+by accident.
+
+A mutation having been generated, applied, or expected to break something
+establishes nothing on its own. It becomes truth only when the executed run left
+independent evidence that it met live traffic.
+
+### Evidence predicates
+
+Every condition Challenge Mode can set carries two predicates over that
+observation, and neither of them can see a diagnosis.
+
+**The scoped predicate** answers "did *this* mutation, on this node and this
+port, meet live traffic". It is `mutationObserved` plus the condition's own
+optional `requires`, and it is what establishes the answer for a challenge that
+injected a fault. It is deliberately narrow: it knows which node was mutated,
+which is what lets a refused port be told apart from a filtered one on the same
+host.
+
+**The evidence signature** answers the different question "does this run show a
+fault of this class *anywhere*, with no mutation to scope it by". It lives on
+the condition row as `signature` and is defined in
+`internal/simulation/challenge_truth.go`. It exists for the healthy challenge,
+where there is no mutation to scope by and the only honest test is that no
+condition's trace is present.
+
+The split is what removed the last hand-maintained list. The healthy verdict
+used to restate every condition's negation in prose, kept in step with the
+condition table by a test that spelled the mapping out a third time; adding a
+playable diagnosis meant editing all three and remembering to. Now
+`healthyObserved` walks `challengeConditions` and consults each signature, so a
+condition added without one fails in `TestEveryChallengeConditionCarriesASignature`
+rather than quietly widening what counts as a healthy network.
+
+A signature may be shared by several conditions, and several are. It names a
+class of trace rather than fingerprinting one mutation — telling neighbouring
+families apart is the scoped predicate's job, and asking the unscoped one to do
+it too would be asking it to name a fault from evidence that does not identify
+one. `TestEvidenceSignaturesDiscriminate` is the table that holds each signature
+to its neighbours: refused against timed-out, expired against name-mismatched, a
+counted drop against an installed rule that matched nothing.
+
+The playable set is derived from the same table. `challengePlayableAnswers`
+reads the conditions rather than listing the answers again, so there is no
+second taxonomy for generation to drift out of sync with.
+
+### Authored and generated challenges
+
+Both kinds are the same challenge. They differ only in how the case is chosen.
+
+A **generated** challenge is a draw: an id seeds a search over base scenarios
+and case numbers. To get one that sets a particular fault you scan ids until one
+falls out — which is how the starter packs were built, and is a poor way to
+write a lesson, because the case you end up teaching is whichever one the search
+reached first.
+
+An **authored** challenge names its base scenario and its fault directly.
+`internal/simulation/challenge_authored.go` holds the table. Everything after
+the choice is shared: the fault is produced by the ordinary hunt mutation
+operator against the ordinary base scenario, so nothing hand-writes a node name,
+a port or an address that could drift out of step with the topology; truth is
+established by the same scoped predicate; and scoring is the same
+`ScoreChallenge`. There is no second correctness path.
+
+Authored cases are deterministic — the fault's parameters come from a seed
+derived from the slug — and validated by
+`TestAuthoredChallengesAreValid`, which builds each one, proves the mutation
+applies to the declared base, proves the declared diagnosis is the one the
+condition table says that mutation establishes, and proves the fault lands on
+the target the briefing names. `TestAuthoredChallengesScoreThroughTheSharedEngine`
+additionally proves no *other* playable answer scores correct, so an authored
+case cannot be accidentally ambiguous. A case with an inconsistent declaration
+fails the build rather than reaching a player.
+
+```sh
+./netdoc-sim authored                                   # the cases and their ids
+./netdoc-sim challenge -authored missing-subnet-route   # play one
+./netdoc-sim challenge -id A1-48CFF9                    # the same case, by id
+```
+
+### Adding a new playable diagnosis
+
+There is one workflow, and no hidden allowlists to remember.
+
+1. **Confirm simulator truth.** The fault needs a hunt mutation operator in
+   `huntMutationRegistry` that a control scenario can express, and the run has to
+   leave independent evidence it met live traffic. If `mutationObserved` has no
+   case for it, add one — that is the scoped predicate.
+2. **Add the condition.** One row in `challengeConditions`: the mutation id, the
+   answer, a difficulty, the reveal explanation, and the evidence `signature`.
+   Add `requires` if the shared per-mutation check would settle for less than
+   proof that live traffic met the fault, and `briefed` if the fault could land
+   on a target the briefing never names. Check the four contract tests above
+   before adding it at all.
+3. **Prove discrimination.** Add the signature to the table in
+   `TestEvidenceSignaturesDiscriminate` with its canonical positive evidence
+   *and* the traces of its nearest neighbours, which must not fire it.
+4. **Decide what netdoc may say.** If its vocabulary can state the condition, add
+   an entry to `challengeRecognition`. If it cannot, add nothing: the condition
+   is still playable and scores `unrecognized`, which is a challenger win and the
+   finding worth having.
+
+Nothing else needs updating. The answer menu entry is the one remaining piece of
+prose, and `TestAdvertisedChallengeAnswersAreProducible` will tell you if you
+forgot it. The healthy oracle, the playable set and V4 generation all derive
+from the row you added. Generation reaches it from V4 onwards; earlier versions
+keep their frozen lists, which is what the id version is for.
+
+### Adding an authored challenge
+
+Append a row to `authoredChallenges` with a stable slug, a name, the base
+scenario, the mutation id, the diagnosis it teaches, and one sentence saying
+what telling it apart requires. Then run the tests: they will build it, check
+the declaration against the condition table, and reject it if the mutation does
+not apply to that base or the fault lands off the briefed target.
+
+The slug derives both the id and the generation seed, so reordering the table is
+safe and renaming a slug mints a different challenge. Once a case is published,
+pin its id in `TestAuthoredChallengeIDsAreFrozen`.
 
 ### Scoring
 
@@ -928,10 +1090,13 @@ demands more — `netem.loss` wants the qdisc's kernel drop counter, because a
 shaper installed with exactly the requested parameters still impaired nobody if
 it matched no traffic. For a challenge that injected nothing it means the
 simulator positively measured health along every dimension a challenge is able
-to break: a reachable family at the client node and no unreachable one, every
-controlled target reached, every selected gateway answering, no failing DNS
-answers, no reset connections, no expired certificate a client refused, no
-downed link, and no shaper counting drops. An empty mutation list is not
+to break. That list is not written down anywhere: `healthyObserved` walks
+`challengeConditions` and asks each condition whether its own evidence signature
+appears in this run, so "healthy" means every fault the game can set was looked
+for with that fault's own predicate and not found. On top of that sits a floor
+of measurements that have to have been taken at all — a reachable family at the
+client node, every selected gateway answering, no downed link — plus the two
+faults no challenge condition covers. An empty mutation list is not
 evidence of anything, the mutation manifest is not evidence of anything, and
 neither is netdoc's verdict — the healthy oracle reads none of them. Anything
 else is `no_result`, for both contestants at once. A mutation that failed to
