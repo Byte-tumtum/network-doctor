@@ -185,7 +185,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&checks, "check", "run stable probe IDs in `probe[,probe...]` form; repeatable")
 	fs.Var(&skips, "skip", "skip stable probe IDs in `probe[,probe...]` form; repeatable")
 	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
-	keys := fs.String("keys", "default", "keybinding `preset` for the TUI: default or vim")
+	keys := fs.String("keys", "", "keybinding `preset` for the TUI: default or vim; overrides the config file")
+	noConfig := fs.Bool("no-config", false, "don't read the key bindings config file")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 
@@ -268,10 +269,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// Validated even for -json, where it changes nothing: a typo in a flag is
 	// worth hearing about on the run that carries it, not on the next one.
-	keymap, err := ui.PresetKeymap(*keys)
-	if err != nil {
-		fmt.Fprintln(stderr, "netdoc: -keys:", err)
-		return 2
+	if *keys != "" {
+		if _, err := ui.PresetKeymap(*keys); err != nil {
+			fmt.Fprintln(stderr, "netdoc: -keys:", err)
+			return 2
+		}
 	}
 
 	if *jsonOut {
@@ -281,8 +283,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
+	// A rejected config is reported twice on purpose. stderr is written before
+	// the alt screen takes over, so it is still on the terminal after netdoc
+	// exits — where a keymap gets fixed; the notice is what says so while the
+	// TUI is up and the scrollback is out of reach.
+	configPath := keyConfigFile(*noConfig)
+	keymap, keyErrs := ui.LoadKeymap(configPath, *keys)
+	opts := []ui.Option{ui.WithKeymap(keymap)}
+	if len(keyErrs) > 0 {
+		for _, err := range keyErrs {
+			fmt.Fprintf(stderr, "netdoc: %s: %v\n", configPath, err)
+		}
+		opts = append(opts, ui.WithStartupNotice(keyConfigNotice(configPath, keyErrs)))
+	}
 	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection,
-		ui.WithKeymap(keymap)), tea.WithAltScreen())
+		opts...), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -304,6 +319,48 @@ func historyFile(disabled bool) string {
 		return ""
 	}
 	return filepath.Join(dir, "netdoc", "history")
+}
+
+// keyConfigFile is where key bindings are read from: the dotfile first, then
+// the config directory netdoc already keeps history in. The dotfile wins
+// because it is the one a user puts in a dotfiles repo and expects to be in
+// charge, and because it is the only one of the two that is a dotfile on all
+// three platforms. Neither is ever written.
+//
+// "" is "no config", which is also what -no-config means and what an absent
+// file leaves behind, so the flag is that path taken on purpose rather than a
+// second opt-out mechanism.
+func keyConfigFile(disabled bool) string {
+	if disabled {
+		return ""
+	}
+	var candidates []string
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".netdocrc"))
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		candidates = append(candidates, filepath.Join(dir, "netdoc", "config.yaml"))
+	}
+	for _, path := range candidates {
+		// Stat, not "read and see": a path that exists but can't be read is a
+		// problem worth reporting, not a reason to fall through to the other
+		// file and silently use different bindings.
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+// keyConfigNotice is the one line the TUI shows about a rejected config. One
+// error is quoted; several are counted, because the bar is one line and the
+// full list is already on stderr.
+func keyConfigNotice(path string, errs []error) string {
+	where := filepath.Base(path)
+	if len(errs) == 1 {
+		return fmt.Sprintf("%s: %v — using the built-in keys", where, errs[0])
+	}
+	return fmt.Sprintf("%s: %d key binding errors — using the built-in keys", where, len(errs))
 }
 
 // printUsage writes the full help text: usage line, the target grammar

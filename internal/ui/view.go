@@ -624,9 +624,19 @@ func (m model) chordHint(help string) string {
 // exception is S: the form works against any target, but advertising a login
 // to a host with no SSH server on it is a suggestion, not information.
 func (m model) helpOverlay() string {
+	// The key column is sized to what is actually bound, not to a constant:
+	// rebinding can make a label as long as "ctrl+b/pgup", which a fixed width
+	// would run straight into its description.
+	keyWidth := 8
+	for _, def := range actionDefs {
+		if m.keys.bound(def.act) {
+			keyWidth = max(keyWidth, lipgloss.Width(m.keys.label(def.act)))
+		}
+	}
 	row := func(k, desc string) string {
-		// fmt widths count runes, so ↑/↓ pads the same as ASCII keys.
-		return "  " + keyStyle.Render(fmt.Sprintf("%-10s", k)) + faintStyle.Render(desc) + "\n"
+		return "  " + keyStyle.Render(k) +
+			strings.Repeat(" ", max(keyWidth-lipgloss.Width(k), 0)+2) +
+			faintStyle.Render(desc) + "\n"
 	}
 	// Both sections are generated from the same table the keys dispatch
 	// through, so a rebound key is documented by the act of rebinding it and

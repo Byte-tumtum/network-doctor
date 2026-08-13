@@ -251,6 +251,30 @@ func TestHelpFollowsRebinding(t *testing.T) {
 	}
 }
 
+// A rebound key can be much longer than the one it replaced, and the
+// cheatsheet's key column has to grow with it instead of running the label
+// into its description.
+func TestCheatsheetKeyColumnFitsLongLabels(t *testing.T) {
+	km, errs := buildKeymap("default", map[string][]string{"help": {"ctrl+x", "f12", "?"}})
+	if len(errs) > 0 {
+		t.Fatalf("rebind: %v", errs)
+	}
+	m := newModel(nil, false)
+	m.keys, m.width, m.height = km, 100, 40
+	m.helping = true
+	want := km.label(actHelp)
+	for _, line := range strings.Split(m.View(), "\n") {
+		if !strings.Contains(line, want) {
+			continue
+		}
+		if !strings.Contains(line, want+"  ") {
+			t.Errorf("cheatsheet row %q runs the key label into its description", line)
+		}
+		return
+	}
+	t.Errorf("no cheatsheet row for %q:\n%s", want, m.View())
+}
+
 // An unbound action is not advertised: a help bar offering a key that does
 // nothing is worse than a shorter help bar.
 func TestUnboundActionsVanishFromHelp(t *testing.T) {

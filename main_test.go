@@ -244,6 +244,49 @@ func TestHistoryFile(t *testing.T) {
 	}
 }
 
+// The two config locations and the order between them. Both are derived from
+// HOME here, so the same test pins the path on every platform's answer for
+// os.UserConfigDir.
+func TestKeyConfigFile(t *testing.T) {
+	if got := keyConfigFile(true); got != "" {
+		t.Errorf("keyConfigFile(true) = %q, want the empty path", got)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("AppData", filepath.Join(home, "AppData"))
+	if got := keyConfigFile(false); got != "" {
+		t.Errorf("keyConfigFile with no file = %q, want the empty path", got)
+	}
+
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir on this host: %v", err)
+	}
+	configYAML := filepath.Join(dir, "netdoc", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configYAML), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configYAML, []byte("keys: vim\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := keyConfigFile(false); got != configYAML {
+		t.Errorf("keyConfigFile = %q, want %q", got, configYAML)
+	}
+
+	// The dotfile outranks it once it exists.
+	dotfile := filepath.Join(home, ".netdocrc")
+	if err := os.WriteFile(dotfile, []byte("keys: default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := keyConfigFile(false); got != dotfile {
+		t.Errorf("keyConfigFile = %q, want the dotfile %q", got, dotfile)
+	}
+	if got := keyConfigFile(true); got != "" {
+		t.Errorf("-no-config still found %q", got)
+	}
+}
+
 // A misspelled preset is rejected before anything runs — including under
 // -json, where the keymap has no effect but the typo is still worth hearing
 // about on the run that carries it.

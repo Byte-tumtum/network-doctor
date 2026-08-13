@@ -106,8 +106,11 @@ const (
 	maxParkedJobs = 12
 	ctrlCWindow   = 2 * time.Second
 	noticeWindow  = 4 * time.Second
-	watchRuns     = 20
-	ctrlCNotice   = "Press Ctrl+C again to quit"
+	// startupNoticeWindow holds a pre-TUI complaint long enough to be read by
+	// someone who was looking at the banner, not waiting for a reply.
+	startupNoticeWindow = 12 * time.Second
+	watchRuns           = 20
+	ctrlCNotice         = "Press Ctrl+C again to quit"
 )
 
 // WatchEvery is the gap between repeat passes in watch mode, shared so the TUI
@@ -251,6 +254,17 @@ func WithKeymap(km Keymap) Option {
 	return func(m *model) { m.keys = km }
 }
 
+// WithStartupNotice opens the run with one line of feedback, for something
+// that went wrong before the TUI existed — a rejected config file being the
+// only current caller. It holds longer than an ordinary notice: nothing the
+// user did triggered it, so nothing tells them to be looking when it appears.
+func WithStartupNotice(msg string) Option {
+	return func(m *model) {
+		m.notice, m.noticeOK = textsafe.Clean(msg), false
+		m.noticeDeadline = time.Now().Add(startupNoticeWindow)
+	}
+}
+
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
 func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
@@ -353,10 +367,20 @@ func saveHistory(path string, hist []string) {
 }
 
 func (m model) Init() tea.Cmd {
-	if m.toolbox {
-		return m.spinner.Tick // chain deferred until 'r'; tick drives the job timer
+	cmds := []tea.Cmd{m.spinner.Tick} // chain deferred until 'r' in toolbox mode; tick drives the job timer
+	if !m.toolbox {
+		cmds = append(cmds, func() tea.Msg { return scheduleMsg{gen: 0} })
 	}
-	return tea.Batch(m.spinner.Tick, func() tea.Msg { return scheduleMsg{gen: 0} })
+	// A notice set before the program started has its deadline but not yet the
+	// tick that clears it; setNotice can't run here, since Init's mutations
+	// are discarded.
+	if !m.noticeDeadline.IsZero() {
+		deadline := m.noticeDeadline
+		cmds = append(cmds, tea.Tick(time.Until(deadline), func(time.Time) tea.Msg {
+			return noticeDoneMsg{deadline: deadline}
+		}))
+	}
+	return tea.Batch(cmds...)
 }
 
 // chainRan reports whether the diagnostic chain has been started this session.

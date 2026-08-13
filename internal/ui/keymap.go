@@ -256,11 +256,15 @@ func parseKeySeq(seq string) (string, error) {
 		if r := []rune(key); len(r) == 1 && unicode.IsPrint(r[0]) {
 			continue
 		}
+		// Both hints name a mistake that would otherwise read as a key that
+		// simply never fires. Case matters — G and g are different keys — so a
+		// name that is only miscapitalized is worth saying out loud.
 		hint := ""
-		if len([]rune(key)) > 1 {
-			// The commonest mistake by far, and the one that would otherwise
-			// look like a key that simply never fires.
-			hint = " (a chord is written with spaces, e.g. \"g g\")"
+		switch {
+		case keyNames[strings.ToLower(key)]:
+			hint = fmt.Sprintf(" (named keys are lower case: %q)", strings.ToLower(key))
+		case len([]rune(key)) > 1:
+			hint = ` (a chord is written with spaces, e.g. "g g")`
 		}
 		return "", fmt.Errorf("unknown key %q%s", textsafe.Clean(key), hint)
 	}
