@@ -579,13 +579,23 @@ func (m model) helpView(deferred bool) string {
 	if len(m.otherJobs) > 0 {
 		add(m.keys.label(actSwitchJob), "switch job")
 	}
+	// withNotice is applied to every exit, including the deferred one: a
+	// notice raised before the chain has run — a tool that would not launch,
+	// or a config netdoc could not use — is exactly the kind that has nothing
+	// else on screen to explain it.
+	withNotice := func(help string) string {
+		if notice := m.noticeView(); notice != "" {
+			return notice + "\n" + help
+		}
+		return help
+	}
 	if deferred {
 		if m.networkMap {
 			add(m.keys.label(actRestart), "run the checks")
 		}
 		add(m.keys.label(actHelp), "help")
 		add(m.keys.label(actQuit), "quit")
-		return m.chordHint(helpKeys(m.width, kv...))
+		return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 	}
 	if m.selectedPortalURL() != "" {
 		add(m.keys.label(actCopy), "copy portal URL")
@@ -601,11 +611,7 @@ func (m model) helpView(deferred bool) string {
 	add(m.keys.label(actRestart), "restart")
 	add(m.keys.label(actHelp), "help")
 	add(m.keys.label(actQuit), "quit")
-	help := m.chordHint(helpKeys(m.width, kv...))
-	if notice := m.noticeView(); notice != "" {
-		help = notice + "\n" + help
-	}
-	return help
+	return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 }
 
 // chordHint prefixes the help bar with the half-typed chord, the way vim's

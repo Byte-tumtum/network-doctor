@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -157,6 +161,58 @@ func TestLoadKeymapRejectsAnOversizedFile(t *testing.T) {
 		t.Fatalf("errs = %v, want one size complaint", errs)
 	}
 }
+
+// The whole path, as main walks it: a file on disk, through the option, to a
+// keypress the model answers.
+func TestConfiguredKeymapReachesTheModel(t *testing.T) {
+	path := writeConfig(t, "keys: vim\nbindings:\n  restart: [ctrl+r]\n")
+	km, errs := LoadKeymap(path, "")
+	if len(errs) > 0 {
+		t.Fatalf("LoadKeymap: %v", errs)
+	}
+	m := asModel(t, NewWithSelection(nil, nil, true, false, "", "test",
+		diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, WithKeymap(km)))
+	u, _ := m.handleKey(keyPress("ctrl+r"))
+	if !asModel(t, u).entering {
+		t.Error("ctrl+r did not open the restart prompt")
+	}
+	if u, _ := m.handleKey(keyPress("r")); asModel(t, u).entering {
+		t.Error("r still opens the restart prompt after being rebound away")
+	}
+	if help := m.helpView(true); !strings.Contains(help, "ctrl+r") {
+		t.Errorf("help bar = %q, want the configured key", help)
+	}
+}
+
+// A complaint from before the TUI existed has to survive into it: the model
+// opens with it on screen and with the tick that will clear it armed.
+func TestStartupNoticeIsShownAndExpires(t *testing.T) {
+	m := asModel(t, NewWithSelection(nil, nil, true, false, "", "test",
+		diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{},
+		WithStartupNotice("netdocrc: unknown action \"quti\"\x1b]52;c;aGk=\x07")))
+	if m.notice == "" || m.noticeOK {
+		t.Fatalf("notice = %q ok = %v, want a complaint", m.notice, m.noticeOK)
+	}
+	if strings.ContainsAny(m.notice, "\x1b\x07") {
+		t.Errorf("notice = %q, want the escapes sanitized out", m.notice)
+	}
+	if !strings.Contains(m.View(), "quti") {
+		t.Errorf("the notice is not on the opening screen:\n%s", m.View())
+	}
+	if m.noticeDeadline.IsZero() {
+		t.Fatal("no deadline, so nothing will ever clear the notice")
+	}
+	// Init arms the expiry, since Init's own mutations are discarded.
+	if m.Init() == nil {
+		t.Fatal("Init returned no commands")
+	}
+	cleared := asModel(t, mustUpdated(m.Update(noticeDoneMsg{deadline: m.noticeDeadline})))
+	if cleared.notice != "" {
+		t.Errorf("notice = %q after its deadline, want it cleared", cleared.notice)
+	}
+}
+
+func mustUpdated(m tea.Model, _ tea.Cmd) tea.Model { return m }
 
 // An empty file is a file someone is about to write, not a mistake.
 func TestLoadKeymapAcceptsAnEmptyFile(t *testing.T) {
