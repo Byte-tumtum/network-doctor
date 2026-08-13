@@ -202,6 +202,11 @@ Flags for triage:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
 
+In the session you get a shell in the broken machine, then a menu. Pick a
+diagnosis by number or by name, 'b' rereads the briefing, 's' returns to the
+shell, 'q' gives up. Your solve time is the shell and the menu, not the
+simulator's setup or Network Doctor's own run.
+
 Flags for challenge:
   -id <ID>                 replay a specific challenge instead of drawing one
   -difficulty <level>      draw an easy, medium or hard challenge

@@ -1276,15 +1276,6 @@ func netdocDuration(c *Challenge, report *Report) time.Duration {
 	return 0
 }
 
-// challengeSessionLabel is what the shell banner calls the node, kept out of
-// the reveal path so it cannot grow a hint.
-func challengeSessionLabel(c *Challenge) string {
-	if c.Target == "" {
-		return c.Node + " (no specific target: the client's own connectivity)"
-	}
-	return c.Node + " → " + c.Target
-}
-
 func challengeIDVersionOf(id string) string {
 	version, _, _ := strings.Cut(id, "-")
 	return version

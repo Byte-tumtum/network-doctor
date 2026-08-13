@@ -234,6 +234,18 @@ type challengePlay struct {
 	out    io.Writer
 	answer string
 	giveUp bool
+	// now is the monotonic clock the solve time is measured on, injectable so a
+	// test can prove where the timer starts and stops without sleeping through
+	// it. time.Now carries a monotonic reading and time.Since uses it, so the
+	// measurement is unaffected by the wall clock being adjusted mid-session.
+	now func() time.Time
+}
+
+func (p *challengePlay) clock() time.Time {
+	if p.now == nil {
+		return time.Now()
+	}
+	return p.now()
 }
 
 func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSession) (simulation.ChallengeSubmission, error) {
@@ -244,7 +256,11 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 		info, _ := simulation.ChallengeAnswerByName(p.answer)
 		return simulation.ChallengeSubmission{Answer: info.ID}, nil
 	}
-	started := time.Now()
+	// The timer starts here and not a line earlier. Everything before this — the
+	// namespaces, the services, the faults — happened without the player, and
+	// charging them for it would make the number depend on how fast the host
+	// builds a network rather than on how fast they read one.
+	started := p.clock()
 	p.challenge.WriteBriefing(p.out)
 	if !session.ShellAvailable() {
 		fmt.Fprintln(p.out, "\nThis backend cannot open a shell, so answer from what you already know.")
@@ -263,7 +279,10 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 		if again {
 			continue
 		}
-		submission.Elapsed = time.Since(started)
+		// Stopped where the answer is accepted, so rereading the briefing, going
+		// back into the shell and thinking at the menu are all part of the solve —
+		// which they are. What is excluded is the netdoc run that follows.
+		submission.Elapsed = p.clock().Sub(started)
 		fmt.Fprintln(p.out, "\nAnswer locked in. Network Doctor is taking its turn on the same network…")
 		return submission, nil
 	}
@@ -286,13 +305,18 @@ func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
 		switch choice {
 		case "s":
 			return simulation.ChallengeSubmission{}, true, nil
+		case "b", "brief", "briefing":
+			// The same renderer the session opened with, so what is recalled is what
+			// was originally said — and it is still only what netdoc's run is given.
+			p.challenge.WriteBriefing(p.out)
+			continue
 		case "q", "quit", "":
 			return simulation.ChallengeSubmission{GaveUp: true}, false, nil
 		}
 		picked, ok := pickAnswer(choice)
 		if !ok {
 			fmt.Fprintf(p.out, "\nPick a number between 1 and %d or type the diagnosis by name;"+
-				" `s` for the shell, `q` to give up.\n",
+				" `b` for the briefing, `s` for the shell, `q` to give up.\n",
 				len(simulation.ChallengeAnswerMenu))
 			continue
 		}

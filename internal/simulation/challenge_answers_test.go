@@ -190,8 +190,8 @@ func TestAnswerMenuRendersTheCatalog(t *testing.T) {
 			t.Errorf("the menu does not explain %q", item.Label)
 		}
 	}
-	// And it tells the player the things that are not a diagnosis.
-	for _, key := range []string{"s.", "q."} {
+	// And it tells the player the three things that are not a diagnosis.
+	for _, key := range []string{"s.", "b.", "q."} {
 		if !strings.Contains(text, key) {
 			t.Errorf("the menu does not offer %q", key)
 		}
