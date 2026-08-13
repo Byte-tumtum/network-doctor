@@ -249,18 +249,9 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 
 Every key above is an *action*, and both the preset and the individual keys are yours to change.
 
-`gg` and `G` need no preset and no config: they jump to the top and bottom of whatever you are looking at — the check list, the network map, and the full output of any tool, `route table` and `open sockets` included. They are in the default keymap because they cost a non-vim user nothing, both keys having previously done nothing at all, and because reaching the top of a long route table should not require a config file.
+`gg` and `G` jump to the top and bottom of whatever is on screen — the check list, the network map, and any tool's full output — with no configuration. `--keys vim` adds `ctrl+b`/`ctrl+f` (page) and `ctrl+u`/`ctrl+d` (half page) in the viewer, and lists `gg`/`G` ahead of `home`/`end` in the help bar. `home`/`end`/`pgup`/`pgdn` work under both.
 
-`--keys vim` adds the motions that would have cost something:
-
-| Action | vim keys | still bound |
-|--------|----------|-------------|
-| page up / down (viewer) | `ctrl+b` / `ctrl+f` | `pgup`/`pgdn` |
-| half page up / down (viewer) | `ctrl+u` / `ctrl+d` | — |
-
-The preset adds motions rather than replacing keys: `j`/`k`, `/`, and `y` were already the vim spelling of themselves, and `home`/`end`/`pgup`/`pgdn` keep working, so a shared terminal stays usable for whoever sits down at it. What it does change is billing: `gg`/`G` are listed ahead of `home`/`end` in the help bar, so the preset says out loud that it is on.
-
-To make it permanent, or to move individual keys, write `~/.netdocrc` (or `netdoc/config.yaml` under the config directory that already holds `history` — the dotfile wins if both exist):
+For a permanent change, or to move individual keys, write `~/.netdocrc` (or `netdoc/config.yaml` under the config directory that holds `history`; the dotfile wins if both exist):
 
 ```yaml
 keys: vim            # base preset: default (the omitted value) or vim
@@ -272,7 +263,11 @@ bindings:            # per-action overrides, applied on top of the preset
   network-map: []    # an empty list unbinds the action outright
 ```
 
-`?` shows what that file actually did. The cheatsheet is generated from your bindings rather than written by hand, so it is also how you check them — here it is with exactly the config above in effect, on a run started with no target (so the toolbox lists only the two tools that need none):
+`--keys` overrides the file's `keys:` for one run, and your `bindings:` still apply on top. `--no-config` ignores the file. netdoc only ever reads it.
+
+Action names are the ones `?` lists: `up`, `down`, `top`, `bottom`, `page-up`, `page-down`, `half-page-up`, `half-page-down`, `open`, `filter`, `copy`, `save`, `switch-job`, `cancel-job`, `network-map`, `restart`, `ssh`, `clear-filter`, `back`, `help`, `quit`. Key names are the ones your terminal sends — a single character (`q`, `G`, `?`), or a named key in lower case (`enter`, `esc`, `tab`, `space`, `home`, `end`, `pgup`, `pgdown`, `up`, `down`, `left`, `right`, `delete`, `insert`, `f1`–`f12`, `ctrl+a`, `shift+tab`, …).
+
+`?` lists the keys that are actually bound, so it doubles as a check on the file. With the config above in effect, on a run started with no target:
 
 ```
 Keys
@@ -311,45 +306,9 @@ Output viewer
 any key close
 ```
 
-The sheet is exhaustive, which makes it taller than a short terminal, so it scrolls with the same motions that scroll output — and only those keys; everything else still closes it:
+Rebinding covers the check list and the output viewer. The restart prompt, SSH form, filter line, and tool confirm gate keep fixed keys, as do drill-down tool hotkeys — a binding that would shadow one is rejected.
 
-```
-  ctrl+r         restart with a new target
-  ?              full-screen key cheatsheet
-  q/Q            quit
-  i              run route table
-  s              run open sockets
-
-1–16 of 32  ·  ↑/↓ scroll  ·  gg/G top/bottom  ·  any other key close
-```
-
-`network-map` has no row because the file unbound it, and the help bar drops its chip to match:
-
-```
-Dig deeper  [i] route table  ·  [s] open sockets  ·  [S] SSH login — needs a target
-
-ctrl+r run the checks  ·  letter runs that tool  ·  ? help  ·  q/Q quit
-```
-
-`--keys` overrides the file's `keys:` for one run; your `bindings:` still apply on top of it. `--no-config` ignores the file entirely, which is the way back in if a keymap locks you out. netdoc only ever reads the file — it is never created, repaired, or rewritten for you.
-
-Action names are the ones the `?` cheatsheet lists: `up`, `down`, `top`, `bottom`, `page-up`, `page-down`, `half-page-up`, `half-page-down`, `open`, `filter`, `copy`, `save`, `switch-job`, `cancel-job`, `network-map`, `restart`, `ssh`, `clear-filter`, `back`, `help`, `quit`. Key names are the ones your terminal sends — a single character (`q`, `G`, `?`), or a named key in lower case (`enter`, `esc`, `tab`, `space`, `home`, `end`, `pgup`, `pgdown`, `up`, `down`, `left`, `right`, `delete`, `insert`, `f1`–`f12`, `ctrl+a`, `shift+tab`, …).
-
-The cheatsheet and the contextual help bar are generated from your bindings, so they always show the keys that actually run, and an action you unbind stops being advertised. Rebinding covers the check list and the output viewer; the restart prompt, SSH form, filter line, and the tool confirm gate keep fixed keys, since every printable key there belongs to what you are typing. Drill-down tool hotkeys are fixed too — a binding that would shadow one is rejected rather than quietly breaking that tool on the targets that offer it.
-
-A config netdoc cannot use is reported, never fatal: it prints every problem to stderr, says so in the TUI, and runs on the built-in keys. `netdoc` is usually started *during* an outage, so refusing to start over a stale dotfile is the one response that helps nobody. A file with `quti:` where you meant `quit:` gets you this, and a working keymap:
-
-```
-netdoc: /home/you/.netdocrc: unknown action "quti"
-```
-
-```
-✗ .netdocrc: unknown action "quti" — using the built-in keys
-
-r run the checks  ·  v network map  ·  letter runs that tool  ·  ? help  ·  q quit
-```
-
-The stderr line is still on your terminal after netdoc exits, which is where the keymap gets fixed; the notice is what says so while the alt screen has the scrollback. Every problem in the file is listed, not just the first, and none of the bindings are applied — a half-applied keymap is a puzzle with nothing on screen to explain it.
+A config netdoc cannot use is reported on stderr and in the TUI, and the run continues on the built-in keys. Every problem in the file is listed, and none of the bindings are applied.
 
 ## Drill-down tools
 
@@ -536,25 +495,19 @@ Race, fuzz, and network-namespace checks run only on Linux in CI. The
 namespaces; they never need root. That gate keeps `-v` because a skipped run and
 a real one both print just `ok` otherwise, and `-count=1` because a cached
 result would not have exercised any namespace at all. Off Linux those tests are
-absent rather than skipped — they read the backend's own Linux internals to
-prove the host was left alone — so the step passes there without exercising a
-namespace.
+absent, so the step passes without exercising a namespace.
 
-Two steps therefore mean less than they appear to on macOS and Windows, and one
-of them looks like a failure. `golangci-lint` analyses a single build
-configuration, and CI lints on Linux: run it from another platform and the
-`unused` linter reports every helper that only Linux-tagged code calls — around
-forty in `internal/simulation`, none of them real. To reproduce CI's result,
-build the linter for your own machine and point it at the Linux configuration:
+`golangci-lint` analyses one build configuration and CI lints on Linux, so
+running it on macOS or Windows reports the helpers only Linux-tagged code calls
+as `unused` — around forty in `internal/simulation`, none of them real. Point a
+host-built linter at the Linux configuration to get CI's result (`GOOS=linux go
+run …` cross-builds the linter itself and then cannot execute it):
 
 ```sh
 tools=$(mktemp -d)
 GOBIN=$tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 GOOS=linux $tools/golangci-lint run ./...
 ```
-
-`GOOS=linux go run …` does not work for this: it cross-builds the linter itself
-and then cannot execute it.
 
 ## Testing Network Doctor against broken networks
 

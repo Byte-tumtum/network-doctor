@@ -1,6 +1,5 @@
 // The cheatsheet as a screen of its own: reachable from the output viewer,
-// scrollable when it outgrows the terminal, and still closed by anything that
-// isn't a motion.
+// scrollable, and still closed by anything that is not a motion.
 
 package ui
 
@@ -12,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// viewerWith opens the full-screen output viewer on a finished job holding n
-// lines — the shape a route table or an open-sockets dump arrives in.
+// viewerWith opens the output viewer on a finished job holding n lines — the
+// shape a route table or open-sockets dump arrives in.
 func viewerWith(t *testing.T, name string, n int) model {
 	t.Helper()
 	m := newModel(nil, false)
@@ -30,9 +29,7 @@ func viewerWith(t *testing.T, name string, n int) model {
 	return m
 }
 
-// The tools the user reaches for first are the two that need no target, and
-// their output is read in the viewer. Both jump keys have to work there on a
-// stock netdoc, with no config file in sight.
+// Both jump keys have to work on tool output with no config file in sight.
 func TestJumpKeysScrollToolOutputByDefault(t *testing.T) {
 	for _, tool := range []string{"route table", "open sockets"} {
 		t.Run(tool, func(t *testing.T) {
@@ -62,7 +59,7 @@ func TestJumpKeysScrollToolOutputByDefault(t *testing.T) {
 	}
 }
 
-// The same two keys on the check list and the network map, also stock.
+// The same two keys on the check list and the network map.
 func TestJumpKeysMoveTheListAndMapByDefault(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com"), false)
 	if len(m.probes) < 2 {
@@ -130,10 +127,8 @@ func TestHelpOpensFromTheOutputViewer(t *testing.T) {
 
 func mustModel(m tea.Model, _ tea.Cmd) tea.Model { return m }
 
-// The reported path, end to end and through the one entry point every key
-// takes: run the tool, then ask for help — on the pane it lands in, and in the
-// full-screen view of it. Both are "the route table screen" to whoever is
-// looking at one.
+// The reported path: run the tool, then ask for help — on the pane it lands in
+// and in the full-screen view of it.
 func TestHelpAnswersAfterRunningATool(t *testing.T) {
 	oldLookPath := toolLookPath
 	// Missing on purpose: launchTool then reports "not found" in a pane
@@ -170,8 +165,8 @@ func TestHelpAnswersAfterRunningATool(t *testing.T) {
 	}
 }
 
-// The sheet is longer than a short terminal, and it used to be cut off there
-// with no way to reach the rest.
+// The sheet is longer than a short terminal, and used to be cut off with no
+// way to reach the rest.
 func TestCheatsheetScrollsInsteadOfBeingCutOff(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com"), false)
 	m.width, m.height = 92, 16
@@ -179,9 +174,8 @@ func TestCheatsheetScrollsInsteadOfBeingCutOff(t *testing.T) {
 	if len(body) <= m.helpVisible() {
 		t.Fatalf("cheatsheet is %d rows and %d fit; this test needs it to overflow", len(body), m.helpVisible())
 	}
-	// A row from the viewer section, which is the half that used to be cut
-	// off. Not simply the last row: that one is ?, which the list section
-	// carries too, so finding it on screen would prove nothing.
+	// A row from the viewer section, the half that used to be cut off. Not the
+	// last row: that one is ?, which the list section carries too.
 	var lastRow string
 	for _, line := range body {
 		if strings.Contains(line, "clear the filter") {
@@ -238,8 +232,7 @@ func TestCheatsheetScrollsInsteadOfBeingCutOff(t *testing.T) {
 }
 
 // Keys typed fast arrive as one KeyMsg. Splitting them has to happen before
-// any screen sees them, or a chord reads as a single unknown key — which on
-// the cheatsheet means "close" rather than "jump to the top".
+// any screen sees them, or a chord reads as one unknown key — here, "close".
 func TestFastChordIsNotOneKey(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com"), false)
 	m.width, m.height = 92, 16

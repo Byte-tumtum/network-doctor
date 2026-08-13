@@ -1,6 +1,5 @@
-// The key-binding config file: a small YAML dotfile naming a preset and, on
-// top of it, whatever the user wants moved. netdoc only ever reads it — no
-// file is created, repaired, or rewritten on a user's behalf.
+// The key-binding config file: a small YAML dotfile naming a preset and the
+// keys to move on top of it. netdoc only ever reads it.
 
 package ui
 
@@ -21,8 +20,7 @@ import (
 const maxConfigBytes = 256 << 10
 
 // keyConfig is the file's shape. Unknown fields are rejected rather than
-// ignored: a mistyped `binding:` that silently did nothing would look exactly
-// like netdoc losing the user's keymap, and this file is hand-written.
+// ignored: a mistyped `binding:` would otherwise look like a lost keymap.
 type keyConfig struct {
 	// Keys names a preset to start from. Empty means the default preset.
 	Keys string `yaml:"keys"`
@@ -33,12 +31,9 @@ type keyConfig struct {
 
 // LoadKeymap resolves the keymap for a run: the file at path (empty path, or
 // no file there, means no user config), with preset overriding the file's own
-// `keys:` when the CLI supplied one.
-//
-// It always returns a usable keymap. A broken config is reported, never fatal:
-// the config is normally edited between runs, but netdoc is normally started
-// during an outage, and refusing to start is the one response that helps
-// nobody.
+// `keys:` when the CLI supplied one. It always returns a usable keymap — a
+// broken config is reported but never fatal, since netdoc is usually started
+// during an outage.
 func LoadKeymap(path, preset string) (Keymap, []error) {
 	cfg, err := readKeyConfig(path)
 	if err != nil {

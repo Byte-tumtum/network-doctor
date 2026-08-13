@@ -579,10 +579,8 @@ func (m model) helpView(deferred bool) string {
 	if len(m.otherJobs) > 0 {
 		add(m.keys.label(actSwitchJob), "switch job")
 	}
-	// withNotice is applied to every exit, including the deferred one: a
-	// notice raised before the chain has run — a tool that would not launch,
-	// or a config netdoc could not use — is exactly the kind that has nothing
-	// else on screen to explain it.
+	// Applied to every exit, including the deferred one: a notice raised before
+	// the chain has run has nothing else on screen to explain it.
 	withNotice := func(help string) string {
 		if notice := m.noticeView(); notice != "" {
 			return notice + "\n" + help
@@ -614,9 +612,8 @@ func (m model) helpView(deferred bool) string {
 	return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 }
 
-// chordHint prefixes the help bar with the half-typed chord, the way vim's
-// showcmd does. Without it the first key of a chord looks like a keypress the
-// app dropped.
+// chordHint prefixes the help bar with a half-typed chord, as vim's showcmd
+// does, so the first key of one does not look like a dropped keypress.
 func (m model) chordHint(help string) string {
 	if len(m.pendingKeys) == 0 {
 		return help
@@ -624,15 +621,11 @@ func (m model) chordHint(help string) string {
 	return keyStyle.Render(displaySeq(strings.Join(m.pendingKeys, " "))+"…") + faintStyle.Render("  ·  ") + help
 }
 
-// helpBody is the cheatsheet's rows: every binding, unconditionally — simpler
-// than mirroring the help bar's context rules, and a key that currently does
-// nothing is still worth knowing about. The lone exception is S: the form
-// works against any target, but advertising a login to a host with no SSH
-// server on it is a suggestion, not information.
+// helpBody is the cheatsheet's rows: every binding, unconditionally. The lone
+// exception is S, which advertises a login only once one is known to be there.
 func (m model) helpBody() []string {
-	// The key column is sized to what is actually bound, not to a constant:
-	// rebinding can make a label as long as "ctrl+b/pgup", which a fixed width
-	// would run straight into its description.
+	// The key column is sized to what is bound: rebinding can make a label as long
+	// as "ctrl+b/pgup", which a fixed width would run into its description.
 	keyWidth := 8
 	for _, def := range actionDefs {
 		if m.keys.bound(def.act) {
@@ -684,10 +677,8 @@ func (m model) helpVisible() int {
 // never past it.
 func (m model) helpMaxOffset() int { return max(len(m.helpBody())-m.helpVisible(), 0) }
 
-// helpOverlay is the full-screen key cheatsheet (?). It is taller than a short
-// terminal — the whole point of it is to be exhaustive — so it scrolls rather
-// than being silently cut off at whatever row the terminal ends on, which is
-// what it used to do to its own second half.
+// helpOverlay is the full-screen key cheatsheet (?). It scrolls rather than
+// being cut off at whatever row a short terminal ends on.
 func (m model) helpOverlay() string {
 	lines := m.helpBody()
 	visible, total := m.helpVisible(), len(lines)

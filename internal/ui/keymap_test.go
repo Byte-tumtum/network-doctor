@@ -1,6 +1,5 @@
-// The keymap's structural invariants — the ones a rebinding user relies on
-// without knowing they exist: one action per key per screen, no binding buried
-// under a chord that starts with it, and nothing shadowing a tool hotkey.
+// Structural invariants of the keymap: one action per key per screen, no
+// binding buried under a chord, nothing shadowing a tool hotkey.
 
 package ui
 
@@ -26,9 +25,8 @@ func keyPress(name string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
 }
 
-// Every shipped preset has to survive the same validation a user's config
-// does; a preset that couldn't be written by hand would be a keymap the
-// validator calls impossible.
+// A preset that could not be written by hand would be one the validator
+// calls impossible.
 func TestPresetsValidate(t *testing.T) {
 	for name, preset := range presets {
 		if errs := validateBindings(preset); len(errs) > 0 {
@@ -37,8 +35,7 @@ func TestPresetsValidate(t *testing.T) {
 	}
 }
 
-// The cheatsheet and the help bar both read descriptions out of actionDefs, so
-// an action missing from that table is an action nobody can discover.
+// An action missing from actionDefs is one nobody can discover.
 func TestEveryActionIsDescribed(t *testing.T) {
 	seen := map[keyAction]bool{}
 	for _, def := range actionDefs {
@@ -62,9 +59,8 @@ func TestEveryActionIsDescribed(t *testing.T) {
 	}
 }
 
-// A chord is resolved key by key, and the key that ends a dead chord still
-// gets its own turn — otherwise a stray prefix would eat the keystroke after
-// it, which reads as the app dropping input.
+// A chord resolves key by key, and the key that ends a dead one still gets its
+// own turn — otherwise a stray prefix eats the keystroke after it.
 func TestChordResolution(t *testing.T) {
 	km, errs := buildKeymap("default", map[string][]string{"top": {"g g"}})
 	if len(errs) > 0 {
@@ -98,8 +94,7 @@ func TestChordResolution(t *testing.T) {
 }
 
 // A chord in flight launches nothing, and the key that ends an unfinished one
-// behaves exactly as it would have if the prefix had never been typed — an
-// abandoned chord costs the user nothing, in either direction.
+// behaves as it would have if the prefix had never been typed.
 func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
 	km, errs := buildKeymap("default", map[string][]string{"help": {"z z"}})
 	if len(errs) > 0 {
@@ -115,9 +110,8 @@ func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
 	if m.confirmTool != nil || m.cur.name != "" {
 		t.Fatalf("z started something: confirm=%v job=%q", m.confirmTool, m.cur.name)
 	}
-	// "n" is nmap's letter. It does not complete the chord, so the chord ends
-	// and n gets the turn it would have had on its own — the confirm gate,
-	// never a launch.
+	// n is nmap's letter: it does not complete the chord, so the chord ends and n
+	// gets its own turn — the confirm gate, never a launch.
 	u, _ = m.handleKey(keyMsg("n"))
 	m = u.(model)
 	if m.pendingKeys != nil {
@@ -134,9 +128,8 @@ func TestChordHoldsTheToolboxThenReleasesIt(t *testing.T) {
 	}
 }
 
-// The vim preset's whole point is the motions, so each one is pinned against
-// the screen it moves — and against the default keys it must not have taken
-// away on its way in.
+// Each motion is pinned against the screen it moves, and against the default
+// keys the preset must not have taken away.
 func TestVimPresetMotions(t *testing.T) {
 	km, err := PresetKeymap("vim")
 	if err != nil {
@@ -189,8 +182,7 @@ func TestVimPresetMotions(t *testing.T) {
 	}
 }
 
-// gg has to scroll the viewport, not just resolve: the chord path and the
-// scrolling path are separate pieces of machinery.
+// The chord path and the scrolling path are separate machinery.
 func TestVimChordScrollsTheViewer(t *testing.T) {
 	km, err := PresetKeymap("vim")
 	if err != nil {
@@ -227,8 +219,7 @@ func TestVimChordScrollsTheViewer(t *testing.T) {
 	}
 }
 
-// The help bar and cheatsheet must show the keys that actually run, not the
-// ones the defaults used to use.
+// The help must show the keys that run, not the ones the defaults used.
 func TestHelpFollowsRebinding(t *testing.T) {
 	km, errs := buildKeymap("default", map[string][]string{"quit": {"Q"}, "restart": {"R"}})
 	if len(errs) > 0 {
@@ -251,9 +242,8 @@ func TestHelpFollowsRebinding(t *testing.T) {
 	}
 }
 
-// A rebound key can be much longer than the one it replaced, and the
-// cheatsheet's key column has to grow with it instead of running the label
-// into its description.
+// A rebound key can be longer than the one it replaced, so the cheatsheet's
+// key column has to grow rather than run the label into its description.
 func TestCheatsheetKeyColumnFitsLongLabels(t *testing.T) {
 	km, errs := buildKeymap("default", map[string][]string{"help": {"ctrl+x", "f12", "?"}})
 	if len(errs) > 0 {
@@ -275,8 +265,7 @@ func TestCheatsheetKeyColumnFitsLongLabels(t *testing.T) {
 	t.Errorf("no cheatsheet row for %q:\n%s", want, m.View())
 }
 
-// An unbound action is not advertised: a help bar offering a key that does
-// nothing is worse than a shorter help bar.
+// An unbound action is not advertised.
 func TestUnboundActionsVanishFromHelp(t *testing.T) {
 	km, errs := buildKeymap("default", map[string][]string{"network-map": {}})
 	if len(errs) > 0 {
@@ -292,8 +281,7 @@ func TestUnboundActionsVanishFromHelp(t *testing.T) {
 	}
 }
 
-// allToolKeys is hand-written, so it needs a guard that walks the real
-// toolbox: a new drill-down tool must not become bindable by accident.
+// allToolKeys is hand-written, so a guard walks the real toolbox.
 func TestAllToolKeysMatchesTheToolbox(t *testing.T) {
 	targets := []*diagnostic.Target{
 		nil,

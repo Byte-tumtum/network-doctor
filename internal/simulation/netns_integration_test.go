@@ -8,14 +8,9 @@
 // tests skip themselves on a host where that is unavailable, and nothing they
 // create is reachable from — or visible to — the host network.
 //
-// The linux term is load-bearing, not decoration: these tests reach into the
-// backend's own internals (ipv4ForwardPath, nftTable) to prove the host was
-// left alone, and those live in netns_linux.go. Without it the tag selects
-// this file on macOS and Windows without the code it calls, and the package
-// fails to build rather than skipping — which is what running the gate's netns
-// step on a Mac used to do. Skipping is already this file's answer for a Linux
-// host that cannot make namespaces; a host that cannot even have them wants
-// the same answer one level up.
+// The linux term is required: these tests read the backend's own internals
+// (ipv4ForwardPath, nftTable) from netns_linux.go, so without it the tag
+// selects this file on macOS and Windows without the code it calls.
 
 package simulation
 

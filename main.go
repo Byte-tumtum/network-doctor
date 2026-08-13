@@ -322,14 +322,9 @@ func historyFile(disabled bool) string {
 }
 
 // keyConfigFile is where key bindings are read from: the dotfile first, then
-// the config directory netdoc already keeps history in. The dotfile wins
-// because it is the one a user puts in a dotfiles repo and expects to be in
-// charge, and because it is the only one of the two that is a dotfile on all
-// three platforms. Neither is ever written.
-//
-// "" is "no config", which is also what -no-config means and what an absent
-// file leaves behind, so the flag is that path taken on purpose rather than a
-// second opt-out mechanism.
+// the config directory netdoc already keeps history in. Neither is ever
+// written. "" is "no config", which is also what -no-config and an absent file
+// leave behind.
 func keyConfigFile(disabled bool) string {
 	if disabled {
 		return ""

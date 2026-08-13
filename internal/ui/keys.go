@@ -32,9 +32,7 @@ func (m model) resolveKey(ctx keyContext, key string) (keyAction, []string) {
 	if m.keys.isPrefix(ctx, seq) {
 		return actNone, seq
 	}
-	// The chord died on this key, but the key itself is innocent: it gets the
-	// turn it would have had on its own, so an abandoned prefix costs the
-	// keystroke after it nothing.
+	// The key that killed a chord still gets the turn it would have had alone.
 	if len(m.pendingKeys) > 0 {
 		if act, ok := m.keys.lookup(ctx, []string{key}); ok {
 			return act, nil
@@ -63,10 +61,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	act, pending := m.resolveKey(ctxList, msg.String())
 	m.pendingKeys = pending
 	if act == actNone {
-		// A chord still waiting for its next key owns the keyboard; letting a
-		// tool hotkey through here would launch a subprocess on the way to a
-		// movement key. A chord that just died is not waiting for anything —
-		// resolveKey has already given the key that killed it its own turn.
+		// A chord waiting for its next key owns the keyboard, or a tool hotkey would
+		// fork a subprocess on the way to a movement key. A chord that just died is
+		// not waiting: resolveKey has already given the key that killed it its turn.
 		if len(pending) > 0 {
 			return m, nil
 		}
@@ -213,9 +210,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.viewing, m.follow = true, true
 		m.vp = viewport.New(m.width, m.vpHeight())
-		// The viewer's own keys are dispatched by handleViewKey, which the
-		// bindings make rebindable; leaving the viewport's built-in map armed
-		// would give b/f/space/u/d a second, unconfigurable owner.
+		// handleViewKey dispatches the viewer through the bindings; leaving the
+		// viewport's built-in map armed would give b/f/space/u/d a second owner.
 		m.vp.KeyMap = viewport.KeyMap{}
 		m.refreshViewport()
 		return m, nil
@@ -239,10 +235,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleHelpKey handles keys while the cheatsheet is open. It lists every
-// binding plus the toolbox, which outgrows a short terminal, so the motions
-// that scroll output scroll the sheet as well; everything else still closes
-// it, which is the one thing users already knew about this screen.
+// handleHelpKey handles keys while the cheatsheet is open. It outgrows a short
+// terminal, so the motions that scroll output scroll it; anything else closes it.
 func (m model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	act, pending := m.resolveKey(ctxViewer, msg.String())
 	m.pendingKeys = pending

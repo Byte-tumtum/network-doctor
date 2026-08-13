@@ -1,8 +1,5 @@
-// Key bindings as data. One table drives three things that used to be three
-// hand-maintained copies of the same letters: what a key does, what the
-// contextual help bar advertises, and what the ? cheatsheet lists. A binding
-// can no longer exist without a help entry, or drift from the key that
-// actually runs it.
+// Key bindings as data: one table drives what a key does, what the help bar
+// advertises, and what the ? cheatsheet lists, so the three cannot drift.
 
 package ui
 
@@ -46,13 +43,10 @@ const (
 	actQuit
 )
 
-// keyContext is the screen a binding applies to. The text-entry screens — the
-// restart prompt, the SSH form, the filter line — are deliberately absent:
-// every printable key there belongs to the input, so a binding on this table
-// would take a letter away from typing rather than give the user a shortcut.
-// The confirm gate is absent for the same reason in reverse: y/esc on a shown
-// command is a safety question, not a shortcut, and it stays where the muscle
-// memory of every other confirm prompt puts it.
+// keyContext is the screen a binding applies to. The text-entry screens (the
+// restart prompt, the SSH form, the filter line) and the confirm gate are
+// absent: every printable key there belongs to the input or to a safety
+// question, not to a shortcut.
 type keyContext int
 
 const (
@@ -61,10 +55,8 @@ const (
 	numContexts
 )
 
-// actionDef is an action's name in the config file and its cheatsheet line
-// per context. A context missing from desc is a context the action does not
-// exist in, which is also what makes config validation context-aware: binding
-// `filter` costs the viewer a key and the check list nothing.
+// actionDef is an action's config name and its cheatsheet line per context.
+// A context missing from desc is one the action does not exist in.
 type actionDef struct {
 	act  keyAction
 	name string
@@ -90,9 +82,8 @@ var actionDefs = []actionDef{
 		ctxList:   "last check — or device on the network map",
 		ctxViewer: "jump to bottom (re-enables follow)",
 	}},
-	// Paging is viewer-only on purpose: the check list is rendered whole, so
-	// there is no page below the fold to move by — top/bottom already reach
-	// everything a page key could.
+	// Paging is viewer-only: the check list is rendered whole, so top/bottom
+	// already reach everything a page key could.
 	{actPageUp, "page-up", map[keyContext]string{ctxViewer: "page up"}},
 	{actPageDown, "page-down", map[keyContext]string{ctxViewer: "page down"}},
 	{actHalfPageUp, "half-page-up", map[keyContext]string{ctxViewer: "half page up"}},
@@ -117,14 +108,11 @@ var actionDefs = []actionDef{
 	{actNetworkMap, "network-map", map[keyContext]string{ctxList: "toggle network map"}},
 	{actRestart, "restart", map[keyContext]string{ctxList: "restart with a new target"}},
 	{actSSH, "ssh", map[keyContext]string{ctxList: "ssh to a host — hands the terminal to ssh"}},
-	// Two actions rather than one so that a filtered viewer keeps its
-	// two-step exit: the key that clears a filter is not the key that leaves
-	// with one still applied, and each stays rebindable on its own.
+	// Two actions, so a filtered viewer keeps its two-step exit: the key that
+	// clears a filter is not the key that leaves with one applied.
 	{actClearFilter, "clear-filter", map[keyContext]string{ctxViewer: "clear the filter, or back when none is set"}},
 	{actBack, "back", map[keyContext]string{ctxViewer: "back"}},
-	// Reachable from the output viewer too: a tool's full output is exactly
-	// where someone wonders what a key does, and it used to be the one screen
-	// that could not answer.
+	// Also in the viewer: a tool's full output is where the question comes up.
 	{actHelp, "help", map[keyContext]string{
 		ctxList:   "full-screen key cheatsheet",
 		ctxViewer: "full-screen key cheatsheet",
@@ -132,14 +120,10 @@ var actionDefs = []actionDef{
 	{actQuit, "quit", map[keyContext]string{ctxList: "quit"}},
 }
 
-// defaultPreset is the historical keymap: every letter netdoc has ever
-// answered to, plus the jump keys that had no binding before.
-//
-// gg and G are here rather than in the vim preset because they cost a
-// non-vim user nothing — both keys did nothing at all before, and a lone g
-// still lets the key after it behave exactly as it would have. A jump to the
-// top of a long route table should not require a config file. home and end
-// are listed first, so the help bar advertises the spelling everyone knows.
+// defaultPreset is the historical keymap plus the jump keys that had no
+// binding before. gg and G are here rather than in the vim preset because they
+// cost a non-vim user nothing: both keys did nothing at all before. home and
+// end are listed first, so the help bar advertises the familiar spelling.
 var defaultPreset = map[keyAction][]string{
 	actUp:           {"up", "k"},
 	actDown:         {"down", "j"},
@@ -164,16 +148,10 @@ var defaultPreset = map[keyAction][]string{
 	actQuit:         {"q"},
 }
 
-// vimOverlay is what `keys: vim` changes, and it is deliberately short: j/k,
-// /, y, gg and G are already in the default keymap, so what is left is the
-// ctrl-motions — the ones that would cost a non-vim user a key they might
-// want for something else. Nothing is taken away: pgup/pgdown keep working,
-// because a preset that unbound them would trade one set of habits for
-// another rather than add to it.
-//
-// top and bottom are relisted only to reorder them. The keys are the same
-// ones the default binds; putting vim's spelling first is what makes the help
-// bar read gg/G instead of home/end, so the preset says out loud that it is on.
+// vimOverlay is what `keys: vim` adds: the ctrl-motions, the only ones that
+// would cost a non-vim user a key. Nothing is taken away — pgup/pgdown keep
+// working. top and bottom are relisted only to put vim's spelling first, which
+// is what makes the help bar read gg/G instead of home/end.
 var vimOverlay = map[keyAction][]string{
 	actTop:          {"g g", "home"},
 	actBottom:       {"G", "end"},
@@ -207,16 +185,11 @@ func PresetKeymap(name string) (Keymap, error) {
 // presetNames lists the presets for error messages, in a stable order.
 func presetNames() []string { return slices.Sorted(maps.Keys(presets)) }
 
-// keyNames is every key name a binding may use, spelled the way Bubble Tea
-// spells it when the key arrives — the set is built by asking Bubble Tea for
-// each name rather than by copying the strings, so a binding can never be
-// written in a spelling that no keypress will ever match ("pgdn" for
-// "pgdown"). Printable single runes are accepted on top of these.
-//
-// Absent on purpose: ctrl+c (the terminal's own way out, and the second press
-// quits whatever quit is bound to), ctrl+h/ctrl+i/ctrl+j/ctrl+m (the same
-// bytes as backspace/tab/enter, so binding them would move a key the user did
-// not name), and ctrl+z (the shell's job control).
+// bindableKeyTypes are the keys a binding may name. Bubble Tea supplies the
+// spellings, so a binding can never be written in one no keypress will match
+// ("pgdn" for "pgdown"); printable single runes are accepted on top of them.
+// Absent on purpose: ctrl+c (the terminal's own way out), ctrl+h/i/j/m (the
+// same bytes as backspace/tab/enter), and ctrl+z (job control).
 var bindableKeyTypes = []tea.KeyType{
 	tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
 	tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftLeft, tea.KeyShiftRight,
@@ -242,10 +215,8 @@ var keyNames = func() map[string]bool {
 	return names
 }()
 
-// spaceKey is what Bubble Tea calls the space bar. A chord's keys are
-// separated by spaces, so that name cannot survive the encoding: bindings
-// spell the space bar "space" and arriving keys are translated to match,
-// which keeps it bindable instead of unwritable.
+// spaceKey is Bubble Tea's name for the space bar. Chords are space-separated,
+// so bindings spell it "space" and arriving keys are translated to match.
 const spaceKey = " "
 
 func normalizeKey(key string) string {
@@ -270,9 +241,8 @@ func parseKeySeq(seq string) (string, error) {
 		if r := []rune(key); len(r) == 1 && unicode.IsPrint(r[0]) {
 			continue
 		}
-		// Both hints name a mistake that would otherwise read as a key that
-		// simply never fires. Case matters — G and g are different keys — so a
-		// name that is only miscapitalized is worth saying out loud.
+		// Case matters (G and g differ), so a name that is only miscapitalized is
+		// worth saying out loud rather than reporting as unknown.
 		hint := ""
 		switch {
 		case keyNames[strings.ToLower(key)]:
@@ -322,21 +292,15 @@ func validateBindings(bindings map[keyAction][]string) []error {
 		}
 	}
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
-	// One mistake, one sentence. An action that exists on both screens is
-	// checked on both, so a key it collides with produces the same complaint
-	// twice — which reads as two separate problems to fix.
+	// One mistake, one sentence: an action on both screens is checked on both.
 	return slices.CompactFunc(errs, func(a, b error) bool { return a.Error() == b.Error() })
 }
 
 // buildKeymap resolves a preset name and the user's per-action overrides into
 // a keymap. An override replaces that action's keys outright rather than
-// adding to them, so a user who moves an action doesn't have to also remember
-// to remove the key it used to be on; an empty list unbinds it.
-//
-// Errors never yield a half-applied keymap. A partially honored config is a
-// puzzle — some keys moved, some didn't, and nothing on screen says which —
-// so the returned keymap is the plain preset whenever anything is wrong, and
-// every reason is reported at once.
+// adding to them; an empty list unbinds it. Errors never yield a half-applied
+// keymap — a partly honored config is a puzzle nothing on screen explains — so
+// anything wrong returns the plain preset and reports every reason at once.
 func buildKeymap(preset string, overrides map[string][]string) (Keymap, []error) {
 	base, ok := presets[preset]
 	if !ok {
@@ -384,9 +348,8 @@ type Keymap struct {
 	prefix []map[string]bool
 }
 
-// newKeymap indexes a binding set for dispatch. It assumes the set has already
-// been through validate — an unvalidated one silently resolves ties by map
-// order, which is exactly the non-determinism validate exists to prevent.
+// newKeymap indexes a validated binding set for dispatch. An unvalidated one
+// resolves ties by map order, which is what validate exists to prevent.
 func newKeymap(bindings map[keyAction][]string) Keymap {
 	km := Keymap{
 		keys:   maps.Clone(bindings),
@@ -437,9 +400,8 @@ func (k Keymap) isPrefix(ctx keyContext, seq []string) bool {
 // keysFor returns an action's bound sequences.
 func (k Keymap) keysFor(act keyAction) []string { return k.resolved().keys[act] }
 
-// bound reports whether an action can be reached at all. The help bar asks
-// before advertising anything: a user who unbinds an action should stop being
-// told about it, not be told a lie.
+// bound reports whether an action can be reached at all, so the help bar can
+// stop advertising one the user unbound.
 func (k Keymap) bound(act keyAction) bool { return len(k.keysFor(act)) > 0 }
 
 // label renders every key bound to an action for the help bar and cheatsheet,
@@ -453,11 +415,8 @@ func (k Keymap) label(act keyAction) string {
 	return strings.Join(out, "/")
 }
 
-// pairLabel renders two opposed actions as one chip ("↑/↓"), using each
-// action's first binding. The help bar is width-constrained and up/down,
-// esc/q and their kin have always shared a chip there; showing every key of
-// both would double the bar's width to say the same thing. The cheatsheet,
-// which has the room, uses label and shows them all.
+// pairLabel renders two opposed actions as one chip ("↑/↓") from each one's
+// first binding, for the width-constrained help bar. The cheatsheet uses label.
 func (k Keymap) pairLabel(a, b keyAction) string {
 	first := func(act keyAction) string {
 		if seqs := k.keysFor(act); len(seqs) > 0 {
@@ -477,9 +436,8 @@ func (k Keymap) pairLabel(a, b keyAction) string {
 	return x + "/" + y
 }
 
-// displaySeq renders one binding for the screen: arrows as glyphs, and a
-// chord without the space that separates its keys in the config file, since
-// "gg" is how the user thinks of it and "g g" is only how it is written down.
+// displaySeq renders a binding for the screen: arrows as glyphs, and a chord
+// without the space that only separates its keys in the config file.
 func displaySeq(seq string) string {
 	var b strings.Builder
 	for _, key := range strings.Split(seq, " ") {

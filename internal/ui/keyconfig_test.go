@@ -1,5 +1,5 @@
-// The config file: what a good one does, and what every bad one must do
-// instead — report itself, change nothing, and leave a working keymap behind.
+// The config file: what a good one does, and what a bad one must do instead —
+// report itself, change nothing, and leave a working keymap behind.
 
 package ui
 
@@ -59,8 +59,7 @@ bindings:
 	}
 }
 
-// The flag is the more specific instruction and the way out of a file that
-// picks a preset the user is done with.
+// The flag is the way out of a file that picks a preset the user is done with.
 func TestLoadKeymapFlagOverridesFilePreset(t *testing.T) {
 	path := writeConfig(t, "keys: vim\n")
 	km, errs := LoadKeymap(path, "default")
@@ -100,8 +99,7 @@ func TestLoadKeymapMissingFileIsNotAnError(t *testing.T) {
 	}
 }
 
-// Every rejection has to leave a keymap that works, and leave it whole: a
-// half-applied config is a puzzle nothing on screen explains.
+// Every rejection leaves a working keymap, and leaves it whole.
 func TestLoadKeymapRejectionsChangeNothing(t *testing.T) {
 	tests := []struct {
 		name, body, want string
@@ -137,8 +135,7 @@ func TestLoadKeymapRejectionsChangeNothing(t *testing.T) {
 	}
 }
 
-// Several mistakes are reported together: fixing a keymap one run per typo is
-// the kind of loop that makes people give up and delete the file.
+// Several mistakes are reported together, not one run per typo.
 func TestLoadKeymapReportsEveryError(t *testing.T) {
 	_, errs := LoadKeymap(writeConfig(t, "bindings:\n  quti: [Q]\n  help: [nope]\n  quit: [n]\n"), "")
 	if len(errs) != 3 {
@@ -146,8 +143,7 @@ func TestLoadKeymapReportsEveryError(t *testing.T) {
 	}
 }
 
-// The file is external input, so what it says can reach the screen only after
-// the sanitizer has seen it.
+// The file is external input, so it reaches the screen only sanitized.
 func TestLoadKeymapErrorsAreSanitized(t *testing.T) {
 	_, errs := LoadKeymap(writeConfig(t, "bindings:\n  \"\\e]52;c;aGk=\\a\": [Q]\n"), "")
 	if len(errs) == 0 {
@@ -169,7 +165,7 @@ func TestLoadKeymapRejectsAnOversizedFile(t *testing.T) {
 	}
 }
 
-// The whole path, as main walks it: a file on disk, through the option, to a
+// The whole path as main walks it: a file on disk, through the option, to a
 // keypress the model answers.
 func TestConfiguredKeymapReachesTheModel(t *testing.T) {
 	path := writeConfig(t, "keys: vim\nbindings:\n  restart: [ctrl+r]\n")
@@ -191,8 +187,8 @@ func TestConfiguredKeymapReachesTheModel(t *testing.T) {
 	}
 }
 
-// A complaint from before the TUI existed has to survive into it: the model
-// opens with it on screen and with the tick that will clear it armed.
+// A complaint from before the TUI existed has to survive into it, with the
+// tick that will clear it armed.
 func TestStartupNoticeIsShownAndExpires(t *testing.T) {
 	m := asModel(t, NewWithSelection(nil, nil, true, false, "", "test",
 		diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{},

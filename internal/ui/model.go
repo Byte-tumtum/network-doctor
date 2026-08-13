@@ -248,9 +248,8 @@ var (
 	}
 )
 
-// Option adjusts a new model. Everything the TUI needs to run is a positional
-// argument; options are for what the user configured rather than what the run
-// requires, so leaving them all off yields netdoc's stock behavior.
+// Option adjusts a new model. Everything the TUI needs to run is positional;
+// options are for what the user configured.
 type Option func(*model)
 
 // WithKeymap runs the TUI on a resolved keymap instead of the default one.
@@ -258,10 +257,9 @@ func WithKeymap(km Keymap) Option {
 	return func(m *model) { m.keys = km }
 }
 
-// WithStartupNotice opens the run with one line of feedback, for something
-// that went wrong before the TUI existed — a rejected config file being the
-// only current caller. It holds longer than an ordinary notice: nothing the
-// user did triggered it, so nothing tells them to be looking when it appears.
+// WithStartupNotice opens the run with one line of feedback about something
+// that went wrong before the TUI existed. It holds longer than an ordinary
+// notice, since nothing the user did triggered it.
 func WithStartupNotice(msg string) Option {
 	return func(m *model) {
 		m.notice, m.noticeOK = textsafe.Clean(msg), false
@@ -451,11 +449,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Runes read from stdin in one batch arrive as a single KeyMsg
-		// ("jjj"), which matches no binding; replay them one key at a time.
-		// This comes first so that no screen below ever sees a batch: a chord
-		// typed fast is the same two keys as a chord typed slowly, and a
-		// screen that closes on "any key" must not close on a whole handful.
+		// Runes read from stdin in one batch arrive as a single KeyMsg ("jjj"), which
+		// matches no binding; replay them one at a time. First, so no screen below sees
+		// a batch: a chord typed fast must be the same two keys as one typed slowly.
 		if msg.Type == tea.KeyRunes && !msg.Paste && len(msg.Runes) > 1 {
 			var cmds []tea.Cmd
 			cur := tea.Model(m)
