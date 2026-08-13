@@ -33,6 +33,7 @@ type challengeFlags struct {
 	fs         *flag.FlagSet
 	id         *string
 	difficulty *string
+	starter    *string
 	answer     *string
 	giveUp     *bool
 	json       *bool
@@ -51,6 +52,7 @@ func newChallengeFlags(out io.Writer) *challengeFlags {
 	f.fs.SetOutput(out)
 	f.id = f.fs.String("id", "", "replay a specific challenge")
 	f.difficulty = f.fs.String("difficulty", "", "draw an easy, medium or hard challenge")
+	f.starter = f.fs.String("starter", "", "draw from a curated starter pack; 'netdoc-sim starters' lists them")
 	f.answer = f.fs.String("answer", "", "submit this diagnosis without opening a shell")
 	f.giveUp = f.fs.Bool("give-up", false, "skip straight to the answer")
 	f.json = f.fs.Bool("json", false, "print the machine-readable result")
@@ -75,6 +77,18 @@ func (f *challengeFlags) parse(args []string) error {
 	}
 	if *f.id != "" && *f.difficulty != "" {
 		return errors.New("-id names one challenge, so -difficulty has nothing to choose")
+	}
+	if *f.starter != "" {
+		if *f.id != "" {
+			return errors.New("-id names one challenge, so -starter has nothing to draw")
+		}
+		if *f.difficulty != "" {
+			return errors.New("a starter pack sets its own difficulties, so -difficulty has nothing to choose")
+		}
+		if _, ok := simulation.StarterPackByID(*f.starter); !ok {
+			return fmt.Errorf("unknown starter pack %q (have: %s)", textsafe.Clean(*f.starter),
+				strings.Join(simulation.StarterPackNames(), ", "))
+		}
 	}
 	if *f.answer != "" && *f.giveUp {
 		return errors.New("-answer and -give-up are two different submissions")
@@ -108,7 +122,7 @@ func launchChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	challenge, err := resolveChallenge(*f.id, *f.difficulty)
+	challenge, err := resolveChallenge(f)
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitUsage
@@ -138,11 +152,14 @@ func launchChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 	return code
 }
 
-func resolveChallenge(id, difficulty string) (*simulation.Challenge, error) {
-	if id != "" {
-		return simulation.BuildChallenge(id)
+func resolveChallenge(f *challengeFlags) (*simulation.Challenge, error) {
+	switch {
+	case *f.id != "":
+		return simulation.BuildChallenge(*f.id)
+	case *f.starter != "":
+		return simulation.StarterChallenge(*f.starter)
 	}
-	return simulation.FindChallenge(difficulty)
+	return simulation.FindChallenge(*f.difficulty)
 }
 
 func challengeDirectorArgv(f *challengeFlags, id string, netdoc netdocIdentity) []string {

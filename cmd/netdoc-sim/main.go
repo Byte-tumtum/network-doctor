@@ -117,6 +117,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, n)
 		}
 		return exitOK
+	case "starters":
+		return starters(args[1:], stdout, stderr)
 	case "capabilities":
 		return capabilities(ctx, stdout)
 	case "list":
@@ -148,6 +150,7 @@ Commands:
   challenge [id] [flags]   diagnose a hidden fault yourself, then let netdoc try
   validate <scenario>      parse and check a scenario without building anything
   scenarios                list the built-in scenarios
+  starters [pack]          list the curated starter packs, or one pack's challenges
   capabilities             report whether this host can simulate, and what a run does
   list                     list simulations left running by 'run -keep'
   inspect <id>             show a kept simulation's nodes and how to enter them
@@ -202,6 +205,12 @@ Flags for triage:
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
 
+Ways to play a challenge:
+  netdoc-sim challenge                     draw one and play it
+  netdoc-sim challenge -starter fundamentals
+                                           a curated challenge to learn on
+  netdoc-sim challenge V3-8F42C1           replay the one a friend sent you
+
 In the session you get a shell in the broken machine, then a menu. Pick a
 diagnosis by number or by name, 'b' rereads the briefing, 's' returns to the
 shell, 'q' gives up. Your solve time is the shell and the menu, not the
@@ -209,6 +218,7 @@ simulator's setup or Network Doctor's own run.
 
 Flags for challenge:
   -id <ID>                 replay a specific challenge instead of drawing one
+  -starter <pack>          draw from a starter pack ('netdoc-sim starters')
   -difficulty <level>      draw an easy, medium or hard challenge
   -answer <name>           submit this diagnosis without opening a shell
   -give-up                 skip straight to the answer
@@ -855,6 +865,43 @@ func list(stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%s  %-40s pid %-7d %s  %s\n", s.ID, textsafe.Clean(s.Scenario), s.PID,
 			s.Started.Format(time.RFC3339), status)
+	}
+	return exitOK
+}
+
+// starters is the discovery half of the starter packs: which ones exist, and
+// with a pack named, the challenge ids in it. It prints the ids on purpose —
+// they are ordinary challenge ids, so a beginner can work through a pack in
+// order with -id instead of drawing from it and hoping.
+func starters(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 {
+		fmt.Fprintln(stderr, "netdoc-sim: starters takes one pack name, or none to list them all")
+		return exitUsage
+	}
+	if len(args) == 0 {
+		fmt.Fprintln(stdout, "Starter packs — curated challenges to learn on. Play one with:")
+		fmt.Fprintln(stdout, "  netdoc-sim challenge -starter <pack>")
+		fmt.Fprintln(stdout, "\nA pack names the layer you are practising, which is a hint you asked for.")
+		fmt.Fprintln(stdout, "Which fault it is remains yours to find, and one entry per pack may be")
+		fmt.Fprintln(stdout, "a network with nothing wrong with it at all.")
+		fmt.Fprintln(stdout)
+		for _, pack := range simulation.StarterPacks() {
+			fmt.Fprintf(stdout, "  %-14s %-34s %d challenges\n", pack.ID, pack.Name, len(pack.Challenges))
+			fmt.Fprintf(stdout, "  %-14s %s\n\n", "", pack.Description)
+		}
+		fmt.Fprintln(stdout, "'netdoc-sim starters <pack>' lists a pack's challenge ids in order.")
+		return exitOK
+	}
+	pack, ok := simulation.StarterPackByID(args[0])
+	if !ok {
+		fmt.Fprintf(stderr, "netdoc-sim: unknown starter pack %q (have: %s)\n",
+			textsafe.Clean(args[0]), strings.Join(simulation.StarterPackNames(), ", "))
+		return exitUsage
+	}
+	fmt.Fprintf(stdout, "%s — %s\n%s\n\n", pack.ID, pack.Name, pack.Description)
+	fmt.Fprintln(stdout, "In order, easiest first:")
+	for _, id := range pack.Challenges {
+		fmt.Fprintf(stdout, "  netdoc-sim challenge -id %s\n", id)
 	}
 	return exitOK
 }
