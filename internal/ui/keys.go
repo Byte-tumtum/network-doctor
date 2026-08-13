@@ -328,17 +328,17 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// any move that happens to land on the last line resumes following, and
 	// the amount a key scrolls is the viewport's business, not this switch's.
 	case actUp:
-		m.vp.LineUp(1)
+		m.vp.ScrollUp(1)
 	case actDown:
-		m.vp.LineDown(1)
+		m.vp.ScrollDown(1)
 	case actPageUp:
-		m.vp.ViewUp()
+		m.vp.PageUp()
 	case actPageDown:
-		m.vp.ViewDown()
+		m.vp.PageDown()
 	case actHalfPageUp:
-		m.vp.HalfViewUp()
+		m.vp.HalfPageUp()
 	case actHalfPageDown:
-		m.vp.HalfViewDown()
+		m.vp.HalfPageDown()
 	default:
 		return m, nil
 	}
