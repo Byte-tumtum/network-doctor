@@ -325,9 +325,10 @@ func writeFakeNetdoc(t *testing.T, dir, version string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, name)
-	// A link when the filesystem allows one, a copy when it does not: t.TempDir
-	// and the test binary do not always live on the same device.
-	if err := os.Link(self, path); err != nil {
+	// Windows cannot remove a hard link to this running test executable, so copy
+	// there. Elsewhere, link when the filesystems allow it and copy when not.
+	linked := runtime.GOOS != "windows" && os.Link(self, path) == nil
+	if !linked {
 		body, err := os.ReadFile(self)
 		if err != nil {
 			t.Fatal(err)
