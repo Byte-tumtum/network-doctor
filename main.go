@@ -185,6 +185,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&checks, "check", "run stable probe IDs in `probe[,probe...]` form; repeatable")
 	fs.Var(&skips, "skip", "skip stable probe IDs in `probe[,probe...]` form; repeatable")
 	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
+	keys := fs.String("keys", "", "keybinding `preset` for the TUI: default or vim")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 
@@ -265,6 +266,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc:", err)
 		return 2
 	}
+	// Resolve once here, then pass the result straight to the TUI.
+	keymap, err := ui.PresetKeymap(*keys)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc: -keys:", err)
+		return 2
+	}
 
 	if *jsonOut {
 		return runJSON(context.Background(), t, sources, *watch, *publicDNS, selection, stdout, stderr)
@@ -273,7 +280,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
-	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection), tea.WithAltScreen())
+	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection,
+		ui.WithKeymap(keymap)), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.

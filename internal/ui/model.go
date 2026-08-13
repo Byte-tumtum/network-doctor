@@ -197,6 +197,13 @@ type model struct {
 
 	helping bool // ?: full-screen key cheatsheet; any key closes it
 
+	// keys resolves keypresses to actions. The zero value is the default
+	// keymap, so a model built without one behaves as netdoc always has.
+	// pendingKeys is the unfinished start of a chord ("g" of "gg") waiting
+	// for the key that completes it.
+	keys        Keymap
+	pendingKeys []string
+
 	toolbox    bool // --toolbox: chain deferred until 'r'
 	watch      bool
 	runHistory map[diagnostic.ProbeID][]diagnostic.Status
@@ -234,9 +241,17 @@ var (
 	}
 )
 
+// Option adjusts a new model without growing its positional constructor.
+type Option func(*model)
+
+// WithKeymap runs the TUI on a resolved keymap instead of the default one.
+func WithKeymap(km Keymap) Option {
+	return func(m *model) { m.keys = km }
+}
+
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
-func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection) tea.Model {
+func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
 	allProbes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
 	probes := selection.Apply(allProbes)
 	sp := spinner.New()
@@ -259,6 +274,9 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 		histPath:         histFile,
 		version:          version,
 		width:            100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+	}
+	for _, opt := range opts {
+		opt(&m)
 	}
 	m.history = loadHistory(histFile)
 	if t != nil {
@@ -407,18 +425,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helping = false
 			return m, nil
 		}
-		// Ctrl+C while the confirm gate is up cancels the gate, not the app.
-		if msg.Type == tea.KeyCtrlC && m.confirmTool != nil {
-			return m.handleConfirmKey(msg)
-		}
-		if msg.Type == tea.KeyCtrlC {
-			if m.notice == ctrlCNotice && time.Now().Before(m.noticeDeadline) {
-				return m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-			}
-			return m, m.setNotice(ctrlCNotice, false)
-		}
-		// Runes read from stdin in one batch arrive as a single KeyMsg
-		// ("jjj"), which matches no binding; replay them one key at a time.
+		// Runes read from stdin in one batch arrive as a single KeyMsg ("jjj"), which
+		// matches no binding; replay them one at a time, so a fast chord and a
+		// slow chord behave identically.
 		if msg.Type == tea.KeyRunes && !msg.Paste && len(msg.Runes) > 1 {
 			var cmds []tea.Cmd
 			cur := tea.Model(m)
@@ -428,6 +437,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			return cur, tea.Batch(cmds...)
+		}
+		// Ctrl+C while the confirm gate is up cancels the gate, not the app.
+		if msg.Type == tea.KeyCtrlC && m.confirmTool != nil {
+			return m.handleConfirmKey(msg)
+		}
+		if msg.Type == tea.KeyCtrlC {
+			// Ctrl+C reaches quit directly rather than through the quit
+			// binding: it is the terminal's own way out, and rebinding quit
+			// must not take it away.
+			if m.notice == ctrlCNotice && time.Now().Before(m.noticeDeadline) {
+				return m.quit()
+			}
+			return m, m.setNotice(ctrlCNotice, false)
 		}
 		if m.confirmTool != nil {
 			return m.handleConfirmKey(msg)

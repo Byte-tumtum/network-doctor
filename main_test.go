@@ -244,6 +244,38 @@ func TestHistoryFile(t *testing.T) {
 	}
 }
 
+// A misspelled preset is rejected before anything runs — including under
+// -json, where the keymap has no effect but the typo is still worth hearing
+// about on the run that carries it.
+func TestRunRejectsUnknownKeyPreset(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-keys", "emacs", "-json"}, &stdout, &stderr); code != 2 {
+		t.Errorf("run(-keys emacs) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown key preset") || !strings.Contains(stderr.String(), "vim") {
+		t.Errorf("stderr = %q, want the rejection and the valid names", stderr.String())
+	}
+	if stdout.Len() > 0 {
+		t.Errorf("stdout = %q, want nothing", stdout.String())
+	}
+}
+
+func TestRunAcceptsVimKeyPreset(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, probe := range probes {
+			results[probe.ID] = diagnostic.ProbeResult{ID: probe.ID, Status: diagnostic.StatusPass}
+		}
+		return results
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--keys=vim", "--json", "--check", "iface"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("run(--keys=vim) = %d; stderr: %s", code, stderr.String())
+	}
+}
+
 // Drives the real -json path through run() with probe execution stubbed out,
 // pinning the headless contract: valid JSON on stdout, exit 1 iff a check failed.
 func TestRunJSON(t *testing.T) {

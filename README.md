@@ -253,6 +253,18 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 | `?` | full-screen key cheatsheet; any key closes it |
 | `q` | quit (cancels running jobs first, then exits) |
 
+### Vim keybindings
+
+Use Vim-style navigation with:
+
+```sh
+netdoc --keys vim
+```
+
+The Vim preset adds `gg`/`G` for first/last, `ctrl+b`/`ctrl+f` for page
+up/down, and `ctrl+u`/`ctrl+d` for half-page up/down. Existing keys continue
+to work.
+
 ## Drill-down tools
 
 Each diagnosis row is *evidence*; when you want proof, run the real tools as cancellable streaming jobs — several run at once, and `tab` switches between the live ones. A contextual toolbox shows the tools available for the current target with their hotkeys, greying out missing binaries with an install hint. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.
