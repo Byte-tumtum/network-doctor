@@ -185,8 +185,9 @@ type model struct {
 	// SSH login form (S): host, username, key file, password. Enter hands the
 	// terminal to ssh; esc closes it. Every S starts a fresh form, so a typed
 	// password lives only as long as the form is open.
-	sshPrompt bool
-	ssh       sshForm
+	sshPrompt  bool
+	ssh        sshForm
+	sshRequest uint64
 
 	// Confirm gate: a tool marked Confirm (nmap) is held here after its hotkey,
 	// showing the exact command until 'y' runs it or esc cancels.
@@ -376,10 +377,10 @@ func (m model) sshDetected() bool {
 	return ok && r.Status == diagnostic.StatusPass
 }
 
-// spinnerActive reports whether the spinner tick chain should keep running:
-// while a started probe chain is pending or a drill-down job is live.
+// spinnerActive reports whether the spinner tick chain should keep running for
+// probes, jobs, name lookups, or SSH configuration resolution.
 func (m model) spinnerActive() bool {
-	return ((!m.toolbox || m.generation > 0 || m.chainRan()) && !m.allDone()) || m.jobsRunning() || len(m.namesPending) > 0
+	return ((!m.toolbox || m.generation > 0 || m.chainRan()) && !m.allDone()) || m.jobsRunning() || len(m.namesPending) > 0 || m.ssh.pending != nil
 }
 
 // setNotice shows one-line feedback and schedules its expiry. The expiry tick
@@ -488,6 +489,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 		}
 		return m, m.setNotice(notice, msg.err == nil)
+
+	case sshResolvedMsg:
+		if !m.sshPrompt || m.ssh.pending == nil || msg.id != m.ssh.pending.id {
+			return m, nil
+		}
+		pending := m.ssh.pending
+		m.ssh.pending = nil
+		if msg.err != nil {
+			m.ssh.err = textsafe.Clean(msg.err.Error())
+			return m, nil
+		}
+		args, env := sshAskpass(pending.args, m.ssh.pass.Value(), pending.self, msg.host, msg.proxied)
+		m.sshPrompt = false
+		// The password is in env now, so the form has no reason to keep it.
+		// Go strings cannot be wiped; this only shortens the window.
+		m.ssh.pass.SetValue("")
+		return m, runSSH(args, env)
 
 	case scheduleMsg:
 		if msg.gen != m.generation {

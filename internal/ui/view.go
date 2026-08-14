@@ -529,6 +529,10 @@ func (m model) sshFormView() string {
 	if m.ssh.err != "" {
 		body += "\n" + failStyle.Render("✗ "+m.ssh.err)
 	}
+	if m.ssh.pending != nil {
+		body += "\n" + m.spinner.View() + " checking ssh config…"
+		return focusPanelStyle.Width(w).Render(body) + "\n" + helpKeys(m.width, "esc", "back")
+	}
 	return focusPanelStyle.Width(w).Render(body) + "\n" +
 		helpKeys(m.width, "tab", "next field", "enter", "connect", "esc", "back")
 }

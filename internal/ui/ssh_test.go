@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,53 @@ import (
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
+
+// resolvedSSHCommand exercises the pure argv builder, the off-loop resolver,
+// and the final askpass handoff without involving the Bubble Tea model.
+func resolvedSSHCommand(t *testing.T, host, login, key, password, self, goos string) (args, env []string, err error) {
+	t.Helper()
+	args, err = sshCommand(host, login, key)
+	if err != nil || password == "" || self == "" {
+		return args, nil, err
+	}
+	msg := resolveSSH(1, args, goos)().(sshResolvedMsg)
+	if msg.err != nil {
+		return nil, nil, msg.err
+	}
+	args, env = sshAskpass(args, password, self, msg.host, msg.proxied)
+	return args, env, nil
+}
+
+func sshFormForTest(t *testing.T, host string) model {
+	t.Helper()
+	old := toolLookPath
+	toolLookPath = func(string) (string, error) { return "ssh", nil }
+	t.Cleanup(func() { toolLookPath = old })
+	m := asModel(t, must(newModel(mustTarget(t, host), true).Update(keyMsg("S"))))
+	if !m.sshPrompt {
+		t.Fatal("S did not open the SSH form")
+	}
+	return m
+}
+
+func sshResult(t *testing.T, cmd tea.Cmd) sshResolvedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("missing SSH resolver command")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		if len(batch) == 0 {
+			t.Fatal("empty SSH resolver batch")
+		}
+		msg = batch[0]()
+	}
+	resolved, ok := msg.(sshResolvedMsg)
+	if !ok {
+		t.Fatalf("resolver returned %T, want sshResolvedMsg", msg)
+	}
+	return resolved
+}
 
 func TestSSHCommand(t *testing.T) {
 	home, err := os.UserHomeDir()
@@ -55,7 +103,7 @@ func TestSSHCommand(t *testing.T) {
 	stubSSHEffective(t, "example.com", false)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args, env, err := sshCommand(tt.host, tt.login, tt.keyArg, tt.password, "/usr/bin/netdoc", "linux")
+			args, env, err := resolvedSSHCommand(t, tt.host, tt.login, tt.keyArg, tt.password, "/usr/bin/netdoc", "linux")
 			if err != nil {
 				t.Fatalf("sshCommand: %v", err)
 			}
@@ -100,7 +148,7 @@ func TestSSHDisplayUsesPlatformQuoter(t *testing.T) {
 // Without a helper path there is nothing to feed the password to, so ssh must
 // be left to ask on the terminal rather than told the prompt count.
 func TestSSHCommandWithoutHelper(t *testing.T) {
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "", "linux")
+	args, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "hunter2", "", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -145,7 +193,7 @@ func TestSSHCommandAllowsBlankWindowsPassword(t *testing.T) {
 	}
 	t.Cleanup(func() { sshVersion = oldVersion })
 
-	args, env, err := sshCommand("example.com", "alice", "", "", `C:\netdoc.exe`, "windows")
+	args, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "", `C:\netdoc.exe`, "windows")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -164,7 +212,7 @@ func TestSSHCommandRejectsUnsupportedWindowsAskpass(t *testing.T) {
 	}
 	t.Cleanup(func() { sshVersion = oldVersion })
 
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", `C:\netdoc.exe`, "windows")
+	args, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "hunter2", `C:\netdoc.exe`, "windows")
 	if err == nil || !strings.Contains(err.Error(), "password field blank") {
 		t.Fatalf("sshCommand error = %v, want the safe blank-field fallback", err)
 	}
@@ -197,7 +245,7 @@ func stubSSHEffectiveErr(t *testing.T, err error) {
 // never match its own prompt, and the legitimate password would be refused.
 func TestSSHCommandResolvesTheAlias(t *testing.T) {
 	stubSSHEffective(t, "real.example.com", false)
-	_, env, err := sshCommand("alias", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
+	_, env, err := resolvedSSHCommand(t, "alias", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -213,7 +261,7 @@ func TestSSHCommandResolvesTheAlias(t *testing.T) {
 // has to know it cannot attribute a host-less prompt to the target.
 func TestSSHCommandMarksProxiedConnections(t *testing.T) {
 	stubSSHEffective(t, "example.com", true)
-	_, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
+	_, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -228,7 +276,7 @@ func TestSSHCommandMarksProxiedConnections(t *testing.T) {
 // the login and say why, so the retry with a blank field is the user's choice.
 func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
 	stubSSHEffectiveErr(t, errors.New("exit status 255"))
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
+	args, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	if err == nil {
 		t.Fatal("sshCommand succeeded, want a refusal")
 	}
@@ -243,18 +291,17 @@ func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
 	}
 }
 
-// A config read that never answers is the same refusal as one that answers
-// badly, and it has to arrive on time: sshCommand runs inside Update, so an
-// unbounded `ssh -G` freezes the TUI instead of failing it. This one runs the
-// real sshEffective — stub it and the deadline under test never executes.
-func TestSSHCommandBoundsAStalledConfigRead(t *testing.T) {
+// A config read that never answers is still bounded even though it now runs
+// outside Update. This uses the real sshEffective; stubbing it would bypass the
+// deadline under test.
+func TestSSHResolutionBoundsAStalledConfigRead(t *testing.T) {
 	stallSSHOnPath(t)
 	old := sshConfigTimeout
 	sshConfigTimeout = 150 * time.Millisecond
 	t.Cleanup(func() { sshConfigTimeout = old })
 
 	start := time.Now()
-	args, env, err := sshCommand("example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
+	args, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "hunter2", "/usr/bin/netdoc", "linux")
 	elapsed := time.Since(start)
 
 	// Unbounded, this waits out the fake's full sleep and then succeeds on its
@@ -303,7 +350,7 @@ func TestSSHCommandWithoutPasswordIgnoresConfigFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { sshEffective = old })
 
-	args, env, err := sshCommand("example.com", "alice", "", "", "/usr/bin/netdoc", "linux")
+	args, env, err := resolvedSSHCommand(t, "example.com", "alice", "", "", "/usr/bin/netdoc", "linux")
 	if err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
@@ -326,7 +373,7 @@ func TestSSHCommandQueriesWithTheRealArgv(t *testing.T) {
 	sshEffective = func(args []string) (string, bool, error) { got = args; return "example.com", false, nil }
 	t.Cleanup(func() { sshEffective = old })
 
-	if _, _, err := sshCommand("example.com:2222", "alice", "", "hunter2", "/usr/bin/netdoc", "linux"); err != nil {
+	if _, _, err := resolvedSSHCommand(t, "example.com:2222", "alice", "", "hunter2", "/usr/bin/netdoc", "linux"); err != nil {
 		t.Fatalf("sshCommand: %v", err)
 	}
 	want := []string{"-p", "2222", "-l", "alice", "example.com"}
@@ -356,7 +403,7 @@ func TestParseSSHConfig(t *testing.T) {
 }
 
 func TestSSHCommandNeedsHost(t *testing.T) {
-	if _, _, err := sshCommand("", "alice", "", "", "/usr/bin/netdoc", "linux"); err == nil {
+	if _, err := sshCommand("", "alice", ""); err == nil {
 		t.Error("empty host = nil error, want one")
 	}
 }
@@ -383,7 +430,7 @@ func TestSSHHostValueRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseTarget: %v", err)
 			}
-			args, _, err := sshCommand(sshHostValue(target), "", "", "", "", "linux")
+			args, err := sshCommand(sshHostValue(target), "", "")
 			if err != nil {
 				t.Fatalf("sshCommand: %v", err)
 			}
@@ -495,26 +542,246 @@ func TestSSHFormKeys(t *testing.T) {
 	}
 }
 
-// Once the password has been handed to the askpass environment, the form drops
-// its copy rather than holding it until the next S.
-func TestSSHFormClearsPasswordOnConnect(t *testing.T) {
-	stubSSHEffective(t, "example.com", false)
-	oldLookPath := toolLookPath
-	toolLookPath = func(string) (string, error) { return "ssh", nil }
-	t.Cleanup(func() { toolLookPath = oldLookPath })
+// A blocked config resolver lives in the returned tea.Cmd, not Update. The
+// started barrier also proves a later message is handled while that command is
+// still blocked; no elapsed-time guess is involved.
+func TestSSHResolutionLeavesUpdateResponsive(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	oldEffective := sshEffective
+	sshEffective = func([]string) (string, bool, error) {
+		close(started)
+		<-release
+		return "example.com", false, nil
+	}
+	t.Cleanup(func() { sshEffective = oldEffective })
 
-	target, err := diagnostic.ParseTarget("example.com:2222")
-	if err != nil {
-		t.Fatalf("ParseTarget: %v", err)
-	}
-	m := asModel(t, must(newModel(target, true).Update(keyMsg("S"))))
+	m := sshFormForTest(t, "example.com")
+	m.toolbox = false // keep the existing spinner chain active, so Enter returns the resolver directly
 	m.ssh.pass.SetValue("hunter2")
-	m = asModel(t, must(m.Update(tea.KeyMsg{Type: tea.KeyEnter})))
-	if m.sshPrompt {
-		t.Fatal("enter left the form open")
+	type updateResult struct {
+		m   model
+		cmd tea.Cmd
 	}
-	if got := m.ssh.pass.Value(); got != "" {
-		t.Errorf("password = %q, want it cleared after connecting", got)
+	updated := make(chan updateResult, 1)
+	go func() {
+		u, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		updated <- updateResult{m: u.(model), cmd: cmd}
+	}()
+
+	var entered updateResult
+	select {
+	case entered = <-updated:
+	case <-started:
+		close(release)
+		<-updated
+		t.Fatal("ssh config resolution ran before Update returned")
+	}
+	m = entered.m
+	resolved := make(chan tea.Msg, 1)
+	go func() { resolved <- entered.cmd() }()
+	<-started
+
+	u, _ := m.Update(tea.WindowSizeMsg{Width: 137, Height: 41})
+	m = asModel(t, u)
+	if m.width != 137 || m.height != 41 {
+		t.Fatalf("window message was not processed while resolver blocked: %dx%d", m.width, m.height)
+	}
+	close(release)
+	u, launch := m.Update(<-resolved)
+	if m = asModel(t, u); m.sshPrompt || launch == nil {
+		t.Fatal("successful resolution did not close the form and launch SSH")
+	}
+}
+
+// Success constructs the askpass environment while the password is still in
+// the form, then clears the form and accepts the result only once.
+func TestSSHResolutionSuccessHandsOffPasswordOnce(t *testing.T) {
+	stubSSHEffective(t, "real.example.com", false)
+	oldRunner := runSSH
+	var runs int
+	var gotArgs, gotEnv []string
+	runSSH = func(args, env []string) tea.Cmd {
+		runs++
+		gotArgs, gotEnv = slices.Clone(args), slices.Clone(env)
+		return func() tea.Msg { return nil }
+	}
+	t.Cleanup(func() { runSSH = oldRunner })
+
+	m := sshFormForTest(t, "example.com:2222")
+	m.ssh.user.SetValue("alice")
+	m.ssh.pass.SetValue("hunter2")
+	u, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	if !m.sshPrompt || m.ssh.pending == nil || m.ssh.pass.Value() != "hunter2" {
+		t.Fatal("Enter did not leave the password in the pending form")
+	}
+	msg := sshResult(t, cmd)
+	u, launch := m.Update(msg)
+	m = asModel(t, u)
+	if launch == nil || runs != 1 || m.sshPrompt || m.ssh.pending != nil || m.ssh.pass.Value() != "" {
+		t.Fatalf("success state: launch=%v runs=%d prompt=%v pending=%v password=%q", launch != nil, runs, m.sshPrompt, m.ssh.pending != nil, m.ssh.pass.Value())
+	}
+	wantArgs := []string{"-p", "2222", "-l", "alice", "-o", "NumberOfPasswordPrompts=1", "example.com"}
+	if !slices.Equal(gotArgs, wantArgs) {
+		t.Errorf("args = %v, want %v", gotArgs, wantArgs)
+	}
+	if !slices.Contains(gotEnv, AskpassEnv+"=hunter2") || !slices.Contains(gotEnv, AskpassHostEnv+"=real.example.com") {
+		t.Error("accepted result did not hand the password and resolved host to askpass")
+	}
+	if slices.ContainsFunc(gotArgs, func(arg string) bool { return strings.Contains(arg, "hunter2") }) {
+		t.Error("password leaked into SSH argv")
+	}
+	_, duplicate := m.Update(msg)
+	if duplicate != nil || runs != 1 {
+		t.Fatalf("duplicate completion launched SSH again: cmd=%v runs=%d", duplicate != nil, runs)
+	}
+}
+
+func TestSSHResolutionErrorKeepsFormUsableForRetry(t *testing.T) {
+	oldEffective := sshEffective
+	var calls atomic.Int32
+	sshEffective = func([]string) (string, bool, error) {
+		if calls.Add(1) == 1 {
+			return "", false, errors.New("config unavailable")
+		}
+		return "example.com", false, nil
+	}
+	t.Cleanup(func() { sshEffective = oldEffective })
+	oldRunner := runSSH
+	var runs int
+	runSSH = func([]string, []string) tea.Cmd { runs++; return func() tea.Msg { return nil } }
+	t.Cleanup(func() { runSSH = oldRunner })
+
+	m := sshFormForTest(t, "example.com")
+	m.ssh.setFocus(sshPass)
+	m.ssh.pass.SetValue("hunter2")
+	u, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	first := sshResult(t, cmd)
+	u, launch := m.Update(first)
+	m = asModel(t, u)
+	if launch != nil || !m.sshPrompt || m.ssh.pending != nil || m.ssh.focus != sshPass || m.ssh.pass.Value() != "hunter2" || !strings.Contains(m.ssh.err, "cannot read ssh config") {
+		t.Fatalf("error state: launch=%v prompt=%v pending=%v focus=%d password=%q err=%q", launch != nil, m.sshPrompt, m.ssh.pending != nil, m.ssh.focus, m.ssh.pass.Value(), m.ssh.err)
+	}
+	u, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	second := sshResult(t, cmd)
+	if first.id == second.id {
+		t.Fatal("retry reused the old request id")
+	}
+	u, launch = m.Update(second)
+	m = asModel(t, u)
+	if launch == nil || runs != 1 || m.sshPrompt {
+		t.Fatalf("retry did not launch once: launch=%v runs=%d prompt=%v", launch != nil, runs, m.sshPrompt)
+	}
+}
+
+func TestSSHResolutionIgnoresRepeatedEnter(t *testing.T) {
+	stubSSHEffective(t, "example.com", false)
+	m := sshFormForTest(t, "example.com")
+	m.ssh.pass.SetValue("hunter2")
+	u, first := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	id := m.ssh.pending.id
+	u, second := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	if second != nil || m.ssh.pending == nil || m.ssh.pending.id != id || m.ssh.pass.Value() != "hunter2" {
+		t.Fatal("repeated Enter replaced the pending request or password")
+	}
+	if msg := sshResult(t, first); msg.id != id {
+		t.Fatalf("resolver id = %d, want %d", msg.id, id)
+	}
+}
+
+// Escape abandons request A immediately. Reopening can start request B while A
+// winds down, and A cannot launch with either its old password or B's new one.
+func TestSSHResolutionEscapeRejectsStaleResult(t *testing.T) {
+	startA, startB := make(chan struct{}), make(chan struct{})
+	releaseA, releaseB := make(chan struct{}), make(chan struct{})
+	oldEffective := sshEffective
+	var calls atomic.Int32
+	sshEffective = func([]string) (string, bool, error) {
+		if calls.Add(1) == 1 {
+			close(startA)
+			<-releaseA
+			return "old.example.com", false, nil
+		}
+		close(startB)
+		<-releaseB
+		return "new.example.com", false, nil
+	}
+	t.Cleanup(func() { sshEffective = oldEffective })
+	oldRunner := runSSH
+	var runs int
+	var gotEnv []string
+	runSSH = func(_ []string, env []string) tea.Cmd {
+		runs++
+		gotEnv = slices.Clone(env)
+		return func() tea.Msg { return nil }
+	}
+	t.Cleanup(func() { runSSH = oldRunner })
+
+	m := sshFormForTest(t, "example.com")
+	m.toolbox = false // return each resolver directly; both are run under test-controlled barriers
+	m.ssh.pass.SetValue("old-password")
+	u, cmdA := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	resultA := make(chan tea.Msg, 1)
+	go func() { resultA <- cmdA() }()
+	<-startA
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = asModel(t, u)
+	if m.sshPrompt || m.ssh.pending != nil || m.ssh.pass.Value() != "" {
+		t.Fatal("Escape did not immediately close and clear the pending form")
+	}
+
+	u, _ = m.Update(keyMsg("S"))
+	m = asModel(t, u)
+	m.ssh.pass.SetValue("new-password")
+	u, cmdB := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	idB := m.ssh.pending.id
+	resultB := make(chan tea.Msg, 1)
+	go func() { resultB <- cmdB() }()
+	<-startB
+
+	close(releaseA)
+	u, staleLaunch := m.Update(<-resultA)
+	m = asModel(t, u)
+	if staleLaunch != nil || runs != 0 || !m.sshPrompt || m.ssh.pending == nil || m.ssh.pending.id != idB || m.ssh.pass.Value() != "new-password" {
+		t.Fatal("stale request A changed request B")
+	}
+	close(releaseB)
+	u, launch := m.Update(<-resultB)
+	m = asModel(t, u)
+	if launch == nil || runs != 1 || m.sshPrompt {
+		t.Fatalf("request B did not launch once: launch=%v runs=%d prompt=%v", launch != nil, runs, m.sshPrompt)
+	}
+	if !slices.Contains(gotEnv, AskpassEnv+"=new-password") || slices.Contains(gotEnv, AskpassEnv+"=old-password") {
+		t.Error("request B did not exclusively use its own password")
+	}
+}
+
+func TestSSHResolutionKeepsSpinnerAlive(t *testing.T) {
+	stubSSHEffective(t, "example.com", false)
+	m := sshFormForTest(t, "example.com")
+	doneResults(&m, "")
+	if m.spinnerActive() {
+		t.Fatal("spinner active before SSH resolution")
+	}
+	m.ssh.pass.SetValue("hunter2")
+	u, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, u)
+	if !m.spinnerActive() || !strings.Contains(m.View(), "checking ssh config") {
+		t.Fatal("pending SSH resolution did not keep and render the spinner")
+	}
+	if _, ok := cmd().(tea.BatchMsg); !ok {
+		t.Fatal("starting from an idle spinner did not seed a new tick chain")
+	}
+	u, _ = m.Update(sshResolvedMsg{id: m.ssh.pending.id, err: errors.New("no config")})
+	m = asModel(t, u)
+	if m.spinnerActive() {
+		t.Fatal("spinner remained active after SSH resolution error")
 	}
 }
 

@@ -36,6 +36,22 @@ type sshDoneMsg struct {
 	output  string
 }
 
+// sshResolvedMsg carries only the non-secret result of the off-loop ssh
+// configuration read. The password stays in the form until Update accepts the
+// matching request and builds the askpass environment.
+type sshResolvedMsg struct {
+	id      uint64
+	host    string
+	proxied bool
+	err     error
+}
+
+type sshPending struct {
+	id   uint64
+	args []string
+	self string
+}
+
 // The form's fields, in tab order.
 const (
 	sshUser = iota
@@ -69,13 +85,14 @@ const AskpassProxyEnv = "NETDOC_ASKPASS_PROXY" // #nosec G101 -- this is an envi
 // sshForm is the SSH login prompt. The host is the run target, not a field:
 // the form logs in to the machine the checks are about.
 type sshForm struct {
-	host   string
-	user   textinput.Model
-	pass   textinput.Model
-	keys   []string // private keys found in ~/.ssh; keyIdx 0 means "none"
-	keyIdx int
-	focus  int
-	err    string
+	host    string
+	user    textinput.Model
+	pass    textinput.Model
+	keys    []string // private keys found in ~/.ssh; keyIdx 0 means "none"
+	keyIdx  int
+	focus   int
+	err     string
+	pending *sshPending
 }
 
 // newSSHForm seeds the form from the run target, the local login name, and the
@@ -185,10 +202,16 @@ func (f *sshForm) setFocus(i int) tea.Cmd {
 // up/down) move between fields, ←/→ picks a key while that row is focused,
 // enter connects, esc backs out.
 func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	if msg.String() == "esc" {
 		m.sshPrompt = false
+		m.ssh.pending = nil
+		m.ssh.pass.SetValue("")
 		return m, nil
+	}
+	if m.ssh.pending != nil {
+		return m, nil
+	}
+	switch msg.String() {
 	case "tab", "down":
 		return m, m.ssh.setFocus(m.ssh.focus + 1)
 	case "shift+tab", "up":
@@ -208,19 +231,25 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			self = "" // no askpass helper; ssh falls back to asking on the tty
 		}
-		args, env, err := sshCommand(m.ssh.host, strings.TrimSpace(m.ssh.user.Value()),
-			m.ssh.keyPath(), m.ssh.pass.Value(), self, runtime.GOOS)
+		args, err := sshCommand(m.ssh.host, strings.TrimSpace(m.ssh.user.Value()), m.ssh.keyPath())
 		if err != nil {
-			// The panel renders this raw, and one of these errors now quotes an
-			// exec failure. Clean at the assignment, which is the only one.
 			m.ssh.err = textsafe.Clean(err.Error())
 			return m, nil
 		}
+		if m.ssh.pass.Value() != "" && self != "" {
+			wasTicking := m.spinnerActive()
+			m.sshRequest++
+			m.ssh.pending = &sshPending{id: m.sshRequest, args: args, self: self}
+			m.ssh.err = ""
+			cmd := resolveSSH(m.sshRequest, args, runtime.GOOS)
+			if !wasTicking {
+				return m, tea.Batch(cmd, m.spinner.Tick)
+			}
+			return m, cmd
+		}
 		m.sshPrompt = false
-		// The password is in env now, so the form has no reason to keep it.
-		// Go strings can't be wiped, so this only shortens the window.
 		m.ssh.pass.SetValue("")
-		return m, runSSH(args, env)
+		return m, runSSH(args, nil)
 	}
 	var cmd tea.Cmd
 	switch m.ssh.focus {
@@ -233,16 +262,15 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// sshCommand builds the argv and environment for the form's answers. self is
-// this binary's path, used as ssh's askpass helper; an empty self drops the
-// password and leaves ssh to prompt for it on the terminal.
-func sshCommand(host, login, key, password, self, goos string) (args, env []string, err error) {
+// sshCommand validates the form's non-secret answers and builds the argv that
+// both `ssh -G` and the interactive session use.
+func sshCommand(host, login, key string) (args []string, err error) {
 	if host == "" {
-		return nil, nil, errors.New("no target host — press r to set one")
+		return nil, errors.New("no target host — press r to set one")
 	}
 	t, err := diagnostic.ParseTarget(host)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if t.PortExplicit && t.Port != 22 {
 		args = append(args, "-p", strconv.Itoa(t.Port))
@@ -259,56 +287,57 @@ func sshCommand(host, login, key, password, self, goos string) (args, env []stri
 		// starting with "-" stays a name instead of becoming an ssh option.
 		args = append(args, "-l", login)
 	}
-	if password != "" && self != "" {
+	return append(args, t.Host), nil
+}
+
+// resolveSSH performs every external configuration read in a tea.Cmd. Its
+// immutable snapshot contains no password; stale results are rejected by id.
+func resolveSSH(id uint64, args []string, goos string) tea.Cmd {
+	args = slices.Clone(args)
+	return func() tea.Msg {
 		if goos == "windows" {
 			version, err := sshVersion()
 			if err != nil {
-				return nil, nil, fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%w) — retry with the password field blank and let ssh ask", err)
+				return sshResolvedMsg{id: id, err: fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%w) — retry with the password field blank and let ssh ask", err)}
 			}
 			if err := windowsForcedAskpass(version); err != nil {
-				return nil, nil, err
+				return sshResolvedMsg{id: id, err: err}
 			}
 		}
-		// Asked with the same argv the session will use, because a Match block
-		// can key off the port, the login, or the host and hand back a
-		// different HostName than a bare query would.
-		effective, proxied, err := sshEffective(append(slices.Clone(args), t.Host))
+		host := args[len(args)-1]
+		effective, proxied, err := sshEffective(args)
 		if err != nil {
-			// Neither default is safe. Assume direct and a jump host's prompt
-			// gets answered with this password; assume proxied and every
-			// ordinary login quietly loses the answer it asked for. Say which
-			// step failed instead — with the field blank ssh asks on the
-			// terminal, where the user can see who is asking.
-			return nil, nil, fmt.Errorf("cannot read ssh config for %s (%w) — retry with the password field blank and let ssh ask", t.Host, err)
+			return sshResolvedMsg{id: id, err: fmt.Errorf("cannot read ssh config for %s (%w) — retry with the password field blank and let ssh ask", host, err)}
 		}
 		if effective == "" {
-			effective = t.Host // ssh had nothing to say
+			effective = host // ssh had nothing to say
 		}
-		// The secret goes through the environment to the helper, never through
-		// argv, which every process can read. It lives in ssh's environment for
-		// the whole session and is inherited by whatever ssh_config starts —
-		// ProxyCommand, LocalCommand, a ProxyJump's own ssh.
-		// One prompt only: the helper would just repeat a rejected password.
-		args = append(args, "-o", "NumberOfPasswordPrompts=1")
-		env = append(os.Environ(),
-			"SSH_ASKPASS="+self,
-			"SSH_ASKPASS_REQUIRE=force", // ask the helper even though ssh has a tty
-			AskpassEnv+"="+password,
-			AskpassHostEnv+"="+effective)
-		if proxied {
-			env = append(env, AskpassProxyEnv+"=1")
-		}
+		return sshResolvedMsg{id: id, host: effective, proxied: proxied}
 	}
-	return append(args, t.Host), env, nil
 }
 
-// sshConfigTimeout bounds the `ssh -G` config read. That read is synchronous
-// inside Update, so a stall freezes the whole TUI — no repaint, no Ctrl-C —
-// and ssh_config can genuinely stall: Match exec runs arbitrary commands and
-// Include pulls in files that may sit on a hung mount. Seconds for work that
-// normally costs milliseconds; past that the caller's existing refusal is a
-// better answer than a frozen screen. A var so the timeout test needn't wait
-// it out.
+// sshAskpass adds the password environment only after Update accepts the
+// resolver result. The secret never enters a tea.Cmd or tea.Msg.
+func sshAskpass(args []string, password, self, effective string, proxied bool) ([]string, []string) {
+	// One prompt only: the helper would just repeat a rejected password.
+	args = slices.Insert(slices.Clone(args), len(args)-1, "-o", "NumberOfPasswordPrompts=1")
+	// The secret goes through the environment to the helper, never through
+	// argv, which every process can read. It lives in ssh's environment for
+	// the whole session and is inherited by whatever ssh_config starts.
+	env := append(os.Environ(),
+		"SSH_ASKPASS="+self,
+		"SSH_ASKPASS_REQUIRE=force",
+		AskpassEnv+"="+password,
+		AskpassHostEnv+"="+effective)
+	if proxied {
+		env = append(env, AskpassProxyEnv+"=1")
+	}
+	return args, env
+}
+
+// sshConfigTimeout bounds off-loop `ssh -V` and `ssh -G` reads. ssh_config can
+// genuinely stall: Match exec runs arbitrary commands and Include can touch a
+// hung mount. A var so the timeout test needn't wait it out.
 var sshConfigTimeout = 3 * time.Second
 
 // sshVersion identifies the Windows client before relying on forced askpass.
@@ -393,7 +422,7 @@ func parseSSHConfig(out string) (host string, proxied bool) {
 // stderr is teed rather than captured: it still scrolls past live during the
 // session, and the copy comes back with the terminal so "Permission denied"
 // survives in a job pane instead of being painted over by the restored TUI.
-func runSSH(args, env []string) tea.Cmd {
+var runSSH = func(args, env []string) tea.Cmd {
 	// #nosec G204 -- ssh is fixed and args remain separate argv elements, never shell text.
 	cmd := exec.Command("ssh", args...)
 	cmd.Env = env // nil inherits
