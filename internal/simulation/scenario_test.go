@@ -401,6 +401,21 @@ func TestLibraryScenariosValidate(t *testing.T) {
 	}
 }
 
+func TestLibraryScenarioReturnsIndependentCopies(t *testing.T) {
+	first, err := LibraryScenario("healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Topology.Nodes[0].Name = "changed"
+	second, err := LibraryScenario("healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Topology.Nodes[0].Name == "changed" {
+		t.Error("mutating one library scenario changed the next load")
+	}
+}
+
 func TestLoadPrefersFilesForPathLikeRefs(t *testing.T) {
 	// A reference that looks like a path must never resolve to a built-in, or a
 	// local scenario could be silently shadowed by one shipped in the binary.

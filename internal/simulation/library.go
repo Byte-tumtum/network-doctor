@@ -9,10 +9,13 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 )
 
 //go:embed scenarios/*.yaml
 var library embed.FS
+
+var libraryScenarios sync.Map
 
 // LibraryNames lists the built-in scenarios, by file stem.
 func LibraryNames() []string {
@@ -30,6 +33,9 @@ func LibraryNames() []string {
 
 // LibraryScenario loads a built-in scenario by name.
 func LibraryScenario(name string) (*Scenario, error) {
+	if cached, ok := libraryScenarios.Load(name); ok {
+		return cloneScenario(cached.(*Scenario)), nil
+	}
 	blob, err := library.ReadFile(path.Join("scenarios", path.Base(name)+".yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("no built-in scenario %q (have: %s)", name, strings.Join(LibraryNames(), ", "))
@@ -38,7 +44,8 @@ func LibraryScenario(name string) (*Scenario, error) {
 	if err != nil {
 		return nil, fmt.Errorf("built-in scenario %s: %w", name, err)
 	}
-	return s, nil
+	libraryScenarios.Store(name, s)
+	return cloneScenario(s), nil
 }
 
 // Load resolves a scenario reference: a built-in name, or a path to a YAML
