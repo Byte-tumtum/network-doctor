@@ -87,8 +87,8 @@ func selectableProbeIDs() []ProbeID {
 			ids = append(ids, p.ID)
 		}
 	}
-	for proto := ProtoNone; proto <= ProtoSMTP; proto++ {
-		add(defaultOps.buildProbes(&Target{Host: "example.invalid", Port: 443, Proto: proto}, DefaultPublicDNS))
+	for proto := range protoNames {
+		add(defaultOps.buildProbes(&Target{Host: "example.invalid", Port: 443, Proto: Proto(proto)}, DefaultPublicDNS))
 	}
 	add(defaultOps.buildProbes(nil, DefaultPublicDNS))
 	return ids

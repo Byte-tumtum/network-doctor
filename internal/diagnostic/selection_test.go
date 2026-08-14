@@ -2,11 +2,144 @@ package diagnostic
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 )
+
+// declaredConstants reads the declarations because Go has no runtime enum
+// inventory. This keeps the regression check independent of another hand-kept
+// list of protocols, statuses, or probe IDs.
+func declaredConstants(t *testing.T, filename, typeName string) []*ast.ValueSpec {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declared []*ast.ValueSpec
+	for _, decl := range f.Decls {
+		group, ok := decl.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		active := false
+		for _, raw := range group.Specs {
+			spec := raw.(*ast.ValueSpec)
+			if name, ok := spec.Type.(*ast.Ident); ok {
+				active = name.Name == typeName
+			} else if len(spec.Values) > 0 {
+				active = false
+			}
+			if active {
+				declared = append(declared, spec)
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatalf("no %s constants found", typeName)
+	}
+	return declared
+}
+
+func declaredIotaLen(t *testing.T, filename, typeName string) int {
+	t.Helper()
+	specs := declaredConstants(t, filename, typeName)
+	if len(specs[0].Names) != 1 || len(specs[0].Values) != 1 {
+		t.Fatalf("first %s constant is not iota", typeName)
+	}
+	iotaExpr, ok := specs[0].Values[0].(*ast.Ident)
+	if !ok || iotaExpr.Name != "iota" {
+		t.Fatalf("first %s constant is not iota", typeName)
+	}
+	for _, spec := range specs[1:] {
+		if len(spec.Names) != 1 || len(spec.Values) != 0 {
+			t.Fatalf("%s must remain a contiguous iota enum", typeName)
+		}
+	}
+	return len(specs)
+}
+
+func declaredProbeIDs(t *testing.T) map[ProbeID]struct{} {
+	t.Helper()
+	ids := map[ProbeID]struct{}{}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), entry.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			spec, ok := node.(*ast.ValueSpec)
+			if !ok {
+				return true
+			}
+			typeName, ok := spec.Type.(*ast.Ident)
+			if !ok || typeName.Name != "ProbeID" {
+				return true
+			}
+			for i, name := range spec.Names {
+				if i >= len(spec.Values) {
+					t.Fatalf("%s has no explicit stable probe ID", name.Name)
+				}
+				literal, ok := spec.Values[i].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("%s is not a string literal", name.Name)
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				id := ProbeID(value)
+				if _, duplicate := ids[id]; duplicate {
+					t.Fatalf("duplicate declared probe ID %q", id)
+				}
+				ids[id] = struct{}{}
+			}
+			return true
+		})
+	}
+	return ids
+}
+
+func TestEnumNameTablesCoverDeclarations(t *testing.T) {
+	if got := declaredIotaLen(t, "target.go", "Proto"); got != len(protoNames) {
+		t.Errorf("%d Proto constants, but %d names", got, len(protoNames))
+	}
+	if got := declaredIotaLen(t, "checks.go", "Status"); got != len(statusNames) {
+		t.Errorf("%d Status constants, but %d names", got, len(statusNames))
+	}
+}
+
+func TestSelectableProbeIDsCoverDeclaredProbeIDs(t *testing.T) {
+	declared := declaredProbeIDs(t)
+	selected := map[ProbeID]struct{}{}
+	for _, id := range selectableProbeIDs() {
+		if _, duplicate := selected[id]; duplicate {
+			t.Errorf("selectable probe ID %q is duplicated", id)
+		}
+		selected[id] = struct{}{}
+		if _, ok := declared[id]; !ok {
+			t.Errorf("selectable probe ID %q has no ProbeID constant", id)
+		}
+	}
+	for id := range declared {
+		if _, ok := selected[id]; !ok {
+			t.Errorf("declared probe ID %q is not selectable", id)
+		}
+	}
+}
 
 func probeSet(ids ...ProbeID) map[ProbeID]struct{} {
 	set := make(map[ProbeID]struct{}, len(ids))

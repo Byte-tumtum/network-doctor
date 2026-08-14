@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net"
 	"os"
 	"path/filepath"
@@ -141,12 +144,47 @@ func TestJobStatusString(t *testing.T) {
 		{JobFailed, "failed"},
 		{JobCanceled, "canceled"},
 		{JobTimedOut, "timed out"},
+		{JobStatus(-1), "?"},
 		{JobStatus(99), "?"},
 	}
 	for _, c := range cases {
 		if got := c.s.String(); got != c.want {
 			t.Errorf("JobStatus(%d) = %q, want %q", c.s, got, c.want)
 		}
+	}
+
+	f, err := parser.ParseFile(token.NewFileSet(), "jobs.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := 0
+	ast.Inspect(f, func(node ast.Node) bool {
+		group, ok := node.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST || len(group.Specs) == 0 {
+			return true
+		}
+		first := group.Specs[0].(*ast.ValueSpec)
+		typeName, ok := first.Type.(*ast.Ident)
+		if !ok || typeName.Name != "JobStatus" {
+			return false
+		}
+		for i, spec := range group.Specs {
+			value := spec.(*ast.ValueSpec)
+			if len(value.Names) != 1 || i == 0 && len(value.Values) != 1 || i > 0 && len(value.Values) != 0 {
+				t.Fatal("JobStatus must remain a contiguous iota enum")
+			}
+			if i == 0 {
+				iotaExpr, ok := value.Values[0].(*ast.Ident)
+				if !ok || iotaExpr.Name != "iota" {
+					t.Fatal("first JobStatus constant is not iota")
+				}
+			}
+			declared += len(value.Names)
+		}
+		return false
+	})
+	if declared != len(jobStatusNames) {
+		t.Errorf("%d JobStatus constants, but %d names", declared, len(jobStatusNames))
 	}
 }
 

@@ -36,6 +36,7 @@ func TestStatusString(t *testing.T) {
 		{StatusFail, "FAIL"},
 		{StatusSkip, "SKIP"},
 		{StatusNA, "N/A"},
+		{Status(-1), "?"},
 		{Status(255), "?"},
 	}
 	for _, c := range cases {

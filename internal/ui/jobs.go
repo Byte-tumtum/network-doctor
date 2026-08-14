@@ -27,11 +27,13 @@ const (
 	JobTimedOut
 )
 
+var jobStatusNames = [...]string{"queued", "running", "done", "failed", "canceled", "timed out"}
+
 func (s JobStatus) String() string {
-	if s < JobQueued || s > JobTimedOut {
+	if s < 0 || s >= JobStatus(len(jobStatusNames)) {
 		return "?"
 	}
-	return [...]string{"queued", "running", "done", "failed", "canceled", "timed out"}[s]
+	return jobStatusNames[s]
 }
 
 // ToolOutputMsg is one sanitized output line. JobID+Generation identity lets

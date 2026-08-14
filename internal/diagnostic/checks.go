@@ -43,6 +43,8 @@ const (
 	StatusNA
 )
 
+var statusNames = [...]string{"PASS", "WARN", "FAIL", "SKIP", "N/A"}
+
 // Route failure causes are attached to the existing direct-egress row. They
 // describe only evidence the local kernel exposes; none claims an alternate
 // path works without a successful probe proving that separately.
@@ -72,10 +74,10 @@ type FamilyConnectivity struct {
 }
 
 func (s Status) String() string {
-	if s < StatusPass || s > StatusNA {
+	if s < 0 || s >= Status(len(statusNames)) {
 		return "?"
 	}
-	return [...]string{"PASS", "WARN", "FAIL", "SKIP", "N/A"}[s]
+	return statusNames[s]
 }
 
 // Attempt is one connection attempt against a single address.

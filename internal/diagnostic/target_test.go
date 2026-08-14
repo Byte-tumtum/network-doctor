@@ -175,7 +175,7 @@ func FuzzParseTarget(f *testing.F) {
 		if target.Port < 1 || target.Port > 65535 {
 			t.Fatalf("ParseTarget(%q).Port = %d, want 1..65535", input, target.Port)
 		}
-		if target.Proto < ProtoNone || target.Proto > ProtoSMTP {
+		if target.Proto < 0 || target.Proto >= Proto(len(protoNames)) {
 			t.Fatalf("ParseTarget(%q).Proto = %d, want a defined protocol", input, target.Proto)
 		}
 		if target.Host != textsafe.Clean(target.Host) || target.Raw != textsafe.Clean(target.Raw) {
@@ -209,6 +209,7 @@ func TestProtoString(t *testing.T) {
 		{ProtoHTTP, "http"},
 		{ProtoSSH, "ssh"},
 		{ProtoSMTP, "smtp"},
+		{Proto(-1), "none"},
 		{Proto(99), "none"}, // out-of-range collapses to none, not a panic
 	}
 	for _, c := range cases {

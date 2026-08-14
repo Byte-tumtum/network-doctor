@@ -23,11 +23,13 @@ const (
 	ProtoSMTP
 )
 
+var protoNames = [...]string{"none", "tls+http", "http", "ssh", "smtp"}
+
 func (p Proto) String() string {
-	if p < ProtoNone || p > ProtoSMTP {
+	if p < 0 || p >= Proto(len(protoNames)) {
 		return "none"
 	}
-	return [...]string{"none", "tls+http", "http", "ssh", "smtp"}[p]
+	return protoNames[p]
 }
 
 // Target is the parsed, validated destination. Two independent axes: the
