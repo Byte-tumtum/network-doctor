@@ -12,37 +12,6 @@ type ProbeSelection struct {
 	Skip  map[ProbeID]struct{}
 }
 
-// DiagnoseSelected summarizes an intentionally filtered DAG without inferring
-// success or failure from probes that were not requested.
-func DiagnoseSelected(probes []Probe, res map[ProbeID]ProbeResult) (string, string) {
-	if len(probes) == 0 {
-		return "No checks selected.", VerdictOK
-	}
-	degraded := false
-	for _, p := range probes {
-		r, ok := res[p.ID]
-		if !ok {
-			return "Running diagnostics…", VerdictIncomplete
-		}
-		degraded = degraded || r.Status == StatusWarn
-		if r.Status != StatusFail {
-			continue
-		}
-		switch p.ID {
-		case ProbeDNS:
-			return "A selected DNS check failed.", VerdictDNS
-		case ProbeTLS, ProbeHTTP, ProbeHTTPS, ProbeSSH, ProbeSMTP:
-			return "A selected service check failed.", VerdictService
-		default:
-			return "A selected network check failed.", VerdictNetwork
-		}
-	}
-	if degraded {
-		return "Selected checks completed with warnings.", VerdictDegraded
-	}
-	return "Selected checks passed.", VerdictOK
-}
-
 // Validate rejects IDs that are not stable nodes in any normal probe DAG.
 func (s ProbeSelection) Validate() error {
 	if len(s.Check) == 0 && len(s.Skip) == 0 {

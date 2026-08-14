@@ -12,6 +12,9 @@ import (
 // "Running diagnostics…" until every probe in order has a result. A completed
 // run always returns a verdict.
 func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, string) {
+	if len(order) == 0 {
+		return "No checks selected.", VerdictOK
+	}
 	degraded := false
 	for _, id := range order {
 		r, ok := res[id]
@@ -25,12 +28,30 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	if degraded {
 		healthy = VerdictDegraded
 	}
-	pass := func(id ProbeID) bool { return res[id].Status == StatusPass }
-	fail := func(id ProbeID) bool { return res[id].Status == StatusFail }
-	warn := func(id ProbeID) bool { return res[id].Status == StatusWarn }
-	timedOut := func(id ProbeID) bool { return res[id].timedOut }
 	has := func(id ProbeID) bool { _, ok := res[id]; return ok }
+	pass := func(id ProbeID) bool { r, ok := res[id]; return ok && r.Status == StatusPass }
+	fail := func(id ProbeID) bool { r, ok := res[id]; return ok && r.Status == StatusFail }
+	warn := func(id ProbeID) bool { r, ok := res[id]; return ok && r.Status == StatusWarn }
+	timedOut := func(id ProbeID) bool { r, ok := res[id]; return ok && r.timedOut }
 	directOK := func() bool { return directEgressOK(res) }
+	fallback := func() (string, string) {
+		for _, id := range order {
+			switch {
+			case !fail(id):
+				continue
+			case id == ProbeDNS:
+				return "A selected DNS check failed.", VerdictDNS
+			case id == ProbeTLS || id == ProbeHTTP || id == ProbeHTTPS || id == ProbeSSH || id == ProbeSMTP:
+				return "A selected service check failed.", VerdictService
+			default:
+				return "A selected network check failed.", VerdictNetwork
+			}
+		}
+		if degraded {
+			return "Selected checks completed with warnings.", VerdictDegraded
+		}
+		return "Selected checks passed.", VerdictOK
+	}
 
 	if fail(ProbeIface) {
 		return "No usable network interface — the link is down.", VerdictNetwork
@@ -39,30 +60,31 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	prx := has(ProbeProxy) && functional(res[ProbeProxy].Status)
 	prxDown := has(ProbeProxy) && fail(ProbeProxy)
 	publicResolves := has(ProbeDNSPublic) && len(res[ProbeDNSPublic].Addrs) > 0
-	bothNotFound := res[ProbeDNS].DNSNotFound && has(ProbeDNSPublic) && res[ProbeDNSPublic].DNSNotFound
+	bothNotFound := has(ProbeDNS) && res[ProbeDNS].DNSNotFound && has(ProbeDNSPublic) && res[ProbeDNSPublic].DNSNotFound
 
 	// Generic mode (no target): the verdict is a truth table over egress, DNS,
 	// and proxy state. Cases are ordered most-specific first because several
 	// overlap — reordering them changes answers, so don't.
 	if t == nil {
 		ip, dn := pass(ProbeInternet), pass(ProbeDNS)
+		hasInternet := has(ProbeInternet)
 		// Generic mode has only two rungs to lose, and which one broke doesn't
 		// partition the prose cases cleanly, so classify it once up front.
 		// Without egress a DNS failure is a symptom of the outage, not a
 		// separate one; a working proxy makes a dead direct route a degradation.
 		gv := healthy
 		switch {
-		case !directOK() && fail(ProbeDNS):
+		case hasInternet && !directOK() && fail(ProbeDNS):
 			gv = VerdictNetwork
 		case fail(ProbeDNS):
 			gv = VerdictDNS
-		case !directOK() && !prx:
+		case hasInternet && !directOK() && !prx:
 			gv = VerdictNetwork
-		case !directOK():
+		case hasInternet && !directOK():
 			gv = VerdictDegraded
 		}
 		switch {
-		case res[ProbeInternet].Portal != nil:
+		case hasInternet && res[ProbeInternet].Portal != nil:
 			return "Behind a captive portal — traffic is intercepted until you sign in to the network.", VerdictNetwork
 		case directOK() && fail(ProbeDNS) && publicResolves:
 			return "System DNS is failing, but public DNS resolves the name — check the configured resolver, VPN, or DNS filter.", gv
@@ -72,7 +94,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return "Direct TCP/443 works, but the QUIC handshake over UDP/443 failed — applications can fall back to TCP, which may feel slower.", VerdictDegraded
 		case encryptedDNSBlocked(res):
 			return encryptedDNSSummary, VerdictDegraded
-		case warn(ProbeDNSPublic) && functional(res[ProbeDNS].Status):
+		case warn(ProbeDNSPublic) && has(ProbeDNS) && functional(res[ProbeDNS].Status):
 			return "Online, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", gv
 		case ip && dn && prxDown:
 			return "Online directly — but the configured environment proxy check failed, so apps that use the proxy will fail (see the proxy row).", VerdictDegraded
@@ -82,14 +104,16 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return "Online via the environment proxy — direct egress is blocked (proxy-only network).", gv
 		case directOK() && warn(ProbeInternet) && dn:
 			return "Online but degraded — direct egress is impaired (see the ! row for details).", gv
-		case warn(ProbeInternet) && !dn:
+		case warn(ProbeInternet) && fail(ProbeDNS):
 			return "Internet egress works (degraded) but DNS resolution is failing.", gv
-		case ip && !dn:
+		case ip && fail(ProbeDNS):
 			return "Internet egress works but DNS resolution is failing.", gv
-		case !ip && dn:
+		case hasInternet && !directOK() && dn:
 			return "DNS resolves but there's no direct TCP egress (proxy-only or filtered network?).", gv
-		default:
+		case fail(ProbeInternet) && fail(ProbeDNS):
 			return "Offline — neither direct egress nor DNS is working.", gv
+		default:
+			return fallback()
 		}
 	}
 
@@ -99,8 +123,22 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	// Targeted mode: walk up the protocol stack (DNS → TCP → TLS → HTTP →
 	// banner) and report the first rung that broke — everything above it
 	// failing is implied, everything below it passing is context.
+	targetOK := false
+	switch t.Proto {
+	case ProtoTLSHTTP:
+		targetOK = has(ProbeHTTP) && functional(res[ProbeHTTP].Status) && has(ProbeHTTPS) && functional(res[ProbeHTTPS].Status)
+	case ProtoHTTP:
+		targetOK = has(ProbeHTTP) && functional(res[ProbeHTTP].Status)
+	case ProtoSSH:
+		targetOK = has(ProbeSSH) && functional(res[ProbeSSH].Status)
+	case ProtoSMTP:
+		targetOK = has(ProbeSMTP) && functional(res[ProbeSMTP].Status)
+	default:
+		targetOK = has(ProbeTargetTCP) && functional(res[ProbeTargetTCP].Status)
+	}
+
 	switch {
-	case res[ProbeInternet].Portal != nil:
+	case has(ProbeInternet) && res[ProbeInternet].Portal != nil:
 		// Ahead of the DNS rung: behind a portal every rung below is answering
 		// for the portal, so nothing further down the stack means what it says.
 		return "Behind a captive portal — sign in to the network before trusting anything about " + host + ".", VerdictNetwork
@@ -126,6 +164,9 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		if prx {
 			return hp + " is unreachable directly, but the environment proxy has egress — proxy-only network; route traffic through the proxy.", VerdictNetwork
 		}
+		if !has(ProbeInternet) {
+			return hp + " is unreachable, but general internet reachability was not checked — cannot distinguish a local path problem from a remote service failure.", VerdictNetwork
+		}
 		return host + " resolves but neither it nor the general internet is reachable — local egress problem.", VerdictNetwork
 	case warn(ProbePMTU) && ((fail(ProbeTLS) && timedOut(ProbeTLS)) ||
 		(fail(ProbeHTTP) && timedOut(ProbeHTTP)) || (fail(ProbeHTTPS) && timedOut(ProbeHTTPS))):
@@ -146,22 +187,24 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		return hp + " accepts TCP but the service banner check failed.", VerdictService
 	case (has(ProbeSSH) && warn(ProbeSSH)) || (has(ProbeSMTP) && warn(ProbeSMTP)):
 		return hp + " accepts TCP but sent no service banner.", VerdictDegraded
-	case has(ProbeQUIC) && fail(ProbeQUIC) && directOK():
+	case targetOK && has(ProbeQUIC) && fail(ProbeQUIC) && directOK():
 		return "The target and direct TCP/443 work, but the QUIC handshake over UDP/443 failed — applications can fall back to TCP, which may feel slower.", VerdictDegraded
 	case encryptedDNSBlocked(res):
 		return encryptedDNSSummary, VerdictDegraded
-	case fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded):
+	case targetOK && (fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded)):
 		return "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded
-	case prxDown && directOK():
+	case targetOK && prxDown && directOK():
 		return "The target and direct egress work, but the configured environment proxy check failed — apps that use the proxy will fail (see the proxy row).", VerdictDegraded
-	case warn(ProbeInternet):
+	case targetOK && warn(ProbeInternet):
 		return "The target works but direct internet egress is degraded (see the ! row for details).", VerdictDegraded
-	case warn(ProbeDNSPublic):
+	case targetOK && warn(ProbeDNSPublic) && has(ProbeDNS) && functional(res[ProbeDNS].Status):
 		return "The target works, but system DNS and public DNS disagree — split DNS or filtering may be intentional (see the DNS rows).", VerdictDegraded
-	case degraded:
+	case targetOK && degraded:
 		return "The target works, but some checks are degraded (see the ! rows for details).", VerdictDegraded
-	default:
+	case targetOK:
 		return "All checks passed — " + hp + " looks healthy.", VerdictOK
+	default:
+		return fallback()
 	}
 }
 
@@ -193,8 +236,8 @@ const encryptedDNSSummary = "Plain DNS works, but encrypted DNS could not comple
 // probe produced itself. A Warn planted by downgradeEgress doesn't count —
 // that's a Fail wearing a nicer hat.
 func directEgressOK(res map[ProbeID]ProbeResult) bool {
-	r := res[ProbeInternet]
-	return functional(r.Status) && !r.downgraded
+	r, ok := res[ProbeInternet]
+	return ok && functional(r.Status) && !r.downgraded
 }
 
 // encryptedDNSBlocked reports the one state that is specific to encrypted DNS:
@@ -343,12 +386,12 @@ func downgradeEgress(res map[ProbeID]ProbeResult) {
 	if !ok || r.Status != StatusFail || r.Portal != nil {
 		return
 	}
-	other, hasTarget := res[ProbeTargetTCP]
-	if !hasTarget {
-		other = res[ProbeDNS]
+	other, hasOther := res[ProbeTargetTCP]
+	if !hasOther {
+		other, hasOther = res[ProbeDNS]
 	}
 	prx, hasProxy := res[ProbeProxy]
-	otherOK := functional(other.Status)
+	otherOK := hasOther && functional(other.Status)
 	proxyOK := hasProxy && functional(prx.Status)
 	if !otherOK && !proxyOK {
 		return

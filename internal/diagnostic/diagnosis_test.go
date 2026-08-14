@@ -93,6 +93,100 @@ func TestDiagnoseIncomplete(t *testing.T) {
 	}
 }
 
+func TestDiagnoseSelectionPreservesSupportedDiagnosis(t *testing.T) {
+	tg := mustTarget(t, "github.com")
+	order := []ProbeID{
+		ProbeIface, ProbeInternet, ProbeQUIC, ProbeProxy, ProbeDNS,
+		ProbeDNSPublic, ProbeDNSEncrypted, ProbeTargetTCP, ProbePMTU,
+		ProbeSSID, ProbeTLS, ProbeHTTP, ProbeHTTPS,
+	}
+	cases := []struct {
+		name      string
+		overrides map[ProbeID]ProbeResult
+		omit      []ProbeID
+		verdict   string
+	}{
+		{"healthy", nil, []ProbeID{ProbeSSID, ProbeDNSPublic}, VerdictOK},
+		{"degraded", map[ProbeID]ProbeResult{ProbeQUIC: {Status: StatusFail}}, []ProbeID{ProbeSSID, ProbeDNSPublic}, VerdictDegraded},
+		{"dns", map[ProbeID]ProbeResult{ProbeDNS: {Status: StatusFail}}, []ProbeID{ProbeSSID}, VerdictDNS},
+		{"network", map[ProbeID]ProbeResult{ProbeInternet: {Status: StatusFail}, ProbeTargetTCP: {Status: StatusFail}}, []ProbeID{ProbeSSID, ProbeDNSPublic}, VerdictNetwork},
+		{"service", map[ProbeID]ProbeResult{ProbeTargetTCP: {Status: StatusFail}}, []ProbeID{ProbeSSID, ProbeDNSPublic}, VerdictService},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := make(map[ProbeID]ProbeResult, len(order))
+			for _, id := range order {
+				results[id] = ProbeResult{Status: StatusPass}
+			}
+			for id, result := range tc.overrides {
+				results[id] = result
+			}
+			wantSummary, wantVerdict := Diagnose(tg, order, results)
+			if wantVerdict != tc.verdict {
+				t.Fatalf("fixture verdict = %q, want %q (summary: %s)", wantVerdict, tc.verdict, wantSummary)
+			}
+
+			omit := make(map[ProbeID]bool, len(tc.omit))
+			for _, id := range tc.omit {
+				omit[id] = true
+				delete(results, id)
+			}
+			selected := make([]ProbeID, 0, len(order)-len(omit))
+			for _, id := range order {
+				if !omit[id] {
+					selected = append(selected, id)
+				}
+			}
+			if summary, verdict := Diagnose(tg, selected, results); summary != wantSummary || verdict != wantVerdict {
+				t.Errorf("omitting %v changed diagnosis from %q/%q to %q/%q", tc.omit, wantSummary, wantVerdict, summary, verdict)
+			}
+		})
+	}
+}
+
+func TestDiagnoseDoesNotInferMissingEvidence(t *testing.T) {
+	tg := mustTarget(t, "github.com")
+	t.Run("target failure needs general internet evidence", func(t *testing.T) {
+		order := []ProbeID{ProbeIface, ProbeDNS, ProbeTargetTCP}
+		results := map[ProbeID]ProbeResult{
+			ProbeIface:     {Status: StatusPass},
+			ProbeDNS:       {Status: StatusPass},
+			ProbeTargetTCP: {Status: StatusFail},
+		}
+		summary, verdict := Diagnose(tg, order, results)
+		if verdict != VerdictNetwork || !strings.Contains(summary, "general internet reachability was not checked") {
+			t.Fatalf("Diagnose without internet evidence = %q/%q", summary, verdict)
+		}
+		results[ProbeInternet] = ProbeResult{Status: StatusPass}
+		order = append(order[:1], append([]ProbeID{ProbeInternet}, order[1:]...)...)
+		if _, verdict := Diagnose(tg, order, results); verdict != VerdictService {
+			t.Fatalf("Diagnose with internet evidence = %q, want %q", verdict, VerdictService)
+		}
+	})
+
+	t.Run("missing PMTU warning cannot imply a path black hole", func(t *testing.T) {
+		order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP, ProbeTLS}
+		results := map[ProbeID]ProbeResult{
+			ProbeIface:     {Status: StatusPass},
+			ProbeInternet:  {Status: StatusPass},
+			ProbeDNS:       {Status: StatusPass},
+			ProbeTargetTCP: {Status: StatusPass},
+			ProbeTLS:       {Status: StatusFail, timedOut: true},
+		}
+		if summary, verdict := Diagnose(tg, order, results); verdict != VerdictService || strings.Contains(summary, "MTU") {
+			t.Fatalf("Diagnose without PMTU evidence = %q/%q", summary, verdict)
+		}
+	})
+
+	t.Run("finalization cannot turn an isolated egress failure into a warning", func(t *testing.T) {
+		results := map[ProbeID]ProbeResult{ProbeInternet: {Status: StatusFail}}
+		Finalize(results)
+		if results[ProbeInternet].Status != StatusFail {
+			t.Fatalf("isolated egress status = %v, want FAIL", results[ProbeInternet].Status)
+		}
+	})
+}
+
 func TestDiagnoseTarget(t *testing.T) {
 	tg := mustTarget(t, "github.com")
 	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP, ProbeTLS, ProbeHTTP, ProbeHTTPS}
@@ -357,10 +451,14 @@ func TestReconcileDNS(t *testing.T) {
 
 func TestDiagnoseSecondOpinionDNS(t *testing.T) {
 	tg := mustTarget(t, "example.com")
-	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeDNSPublic}
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeDNSPublic, ProbeTargetTCP, ProbeTLS, ProbeHTTP, ProbeHTTPS}
 	base := map[ProbeID]ProbeResult{
-		ProbeIface:    {Status: StatusPass},
-		ProbeInternet: {Status: StatusPass},
+		ProbeIface:     {Status: StatusPass},
+		ProbeInternet:  {Status: StatusPass},
+		ProbeTargetTCP: {Status: StatusPass},
+		ProbeTLS:       {Status: StatusPass},
+		ProbeHTTP:      {Status: StatusPass},
+		ProbeHTTPS:     {Status: StatusPass},
 	}
 	for _, tc := range []struct {
 		name    string

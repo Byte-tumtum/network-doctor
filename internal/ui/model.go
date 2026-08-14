@@ -121,9 +121,6 @@ type model struct {
 	sources *diagnostic.SourceAddresses
 	// selection is reapplied whenever a target switch rebuilds the probe DAG.
 	selection diagnostic.ProbeSelection
-	// selectionApplied distinguishes a filtered DAG from a harmless policy
-	// that names only probes absent from this target.
-	selectionApplied bool
 	// publicDNS is the second-opinion resolver IP the run was started with, or
 	// "" when it is disabled; every probe rebuild reuses it.
 	publicDNS string
@@ -252,28 +249,26 @@ func WithKeymap(km Keymap) Option {
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
 func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
-	allProbes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
-	probes := selection.Apply(allProbes)
+	probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS))
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
-		target:           t,
-		probes:           probes,
-		sources:          sources,
-		selection:        selection,
-		selectionApplied: len(probes) != len(allProbes),
-		publicDNS:        publicDNS,
-		results:          map[diagnostic.ProbeID]diagnostic.ProbeResult{},
-		started:          map[diagnostic.ProbeID]bool{},
-		tools:            toolsFor(t, runtime.GOOS, bindFor(sources)),
-		spinner:          sp,
-		toolbox:          toolbox,
-		watch:            watch,
-		runHistory:       map[diagnostic.ProbeID][]diagnostic.Status{},
-		histPath:         histFile,
-		version:          version,
-		width:            100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+		target:     t,
+		probes:     probes,
+		sources:    sources,
+		selection:  selection,
+		publicDNS:  publicDNS,
+		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
+		started:    map[diagnostic.ProbeID]bool{},
+		tools:      toolsFor(t, runtime.GOOS, bindFor(sources)),
+		spinner:    sp,
+		toolbox:    toolbox,
+		watch:      watch,
+		runHistory: map[diagnostic.ProbeID][]diagnostic.Status{},
+		histPath:   histFile,
+		version:    version,
+		width:      100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -289,9 +284,6 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 }
 
 func (m model) diagnose(order []diagnostic.ProbeID) (string, string) {
-	if m.selectionApplied {
-		return diagnostic.DiagnoseSelected(m.probes, m.results)
-	}
 	return diagnostic.Diagnose(m.target, order, m.results)
 }
 

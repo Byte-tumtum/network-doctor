@@ -248,6 +248,22 @@ func TestReportReadyWithoutToolRun(t *testing.T) {
 	}
 }
 
+func TestProbeSelectionPreservesDiagnosis(t *testing.T) {
+	target := mustTarget(t, "1.1.1.1:81")
+	baseline := newModel(target, false)
+	doneResults(&baseline, diagnostic.ProbeTargetTCP)
+	order, _, _ := baseline.resultState()
+	wantSummary, wantVerdict := baseline.diagnose(order)
+
+	selection := diagnostic.ProbeSelection{Skip: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeSSID: {}}}
+	selected := NewWithSelection(target, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, selection).(model)
+	doneResults(&selected, diagnostic.ProbeTargetTCP)
+	order, _, _ = selected.resultState()
+	if summary, verdict := selected.diagnose(order); summary != wantSummary || verdict != wantVerdict {
+		t.Fatalf("skipping SSID changed diagnosis from %q/%q to %q/%q", wantSummary, wantVerdict, summary, verdict)
+	}
+}
+
 // A probeDoneMsg from a stale generation is dropped (mirrors the gen guard).
 func TestStaleProbeDropped(t *testing.T) {
 	m := newModel(nil, false)

@@ -346,15 +346,14 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 	// success, so an interrupt before the first line lands has to fail closed.
 	code := 1
 	for {
-		allProbes := diagnostic.BuildProbesFromSources(t, sources, publicDNS)
-		probes := selection.Apply(allProbes)
+		probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS))
 		results := runAll(ctx, probes)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,
 			// so reporting that pass would be a lie.
 			return code
 		}
-		rep := buildReport(t, probes, results, len(probes) != len(allProbes))
+		rep := buildReport(t, probes, results)
 		code = 0
 		if !rep.OK {
 			code = 1
@@ -380,7 +379,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 // buildReport flattens probe results into the stable JSON shape, preserving
 // probe order. OK means "no check failed" — Warn, Skip, and N/A don't count
 // against it, same as everywhere else in the app.
-func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult, filtered bool) report.Report {
+func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) report.Report {
 	rep := report.Report{Version: version, Checks: []report.Check{}, OK: true}
 	if t != nil {
 		rep.Target = &report.Target{Host: t.Host, Port: t.Port, Protocol: t.Proto.String()}
@@ -428,10 +427,6 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		}
 		rep.Checks = append(rep.Checks, c)
 	}
-	if filtered {
-		rep.Summary, rep.Verdict = diagnostic.DiagnoseSelected(probes, results)
-	} else {
-		rep.Summary, rep.Verdict = diagnostic.Diagnose(t, order, results)
-	}
+	rep.Summary, rep.Verdict = diagnostic.Diagnose(t, order, results)
 	return rep
 }

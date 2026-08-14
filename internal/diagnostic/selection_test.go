@@ -157,14 +157,6 @@ func selectedIDs(probes []Probe) []ProbeID {
 	return ids
 }
 
-func probesWithIDs(ids []ProbeID) []Probe {
-	probes := make([]Probe, len(ids))
-	for i, id := range ids {
-		probes[i].ID = id
-	}
-	return probes
-}
-
 func TestProbeSelection(t *testing.T) {
 	target, err := ParseTarget("example.com")
 	if err != nil {
@@ -367,35 +359,6 @@ func TestProbeSelectionValidation(t *testing.T) {
 	err2 := (ProbeSelection{Check: probeSet("aaa", "zzz")}).Validate()
 	if err1 == nil || err2 == nil || err1.Error() != err2.Error() || !strings.Contains(err1.Error(), `unknown probe ID "aaa"`) {
 		t.Fatalf("validation errors are not deterministic: %v / %v", err1, err2)
-	}
-}
-
-func TestDiagnoseSelectedSubsetDoesNotClaimOmittedChecksPassed(t *testing.T) {
-	order := []ProbeID{ProbeIface, ProbeDNS}
-	results := map[ProbeID]ProbeResult{
-		ProbeIface: {Status: StatusPass},
-		ProbeDNS:   {Status: StatusPass},
-	}
-	got, verdict := DiagnoseSelected(probesWithIDs(order), results)
-	if got != "Selected checks passed." || verdict != VerdictOK {
-		t.Errorf("Diagnose selected subset = %q/%q", got, verdict)
-	}
-	if got, verdict := DiagnoseSelected(nil, nil); got != "No checks selected." || verdict != VerdictOK {
-		t.Errorf("Diagnose empty selection = %q/%q", got, verdict)
-	}
-	if got, verdict := DiagnoseSelected(probesWithIDs(order), map[ProbeID]ProbeResult{ProbeIface: {Status: StatusPass}}); got != "Running diagnostics…" || verdict != VerdictIncomplete {
-		t.Errorf("Diagnose unfinished selection = %q/%q", got, verdict)
-	}
-	order = []ProbeID{ProbeIface, ProbeDNS, ProbeTargetTCP}
-	results[ProbeTargetTCP] = ProbeResult{Status: StatusFail}
-	if got, verdict := DiagnoseSelected(probesWithIDs(order), results); got != "A selected network check failed." || verdict != VerdictNetwork {
-		t.Errorf("Diagnose target subset failure = %q/%q", got, verdict)
-	}
-	results[ProbeTargetTCP] = ProbeResult{Status: StatusPass}
-	results[ProbeTLS] = ProbeResult{Status: StatusPass}
-	order = append(order, ProbeTLS)
-	if got, verdict := DiagnoseSelected(probesWithIDs(order), results); got != "Selected checks passed." || verdict != VerdictOK {
-		t.Errorf("Diagnose TLS subset = %q/%q", got, verdict)
 	}
 }
 

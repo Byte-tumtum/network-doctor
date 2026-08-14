@@ -369,6 +369,39 @@ func TestRunProbeSelectionFlags(t *testing.T) {
 	}
 }
 
+func TestRunProbeSelectionPreservesDiagnosis(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			status := diagnostic.StatusPass
+			if p.ID == diagnostic.ProbeTargetTCP {
+				status = diagnostic.StatusFail
+			}
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: status}
+		}
+		return results
+	}
+	runReport := func(args ...string) report.Report {
+		var stdout, stderr bytes.Buffer
+		if got := run(args, &stdout, &stderr); got != 1 {
+			t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+		}
+		var rep report.Report
+		if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+
+	baseline := runReport("--json", "1.1.1.1:81")
+	skipped := runReport("--json", "--skip", "ssid", "1.1.1.1:81")
+	if skipped.Summary != baseline.Summary || skipped.Verdict != baseline.Verdict {
+		t.Fatalf("skipping SSID changed diagnosis from %q/%q to %q/%q", baseline.Summary, baseline.Verdict, skipped.Summary, skipped.Verdict)
+	}
+}
+
 func TestRunKnownButInapplicableProbeSelection(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
@@ -441,7 +474,7 @@ func TestProbeListRejectsAtomically(t *testing.T) {
 }
 
 func TestBuildReportEmptySelection(t *testing.T) {
-	rep := buildReport(nil, nil, nil, true)
+	rep := buildReport(nil, nil, nil)
 	if rep.Checks == nil || rep.Summary != "No checks selected." || rep.Verdict != diagnostic.VerdictOK || !rep.OK {
 		t.Fatalf("empty report = %+v", rep)
 	}
@@ -726,7 +759,7 @@ func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 			Attempts: []diagnostic.Attempt{{IP: net.ParseIP("192.168.1.1"), Dur: 300 * time.Microsecond}},
 		},
 	}
-	rep := buildReport(nil, probes, results, false)
+	rep := buildReport(nil, probes, results)
 	if rep.Checks[0].Ms != 1 {
 		t.Errorf("sub-millisecond check ms = %d, want 1", rep.Checks[0].Ms)
 	}
@@ -746,7 +779,7 @@ func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing
 		}},
 		diagnostic.ProbeIface: {Status: diagnostic.StatusPass},
 	}
-	rep := buildReport(nil, probes, results, false)
+	rep := buildReport(nil, probes, results)
 	if rep.Checks[0].Families == nil || rep.Checks[0].Families.IPv4 != "reachable" || rep.Checks[0].Families.IPv6 != "unreachable" {
 		t.Errorf("internet families = %+v", rep.Checks[0].Families)
 	}
@@ -763,7 +796,7 @@ func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing
 	results[diagnostic.ProbeInternet] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Families: &diagnostic.FamilyConnectivity{
 		IPv4: diagnostic.FamilyReachable,
 	}}
-	availableOnly, err := json.Marshal(buildReport(nil, probes, results, false))
+	availableOnly, err := json.Marshal(buildReport(nil, probes, results))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,7 +816,7 @@ func TestBuildReportKeepsEncryptedResolverWarningFunctional(t *testing.T) {
 		diagnostic.ProbeDNS:          {Status: diagnostic.StatusPass},
 		diagnostic.ProbeDNSEncrypted: {Status: diagnostic.StatusWarn, Detail: "resolver answered SERVFAIL"},
 	}
-	rep := buildReport(nil, probes, results, false)
+	rep := buildReport(nil, probes, results)
 	if !rep.OK || rep.FailedStage != "" || rep.Verdict != diagnostic.VerdictDegraded ||
 		rep.Checks[2].Status != "WARN" || rep.Summary == "" {
 		t.Fatalf("report = %+v, want a visible WARN that remains functional and does not become a failed stage", rep)
@@ -819,7 +852,7 @@ func TestBuildReport(t *testing.T) {
 			},
 		},
 	}
-	rep := buildReport(target, probes, results, false)
+	rep := buildReport(target, probes, results)
 
 	if rep.OK {
 		t.Error("OK = true, want false (DNS failed)")
@@ -874,7 +907,7 @@ func TestBuildReportGenericAllPass(t *testing.T) {
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
 		diagnostic.ProbeIface: {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Detail: "up"},
 	}
-	rep := buildReport(nil, probes, results, false)
+	rep := buildReport(nil, probes, results)
 	if !rep.OK {
 		t.Error("OK = false, want true")
 	}
