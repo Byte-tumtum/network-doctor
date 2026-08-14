@@ -73,7 +73,7 @@ func challengeHostname(id string) string {
 // challengeFixtureHosts are the names netdoc's own connectivity probes dial.
 // They belong to the probe fixtures rather than to the challenge target, and
 // renaming one would break the measurement every scenario depends on.
-var challengeFixtureHosts = []string{proxyCONNECTTarget, "cloudflare-dns.com"}
+var challengeFixtureHosts = []string{proxyCONNECTTarget, diagnostic.EncryptedDNSHost}
 
 // nameChallengeTarget renames the primary test's host to this challenge's own
 // name, everywhere the simulated network spells it. It reports the new host, or

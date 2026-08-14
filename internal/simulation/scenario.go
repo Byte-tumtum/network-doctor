@@ -89,8 +89,8 @@ type Node struct {
 	// for legacy single-segment scenario compatibility.
 	Interfaces []Interface `yaml:"interfaces"`
 	// Aliases are extra addresses put on the node's loopback, which is how the
-	// simulated internet claims the public IPs netdoc probes (1.1.1.1, 8.8.8.8)
-	// without anything leaving the namespace.
+	// simulated internet claims diagnostic's production probe endpoints without
+	// anything leaving the namespace.
 	Aliases  []string  `yaml:"aliases"`
 	Gateway  string    `yaml:"gateway"`
 	Resolver string    `yaml:"resolver"`

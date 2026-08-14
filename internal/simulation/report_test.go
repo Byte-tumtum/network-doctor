@@ -13,7 +13,7 @@ func diagnosisWith(id, status string) *Diagnosis {
 }
 
 func TestRouteSuggestionsNeedAControlOnAnotherPath(t *testing.T) {
-	selectedDefault := RouteEvidence{Node: "client", Destination: "1.1.1.1", Segment: "client-lan", Selected: true}
+	selectedDefault := RouteEvidence{Node: "client", Destination: internetEndpointsForFamily("ipv4")[0], Segment: "client-lan", Selected: true}
 	failedDefault := TestOutcome{Node: "client", Target: "target.test:80", Diagnosis: diagnosisWith("internet_tcp", "WARN")}
 	reachedTarget := diagnosisWith("target_tcp", "PASS")
 

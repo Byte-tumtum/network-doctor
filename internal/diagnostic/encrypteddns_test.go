@@ -244,7 +244,7 @@ func (f *encryptedDNSFixture) run(t *testing.T, ops *netops) ProbeResult {
 	// is supposed to: a peer that answers nothing.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return ops.encryptedDNSProbe(f.ep, probeHost)(ctx, nil)
+	return ops.encryptedDNSProbe(f.ep, ConnectivityProbeHost)(ctx, nil)
 }
 
 var fixtureIPs = []net.IP{net.ParseIP("192.0.2.10")}
@@ -259,7 +259,7 @@ func TestDNSQueryRejectsOverlongName(t *testing.T) {
 }
 
 func TestDNSVerifierRejectsMalformedResponses(t *testing.T) {
-	query, err := newDNSQuery(probeHost)
+	query, err := newDNSQuery(ConnectivityProbeHost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestDNSVerifierRejectsMalformedResponses(t *testing.T) {
 }
 
 func TestDNSVerifierClassifiesValidReachabilityResponsesWithoutAnswers(t *testing.T) {
-	query, err := newDNSQuery(probeHost)
+	query, err := newDNSQuery(ConnectivityProbeHost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestDNSResponseErrorFormatsEveryRcode(t *testing.T) {
 }
 
 func TestDNSVerifierMatchesQuestionCaseInsensitively(t *testing.T) {
-	query, err := newDNSQuery(probeHost)
+	query, err := newDNSQuery(ConnectivityProbeHost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,7 @@ func dnsNameFoldEqual(a, b []byte) bool {
 // the rcode carried back, and about the difference between a malformed message
 // and a valid response reporting an error.
 func FuzzEncryptedDNSResponseVerifier(f *testing.F) {
-	query, err := newDNSQuery(probeHost)
+	query, err := newDNSQuery(ConnectivityProbeHost)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -705,7 +705,7 @@ func TestDoHValidExchangePasses(t *testing.T) {
 }
 
 func TestDoHSendsTheWireQueryAsPublished(t *testing.T) {
-	wantQuestion, err := dnsQuestion(probeHost)
+	wantQuestion, err := dnsQuestion(ConnectivityProbeHost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1053,7 +1053,7 @@ func TestEncryptedDNSTransportsRunConcurrently(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	r := f.ops().encryptedDNSProbe(f.ep, probeHost)(ctx, nil)
+	r := f.ops().encryptedDNSProbe(f.ep, ConnectivityProbeHost)(ctx, nil)
 	if r.Status != StatusPass || !strings.Contains(r.Detail, "DoH completed") {
 		t.Fatalf("result = %+v, want the answering transport to carry the row", r)
 	}
@@ -1121,7 +1121,7 @@ func TestEncryptedDNSCancellationReturnsPromptly(t *testing.T) {
 	f := newEncryptedDNSFixture(t, fixtureIPs, nil, &dotReply{silent: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan ProbeResult, 1)
-	go func() { result <- f.ops().encryptedDNSProbe(f.ep, probeHost)(ctx, nil) }()
+	go func() { result <- f.ops().encryptedDNSProbe(f.ep, ConnectivityProbeHost)(ctx, nil) }()
 	// Give both transports time to be in flight before pulling the context.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -1142,7 +1142,7 @@ func TestEncryptedDNSTimeoutIsBoundedByTheProbeContext(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	r := f.ops().encryptedDNSProbe(f.ep, probeHost)(ctx, nil)
+	r := f.ops().encryptedDNSProbe(f.ep, ConnectivityProbeHost)(ctx, nil)
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("probe ran %v past its own deadline", elapsed)
 	}
@@ -1218,7 +1218,7 @@ func TestEncryptedDNSUsesTheSharedSourceBoundDialer(t *testing.T) {
 	}
 	ep := encryptedDNSEndpoint{host: encryptedFixtureHost, ips: []net.IP{net.ParseIP("192.0.2.10")}, dohPort: dohPort, dotPort: dotPort}
 
-	if r := ops.encryptedDNSProbe(ep, probeHost)(context.Background(), nil); r.Status != StatusFail {
+	if r := ops.encryptedDNSProbe(ep, ConnectivityProbeHost)(context.Background(), nil); r.Status != StatusFail {
 		t.Fatalf("result = %+v, want FAIL when every dial is refused", r)
 	}
 	mu.Lock()
@@ -1251,7 +1251,7 @@ func TestEncryptedDNSReusesSelectedInterfaceResult(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	r := ops.encryptedDNSProbe(f.ep, probeHost)(ctx, map[ProbeID]ProbeResult{
+	r := ops.encryptedDNSProbe(f.ep, ConnectivityProbeHost)(ctx, map[ProbeID]ProbeResult{
 		ProbeIface: {Status: StatusPass, Iface: "selected0"},
 	})
 	if r.Status != StatusPass || r.Iface != "selected0" {
@@ -1472,7 +1472,7 @@ func TestDoHDialOutlivesRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	r := ops.encryptedDNSProbe(ep, probeHost)(ctx, nil)
+	r := ops.encryptedDNSProbe(ep, ConnectivityProbeHost)(ctx, nil)
 	time.Sleep(120 * time.Millisecond) // stay alive for the dial's write, the racing access
 
 	if r.Status != StatusFail {

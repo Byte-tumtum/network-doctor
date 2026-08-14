@@ -15,6 +15,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
@@ -56,7 +58,7 @@ func TestEncryptedDNSServiceAnswersDoHAndDoT(t *testing.T) {
 		Type:        ServiceEncryptedDNS,
 		Port:        443,
 		Zone:        map[string]string{"probe.test": "192.0.2.7"},
-		Certificate: &TLSCertificate{Mode: TLSCertificateValid, DNSNames: []string{"cloudflare-dns.com"}},
+		Certificate: &TLSCertificate{Mode: TLSCertificateValid, DNSNames: []string{diagnostic.EncryptedDNSHost}},
 	}
 	var listeners []net.Listener
 	server, err := startEncryptedDNSServiceWith(context.Background(), svc, nil, work,
@@ -91,9 +93,9 @@ func TestEncryptedDNSServiceAnswersDoHAndDoT(t *testing.T) {
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, listeners[0].Addr().String())
 		},
-		TLSClientConfig: &tls.Config{ServerName: "cloudflare-dns.com", RootCAs: roots},
+		TLSClientConfig: &tls.Config{ServerName: diagnostic.EncryptedDNSHost, RootCAs: roots},
 	}}
-	resp, err := client.Post("https://cloudflare-dns.com/dns-query", encryptedDNSMediaType, bytes.NewReader(query))
+	resp, err := client.Post("https://"+diagnostic.EncryptedDNSHost+"/dns-query", encryptedDNSMediaType, bytes.NewReader(query))
 	if err != nil {
 		t.Fatalf("DoH request: %v", err)
 	}
@@ -103,7 +105,7 @@ func TestEncryptedDNSServiceAnswersDoHAndDoT(t *testing.T) {
 		t.Fatalf("DoH answered %d with % x", resp.StatusCode, body)
 	}
 
-	conn, err := tls.Dial("tcp4", listeners[1].Addr().String(), &tls.Config{ServerName: "cloudflare-dns.com", RootCAs: roots})
+	conn, err := tls.Dial("tcp4", listeners[1].Addr().String(), &tls.Config{ServerName: diagnostic.EncryptedDNSHost, RootCAs: roots})
 	if err != nil {
 		t.Fatalf("DoT handshake: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestEncryptedDNSServiceAnswersDoHAndDoT(t *testing.T) {
 	// Leave one DoH connection between its TLS handshake and HTTP request, and
 	// the DoT connection between framed queries. Shutdown must close both and
 	// join every serve goroutine rather than waiting for client deadlines.
-	dohActive, err := tls.Dial("tcp4", listeners[0].Addr().String(), &tls.Config{ServerName: "cloudflare-dns.com", RootCAs: roots})
+	dohActive, err := tls.Dial("tcp4", listeners[0].Addr().String(), &tls.Config{ServerName: diagnostic.EncryptedDNSHost, RootCAs: roots})
 	if err != nil {
 		t.Fatalf("active DoH handshake: %v", err)
 	}

@@ -247,8 +247,9 @@ const (
 // the path question unanswered.
 var tlsRecordHeader = []byte{0x16, 0x03, 0x01, 0x40, 0x00}
 
-// probeHost is the host used by the generic (no-target) DNS + egress probes.
-const probeHost = "connectivitycheck.gstatic.com"
+// ConnectivityProbeHost is the host used by the generic (no-target) DNS and
+// connectivity probes.
+const ConnectivityProbeHost = "connectivitycheck.gstatic.com"
 
 // quicProbePort is separate from the target port: this Internet-health probe
 // always asks the fixed connectivity endpoint whether QUIC works on UDP/443.
@@ -267,15 +268,36 @@ func publicDNSServer(ip string) string { return net.JoinHostPort(ip, "53") }
 // portalProbeURL answers 204 with an empty body on an unintercepted path.
 // Plain HTTP on purpose — that's the request a captive portal grabs.
 // A var only so tests can point it at a local server; nothing reassigns it.
-var portalProbeURL = "http://" + probeHost + "/generate_204"
+var portalProbeURL = "http://" + ConnectivityProbeHost + "/generate_204"
 
 // internetEndpoints4/6 are the ordered direct-egress endpoints per address
 // family; first connect wins within a family. Honestly "direct TCP egress" —
 // proxy-only networks can fail this.
-var (
-	internetEndpoints4 = []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("8.8.8.8")}
-	internetEndpoints6 = []net.IP{net.ParseIP("2606:4700:4700::1111"), net.ParseIP("2001:4860:4860::8888")}
+const (
+	internetEndpointCloudflareIPv4 = "1.1.1.1"
+	internetEndpointGoogleIPv4     = "8.8.8.8"
+	internetEndpointCloudflareIPv6 = "2606:4700:4700::1111"
+	internetEndpointGoogleIPv6     = "2001:4860:4860::8888"
 )
+
+var (
+	internetEndpoints4 = []net.IP{net.ParseIP(internetEndpointCloudflareIPv4), net.ParseIP(internetEndpointGoogleIPv4)}
+	internetEndpoints6 = []net.IP{net.ParseIP(internetEndpointCloudflareIPv6), net.ParseIP(internetEndpointGoogleIPv6)}
+)
+
+// InternetProbeEndpoints returns the ordered direct-egress endpoints for IPv4
+// and IPv6. The slices and every IP in them are defensive copies.
+func InternetProbeEndpoints() (ipv4, ipv6 []net.IP) {
+	return cloneIPs(internetEndpoints4), cloneIPs(internetEndpoints6)
+}
+
+func cloneIPs(ips []net.IP) []net.IP {
+	out := make([]net.IP, len(ips))
+	for i, ip := range ips {
+		out[i] = append(net.IP(nil), ip...)
+	}
+	return out
+}
 
 // netops holds every network/OS touchpoint the probes use, as function fields
 // so tests can stub them and run probes deterministically without real
@@ -688,7 +710,7 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	iface := Probe{ID: ProbeIface, Name: "Interface", Run: o.ifaceProbe}
 	network := Probe{ID: ProbeSSID, Name: "Wi-Fi network", Deps: []ProbeID{ProbeIface}, Run: o.ssidProbe}
 	internet := Probe{ID: ProbeInternet, Name: "Internet (TCP egress)", Deps: []ProbeID{ProbeIface}, Run: o.internetProbe}
-	quicProbe := Probe{ID: ProbeQUIC, Name: "QUIC / UDP 443", Deps: []ProbeID{ProbeIface}, Run: o.quicProbe(probeHost, quicProbePort)}
+	quicProbe := Probe{ID: ProbeQUIC, Name: "QUIC / UDP 443", Deps: []ProbeID{ProbeIface}, Run: o.quicProbe(ConnectivityProbeHost, quicProbePort)}
 	// Direct and proxied egress are reported separately: the native probes
 	// deliberately bypass proxies, so on a proxy-only network the direct row
 	// fails while this row proves the environment proxy carries traffic.
@@ -697,15 +719,15 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	// rows rather than under them: a network can carry ordinary DNS while
 	// blocking DoH/DoT, which is what makes "DNS works but the browser cannot
 	// resolve" diagnosable at all.
-	encryptedDNS := Probe{ID: ProbeDNSEncrypted, Name: "DNS (encrypted DoH/DoT)", Deps: []ProbeID{ProbeIface}, Run: o.encryptedDNSProbe(defaultEncryptedDNS, probeHost)}
+	encryptedDNS := Probe{ID: ProbeDNSEncrypted, Name: "DNS (encrypted DoH/DoT)", Deps: []ProbeID{ProbeIface}, Run: o.encryptedDNSProbe(defaultEncryptedDNS, ConnectivityProbeHost)}
 
 	if t == nil {
 		// Egress, proxy egress, system DNS, and public DNS are siblings: each
 		// depends only on the interface, so one failure never hides another.
-		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(probeHost, nil)}
+		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(ConnectivityProbeHost, nil)}
 		probes := []Probe{iface, internet, quicProbe, proxy, dns}
 		if publicDNSIP != "" {
-			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(probeHost, nil, publicDNSIP)})
+			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(ConnectivityProbeHost, nil, publicDNSIP)})
 		}
 		probes = append(probes, encryptedDNS)
 		return append(probes, network)
@@ -969,7 +991,7 @@ func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 // check net/http applies to HTTP(S)_PROXY and this file has to apply itself to
 // the ALL_PROXY fallback.
 // ponytail: suffix and "*" matching only, no IP or CIDR entries; the only host
-// asked about is probeHost, a fixed public name that is never a literal IP —
+// asked about is ConnectivityProbeHost, a fixed public name that is never a literal IP —
 // proxyProbe is the sole caller and hardcodes it even when the user names a
 // target, an invariant TestProxyProbeOnlyAsksAboutProbeHost pins. The day a
 // caller passes a host the user chose, that test fails: drop this for
@@ -997,7 +1019,7 @@ func noProxyBypasses(host string) bool {
 }
 
 // proxyProbe checks egress through the environment-configured proxy: dial the
-// proxy and ask it to tunnel to probeHost:443, by HTTP CONNECT or a SOCKS5
+// proxy and ask it to tunnel to ConnectivityProbeHost:443, by HTTP CONNECT or a SOCKS5
 // handshake. This is exactly what proxied HTTPS clients do, minus the TLS
 // handshake inside the tunnel.
 func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
@@ -1008,7 +1030,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	// HTTP_PROXY), so ask for both; https first since that's what almost all
 	// tunneled traffic is.
 	for _, scheme := range []string{"https", "http"} {
-		proxyURL, err = o.proxyFromEnv(&http.Request{URL: &url.URL{Scheme: scheme, Host: probeHost}})
+		proxyURL, err = o.proxyFromEnv(&http.Request{URL: &url.URL{Scheme: scheme, Host: ConnectivityProbeHost}})
 		if err != nil || proxyURL != nil {
 			break
 		}
@@ -1085,7 +1107,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
 			return r
 		}
-		req := "CONNECT " + probeHost + ":443 HTTP/1.1\r\nHost: " + probeHost + ":443\r\n"
+		req := "CONNECT " + ConnectivityProbeHost + ":443 HTTP/1.1\r\nHost: " + ConnectivityProbeHost + ":443\r\n"
 		if auth {
 			pw, _ := proxyURL.User.Password()
 			req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyURL.User.Username()+":"+pw)) + "\r\n"
@@ -1175,12 +1197,12 @@ func (o *netops) proxyTunnelOK(ctx context.Context, conn net.Conn, addr string, 
 	var r ProbeResult
 	src, iface := o.pathIdentity(ctx, conn, nil, 0)
 	r.Status, r.Source, r.Iface = StatusPass, src, iface
-	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, probeHost, Ms(rtt))
+	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, ConnectivityProbeHost, Ms(rtt))
 	applyDialWarnings(&r, rtt)
 	return r
 }
 
-// socks5Probe dials a SOCKS5 proxy and asks it to tunnel to probeHost:443.
+// socks5Probe dials a SOCKS5 proxy and asks it to tunnel to ConnectivityProbeHost:443.
 // socks5 resolves the destination with the client's configured resolver and
 // sends an address request; socks5h sends the hostname so the proxy resolves
 // it. The distinction is observable on split-DNS networks and is why both
@@ -1210,9 +1232,9 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, remoteDNS bool, d
 		r.Fix = "check that the proxy URL names a SOCKS5 port and that the proxy allows this destination"
 		return r
 	}
-	destination := socks5Destination{host: probeHost, port: 443, remoteDNS: remoteDNS}
+	destination := socks5Destination{host: ConnectivityProbeHost, port: 443, remoteDNS: remoteDNS}
 	if !remoteDNS {
-		ips, server, lookupErr := o.lookupIP(ctx, probeHost)
+		ips, server, lookupErr := o.lookupIP(ctx, ConnectivityProbeHost)
 		if lookupErr != nil || len(ips) == 0 {
 			r.Status = StatusFail
 			r.Cause = ProxyCauseClientDNS
@@ -1220,7 +1242,7 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, remoteDNS bool, d
 			if server != "" {
 				via = " via " + dnsServerLabel(server)
 			}
-			r.Detail = "SOCKS5 proxy " + addr + " is reachable, but local DNS cannot resolve " + probeHost + via
+			r.Detail = "SOCKS5 proxy " + addr + " is reachable, but local DNS cannot resolve " + ConnectivityProbeHost + via
 			if lookupErr != nil {
 				r.Detail += ": " + lookupErr.Error()
 			}

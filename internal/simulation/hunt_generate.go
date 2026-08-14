@@ -552,7 +552,7 @@ func hasValidTLSTestTarget(s *Scenario) bool { _, ok := findValidTLSTestTarget(s
 
 type proxyTarget struct{ node, service, targetNode string }
 
-const proxyCONNECTTarget = "connectivitycheck.gstatic.com"
+const proxyCONNECTTarget = diagnostic.ConnectivityProbeHost
 
 func findSOCKS5TestProxy(s *Scenario) (proxyTarget, bool) {
 	for _, test := range s.Tests {
@@ -636,7 +636,7 @@ func hasWorkingQUICFixture(s *Scenario) bool {
 }
 
 func hasWorkingDoHFixture(s *Scenario) bool {
-	target, ok := findProbeFixture(s, ServiceEncryptedDNS, encryptedDNSProbeService, "cloudflare-dns.com")
+	target, ok := findProbeFixture(s, ServiceEncryptedDNS, encryptedDNSProbeService, diagnostic.EncryptedDNSHost)
 	if !ok {
 		return false
 	}
@@ -880,7 +880,7 @@ func generateQUICUDP443Block(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, 
 }
 
 func generateInvalidDoHResponse(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
-	target, _ := findProbeFixture(s, ServiceEncryptedDNS, encryptedDNSProbeService, "cloudflare-dns.com")
+	target, _ := findProbeFixture(s, ServiceEncryptedDNS, encryptedDNSProbeService, diagnostic.EncryptedDNSHost)
 	return GeneratedMutation{Node: target.node, Service: target.service,
 		Description: "make DoH service " + target.service + " return protocol-invalid DNS bytes while preserving DoT"}, nil
 }

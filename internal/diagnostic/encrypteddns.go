@@ -27,7 +27,9 @@ import (
 // so the probe can dial by IP and still verify one fixed name — no bootstrap
 // lookup through the very resolver path this row exists to test.
 const (
-	encryptedDNSHost = "cloudflare-dns.com"
+	// EncryptedDNSHost is the TLS identity and HTTP authority of the fixed
+	// encrypted-DNS probe endpoint.
+	EncryptedDNSHost = "cloudflare-dns.com"
 	// encryptedDNSPath is the RFC 8484 query path Cloudflare publishes.
 	encryptedDNSPath = "/dns-query"
 	// dohPort and dotPort are the standard ports: RFC 8484 rides ordinary HTTPS,
@@ -86,8 +88,8 @@ type encryptedDNSEndpoint struct {
 // one the direct-egress row already dials, so a scenario or network that
 // reaches netdoc's usual endpoints reaches this one too.
 var defaultEncryptedDNS = encryptedDNSEndpoint{
-	host:    encryptedDNSHost,
-	ips:     []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("2606:4700:4700::1111")},
+	host:    EncryptedDNSHost,
+	ips:     []net.IP{internetEndpoints4[0], internetEndpoints6[0]},
 	dohPort: dohPort,
 	dotPort: dotPort,
 }

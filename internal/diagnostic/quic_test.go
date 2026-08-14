@@ -25,15 +25,15 @@ func TestQUICProbeUsesFixedEndpointAndFamilyDialer(t *testing.T) {
 			return fakeConn{local: &net.UDPAddr{IP: net.ParseIP("192.0.2.10")}}, nil
 		},
 		quicHandshake: func(_ context.Context, _ net.Conn, cfg *tls.Config) (quicState, error) {
-			if cfg.ServerName != probeHost || len(cfg.NextProtos) != 1 || cfg.NextProtos[0] != "h3" {
+			if cfg.ServerName != ConnectivityProbeHost || len(cfg.NextProtos) != 1 || cfg.NextProtos[0] != "h3" {
 				t.Fatalf("TLS config = %+v", cfg)
 			}
 			return quicState{version: "v1", alpn: "h3"}, nil
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
-	if r.Status != StatusPass || lookedUp != probeHost || network != "udp4" || address != "192.0.2.44:443" {
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
+	if r.Status != StatusPass || lookedUp != ConnectivityProbeHost || network != "udp4" || address != "192.0.2.44:443" {
 		t.Fatalf("result = %+v, lookup = %q, dial = %s %s", r, lookedUp, network, address)
 	}
 }
@@ -50,7 +50,7 @@ func TestQUICProbeDoesNotCrossBindMissingSourceFamily(t *testing.T) {
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
 	if r.Status != StatusNA || !strings.Contains(r.Detail, "no address family") {
 		t.Fatalf("result = %+v, want N/A for incompatible family", r)
 	}
@@ -74,7 +74,7 @@ func TestQUICProbeUsesCompatibleFamilyWhenSelectedInterfaceLacksOtherFamily(t *t
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
 	if r.Status != StatusPass || network != "udp4" || !r.SelectedIP.Equal(v4) {
 		t.Fatalf("result = %+v, network = %q, want compatible IPv4 attempt", r, network)
 	}
@@ -97,7 +97,7 @@ func TestQUICProbeUsesIPv6Destination(t *testing.T) {
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
 	if r.Status != StatusPass || network != "udp6" || !r.SelectedIP.Equal(wantIP) || !r.Source.Equal(net.ParseIP("2001:db8::10")) {
 		t.Fatalf("result = %+v, network = %q", r, network)
 	}
@@ -144,7 +144,7 @@ func TestQUICProbeRacesBlackHoledIPv6WithWorkingIPv4(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	r := ops.quicProbe(probeHost, quicProbePort)(ctx, nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(ctx, nil)
 	if r.Status != StatusPass || !r.SelectedIP.Equal(v4) {
 		t.Fatalf("result = %+v, want IPv4 to win while IPv6 is black-holed", r)
 	}
@@ -182,7 +182,7 @@ func TestQUICProbeImmediateFamilyFailureDoesNotPoisonSuccess(t *testing.T) {
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
 	if r.Status != StatusPass || !r.SelectedIP.Equal(v4) {
 		t.Fatalf("result = %+v, want IPv4 success after immediate IPv6 failure", r)
 	}
@@ -200,7 +200,7 @@ func TestQUICProbeAllFamiliesFailDeterministically(t *testing.T) {
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
 	if r.Status != StatusFail || r.Cause != QUICCauseHandshake ||
 		!strings.Contains(r.Detail, "2001:db8::44, 192.0.2.44") {
 		t.Fatalf("result = %+v, want stable all-family failure", r)
@@ -225,7 +225,7 @@ func TestQUICProbePreservesAttemptTimeoutCause(t *testing.T) {
 		},
 	}
 
-	r := ops.quicProbe(probeHost, quicProbePort)(context.Background(), nil)
+	r := ops.quicProbe(ConnectivityProbeHost, quicProbePort)(context.Background(), nil)
 	if r.Status != StatusFail || r.Cause != QUICCauseTimeout {
 		t.Fatalf("result = %+v, want attempt timeout to remain classified as timeout", r)
 	}

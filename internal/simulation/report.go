@@ -244,7 +244,7 @@ func (r *Report) routeSuggestions() []Suggestion {
 	}
 	selectedSegment := ""
 	for _, route := range r.Evidence.Routes {
-		if route.Node == r.Tests[0].Node && route.Selected && (route.Destination == "1.1.1.1" || route.Destination == "8.8.8.8") {
+		if route.Node == r.Tests[0].Node && route.Selected && isInternetEndpoint("ipv4", route.Destination) {
 			selectedSegment = route.Segment
 			break
 		}

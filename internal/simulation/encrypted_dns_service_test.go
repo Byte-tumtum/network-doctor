@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 func TestFrameDoTReplyBoundsLength(t *testing.T) {
@@ -86,7 +88,7 @@ func TestDoHRecordsTheResponseItActuallySent(t *testing.T) {
 func TestEncryptedDNSRejectsUnknownDoHResponseMode(t *testing.T) {
 	node := Node{Name: "resolver", Services: []Service{{Name: encryptedDNSProbeService, Type: ServiceEncryptedDNS,
 		Port: 443, Zone: map[string]string{"example.test": "192.0.2.1"}, DoHResponse: "surprise",
-		Certificate: &TLSCertificate{Mode: TLSCertificateValid, DNSNames: []string{"cloudflare-dns.com"}}}}}
+		Certificate: &TLSCertificate{Mode: TLSCertificateValid, DNSNames: []string{diagnostic.EncryptedDNSHost}}}}}
 	if err := node.validateServices(map[string]bool{}); err == nil {
 		t.Fatal("accepted unknown DoH response mode")
 	}

@@ -23,6 +23,22 @@ func mustTarget(t *testing.T, s string) *Target {
 	return tg
 }
 
+func TestInternetProbeEndpointsAreDefensiveCopies(t *testing.T) {
+	ipv4, ipv6 := InternetProbeEndpoints()
+	ipv4[0][0] ^= 0xff
+	ipv4[1] = net.IPv4zero
+	ipv6[0][0] ^= 0xff
+	ipv6[1] = net.IPv6zero
+
+	ipv4, ipv6 = InternetProbeEndpoints()
+	if got := joinIPs(ipv4); got != "1.1.1.1, 8.8.8.8" {
+		t.Errorf("IPv4 endpoints after caller mutation = %q", got)
+	}
+	if got := joinIPs(ipv6); got != "2606:4700:4700::1111, 2001:4860:4860::8888" {
+		t.Errorf("IPv6 endpoints after caller mutation = %q", got)
+	}
+}
+
 // A target adds iface, TCP and QUIC Internet checks, proxy, system/public/
 // encrypted DNS, target_tcp, path_mtu, ssid, plus whatever rows its protocol
 // contributes.

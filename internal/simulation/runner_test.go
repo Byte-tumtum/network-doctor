@@ -545,22 +545,6 @@ func TestInternetFamilyProbesFollowNodeAddresses(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestInternetFamilyProbesMatchTheEndpointsNetdocDials keeps the simulator's
-// controlled endpoints and the addresses the probe under test connects to from
-// drifting apart. A scenario aliases these onto a simulator-owned node.
-func TestInternetFamilyProbesMatchTheEndpointsNetdocDials(t *testing.T) {
-	node := Node{Interfaces: []Interface{{Segment: "lan", IPv4: "10.78.1.10/24", IPv6: "2001:db8:77:1::10/64"}}}
-	want := map[string][]string{
-		"ipv4": {"1.1.1.1", "8.8.8.8"},
-		"ipv6": {"2606:4700:4700::1111", "2001:4860:4860::8888"},
-	}
-	for _, probe := range internetFamilyProbes(&node) {
-		if !reflect.DeepEqual(probe.endpoints, want[probe.family]) {
-			t.Errorf("%s endpoints = %v, want %v", probe.family, probe.endpoints, want[probe.family])
-		}
-	}
 	if internetProbePort != 443 {
 		t.Errorf("probe port = %d, want 443", internetProbePort)
 	}

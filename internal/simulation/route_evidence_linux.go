@@ -617,7 +617,7 @@ func (e *netnsEnv) evidenceDestinations() map[string][]string {
 		if byNode[test.Node] == nil {
 			byNode[test.Node] = make(map[string]bool)
 		}
-		for _, endpoint := range append(append([]string{}, internetEndpoints4...), internetEndpoints6...) {
+		for _, endpoint := range allInternetEndpoints() {
 			byNode[test.Node][endpoint] = true
 		}
 		if test.Target == "" {

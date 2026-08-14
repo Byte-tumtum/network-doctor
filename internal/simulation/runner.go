@@ -240,22 +240,37 @@ func selectedPath(routes []RouteEvidence, node, family string) []string {
 	return nil
 }
 
-// internetEndpoints4 and internetEndpoints6 mirror the fixed addresses
-// diagnostic.internetProbe dials. Scenarios alias them onto a simulator-owned
-// node, so the simulator can dial them itself without leaving the namespace.
-var (
-	internetEndpoints4 = []string{"1.1.1.1", "8.8.8.8"}
-	internetEndpoints6 = []string{"2606:4700:4700::1111", "2001:4860:4860::8888"}
-)
-
+// internetEndpointsForFamily derives the addresses the simulator probes from
+// diagnostic's production contract. Scenarios alias them onto a
+// simulator-owned node so no probe can leave the namespace.
 func internetEndpointsForFamily(family string) []string {
+	ipv4, ipv6 := diagnostic.InternetProbeEndpoints()
+	var endpoints []net.IP
 	if family == string(familyIPv4) {
-		return internetEndpoints4
+		endpoints = ipv4
+	} else if family == string(familyIPv6) {
+		endpoints = ipv6
+	} else {
+		return nil
 	}
-	if family == string(familyIPv6) {
-		return internetEndpoints6
+	out := make([]string, len(endpoints))
+	for i, endpoint := range endpoints {
+		out[i] = endpoint.String()
 	}
-	return nil
+	return out
+}
+
+func allInternetEndpoints() []string {
+	return append(internetEndpointsForFamily(string(familyIPv4)), internetEndpointsForFamily(string(familyIPv6))...)
+}
+
+func isInternetEndpoint(family, endpoint string) bool {
+	for _, candidate := range internetEndpointsForFamily(family) {
+		if candidate == endpoint {
+			return true
+		}
+	}
+	return false
 }
 
 // internetProbePort is the port both netdoc and the simulator connect to on
@@ -281,8 +296,8 @@ type familyProbe struct {
 // works is never read from here — it is settled by dialing it.
 func internetFamilyProbes(n *Node) []familyProbe {
 	out := []familyProbe{
-		{family: "ipv4", target: "IPv4 internet endpoints", endpoints: internetEndpoints4},
-		{family: "ipv6", target: "IPv6 internet endpoints", endpoints: internetEndpoints6},
+		{family: "ipv4", target: "IPv4 internet endpoints", endpoints: internetEndpointsForFamily("ipv4")},
+		{family: "ipv6", target: "IPv6 internet endpoints", endpoints: internetEndpointsForFamily("ipv6")},
 	}
 	for i := range out {
 		out[i].available = n.hasFamily(out[i].family)

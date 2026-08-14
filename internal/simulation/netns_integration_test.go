@@ -28,7 +28,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const proxyProbeName = "connectivitycheck.gstatic.com"
+const proxyProbeName = diagnostic.ConnectivityProbeHost
 
 // buildBinaries produces the two binaries an end-to-end run needs, from the
 // tree under test rather than whatever is installed.

@@ -424,7 +424,7 @@ func TestProxyProbeSocks5(t *testing.T) {
 			}
 			want := string([]byte{5, 1, 0, 5, 1, 0})
 			if scheme == "socks5h" {
-				want += string([]byte{3, byte(len(probeHost))}) + probeHost
+				want += string([]byte{3, byte(len(ConnectivityProbeHost))}) + ConnectivityProbeHost
 			} else {
 				want += string([]byte{1, 192, 0, 2, 10})
 			}
@@ -560,7 +560,7 @@ func TestSOCKS5RejectsInvalidConnectReplyHeader(t *testing.T) {
 // Go's own ProxyFromEnvironment ignores ALL_PROXY; netdoc must not, or a box
 // proxied only through ALL_PROXY reads as having no proxy at all.
 func TestProxyFromEnvironmentAllProxy(t *testing.T) {
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: probeHost}}
+	req := &http.Request{URL: &url.URL{Scheme: "https", Host: ConnectivityProbeHost}}
 	if u, err := http.ProxyFromEnvironment(req); u != nil || err != nil {
 		t.Skipf("test environment already has HTTP(S)_PROXY set (%v, %v)", u, err)
 	}
@@ -748,9 +748,9 @@ func TestProxyProbeAuthRequired(t *testing.T) {
 }
 
 // noProxyBypasses matches suffixes and "*" only — no IP literals, no CIDR — and
-// is safe solely because probeHost is the one host it is ever asked about. Pin
+// is safe solely because ConnectivityProbeHost is the one host it is ever asked about. Pin
 // that: whatever target the user names, the proxy probe still asks about
-// probeHost. If this fails, noProxyBypasses must become httpproxy.
+// ConnectivityProbeHost. If this fails, noProxyBypasses must become httpproxy.
 func TestProxyProbeOnlyAsksAboutProbeHost(t *testing.T) {
 	targets := []*Target{
 		nil,
@@ -772,8 +772,8 @@ func TestProxyProbeOnlyAsksAboutProbeHost(t *testing.T) {
 			t.Fatalf("target %+v: proxy probe never consulted the environment", target)
 		}
 		for _, h := range asked {
-			if h != probeHost {
-				t.Errorf("target %+v: proxy probe asked about %q, want %q", target, h, probeHost)
+			if h != ConnectivityProbeHost {
+				t.Errorf("target %+v: proxy probe asked about %q, want %q", target, h, ConnectivityProbeHost)
 			}
 		}
 	}

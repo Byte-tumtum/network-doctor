@@ -2,8 +2,12 @@ package simulation
 
 import (
 	"fmt"
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 const minimalScenario = `
@@ -479,33 +483,204 @@ func TestIsSafeHostname(t *testing.T) {
 	}
 }
 
-// The simulated internet claims netdoc's fixed endpoint addresses, so it has to
-// answer what netdoc actually sends there. This is the guard for the
-// encrypted-DNS row: a node that claims 1.1.1.1 without the encrypted_dns
-// fixture makes every scenario report a blocked encrypted resolver, and the
-// healthy scenarios would flip to "degraded" for a reason that is the
-// simulator's, not netdoc's.
-func TestLibraryScenariosServeEncryptedDNSWhereTheyClaimItsAddress(t *testing.T) {
+func TestBuiltInScenariosMatchFixedProbeDestinations(t *testing.T) {
 	for _, name := range LibraryNames() {
-		scenario, err := LibraryScenario(name)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+		t.Run(name, func(t *testing.T) {
+			scenario, err := LibraryScenario(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			usedAliases := scenarioAliasConsumers(scenario)
+			carriers := 0
+			for _, node := range scenario.Topology.Nodes {
+				if !nodeHasService(node, ServiceEncryptedDNS, encryptedDNSProbeService) {
+					continue
+				}
+				carriers++
+				checkProbeCarrier(t, scenario, node, usedAliases)
+			}
+			if carriers == 0 {
+				t.Error("no node provides the encrypted-DNS probe fixture")
+			}
+		})
+	}
+}
+
+func checkProbeCarrier(t *testing.T, scenario *Scenario, carrier Node, usedAliases map[string]bool) {
+	t.Helper()
+	for _, family := range []string{"ipv4", "ipv6"} {
+		if !carrier.hasFamily(family) {
+			continue
 		}
-		for _, node := range scenario.Topology.Nodes {
-			claims := false
-			for _, alias := range node.Aliases {
-				claims = claims || alias == "1.1.1.1"
+		actual := aliasesForFamily(carrier.Aliases, family)
+		expected := fixedScenarioAliases(family)
+		for _, alias := range actual {
+			if usedAliases[alias] && !slices.Contains(expected, alias) {
+				expected = append(expected, alias)
 			}
-			if !claims {
-				continue
+		}
+		slices.Sort(actual)
+		slices.Sort(expected)
+		if !slices.Equal(actual, expected) {
+			t.Errorf("node %q %s aliases = %v, want fixed probe aliases %v", carrier.Name, family, actual, expected)
+		}
+	}
+
+	quicFixture := false
+	for _, service := range carrier.Services {
+		switch {
+		case service.Type == ServiceEncryptedDNS && service.Name == encryptedDNSProbeService:
+			if service.Certificate == nil || !certificateCoversHost(service.Certificate, diagnostic.EncryptedDNSHost) {
+				t.Errorf("node %q encrypted-DNS certificate names = %v, want %q", carrier.Name, certificateNames(service), diagnostic.EncryptedDNSHost)
 			}
-			served := false
-			for _, svc := range node.Services {
-				served = served || svc.Type == ServiceEncryptedDNS && svc.Port == 443
+			if !serviceAnswersName(service, diagnostic.ConnectivityProbeHost) {
+				t.Errorf("node %q encrypted-DNS records = %v, want query name %q", carrier.Name, serviceRecordNames(service), diagnostic.ConnectivityProbeHost)
 			}
-			if !served {
-				t.Errorf("%s: node %q claims 1.1.1.1 but serves no encrypted_dns fixture on 443", name, node.Name)
+		case service.Type == ServiceQUIC && service.Name == quicProbeService:
+			quicFixture = true
+			if service.Certificate == nil || !certificateCoversHost(service.Certificate, diagnostic.ConnectivityProbeHost) {
+				t.Errorf("node %q QUIC certificate names = %v, want %q", carrier.Name, certificateNames(service), diagnostic.ConnectivityProbeHost)
 			}
+		}
+	}
+	if !quicFixture {
+		t.Errorf("node %q has no QUIC probe fixture", carrier.Name)
+	}
+
+	for _, node := range scenario.Topology.Nodes {
+		if !nodeProvidesConfiguredResolver(scenario, node) {
+			continue
+		}
+		for _, service := range node.Services {
+			if service.Type == ServiceDNS && len(service.Zone)+len(service.Records) > 0 &&
+				!serviceAnswersName(service, diagnostic.ConnectivityProbeHost) {
+				t.Errorf("node %q DNS records = %v, want fixed probe name %q", node.Name, serviceRecordNames(service), diagnostic.ConnectivityProbeHost)
+			}
+		}
+	}
+
+	checkProbeRoutes(t, scenario, carrier, usedAliases)
+}
+
+func fixedScenarioAliases(family string) []string {
+	aliases := internetEndpointsForFamily(family)
+	if resolver, err := netip.ParseAddr(diagnostic.DefaultPublicDNS); err == nil && addressFamily(resolver) == family &&
+		!slices.Contains(aliases, resolver.String()) {
+		aliases = append(aliases, resolver.String())
+	}
+	return aliases
+}
+
+func aliasesForFamily(aliases []string, family string) []string {
+	var out []string
+	for _, raw := range aliases {
+		if addr, err := netip.ParseAddr(raw); err == nil && addressFamily(addr) == family {
+			out = append(out, addr.String())
+		}
+	}
+	return out
+}
+
+func scenarioAliasConsumers(scenario *Scenario) map[string]bool {
+	used := map[string]bool{diagnostic.DefaultPublicDNS: true}
+	for _, node := range scenario.Topology.Nodes {
+		if addr, err := netip.ParseAddr(node.Resolver); err == nil {
+			used[addr.String()] = true
+		}
+	}
+	for _, test := range scenario.Tests {
+		target, err := diagnostic.ParseTarget(test.Target)
+		if err == nil && target.IP != nil {
+			used[target.IP.String()] = true
+		}
+	}
+	return used
+}
+
+func nodeHasService(node Node, serviceType, name string) bool {
+	for _, service := range node.Services {
+		if service.Type == serviceType && service.Name == name && service.Port == 443 {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeProvidesConfiguredResolver(scenario *Scenario, node Node) bool {
+	if nodeOwnsAddress(node, diagnostic.DefaultPublicDNS) {
+		return true
+	}
+	for _, consumer := range scenario.Topology.Nodes {
+		if nodeOwnsAddress(node, consumer.Resolver) {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceAnswersName(service Service, name string) bool {
+	key := dnsKey(name)
+	for candidate := range service.Zone {
+		if dnsKey(candidate) == key {
+			return true
+		}
+	}
+	for _, record := range service.Records {
+		if dnsKey(record.Name) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceRecordNames(service Service) []string {
+	var names []string
+	for name := range service.Zone {
+		names = append(names, dnsKey(name))
+	}
+	for _, record := range service.Records {
+		names = append(names, dnsKey(record.Name))
+	}
+	slices.Sort(names)
+	return names
+}
+
+func certificateNames(service Service) []string {
+	if service.Certificate == nil {
+		return nil
+	}
+	return service.Certificate.DNSNames
+}
+
+func checkProbeRoutes(t *testing.T, scenario *Scenario, carrier Node, usedAliases map[string]bool) {
+	t.Helper()
+	routes := make(map[string][]string)
+	for _, route := range scenario.Topology.Routes {
+		prefix, err := netip.ParsePrefix(route.Destination)
+		if err != nil || prefix.Bits() != prefix.Addr().BitLen() || !nodeOwnsAddress(carrier, route.Via) {
+			continue
+		}
+		family := addressFamily(prefix.Addr())
+		key := route.Node + "\x00" + family
+		routes[key] = append(routes[key], prefix.Addr().String())
+	}
+	for key, destinations := range routes {
+		node, family, _ := strings.Cut(key, "\x00")
+		expected := internetEndpointsForFamily(family)
+		var actual []string
+		for _, destination := range destinations {
+			if !usedAliases[destination] || slices.Contains(expected, destination) {
+				actual = append(actual, destination)
+			}
+		}
+		if len(actual) == 0 {
+			continue
+		}
+		slices.Sort(actual)
+		slices.Sort(expected)
+		if !slices.Equal(actual, expected) {
+			t.Errorf("router %q %s probe routes = %v, want %v", node, family, actual, expected)
 		}
 	}
 }
