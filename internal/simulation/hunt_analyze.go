@@ -22,6 +22,15 @@ const (
 	SeverityInfo     HuntSeverity = "info"
 )
 
+// HuntSeverities is the hunt severity vocabulary, most severe first.
+var HuntSeverities = []HuntSeverity{
+	SeverityCritical,
+	SeverityHigh,
+	SeverityMedium,
+	SeverityLow,
+	SeverityInfo,
+}
+
 // Finding categories name what kind of disagreement a case produced. Every
 // value here is emitted by a path in this package; a category the oracle cannot
 // establish from independent evidence is not a category, and there is
@@ -116,20 +125,11 @@ type HuntFinding struct {
 }
 
 func severityRank(severity HuntSeverity) int {
-	switch severity {
-	case SeverityCritical:
-		return 5
-	case SeverityHigh:
-		return 4
-	case SeverityMedium:
-		return 3
-	case SeverityLow:
-		return 2
-	case SeverityInfo:
-		return 1
-	default:
+	index := slices.Index(HuntSeverities, severity)
+	if index < 0 {
 		return 0
 	}
+	return len(HuntSeverities) - index
 }
 
 func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) ObservedTruth {

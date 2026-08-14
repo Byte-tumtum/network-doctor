@@ -1009,7 +1009,32 @@ func TestHuntFamilyMismatchExcludesSampledAndTransientPaths(t *testing.T) {
 	}
 }
 
-func TestHuntSuggestionTaxonomyAndRanking(t *testing.T) {
+func TestHuntSeverityVocabulary(t *testing.T) {
+	if len(HuntSeverities) == 0 {
+		t.Fatal("hunt severity vocabulary is empty")
+	}
+	seen := make(map[HuntSeverity]bool, len(HuntSeverities))
+	for i, severity := range HuntSeverities {
+		if seen[severity] {
+			t.Errorf("duplicate hunt severity %q", severity)
+		}
+		seen[severity] = true
+		if parsed, ok := ParseSeverity(string(severity)); !ok || parsed != severity {
+			t.Errorf("ParseSeverity(%q) = %q, %t", severity, parsed, ok)
+		}
+		if rank := severityRank(severity); rank != len(HuntSeverities)-i {
+			t.Errorf("severityRank(%q) = %d, want %d", severity, rank, len(HuntSeverities)-i)
+		}
+	}
+	if rank := severityRank("unknown"); rank != 0 {
+		t.Errorf("severityRank(unknown) = %d, want 0", rank)
+	}
+	if severity, ok := ParseSeverity("unknown"); ok || severity != "" {
+		t.Errorf("ParseSeverity(unknown) = %q, %t", severity, ok)
+	}
+}
+
+func TestHuntSuggestionTaxonomy(t *testing.T) {
 	for code, want := range map[string]struct {
 		category string
 		severity HuntSeverity
@@ -1023,10 +1048,6 @@ func TestHuntSuggestionTaxonomyAndRanking(t *testing.T) {
 		if !ok || category != want.category || severity != want.severity {
 			t.Errorf("%s = %s/%s/%t", code, category, severity, ok)
 		}
-	}
-	if severityRank(SeverityCritical) <= severityRank(SeverityHigh) || severityRank(SeverityHigh) <= severityRank(SeverityMedium) ||
-		severityRank(SeverityMedium) <= severityRank(SeverityLow) || severityRank(SeverityLow) <= severityRank(SeverityInfo) {
-		t.Error("severity ranking is not strict")
 	}
 }
 

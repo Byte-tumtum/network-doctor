@@ -500,6 +500,10 @@ func TestShippedSurfacesDeclareExactlyTheRealFlagsPerCommand(t *testing.T) {
 // both directions at once: a value added, removed or renamed in the simulation
 // package stops matching what the completions offer.
 func TestShippedSurfacesOfferTheRealFixedVocabularies(t *testing.T) {
+	severities := make([]string, len(simulation.HuntSeverities))
+	for i, severity := range simulation.HuntSeverities {
+		severities[i] = string(severity)
+	}
 	vocabularies := []struct {
 		what   string
 		values []string
@@ -509,17 +513,21 @@ func TestShippedSurfacesOfferTheRealFixedVocabularies(t *testing.T) {
 		{"authored challenge slugs", simulation.AuthoredChallengeSlugs()},
 		{"challenge answers", simulation.ChallengeAnswerNames()},
 		{"challenge difficulties", simulation.ChallengeDifficulties},
+		{"hunt severities", severities},
 	}
-	completions := [][]string{
-		{"completions", "netdoc-sim.bash"},
-		{"completions", "netdoc-sim.zsh"},
-		{"completions", "netdoc-sim.fish"},
+	completions := []struct {
+		path           []string
+		prefix, suffix string
+	}{
+		{[]string{"completions", "netdoc-sim.bash"}, `-W "`, `"`},
+		{[]string{"completions", "netdoc-sim.zsh"}, `(`, `)`},
+		{[]string{"completions", "netdoc-sim.fish"}, `-a '`, `'`},
 	}
 	for _, vocabulary := range vocabularies {
 		list := strings.Join(vocabulary.values, " ")
-		for _, path := range completions {
-			if !strings.Contains(packagingFile(t, path...), list) {
-				t.Errorf("%s does not offer the %s as %q", filepath.Join(path...), vocabulary.what, list)
+		for _, completion := range completions {
+			if !strings.Contains(packagingFile(t, completion.path...), completion.prefix+list+completion.suffix) {
+				t.Errorf("%s does not offer the %s as %q", filepath.Join(completion.path...), vocabulary.what, list)
 			}
 		}
 		// The man page spaces its lists over roff lines, so each value is
@@ -555,26 +563,6 @@ func TestShippedSurfacesOfferTheRealFixedVocabularies(t *testing.T) {
 	for _, baseline := range simulation.TriageBaselines() {
 		if !strings.Contains(man, baseline.Scenario) {
 			t.Errorf("netdoc-sim.1 never names the triage baseline %q", baseline.Scenario)
-		}
-	}
-	// The severity vocabulary has no exported enumeration to compare against,
-	// so this is the strongest check available: every level offered has to be
-	// one the flag accepts. A level added to the package and nowhere else would
-	// not be caught here.
-	severities := []string{"critical", "high", "medium", "low", "info"}
-	for _, severity := range severities {
-		if _, ok := simulation.ParseSeverity(severity); !ok {
-			t.Errorf("completions offer -min-severity %s, which the flag rejects", severity)
-		}
-	}
-	if _, ok := simulation.ParseSeverity(string(simulation.SeverityMedium)); !ok ||
-		!slices.Contains(severities, string(simulation.SeverityMedium)) {
-		t.Errorf("the default severity %q is not among the offered levels", simulation.SeverityMedium)
-	}
-	list := strings.Join(severities, " ")
-	for _, path := range completions {
-		if !strings.Contains(packagingFile(t, path...), list) {
-			t.Errorf("%s does not offer the severity levels as %q", filepath.Join(path...), list)
 		}
 	}
 }
