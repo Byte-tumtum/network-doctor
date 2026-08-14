@@ -54,6 +54,7 @@ type fakeEnv struct {
 	evidence      Evidence
 	// faultErr fails fault injection, the way a host missing a tc feature does.
 	faultErr error
+	trustErr error
 
 	mu      sync.Mutex
 	applied []TimedEvent
@@ -117,6 +118,9 @@ func (e *fakeEnv) Exec(ctx context.Context, _ string, argv, env []string) ExecRe
 }
 
 func (e *fakeEnv) TrustAnchor(service string) (string, error) {
+	if e.trustErr != nil {
+		return "", e.trustErr
+	}
 	if service == "tls-target" {
 		return "/simulator/tls-target-ca.pem", nil
 	}

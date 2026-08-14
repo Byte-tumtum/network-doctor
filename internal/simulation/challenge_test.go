@@ -1261,6 +1261,36 @@ func TestRunChallengeOrderAndNetdocArguments(t *testing.T) {
 	}
 }
 
+func TestRunChallengeStopsBeforePlayWhenTrustEnvironmentFails(t *testing.T) {
+	challenge := challengeWithMutation(t, "service.tls_expired")
+	want := errors.New("trust anchor unavailable")
+	env := &fakeEnv{trustErr: want}
+	backend := &fakeBackend{caps: Capabilities{Supported: true, Backend: "fake"}, env: env}
+	played := false
+	result, err := RunChallenge(context.Background(), challenge, backend, ChallengeOptions{
+		Run: Options{Netdoc: "/bin/netdoc"},
+		Play: func(context.Context, *ChallengeSession) (ChallengeSubmission, error) {
+			played = true
+			return ChallengeSubmission{}, nil
+		},
+	})
+	if err == nil || !errors.Is(err, want) || result != nil {
+		t.Fatalf("trust failure returned result %+v, error %v", result, err)
+	}
+	if !strings.Contains(err.Error(), "challenge shell") {
+		t.Fatalf("error does not explain the failed player environment: %v", err)
+	}
+	if played {
+		t.Fatal("the player was handed a shell without the graded run's trust anchors")
+	}
+	if env.execs != 0 {
+		t.Fatalf("netdoc ran %d times after trust setup failed", env.execs)
+	}
+	if env.cleanups == 0 {
+		t.Fatal("trust setup failure did not clean up")
+	}
+}
+
 // A player who walks out has not been scored, and the network still goes away.
 func TestRunChallengeAbandonedRunsNoTestsAndCleansUp(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")

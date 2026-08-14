@@ -100,7 +100,7 @@ func RunChallenge(ctx context.Context, c *Challenge, backend Backend, opts Chall
 		return nil, errors.New("challenge backend is nil")
 	}
 	var submission ChallengeSubmission
-	var playErr error
+	var holdErr error
 	run := opts.Run
 	run.Hold = func(ctx context.Context, env Env) error {
 		if opts.Play == nil {
@@ -111,19 +111,24 @@ func RunChallenge(ctx context.Context, c *Challenge, backend Backend, opts Chall
 			// Whatever trust the netdoc run gets, the player gets: a certificate
 			// the simulator generated has to be verifiable by both, or one
 			// contestant is looking at a different network.
-			session.shellEnv, _ = probeTrustEnv(env, primary)
+			shellEnv, err := probeTrustEnv(env, primary)
+			if err != nil {
+				holdErr = fmt.Errorf("cannot give the challenge shell the graded run's trust anchors: %w", err)
+				return holdErr
+			}
+			session.shellEnv = shellEnv
 		}
 		got, err := opts.Play(ctx, session)
 		if err != nil {
-			playErr = err
+			holdErr = err
 			return err
 		}
 		submission = got
 		return nil
 	}
 	report := Run(ctx, c.Scenario, backend, run)
-	if playErr != nil {
-		return nil, playErr
+	if holdErr != nil {
+		return nil, holdErr
 	}
 	if fingerprint := huntCaseFingerprint(c.Manifest); fingerprint != c.Manifest.CaseFingerprint {
 		// The manifest the player was given and the one being scored have to be
