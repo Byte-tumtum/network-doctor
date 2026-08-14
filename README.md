@@ -555,7 +555,7 @@ date if it was a daily, and two check marks — and never names the fault, so
 sharing your result doesn't spoil the puzzle for whoever plays it next:
 
 ```text
-Network Doctor Challenge V4-8F42C1 (hard)
+Network Doctor Challenge V4-8F42C1 (easy)
 Daily 2026-08-12
 Me:             ✓
 Network Doctor: ✗

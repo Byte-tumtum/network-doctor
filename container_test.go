@@ -31,6 +31,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/simulation"
 )
 
 const (
@@ -39,11 +41,22 @@ const (
 	requireEnv = "NETDOC_REQUIRE_CONTAINER"
 )
 
-// challengeID is a challenge every build of this repository resolves to the
-// same puzzle — the id the README and docs hand out. Reusing it rather than
-// minting a container-only fixture is deliberate: what these tests check is
-// that the container reproduces the challenge everyone else gets.
-const challengeID = "V3-8F42C1"
+// challengeID is the current-generation challenge used by the container guide.
+// Its base needs no forwarding sysctl, which a standard container keeps
+// read-only even though the simulator's nested namespaces are otherwise usable.
+const challengeID = simulation.ChallengeIDVersion + "-005CCD"
+const challengeCorrectAnswer = "tcp_port_blocked"
+
+func TestChallengeFixtureTracksCurrentDocumentedExample(t *testing.T) {
+	challenge, err := simulation.BuildChallenge(challengeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(challenge.Manifest.Mutations) != 1 || challenge.Manifest.Mutations[0].ID != "service.tcp_port_blocked" {
+		t.Fatalf("%s mutations = %+v, want the fault behind the container's %q correct-answer assertion",
+			challengeID, challenge.Manifest.Mutations, challengeCorrectAnswer)
+	}
+}
 
 // documentedOptions is the run command the README and docs hand out, so every
 // ordinary test here exercises the line users actually type. One capability,
@@ -291,7 +304,7 @@ func TestImageExitStatusPropagates(t *testing.T) {
 		args []string
 		want int
 	}{
-		{"a correct answer", []string{"challenge", "-id", challengeID, "-answer", "dns_failure", "-json"}, 0},
+		{"a correct answer", []string{"challenge", "-id", challengeID, "-answer", challengeCorrectAnswer, "-json"}, 0},
 		{"a wrong answer", []string{"challenge", "-id", challengeID, "-answer", "healthy", "-json"}, 1},
 		{"an unknown answer", []string{"challenge", "-id", challengeID, "-answer", "nonsense", "-json"}, 2},
 		{"an unknown scenario", []string{"run", "no-such-scenario"}, 2},

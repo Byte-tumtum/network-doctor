@@ -214,7 +214,7 @@ var nowUTC = func() time.Time { return time.Now().UTC() }
 // for another day. IsBoolFlag is what makes the bare form legal — without it,
 // `-daily` would swallow the next argument, and `netdoc-sim challenge -daily`
 // with nothing after it would be a usage error rather than the shortest way to
-// play. It also means `-daily V3-8F42C1` leaves the id as a positional argument,
+// play. It also means `-daily V4-8F42C1` leaves the id as a positional argument,
 // which the parser then refuses as two challenges at once.
 type dailyFlag struct {
 	set  bool

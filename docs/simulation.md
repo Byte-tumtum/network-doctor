@@ -162,8 +162,8 @@ ordinary `netdoc-sim` command line and nothing re-parses it:
 ```sh
 IMAGE=ghcr.io/heymaikol/netdoc-sim:latest
 docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -difficulty hard
-docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -id V4-8F42C1
-docker run --rm --cap-add SYS_ADMIN $IMAGE challenge -id V4-8F42C1 -answer dns_failure -json
+docker run --rm -it --cap-add SYS_ADMIN $IMAGE challenge -id V4-005CCD
+docker run --rm --cap-add SYS_ADMIN $IMAGE challenge -id V4-005CCD -answer tcp_port_blocked -json
 docker run --rm --cap-add SYS_ADMIN $IMAGE run broken-dns -json
 docker run --rm --cap-add SYS_ADMIN $IMAGE capabilities
 docker run --rm $IMAGE scenarios
@@ -682,7 +682,7 @@ answers are graded against the same independently observed truth.
 ./netdoc-sim challenge -authored no-default-route  # a hand-written case
 ./netdoc-sim challenge -id V4-8F42C1         # replay someone else's
 ./netdoc-sim challenge -difficulty hard
-./netdoc-sim challenge -id V4-8F42C1 -answer dns_failure -json
+./netdoc-sim challenge -id V4-8F42C1 -answer connection_refused -json
 ```
 
 One command runs the whole session: it builds the network, opens a shell in the

@@ -441,6 +441,43 @@ var shippedSurfaces = []shippedSurface{
 	{name: "netdoc-sim help", content: renderedUsage, commands: usageCommands, flags: usageFlags},
 }
 
+var challengeIDLiteral = regexp.MustCompile(`\bV[0-9]+-[0-9A-Fa-f]{6}\b`)
+
+func TestCurrentChallengeExamplesUseCurrentGeneration(t *testing.T) {
+	type exampleSurface struct {
+		name, content string
+	}
+	surfaces := []exampleSurface{
+		{"netdoc-sim help", renderedUsage(t)},
+		{"netdoc-sim.1", manText(t)},
+	}
+	for _, name := range []string{"Dockerfile", "README.md", filepath.Join("docs", "simulation.md"),
+		filepath.Join("cmd", "netdoc-sim", "challenge.go")} {
+		data, err := os.ReadFile(filepath.Join("..", "..", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		surfaces = append(surfaces, exampleSurface{name, string(data)})
+	}
+	for _, surface := range surfaces {
+		ids := challengeIDLiteral.FindAllString(surface.content, -1)
+		if len(ids) == 0 {
+			t.Errorf("%s has no current challenge-id example", surface.name)
+			continue
+		}
+		for _, id := range ids {
+			version, _, _ := strings.Cut(id, "-")
+			if version != simulation.ChallengeIDVersion {
+				t.Errorf("%s uses stale challenge-id example %q; current generation is %s",
+					surface.name, id, simulation.ChallengeIDVersion)
+			}
+			if _, err := simulation.BuildChallenge(id); err != nil {
+				t.Errorf("%s challenge-id example %q does not resolve: %v", surface.name, id, err)
+			}
+		}
+	}
+}
+
 func TestShippedSurfacesDeclareExactlyTheRealCommands(t *testing.T) {
 	want := publicCommands(t)
 	for _, surface := range shippedSurfaces {

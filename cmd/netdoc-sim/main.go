@@ -215,7 +215,7 @@ Ways to play a challenge:
                                            everybody who plays it today
   netdoc-sim challenge -starter fundamentals
                                            a curated challenge to learn on
-  netdoc-sim challenge V3-8F42C1           replay the one a friend sent you
+  netdoc-sim challenge V4-8F42C1           replay the one a friend sent you
 
 In the session you get a shell in the broken machine, then a menu. Pick a
 diagnosis by number or by name, 'b' rereads the briefing, 's' returns to the

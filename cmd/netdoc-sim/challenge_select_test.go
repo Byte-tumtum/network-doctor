@@ -277,7 +277,7 @@ func TestUsageShowsTheWaysToPlay(t *testing.T) {
 	var out bytes.Buffer
 	usage(&out)
 	text := out.String()
-	for _, want := range []string{"-daily", "-starter", "starters", "challenge V3-8F42C1",
+	for _, want := range []string{"-daily", "-starter", "starters", "challenge " + simulation.ChallengeIDVersion + "-8F42C1",
 		"Ways to play", "rereads the briefing"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("usage does not mention %q", want)

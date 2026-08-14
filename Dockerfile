@@ -86,7 +86,7 @@ LABEL org.opencontainers.image.title="netdoc-sim" \
       org.opencontainers.image.revision="${REVISION}"
 
 # netdoc-sim owns the argument parsing, so everything after the image name is
-# its own command line: `challenge`, `challenge -id V3-8F42C1 -json`, `run
+# its own command line: `challenge`, `challenge -id V4-8F42C1 -json`, `run
 # broken-dns`, `capabilities`. Bare `docker run IMAGE` plays a challenge.
 ENTRYPOINT ["/usr/bin/netdoc-sim"]
 CMD ["challenge"]
