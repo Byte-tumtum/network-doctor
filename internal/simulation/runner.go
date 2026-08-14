@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
@@ -412,16 +413,31 @@ func decodeDiagnosis(res ExecResult) (*Diagnosis, error) {
 	if res.Err != nil {
 		return nil, fmt.Errorf("running netdoc: %w", res.Err)
 	}
-	var d Diagnosis
-	if err := json.Unmarshal(res.Stdout, &d); err != nil {
+	var wire report.Report
+	if err := json.Unmarshal(res.Stdout, &wire); err != nil {
 		stderr := strings.TrimSpace(string(res.Stderr))
 		if stderr != "" {
 			return nil, fmt.Errorf("netdoc exited %d without a report: %s", res.ExitCode, stderr)
 		}
 		return nil, fmt.Errorf("netdoc exited %d and its output is not a report: %w", res.ExitCode, err)
 	}
-	if len(d.Checks) == 0 {
+	if len(wire.Checks) == 0 {
 		return nil, fmt.Errorf("netdoc exited %d with an empty report", res.ExitCode)
+	}
+	d := Diagnosis{Checks: make([]DiagnosisCheck, len(wire.Checks)), Summary: wire.Summary,
+		Verdict: wire.Verdict, FailedStage: wire.FailedStage, OK: wire.OK}
+	for i, check := range wire.Checks {
+		d.Checks[i] = DiagnosisCheck{ID: check.ID, Name: check.Name, Status: check.Status, Cause: check.Cause,
+			Ms: check.Ms, Detail: check.Detail, Fix: check.Fix}
+		if check.Families != nil {
+			d.Checks[i].Families = &DiagnosisFamilies{IPv4: check.Families.IPv4, IPv6: check.Families.IPv6}
+		}
+		if check.Attempts != nil {
+			d.Checks[i].Attempts = make([]DiagnosisAttempt, len(check.Attempts))
+			for j, attempt := range check.Attempts {
+				d.Checks[i].Attempts[j] = DiagnosisAttempt{IP: attempt.IP, Ms: attempt.Ms, Error: attempt.Err}
+			}
+		}
 	}
 	return &d, nil
 }

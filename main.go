@@ -19,6 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 	"github.com/heymaikol/network-doctor/internal/ui"
 )
@@ -320,66 +321,6 @@ Target forms:
 	fs.PrintDefaults()
 }
 
-// The report is the stable machine-readable contract: field names and the
-// status vocabulary (PASS/WARN/FAIL/SKIP/N/A) must not change once released.
-type report struct {
-	Version string `json:"version"`
-	// Ts is set only under -json -watch, where the output is a stream and each
-	// pass needs to say when it ran. A single report doesn't carry one, so the
-	// one-shot output stays byte-identical to what it has always been.
-	Ts      string        `json:"ts,omitempty"`
-	Target  *reportTarget `json:"target"` // null in generic (no-target) mode
-	Checks  []reportCheck `json:"checks"`
-	Summary string        `json:"summary"`
-	Verdict string        `json:"verdict"`
-	// FailedStage is the id of the first check that failed, omitted when none
-	// did — the one field a CI job needs to route a bug report.
-	FailedStage string `json:"failed_stage,omitempty"`
-	OK          bool   `json:"ok"`
-}
-
-type reportTarget struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Protocol string `json:"protocol"`
-}
-
-type reportCheck struct {
-	ID         string          `json:"id"`
-	Name       string          `json:"name"`
-	Status     string          `json:"status"`
-	Cause      string          `json:"cause,omitempty"`
-	Families   *reportFamilies `json:"address_families,omitempty"`
-	Ms         int64           `json:"ms"` // wall time, truncated but floored at 1; 0 means the check never ran
-	Detail     string          `json:"detail"`
-	Fix        string          `json:"fix,omitempty"`
-	Addrs      []string        `json:"addrs,omitempty"`
-	SelectedIP string          `json:"selected_ip,omitempty"`
-	Source     string          `json:"source,omitempty"`
-	Iface      string          `json:"iface,omitempty"`
-	Network    string          `json:"network,omitempty"`
-	Portal     *reportPortal   `json:"portal,omitempty"`
-	Attempts   []reportAttempt `json:"attempts,omitempty"`
-}
-
-// A family the selected --iface source has no address for was never dialed, so
-// its state is empty and the key is omitted rather than serialized as "": an
-// absent family reads as untested, which is what it is.
-type reportFamilies struct {
-	IPv4 string `json:"ipv4,omitempty"`
-	IPv6 string `json:"ipv6,omitempty"`
-}
-
-type reportPortal struct {
-	RedirectURL string `json:"redirect_url,omitempty"`
-}
-
-type reportAttempt struct {
-	IP  string `json:"ip"`
-	Ms  int64  `json:"ms"` // same flooring as reportCheck.Ms
-	Err string `json:"error,omitempty"`
-}
-
 // runAll is stubbed in tests so -json runs don't touch the network.
 var runAll = diagnostic.RunAll
 
@@ -439,10 +380,10 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 // buildReport flattens probe results into the stable JSON shape, preserving
 // probe order. OK means "no check failed" — Warn, Skip, and N/A don't count
 // against it, same as everywhere else in the app.
-func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult, filtered bool) report {
-	rep := report{Version: version, Checks: []reportCheck{}, OK: true}
+func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult, filtered bool) report.Report {
+	rep := report.Report{Version: version, Checks: []report.Check{}, OK: true}
 	if t != nil {
-		rep.Target = &reportTarget{Host: t.Host, Port: t.Port, Protocol: t.Proto.String()}
+		rep.Target = &report.Target{Host: t.Host, Port: t.Port, Protocol: t.Proto.String()}
 	}
 	order := make([]diagnostic.ProbeID, len(probes))
 	for i, p := range probes {
@@ -452,7 +393,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		if r.Status == diagnostic.StatusFail && rep.FailedStage == "" {
 			rep.FailedStage = string(p.ID)
 		}
-		c := reportCheck{
+		c := report.Check{
 			ID:      string(p.ID),
 			Name:    p.Name,
 			Status:  r.Status.String(),
@@ -464,10 +405,10 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			Network: r.Network,
 		}
 		if r.Families != nil {
-			c.Families = &reportFamilies{IPv4: r.Families.IPv4, IPv6: r.Families.IPv6}
+			c.Families = &report.Families{IPv4: r.Families.IPv4, IPv6: r.Families.IPv6}
 		}
 		if r.Portal != nil {
-			c.Portal = &reportPortal{RedirectURL: r.Portal.RedirectURL}
+			c.Portal = &report.Portal{RedirectURL: r.Portal.RedirectURL}
 		}
 		for _, ip := range r.Addrs {
 			c.Addrs = append(c.Addrs, ip.String())
@@ -479,7 +420,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			c.Source = r.Source.String()
 		}
 		for _, a := range r.Attempts {
-			ra := reportAttempt{IP: a.IP.String(), Ms: diagnostic.Ms(a.Dur)}
+			ra := report.Attempt{IP: a.IP.String(), Ms: diagnostic.Ms(a.Dur)}
 			if a.Err != nil {
 				ra.Err = a.Err.Error()
 			}

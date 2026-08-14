@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/report"
 )
 
 func diag(verdict string, checks ...DiagnosisCheck) *Diagnosis {
@@ -378,10 +380,14 @@ func TestReportRendersStructuredProxyEvidence(t *testing.T) {
 // netdoc deliberately published none, and "" is one careless comparison away
 // from reading as a failed family.
 func TestUntestedAddressFamilyStaysAbsentThroughTheSimulatorReport(t *testing.T) {
-	const netdocJSON = `{"verdict":"ok","checks":[` +
-		`{"id":"internet_tcp","status":"PASS","address_families":{"ipv4":"reachable"}}]}`
-	var d Diagnosis
-	if err := json.Unmarshal([]byte(netdocJSON), &d); err != nil {
+	netdocJSON, err := json.Marshal(report.Report{Verdict: "ok", Checks: []report.Check{{
+		ID: "internet_tcp", Status: "PASS", Families: &report.Families{IPv4: "reachable"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := decodeDiagnosis(ExecResult{Stdout: netdocJSON})
+	if err != nil {
 		t.Fatal(err)
 	}
 	families := d.Checks[0].Families

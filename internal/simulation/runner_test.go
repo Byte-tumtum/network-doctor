@@ -2,12 +2,15 @@ package simulation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/report"
 )
 
 // fakeBackend and fakeEnv stand in for a real backend so the lifecycle
@@ -363,6 +366,52 @@ func TestDecodeDiagnosisRejectsNonReports(t *testing.T) {
 	d, err := decodeDiagnosis(ExecResult{Stdout: []byte(okReport), ExitCode: 1})
 	if err != nil || d.Verdict != "ok" {
 		t.Errorf("d = %+v, err = %v", d, err)
+	}
+}
+
+func TestDecodeDiagnosisProjectsCanonicalReportWithoutExpandingSimulatorJSON(t *testing.T) {
+	wire := report.Report{
+		Version: "1.2.3",
+		Ts:      "2030-01-02T03:04:05Z",
+		Target:  &report.Target{Host: "example.test", Port: 443, Protocol: "tls+http"},
+		Checks: []report.Check{{
+			ID: "internet_tcp", Name: "Internet connectivity", Status: "WARN", Cause: "ipv6_unreachable",
+			Families: &report.Families{IPv4: "reachable", IPv6: "unreachable"}, Ms: 17,
+			Detail: "IPv4 works", Fix: "check IPv6 route", Addrs: []string{"192.0.2.1", "2001:db8::1"},
+			SelectedIP: "192.0.2.1", Source: "192.0.2.2", Iface: "eth0", Network: "office",
+			Portal:   &report.Portal{RedirectURL: "https://portal.example/signin"},
+			Attempts: []report.Attempt{{IP: "192.0.2.1", Ms: 11}, {IP: "2001:db8::1", Ms: 17, Err: "timeout"}},
+		}},
+		Summary: "IPv6 unavailable", Verdict: "degraded", FailedStage: "internet_tcp", OK: false,
+	}
+	stdout, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeDiagnosis(ExecResult{Stdout: stdout, ExitCode: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &Diagnosis{
+		Checks: []DiagnosisCheck{{
+			ID: "internet_tcp", Name: "Internet connectivity", Status: "WARN", Cause: "ipv6_unreachable",
+			Ms: 17, Detail: "IPv4 works", Fix: "check IPv6 route",
+			Families: &DiagnosisFamilies{IPv4: "reachable", IPv6: "unreachable"},
+			Attempts: []DiagnosisAttempt{{IP: "192.0.2.1", Ms: 11}, {IP: "2001:db8::1", Ms: 17, Error: "timeout"}},
+		}},
+		Summary: "IPv6 unavailable", Verdict: "degraded", FailedStage: "internet_tcp", OK: false,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("diagnosis = %+v\nwant      %+v", got, want)
+	}
+
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantJSON = `{"checks":[{"id":"internet_tcp","name":"Internet connectivity","status":"WARN","cause":"ipv6_unreachable","ms":17,"detail":"IPv4 works","fix":"check IPv6 route","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"attempts":[{"ip":"192.0.2.1","ms":11},{"ip":"2001:db8::1","ms":17,"error":"timeout"}]}],"summary":"IPv6 unavailable","verdict":"degraded","failed_stage":"internet_tcp","ok":false}`
+	if string(encoded) != wantJSON {
+		t.Errorf("simulator diagnosis JSON = %s\nwant                     %s", encoded, wantJSON)
 	}
 }
 

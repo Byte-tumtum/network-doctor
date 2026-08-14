@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/ui"
 )
 
@@ -302,7 +303,7 @@ func TestRunJSON(t *testing.T) {
 			if got := run([]string{"-json", "example.com:443"}, &stdout, &stderr); got != tt.want {
 				t.Fatalf("exit = %d, want %d; stderr: %s", got, tt.want, stderr.String())
 			}
-			var rep report
+			var rep report.Report
 			if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
 				t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
 			}
@@ -353,7 +354,7 @@ func TestRunProbeSelectionFlags(t *testing.T) {
 			if got := run(args, &stdout, &stderr); got != 0 {
 				t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 			}
-			var rep report
+			var rep report.Report
 			if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
 				t.Fatal(err)
 			}
@@ -378,19 +379,19 @@ func TestRunKnownButInapplicableProbeSelection(t *testing.T) {
 		}
 		return results
 	}
-	runReport := func(t *testing.T, args ...string) report {
+	runReport := func(t *testing.T, args ...string) report.Report {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
 		if got := run(args, &stdout, &stderr); got != 0 {
 			t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 		}
-		var rep report
+		var rep report.Report
 		if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
 			t.Fatal(err)
 		}
 		return rep
 	}
-	ids := func(rep report) []string {
+	ids := func(rep report.Report) []string {
 		got := make([]string, len(rep.Checks))
 		for i, check := range rep.Checks {
 			got[i] = check.ID
@@ -553,7 +554,7 @@ func TestRunPublicDNSFlag(t *testing.T) {
 				}
 				return
 			}
-			var rep report
+			var rep report.Report
 			if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
 				t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
 			}
@@ -639,7 +640,7 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 		t.Fatalf("got %d lines, want 3:\n%s", len(lines), buf.String())
 	}
 	for i, line := range lines {
-		var rep report
+		var rep report.Report
 		if err := json.Unmarshal([]byte(line), &rep); err != nil {
 			t.Fatalf("line %d is not valid JSON: %v\n%s", i, err, line)
 		}
@@ -672,7 +673,7 @@ func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
 		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 	}
 	for i, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-		var rep report
+		var rep report.Report
 		if err := json.Unmarshal([]byte(line), &rep); err != nil {
 			t.Fatalf("line %d: %v", i, err)
 		}
@@ -859,7 +860,7 @@ func TestBuildReport(t *testing.T) {
 		t.Errorf("portal = %+v", tcp.Portal)
 	}
 	// Attempts keep probe order, and only a failed attempt carries an error.
-	want := []reportAttempt{
+	want := []report.Attempt{
 		{IP: "192.0.2.1", Ms: 90, Err: "connection refused"},
 		{IP: "2001:db8::1", Ms: 12},
 	}
@@ -888,19 +889,20 @@ func TestBuildReportGenericAllPass(t *testing.T) {
 func TestReportJSONContract(t *testing.T) {
 	tests := []struct {
 		name string
-		rep  report
+		rep  report.Report
 		want string
 	}{
 		{
 			name: "populated",
-			rep: report{
+			rep: report.Report{
 				Version: "1.2.3",
-				Target:  &reportTarget{Host: "example.com", Port: 443, Protocol: "tls+http"},
-				Checks: []reportCheck{{
+				Target:  &report.Target{Host: "example.com", Port: 443, Protocol: "tls+http"},
+				Checks: []report.Check{{
 					ID:         "target_tcp",
 					Name:       "Target TCP",
 					Status:     "WARN",
 					Cause:      "client_dns_failure",
+					Families:   &report.Families{IPv4: "reachable", IPv6: "unreachable"},
 					Ms:         46,
 					Detail:     "slow",
 					Fix:        "check firewall",
@@ -909,8 +911,8 @@ func TestReportJSONContract(t *testing.T) {
 					Source:     "192.0.2.2",
 					Iface:      "eth0",
 					Network:    "office",
-					Portal:     &reportPortal{RedirectURL: "https://portal.example/signin"},
-					Attempts: []reportAttempt{
+					Portal:     &report.Portal{RedirectURL: "https://portal.example/signin"},
+					Attempts: []report.Attempt{
 						{IP: "192.0.2.1", Ms: 12},
 						{IP: "192.0.2.3", Ms: 34, Err: "timeout"},
 					},
@@ -920,16 +922,16 @@ func TestReportJSONContract(t *testing.T) {
 				FailedStage: "tls",
 				OK:          true,
 			},
-			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","cause":"client_dns_failure","ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","portal":{"redirect_url":"https://portal.example/signin"},"attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
+			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","cause":"client_dns_failure","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","portal":{"redirect_url":"https://portal.example/signin"},"attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
 		},
 		{
 			name: "empty",
-			rep:  report{Checks: []reportCheck{{}}},
+			rep:  report.Report{Checks: []report.Check{{}}},
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"","verdict":"","ok":false}`,
 		},
 		{
 			name: "portal without redirect",
-			rep:  report{Checks: []reportCheck{{Portal: &reportPortal{}}}},
+			rep:  report.Report{Checks: []report.Check{{Portal: &report.Portal{}}}},
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":"","portal":{}}],"summary":"","verdict":"","ok":false}`,
 		},
 	}

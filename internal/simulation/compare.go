@@ -7,10 +7,9 @@ import (
 	"time"
 )
 
-// Diagnosis is the part of netdoc's --json report the comparison reads. The
-// field names are netdoc's stable machine-readable contract (see the report
-// struct in main.go); decoding only what is compared keeps this from having to
-// track every field the report gains.
+// Diagnosis is the simulator's narrow view of a netdoc report. It is also
+// embedded in simulator JSON output, so decodeDiagnosis projects the canonical
+// report contract into this type instead of exposing unrelated report fields.
 type Diagnosis struct {
 	Checks      []DiagnosisCheck `json:"checks"`
 	Summary     string           `json:"summary"`
