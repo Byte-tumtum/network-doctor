@@ -1,0 +1,181 @@
+# Hunts and triage reference
+
+Authoritative reference for reproducible fault campaigns, generated bug
+hunts, and nightly triage automation. See
+[docs/simulation.md](simulation.md) for setup and the guide index, and the
+wiki's [Hunts and Triage](https://github.com/heymaikol/network-doctor/wiki/Hunts-and-Triage)
+guide for an orientation to what these are for.
+
+## Deterministic campaigns and reproduction
+
+A campaign resolves bounded ranges in a scenario and runs each iteration
+sequentially through a fresh ordinary simulation lifecycle. If `--seed` is
+omitted, the CLI chooses and prints one. Each iteration seed is derived
+independently from the root seed, scenario name, and iteration number; it does
+not depend on earlier PRNG state. Compilation fixes the complete fault schedule
+before setup, and reports store the seed, schedule, and digest.
+
+```sh
+./netdoc-sim campaign unstable-connectivity --runs 6 --seed 12345
+./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3
+./netdoc-sim campaign unstable-connectivity --seed 12345 --iteration 3 --runs 5
+./netdoc-sim campaign flapping-connectivity --runs 6 --seed 12345
+./netdoc-sim campaign dns-timeout-boundary --runs 6 --seed 12345 -timeout 1s
+```
+
+The same scenario, seed, iteration, and simulator version reproduce the same
+injected schedule. `--iteration N --runs K` repeats that one schedule, which is
+the meaningful way to look for diagnosis divergence. A timed transition can
+still land on a probe boundary differently; in that case the deterministic
+artifact is the requested schedule and timeline fingerprint, not a promise
+that OS scheduling or netdoc's answer is identical.
+
+Campaign scenario definitions document the variables they exercise. In
+particular, `dns-timeout-boundary` draws its delay only during campaign
+compilation, so `netdoc-sim run dns-timeout-boundary` is not the boundary test.
+Use the campaign command and pin the printed seed and iteration to reproduce a
+failure.
+
+## Deterministic bug hunts
+
+`netdoc-sim hunt` mutates a known-good control scenario. Case N is derived from
+the hunt seed, base scenario, and case number, so `--case N --seed S`
+regenerates the case without first running cases 0 through N-1. The accepted
+bases and mutation registry live in `internal/simulation/hunt_generate.go`.
+
+```sh
+./netdoc-sim hunt healthy --seed 20260101 --cases 20
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --json
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --dry-run --json
+```
+
+Every case report includes generator version, root and case seeds, materialized
+mutations, and a case fingerprint. Findings use semantic diagnosis
+fingerprints, excluding prose and incidental timing, paths, process ids, and
+kernel names. Keep the seed, case, generator version, and reproduction command
+with any failure report.
+
+A generated mutation records intent; it is not automatically observed truth.
+`observed_faults` contains a mutation only when service, event, kernel-fault, or
+independent reachability evidence from the executed simulation supports it.
+Persistent netem mutations require matching kernel qdisc state on the intended
+logical node and segment. Timed DNS, netem, and link mutations require the
+specific impairment event to have applied successfully; initialization,
+restoration, failed, and skipped events do not qualify. These timed entries
+prove successful simulator state changes, not that netdoc sampled the affected
+window or observed an end-to-end consequence.
+
+### What a hunt false negative means
+
+A hunt false negative means the simulator independently established a network
+condition whose diagnostic meaning Network Doctor failed to recognize. It does
+not mean a mutation expected probe X to fail and probe X did not fail.
+
+The oracle in `internal/simulation/hunt_oracle.go` is that contract in code. It
+runs on a vocabulary of `NetworkCondition` values — domain facts such as IPv4
+internet reachability lost, a target serving an expired TLS certificate, a proxy
+refusing its CONNECT destination, QUIC datagrams dropped on UDP/443 — and keeps
+two halves apart:
+
+- **observed**: reads simulator evidence and derived simulator truth only, never
+  `report.tests`. A mutation that was generated or applied establishes nothing;
+  only the certificate a client actually refused, the CONNECT a proxy actually
+  declined, the kernel counter that actually matched a packet, or the client's
+  own dial of a controlled endpoint does.
+- **recognized**: reads one diagnosis only, never simulator evidence.
+
+Recognition is expressed over netdoc's cause vocabulary and its structured
+`address_families` verdicts, not over probe ids, so a probe that is renamed,
+split, or merged without changing what the user is told leaves the oracle
+correct. One exception is annotated in the table: `timeout` is not unique in
+netdoc's cause vocabulary, so the QUIC entry scopes it to the QUIC row.
+
+Recognition is deliberately specific. An expired certificate reported as a
+generic handshake failure, a refused destination reported as an unreachable
+proxy, and any unrelated failing row are all misses, because each sends the user
+somewhere else. A cause on a passing row is context, not recognition.
+
+Reconciliation runs on the final client diagnosis and only on stable paths.
+Unknown or unavailable families, persistent netem, and actual timed path
+impairments are not treated as a final-state diagnosis oracle. The opposite
+direction — the simulator reached a family the diagnosis calls unreachable — is
+reported as `family_reachability_mismatch` with category
+`diagnostic_contradiction` rather than as a false negative.
+
+Two observed faults deliberately imply no condition, because netdoc reports no
+failure for either by design and the `http-error` control pins that down: an
+HTTP error status is a working service answering, and an invalid DoH response
+while DoT still resolves is encrypted DNS working. Adding an expectation there
+would invent a contract the probes never made.
+
+`routing.preferred_path_failure` uses `two-path-healthy`. It lowers the
+preferred router's upstream interface, beyond the client-visible gateway, so
+the lower-metric client route remains selected. Observation requires the
+selected preferred family path to be unreachable and the controlled target on
+the distinct higher-metric alternate path to remain reachable; successful
+link-down application alone is insufficient.
+
+### Generator versions
+
+The mutation registry is versioned, because adding an operator to it changes
+which mutation every existing case number lands on: selection draws from a
+permutation of the applicable operators, so a longer or reordered list repoints
+cases that published artifacts already name. `HuntGeneratorVersion` is the
+current one and `huntGeneratorVersions` lists every version this build can
+still materialize. Each operator carries the version it first appeared in, and
+an older generator is simply the registry truncated there — which is why new
+operators are appended and never interleaved. Case seeds are not versioned:
+`v3` and `v4` draw the same numbers and differ exactly where the operator list
+does. `TestHuntGeneratorVersion3Reproduction` pins the older generator against
+a fixed manifest.
+
+### Route tables, and telling absences apart
+
+Three families are about a route that is not there, and none of them can be
+established from reachability. `RouteEvidence` answers "where does this
+destination go"; `RouteTableEvidence` is the different reading of "what routes
+exist at all", taken with `ip route show` from inside the node at the end of
+the run and recorded for every family the node has an address in. An empty
+`routes` list is therefore the positive statement that the table was read and
+held nothing, which is what `routing.no_default_route` needs — and a record
+being absent means nobody looked, which never establishes anything.
+
+`routing.wrong_default_route` needs one thing more, because a default that goes
+nowhere and a network that is broken past the gateway look identical from the
+client: the control endpoint behind the original next hop, reached over its own
+specific route, has to still answer. That is what says the old gateway still
+forwards and only the choice of default changed.
+
+Two more families are about a port rather than a route, and they are each
+other's negative. `ControlledTargetEvidence` now carries the outcome of the
+simulator's own dial rather than only whether it worked, because a reset and a
+timeout are different faults with different fixes and the dialing end is the
+only place the difference is visible. `service.connection_refused` requires the
+dial to have been refused and no drop counter to have matched; `service.tcp_port_blocked` requires the opposite of both. Neither can be established by
+a dial that merely failed, and a run cannot satisfy both.
+
+## Triage and nightly automation
+
+`netdoc-sim triage` hunts the fixed baselines, re-runs each candidate's exact
+case, and requires both its case fingerprint and finding fingerprint to match.
+An unreproduced candidate is reported but never filed. The fixed baselines and
+seeds are authoritative in `internal/simulation/triage.go`.
+
+```sh
+./netdoc-sim triage                               # observe; file nothing
+./netdoc-sim triage --scenarios healthy --cases 5
+./netdoc-sim triage --json
+./netdoc-sim triage --create                      # create issues through gh
+```
+
+`--create` is the only mode that writes to GitHub. It uses the configured `gh`
+client, suppresses duplicates by stable fingerprint, and treats a failed hunt,
+reproduction, parse, or `gh` call as an error rather than as a clean result.
+
+`.github/workflows/hunt.yml` is authoritative for the nightly schedule, runner,
+permissions, case count, and issue-creation opt-in. Scheduled issue creation
+requires the `NETDOC_HUNT_CREATE` repository variable; manual dispatch requires
+its `create` input. Observation-only runs withhold `GH_TOKEN`, even though the
+job declares the permission needed by an opted-in run. Keep the workflow's
+explicit Bash/`pipefail` behavior and seeded-netem-compatible runner when
+changing it.

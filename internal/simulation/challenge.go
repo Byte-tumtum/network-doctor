@@ -299,7 +299,7 @@ type challengeCondition struct {
 // Nothing in that list is "netdoc already recognizes it". A condition netdoc
 // has no vocabulary for is deliberately still eligible, and is a loss for
 // netdoc rather than a challenge that could never be set — see
-// challengeRecognition and docs/simulation.md#the-challenge-contract.
+// challengeRecognition and docs/simulation-challenge.md#the-challenge-contract.
 //
 // Ids select through this list, so adding or removing an entry changes what ids
 // already in circulation resolve to. That is a new id version, not an edit —

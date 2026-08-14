@@ -38,7 +38,10 @@ The code is split by responsibility:
 The UI depends on diagnostics; diagnostics do not depend on the UI. Add network
 semantics under `internal/diagnostic`, and interaction or rendering behavior
 under `internal/ui`. The simulator depends on `internal/diagnostic` for probe
-ids and target parsing, and on nothing in `internal/ui`.
+ids and target parsing, and on nothing in `internal/ui`. This is enforced by
+`architecture_test.go`, not just documented; see the wiki's
+[Architecture](https://github.com/heymaikol/network-doctor/wiki/Architecture)
+page for the full package-dependency diagram and data flow.
 
 Keep network semantics independent of the UI. Put OS-specific behavior in
 build-tagged or platform-suffixed files, keep probes unprivileged and bounded,
