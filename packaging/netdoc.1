@@ -161,6 +161,25 @@ left untouched; see
 .B FILES
 for where it lives and how to clear it.
 .TP
+.BI \-keys " preset"
+Keybinding preset for the terminal UI, either
+.B default
+or
+.BR vim .
+The
+.B vim
+preset adds
+.BR gg / G
+for first and last,
+.BR ctrl+b / ctrl+f
+for page up and down, and
+.BR ctrl+u / ctrl+d
+for half-page up and down inside a tool job's output; every default key keeps
+working. An empty value selects
+.BR default ;
+any other value is rejected. There are no other presets and no keybinding
+configuration file.
+.TP
 .BI \-timeout " duration"
 Per-check probe timeout, as a Go duration string such as
 .B 2s

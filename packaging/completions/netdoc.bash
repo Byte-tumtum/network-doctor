@@ -19,6 +19,10 @@ _netdoc() {
             # These values have nothing useful to enumerate.
             return
             ;;
+        -keys | --keys)
+            COMPREPLY=($(compgen -W "default vim" -- "$cur"))
+            return
+            ;;
         -public-dns | --public-dns)
             # An IP address, or the empty string to skip the check. Neither is
             # enumerable, so offer nothing rather than local filenames.
@@ -38,6 +42,7 @@ _netdoc() {
             -iface --iface
             -public-dns --public-dns
             -no-history --no-history
+            -keys --keys
             -timeout --timeout
             -version --version
             -h -help --help

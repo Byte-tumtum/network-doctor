@@ -26,6 +26,7 @@ _arguments \
   '(--iface -iface)'{--iface,-iface}'[bind probes to an interface name or exact local IP]:interface:_netdoc_ifaces' \
   '(--public-dns -public-dns)'{--public-dns,-public-dns}'[second-opinion DNS resolver IP, empty to skip (default 8.8.8.8)]:ip address:' \
   '(--no-history -no-history)'{--no-history,-no-history}"[don't read or write the saved target history]" \
+  '(--keys -keys)'{--keys,-keys}'[keybinding preset for the TUI (default: default)]:preset:(default vim)' \
   '(--timeout -timeout)'{--timeout,-timeout}'[per-check probe timeout (default 4s)]:duration:' \
   '(- *)'{--version,-version}'[print version and exit]' \
   '(- *)'{--help,-help,-h}'[print usage and exit]' \

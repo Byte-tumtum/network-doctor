@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -169,6 +172,43 @@ func TestReleaseWorkflowPublishesTheImageAtTheTag(t *testing.T) {
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Errorf("the release workflow does not contain %q", want)
+		}
+	}
+}
+
+// The man page and the three completion files are hand-maintained copies of the
+// flag list in main.go, so a new flag silently ships undocumented and
+// uncompletable. Read the flags back out of the real usage output and require
+// each shipped surface to mention every one, in that surface's own spelling.
+func TestShippedSurfacesDocumentEveryFlag(t *testing.T) {
+	var usage bytes.Buffer
+	if code := run([]string{"--help"}, &usage, io.Discard); code != 0 {
+		t.Fatalf("run(--help) = %d, want 0", code)
+	}
+	// PrintDefaults writes "  -name value", then the usage text on its own
+	// indented line.
+	flags := regexp.MustCompile(`(?m)^  -(\S+)`).FindAllStringSubmatch(usage.String(), -1)
+	if len(flags) < 2 {
+		t.Fatalf("parsed %d flags out of the usage output:\n%s", len(flags), usage.String())
+	}
+
+	// How each file spells a flag, so "documented" means the real declaration
+	// and not a passing mention in a comment or an example.
+	surfaces := map[string]func(name string) string{
+		"packaging/netdoc.1":                func(n string) string { return `\-` + strings.ReplaceAll(n, "-", `\-`) },
+		"packaging/completions/netdoc.bash": func(n string) string { return "-" + n + " --" + n },
+		"packaging/completions/netdoc.zsh":  func(n string) string { return "{--" + n + ",-" + n + "}" },
+		"packaging/completions/netdoc.fish": func(n string) string { return "-o " + n + " -l " + n },
+	}
+	for path, spelling := range surfaces {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range flags {
+			if want := spelling(f[1]); !strings.Contains(string(data), want) {
+				t.Errorf("%s never declares -%s (looked for %q)", path, f[1], want)
+			}
 		}
 	}
 }
