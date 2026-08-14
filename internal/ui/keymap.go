@@ -114,7 +114,7 @@ func actionHelpFor(ctx keyContext, act keyAction) (actionHelp, bool) {
 type actionBindings map[keyAction][]string
 type keyPreset [numContexts]actionBindings
 
-// defaultPreset exactly matches the key behavior that predates this PR.
+// defaultPreset preserves the existing TUI key bindings as the default.
 var defaultPreset = keyPreset{
 	ctxList: {
 		actUp:         {"up", "k"},
