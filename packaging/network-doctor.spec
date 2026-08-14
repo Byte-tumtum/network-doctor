@@ -51,6 +51,10 @@ install -Dpm0644 packaging/netdoc.1 %{buildroot}%{_mandir}/man1/netdoc.1
 install -Dpm0644 packaging/completions/netdoc.bash %{buildroot}%{_datadir}/bash-completion/completions/netdoc
 install -Dpm0644 packaging/completions/netdoc.zsh %{buildroot}%{_datadir}/zsh/site-functions/_netdoc
 install -Dpm0644 packaging/completions/netdoc.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/netdoc.fish
+install -Dpm0644 packaging/netdoc-sim.1 %{buildroot}%{_mandir}/man1/netdoc-sim.1
+install -Dpm0644 packaging/completions/netdoc-sim.bash %{buildroot}%{_datadir}/bash-completion/completions/netdoc-sim
+install -Dpm0644 packaging/completions/netdoc-sim.zsh %{buildroot}%{_datadir}/zsh/site-functions/_netdoc-sim
+install -Dpm0644 packaging/completions/netdoc-sim.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/netdoc-sim.fish
 
 %files
 %license LICENSE
@@ -64,6 +68,10 @@ install -Dpm0644 packaging/completions/netdoc.fish %{buildroot}%{_datadir}/fish/
 %{_datadir}/bash-completion/completions/netdoc
 %{_datadir}/zsh/site-functions/_netdoc
 %{_datadir}/fish/vendor_completions.d/netdoc.fish
+%{_mandir}/man1/netdoc-sim.1*
+%{_datadir}/bash-completion/completions/netdoc-sim
+%{_datadir}/zsh/site-functions/_netdoc-sim
+%{_datadir}/fish/vendor_completions.d/netdoc-sim.fish
 
 %changelog
 * Sun Aug 09 2026 Michael Placzek <heymaikol@proton.me> - 1.10.8-1

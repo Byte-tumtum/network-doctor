@@ -32,9 +32,16 @@ type goreleaserConfig struct {
 		IDs []string `yaml:"ids"`
 	} `yaml:"archives"`
 	NFPMs []struct {
-		IDs    []string `yaml:"ids"`
-		Bindir string   `yaml:"bindir"`
+		IDs      []string      `yaml:"ids"`
+		Bindir   string        `yaml:"bindir"`
+		Contents []nfpmContent `yaml:"contents"`
 	} `yaml:"nfpms"`
+}
+
+// nfpmContent is one file the deb/rpm/apk installs, and where it lands.
+type nfpmContent struct {
+	Src string `yaml:"src"`
+	Dst string `yaml:"dst"`
 }
 
 func loadGoreleaserConfig(t *testing.T) goreleaserConfig {
@@ -277,6 +284,106 @@ func TestShippedSurfacesDeclareExactlyTheRealFlags(t *testing.T) {
 			}
 		}
 	}
+}
+
+// reference is the man page and completions one installed binary owes its
+// users. A binary that ships without them sends the reader to GitHub for the
+// command surface, which is the one thing a packaged install should not need.
+type reference struct {
+	src string
+	dst string
+	// specFile is the %files entry, which is the destination in RPM's macro
+	// spelling; the man page's is a glob because brp-compress adds a suffix.
+	specDir  string
+	specFile string
+}
+
+func referencesFor(binary string) []reference {
+	return []reference{
+		{src: "packaging/" + binary + ".1",
+			dst:      "/usr/share/man/man1/" + binary + ".1",
+			specDir:  "%{_mandir}/man1/",
+			specFile: "%{_mandir}/man1/" + binary + ".1*"},
+		{src: "packaging/completions/" + binary + ".bash",
+			dst:      "/usr/share/bash-completion/completions/" + binary,
+			specDir:  "%{_datadir}/bash-completion/completions/",
+			specFile: "%{_datadir}/bash-completion/completions/" + binary},
+		{src: "packaging/completions/" + binary + ".zsh",
+			dst:      "/usr/share/zsh/site-functions/_" + binary,
+			specDir:  "%{_datadir}/zsh/site-functions/",
+			specFile: "%{_datadir}/zsh/site-functions/_" + binary},
+		{src: "packaging/completions/" + binary + ".fish",
+			dst:      "/usr/share/fish/vendor_completions.d/" + binary + ".fish",
+			specDir:  "%{_datadir}/fish/vendor_completions.d/",
+			specFile: "%{_datadir}/fish/vendor_completions.d/" + binary + ".fish"},
+	}
+}
+
+// Whatever ships a binary ships that binary's reference material, in both
+// package builds, at the destinations the other binary already uses. Driving
+// this off linuxBinaries means a third executable cannot be added with a man
+// page nobody installs.
+func TestEveryShippedBinaryShipsItsManPageAndCompletions(t *testing.T) {
+	cfg := loadGoreleaserConfig(t)
+	data, err := os.ReadFile("packaging/network-doctor.spec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := string(data)
+	install := strings.Join(specSection(t, spec, "%install"), "\n")
+	files := specSection(t, spec, "%files")
+
+	for _, binary := range cfg.linuxBinaries() {
+		for _, ref := range referencesFor(binary) {
+			if _, err := os.Stat(ref.src); err != nil {
+				t.Errorf("%s ships %s, but %s does not exist", binary, ref.dst, ref.src)
+				continue
+			}
+			if !slices.Contains(cfg.NFPMs[0].Contents, nfpmContent{Src: ref.src, Dst: ref.dst}) {
+				t.Errorf("the deb/rpm/apk never install %s to %s", ref.src, ref.dst)
+			}
+			if !strings.Contains(install, ref.src+" %{buildroot}"+ref.specDir) {
+				t.Errorf("spec %%install never installs %s into %s", ref.src, ref.specDir)
+			}
+			if !slices.Contains(files, ref.specFile) {
+				t.Errorf("spec %%files never lists %s", ref.specFile)
+			}
+		}
+	}
+}
+
+// The two binaries are one install, so each man page has to be findable from
+// the other. A reader who has only ever run netdoc should still learn that the
+// simulator exists, and vice versa.
+func TestManPagesCrossReferenceEachOther(t *testing.T) {
+	for _, tt := range []struct{ page, wants string }{
+		{"packaging/netdoc.1", `.BR netdoc\-sim (1)`},
+		{"packaging/netdoc-sim.1", `.BR netdoc (1)`},
+	} {
+		data, err := os.ReadFile(tt.page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seeAlso := manSeeAlso(string(data))
+		if seeAlso == "" {
+			t.Errorf("%s has no SEE ALSO section", tt.page)
+			continue
+		}
+		if !strings.Contains(seeAlso, tt.wants) {
+			t.Errorf("%s's SEE ALSO does not reference %q", tt.page, tt.wants)
+		}
+	}
+}
+
+// manSeeAlso returns the SEE ALSO section, so a name that merely turns up in
+// the prose somewhere is not mistaken for a cross-reference.
+func manSeeAlso(data string) string {
+	_, body, ok := strings.Cut(data, "\n.SH SEE ALSO\n")
+	if !ok {
+		return ""
+	}
+	body, _, _ = strings.Cut(body, "\n.SH ")
+	return body
 }
 
 // specSection returns the lines of one %section of an RPM spec, so an assertion

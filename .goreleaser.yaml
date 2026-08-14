@@ -99,6 +99,17 @@ nfpms:
         dst: /usr/share/zsh/site-functions/_netdoc
       - src: packaging/completions/netdoc.fish
         dst: /usr/share/fish/vendor_completions.d/netdoc.fish
+      # netdoc-sim ships in the same package, so its own reference material
+      # ships with it: a package that installed the binary and not its man page
+      # would send the user to GitHub for the command surface.
+      - src: packaging/netdoc-sim.1
+        dst: /usr/share/man/man1/netdoc-sim.1
+      - src: packaging/completions/netdoc-sim.bash
+        dst: /usr/share/bash-completion/completions/netdoc-sim
+      - src: packaging/completions/netdoc-sim.zsh
+        dst: /usr/share/zsh/site-functions/_netdoc-sim
+      - src: packaging/completions/netdoc-sim.fish
+        dst: /usr/share/fish/vendor_completions.d/netdoc-sim.fish
 
 # netdoc only, in all three. A tap/bucket/manifest accepts one archive per
 # OS+arch, and the simulator is Linux-only anyway: without this filter the

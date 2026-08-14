@@ -934,10 +934,17 @@ func inspect(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func cleanup(args []string, stdout, stderr io.Writer) int {
+// newCleanupFlags is built apart from the command for the same reason every
+// other command's flags are: the packaging tests read the flag set to find out
+// what netdoc-sim accepts, rather than keeping a second list of their own.
+func newCleanupFlags(out io.Writer) (*flag.FlagSet, *bool) {
 	fs := flag.NewFlagSet("netdoc-sim cleanup", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	all := fs.Bool("all", false, "release every kept simulation")
+	fs.SetOutput(out)
+	return fs, fs.Bool("all", false, "release every kept simulation")
+}
+
+func cleanup(args []string, stdout, stderr io.Writer) int {
+	fs, all := newCleanupFlags(stderr)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}

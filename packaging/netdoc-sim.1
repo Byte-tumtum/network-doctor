@@ -1,0 +1,608 @@
+.TH NETDOC\-SIM 1 "2026-08-13" "network-doctor" "User Commands"
+.SH NAME
+netdoc\-sim \- build throwaway virtual networks, run netdoc inside them, and score the diagnosis
+.SH SYNOPSIS
+.B netdoc\-sim
+.I command
+.RI [ flags ]
+.RI [ arguments ]
+.SH DESCRIPTION
+.B netdoc\-sim
+builds a virtual network from a scenario, breaks it in a chosen way, runs
+.BR netdoc (1)
+inside it, and reports whether the diagnosis matched what the scenario
+actually broke. It is the test harness for
+.BR netdoc ,
+and the way Challenge Mode is played.
+.PP
+Everything lives in a user namespace that owns nothing on the host: no
+privilege is requested and none is needed, the host's interfaces, routes,
+resolver and firewall are untouched, and the network is gone when the command
+returns. Run
+.B netdoc\-sim capabilities
+to see what a run does on this machine and whether it can run at all.
+.PP
+The only backend that can build a network is Linux namespaces. On other
+systems every command that would simulate reports that the host is
+unsupported.
+.PP
+Each command parses its own flags. Flags may be given before or after a
+command's positional argument, and each accepts both the single-dash and
+double-dash spelling
+.RB ( \-json
+and
+.B \-\-json
+are the same flag).
+.SH COMMANDS
+.TP
+.BI run " scenario"
+Build the network, run the scenario's tests through
+.BR netdoc ,
+and print the report.
+.TP
+.BI campaign " scenario"
+Run a seeded campaign of the scenario sequentially, from one root seed, so a
+mismatch can be replayed exactly. The scenario must carry a campaign
+definition; the built-in ones that do are
+.BR dns\-timeout\-boundary ,
+.BR flapping\-connectivity ,
+and
+.BR unstable\-connectivity .
+.TP
+.BI hunt " [base]"
+Generate deterministic faults on top of a healthy base scenario, run each
+generated case, and rank the cases where the diagnosis looks wrong. The
+default base is
+.BR healthy\-routed\-network .
+.TP
+.B triage
+Hunt the fixed baselines at their fixed seeds, reproduce every candidate
+finding by re-running its exact generated case, and optionally file the
+survivors as GitHub issues.
+.TP
+.BI challenge " [id]"
+Play a challenge: diagnose a hidden fault yourself in a shell inside the
+broken machine, then watch
+.B netdoc
+take its turn on the same network. An
+.I id
+replays a specific challenge, and is the same thing
+.B \-id
+takes.
+.TP
+.BI validate " scenario"
+Parse and check a scenario without building anything. Needs no namespaces and
+no privileges.
+.TP
+.B scenarios
+List the built-in scenario names, one per line.
+.TP
+.BI starters " [pack]"
+List the curated starter packs, or with a pack named, that pack's challenge
+ids in order, easiest first.
+.TP
+.B authored
+List the hand-written challenges, their slugs, and the challenge ids that
+play them.
+.TP
+.B capabilities
+Report whether this host can simulate, what a run does, and what is missing
+if it cannot.
+.TP
+.B list
+List the simulations left running by
+.BR "run \-keep" .
+.TP
+.BI inspect " id"
+Show a kept simulation's nodes and the
+.BR nsenter (1)
+command that enters each one.
+.TP
+.BI cleanup " [id]"
+Release a kept simulation's namespaces and files. Takes one simulation id, or
+.BR \-all .
+.TP
+.B version
+Print the build version, the same one
+.B netdoc
+reports for the same release.
+.TP
+.B help
+Print usage and exit.
+.PP
+A
+.I scenario
+is a built-in name, as listed by
+.BR "netdoc\-sim scenarios" ,
+or a path to a YAML file.
+.SH OPTIONS
+Flags belong to the command they follow;
+.B \-cases
+is a
+.B hunt
+and
+.B triage
+flag, not a
+.B run
+flag. The commands not named below take no flags.
+.SS run
+.TP
+.B \-json
+Print the machine-readable report instead of the text one.
+.TP
+.B \-keep
+Hold the network open after the report, until interrupted, so its nodes can be
+entered with
+.BR nsenter (1).
+The kept simulation is recorded for
+.BR list ,
+.B inspect
+and
+.BR cleanup ,
+and the record is removed when this process exits. Ignored under
+.BR \-dry\-run ,
+which builds nothing to keep.
+.TP
+.BI \-netdoc " path"
+The
+.B netdoc
+binary to run. The default is the one sitting beside
+.BR netdoc\-sim ,
+then the first one on
+.BR $PATH .
+An explicit path never falls back: a binary that cannot be executed is an
+error, because running a different one would make the result a lie about which
+build was measured.
+.TP
+.BI \-timeout " duration"
+.BR netdoc 's
+per-probe timeout, as a Go duration string such as
+.B 2s
+or
+.BR 1500ms .
+Must be positive. The default is
+.BR 4s .
+.TP
+.BI \-repeat " n"
+Run each test
+.I n
+times, to catch a diagnosis that is not stable. Must be at least 1. The
+default is
+.BR 1 .
+.TP
+.B \-dry\-run
+Print every privileged command the run would make, and stop. Creates no
+namespaces, so it works on a host that cannot simulate at all.
+.TP
+.B \-v
+Log each privileged command as it runs.
+.SS campaign
+.TP
+.BI \-runs " n"
+Override the campaign's own bounded run count. Between 1 and 1000 when
+supplied; the default,
+.BR 0 ,
+leaves the campaign's definition in charge.
+.TP
+.BI \-seed " int64"
+Root seed every iteration is derived from. Generated and printed when omitted,
+so a run can always be replayed by passing back the seed it reported.
+.TP
+.BI \-iteration " n"
+Run exactly one independently derived iteration, between 0 and 999999.
+Combined with
+.BR \-runs ,
+that one iteration is repeated
+.I n
+times.
+.TP
+.B \-fail\-fast
+Stop after the first mismatch or simulator error instead of finishing the
+campaign.
+.TP
+.B \-json
+Print the machine-readable aggregate report.
+.TP
+.BI \-netdoc " path"
+The
+.B netdoc
+binary to run; see
+.B \-netdoc
+under
+.BR run .
+.TP
+.BI \-timeout " duration"
+.BR netdoc 's
+per-probe timeout. Must be positive. The default is
+.BR 4s .
+.TP
+.B \-v
+Log each privileged command as it runs.
+.SS hunt
+.TP
+.BI \-cases " n"
+Unique generated cases to run, between 1 and 500. The default is
+.BR 50 .
+.TP
+.BI \-seed " int64"
+Hunt seed. Generated and printed when omitted.
+.TP
+.BI \-case " n"
+Generate and run exactly one independently derived case, between 0 and 999999.
+This is how a reported finding is reproduced: the same seed and the same case
+number regenerate the same network and the same fault.
+.TP
+.BI \-max\-faults " n"
+Maximum mutations applied to one case, between 1 and 3. The default is
+.BR 2 .
+.TP
+.B \-fail\-fast
+Stop after the first case with a reportable finding.
+.TP
+.B \-dry\-run
+Print the generated manifests without creating any namespaces, so the
+generator can be inspected on a host that cannot simulate.
+.TP
+.B \-json
+Print the machine-readable hunt report.
+.TP
+.BI \-netdoc " path"
+The
+.B netdoc
+binary to run; see
+.B \-netdoc
+under
+.BR run .
+.TP
+.BI \-timeout " duration"
+.BR netdoc 's
+per-probe timeout. Must be positive. The default is
+.BR 4s .
+.TP
+.B \-v
+Log each privileged command as it runs.
+.PP
+The base scenario is a positional argument, and has to be one of the healthy
+bases the generator knows how to break:
+.BR dual\-stack\-healthy ,
+.BR healthy ,
+.BR healthy\-routed\-network ,
+.BR socks5h\-remote\-dns\-succeeds ,
+.BR tls\-valid ,
+.BR two\-path\-healthy ,
+.BR two\-path\-ipv6\-healthy ,
+.BR two\-router\-healthy .
+.SS triage
+.TP
+.BI \-scenarios " list"
+Comma-separated baselines to hunt. The default is every baseline:
+.BR healthy ,
+.BR healthy\-routed\-network ,
+.BR dual\-stack\-healthy ,
+.BR tls\-valid ,
+.BR socks5h\-remote\-dns\-succeeds .
+Each carries a fixed seed, which is what makes a nightly run comparable to the
+last one.
+.TP
+.BI \-cases " n"
+Unique generated cases per baseline, between 1 and 500. The default is
+.BR 20 .
+.TP
+.BI \-seed " int64"
+Override the fixed seed of every selected baseline. Normally left alone: the
+fixed seeds are the point.
+.TP
+.BI \-max\-faults " n"
+Maximum mutations per case, between 1 and 3. The default is
+.BR 2 .
+.TP
+.BI \-min\-severity " level"
+Lowest finding severity worth reproducing and filing, one of
+.BR critical ,
+.BR high ,
+.BR medium ,
+.BR low ,
+.BR info .
+The default is
+.BR medium :
+reproducing a case costs a whole simulated run, so the floor is applied before
+the work rather than after it.
+.TP
+.B \-create
+File each reproducible finding as a GitHub issue, through the
+.BR gh (1)
+CLI. Open issues are searched for the finding's fingerprint first, so a
+finding that is already tracked is recorded rather than filed twice. Without
+this flag nothing leaves the machine.
+.TP
+.BI \-context " text"
+Debugging context recorded in the issue body, such as which job produced the
+run.
+.TP
+.BI \-revision " sha"
+Commit to record in the issue body. The default is the VCS revision stamped
+into this binary at build time.
+.TP
+.B \-json
+Print the machine-readable triage report.
+.TP
+.BI \-netdoc " path"
+The
+.B netdoc
+binary to run; see
+.B \-netdoc
+under
+.BR run .
+.TP
+.BI \-timeout " duration"
+.BR netdoc 's
+per-probe timeout. Must be positive. The default is
+.BR 4s .
+.TP
+.B \-v
+Log each privileged command as it runs.
+.SS challenge
+.TP
+.BI \-id " ID"
+Replay a specific challenge instead of drawing one, by the id printed with
+every challenge. The same id is accepted as a positional argument.
+.TP
+.BI \-daily "[=YYYY-MM-DD]"
+Play the challenge for today, or for that UTC date. A daily is the same
+challenge for everybody who asks for that date, so it cannot be combined with
+.BR \-id ,
+.BR \-difficulty ,
+.BR \-starter ,
+or
+.BR \-authored .
+.TP
+.BI \-starter " pack"
+Draw from a curated starter pack, one of
+.BR fundamentals ,
+.BR service ,
+.BR tls ,
+.BR paths ,
+.BR routing .
+.B netdoc\-sim starters
+describes them, and
+.B netdoc\-sim starters
+.I pack
+lists one pack's challenge ids in order.
+.TP
+.BI \-authored " slug"
+Play a hand-written challenge by slug, as listed by
+.BR "netdoc\-sim authored" :
+.BR refused\-vs\-blocked\-refused ,
+.BR refused\-vs\-blocked\-blocked ,
+.BR reset\-after\-accept ,
+.BR certificate\-expired ,
+.BR certificate\-wrong\-name ,
+.BR no\-default\-route ,
+.BR wrong\-default\-route ,
+.BR missing\-subnet\-route .
+.TP
+.BI \-difficulty " level"
+Draw an
+.BR easy ,
+.B medium
+or
+.B hard
+challenge. Difficulty is a property of the case an id resolves to, so this
+only applies to a drawn challenge, never to one already named.
+.TP
+.BI \-answer " name"
+Submit this diagnosis without opening a shell, for scripting a run rather than
+playing it. One of
+.BR healthy ,
+.BR dns_failure ,
+.BR no_default_route ,
+.BR wrong_default_route ,
+.BR missing_subnet_route ,
+.BR preferred_route_failure ,
+.BR ipv4_failure ,
+.BR ipv6_failure ,
+.BR tcp_port_blocked ,
+.BR connection_refused ,
+.BR connection_reset ,
+.BR tls_certificate ,
+.BR tls_hostname_mismatch ,
+.BR http_service ,
+.BR proxy_failure ,
+.BR quic_udp_blocked ,
+.BR packet_loss .
+.TP
+.B \-give\-up
+Skip straight to the answer, scoring the round as a give-up.
+.TP
+.B \-json
+Print the machine-readable result. It runs without a terminal, so it needs
+.B \-answer
+or
+.BR \-give\-up .
+.TP
+.BI \-netdoc " path"
+The
+.B netdoc
+binary to run; see
+.B \-netdoc
+under
+.BR run .
+Which build it is becomes part of the recorded result.
+.TP
+.BI \-timeout " duration"
+.BR netdoc 's
+per-probe timeout. Must be positive. The default is
+.BR 4s .
+.TP
+.B \-v
+Log each privileged command as it runs.
+.SS cleanup
+.TP
+.B \-all
+Release every kept simulation. Takes no simulation id.
+.SH PLAYING A CHALLENGE
+A challenge session is one foreground command, start to finish: the network
+only exists while the process holding its namespaces does.
+.PP
+The session briefs you, then opens a shell in the broken machine. Type
+.B exit
+there when you are ready, and a menu asks for your diagnosis. Pick one by
+number or by name;
+.B b
+rereads the briefing,
+.B s
+returns to the shell, and
+.B q
+gives up. Your solve time is the shell and the menu only \(em not the
+simulator's setup, and not
+.BR netdoc 's
+own run, which happens after your answer is locked in.
+.SH EXIT STATUS
+.TP
+.B 0
+The diagnosis matched. For
+.BR hunt ,
+no reportable finding. For
+.BR challenge ,
+your diagnosis was correct. For
+.BR triage ,
+nothing reproducible, or every reproducible finding is now tracked by an
+issue.
+.TP
+.B 1
+The simulation ran and the diagnosis did not match. For
+.BR hunt ,
+there are findings. For
+.BR challenge ,
+your diagnosis was wrong or you gave up. For
+.BR triage ,
+there are reproducible findings nobody recorded.
+.TP
+.B 2
+Bad arguments, or a scenario the parser rejected.
+.TP
+.B 3
+The simulation could not run: an unsupported host, a
+.B netdoc
+that could not be found or executed, or a cancelled run. For
+.BR triage ,
+also a failed
+.B gh
+call.
+.SH EXAMPLES
+.PP
+Check whether this host can simulate at all:
+.PP
+.RS 4
+.EX
+netdoc\-sim capabilities
+.EE
+.RE
+.PP
+Run one scenario and read the report:
+.PP
+.RS 4
+.EX
+netdoc\-sim run broken\-dns
+.EE
+.RE
+.PP
+See what a run would do, without creating anything:
+.PP
+.RS 4
+.EX
+netdoc\-sim run broken\-dns \-\-dry\-run
+.EE
+.RE
+.PP
+Keep the network up afterwards and walk around inside it:
+.PP
+.RS 4
+.EX
+netdoc\-sim run broken\-dns \-\-keep
+netdoc\-sim list
+netdoc\-sim inspect <id>
+netdoc\-sim cleanup <id>
+.EE
+.RE
+.PP
+Run a seeded campaign, then replay the iteration that failed:
+.PP
+.RS 4
+.EX
+netdoc\-sim campaign flapping\-connectivity
+netdoc\-sim campaign flapping\-connectivity \-\-seed 1234 \-\-iteration 7
+.EE
+.RE
+.PP
+Hunt for diagnoses that look wrong, then reproduce one exactly:
+.PP
+.RS 4
+.EX
+netdoc\-sim hunt \-\-cases 100 \-\-json > hunt.json
+netdoc\-sim hunt healthy\-routed\-network \-\-seed 1234 \-\-case 42
+.EE
+.RE
+.PP
+Run the nightly triage without filing anything:
+.PP
+.RS 4
+.EX
+netdoc\-sim triage \-\-cases 20 \-\-json
+.EE
+.RE
+.PP
+Play a challenge, or today's:
+.PP
+.RS 4
+.EX
+netdoc\-sim challenge
+netdoc\-sim challenge \-\-daily
+netdoc\-sim challenge \-\-starter fundamentals
+netdoc\-sim challenge V3\-8F42C1
+.EE
+.RE
+.PP
+Score a challenge from a script, with no terminal:
+.PP
+.RS 4
+.EX
+netdoc\-sim challenge \-\-id V3\-8F42C1 \-\-answer dns_failure \-\-json
+.EE
+.RE
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/netdoc\-sim/
+One JSON record per simulation kept alive by
+.BR "run \-keep" ,
+which is what
+.BR list ,
+.B inspect
+and
+.B cleanup
+read. Without
+.B $XDG_RUNTIME_DIR
+this is
+.I netdoc\-sim\-$UID
+under the temporary directory instead. A record never outlives the namespaces
+it describes; a stale one is swept by
+.BR cleanup .
+.TP
+.I $TMPDIR/netdoc\-sim\-<id>
+The scratch directory belonging to one simulation, removed with it.
+.SH SEE ALSO
+.BR netdoc (1),
+.BR nsenter (1),
+.BR unshare (1),
+.BR gh (1)
+.PP
+Full documentation in
+.IR docs/simulation.md ,
+including scenario authoring, the report schemas, the challenge contract, and
+how the container image is run:
+.UR https://github.com/heymaikol/network-doctor
+.UE
+.SH BUGS
+Report issues at
+.UR https://github.com/heymaikol/network-doctor/issues
+.UE
