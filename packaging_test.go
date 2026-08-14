@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -349,6 +350,53 @@ func TestEveryShippedBinaryShipsItsManPageAndCompletions(t *testing.T) {
 				t.Errorf("spec %%files never lists %s", ref.specFile)
 			}
 		}
+	}
+}
+
+func TestShippedManPagesHaveValidMetadata(t *testing.T) {
+	headerRE := regexp.MustCompile(`^\.TH (\S+) (\S+) "([^"]+)" "network-doctor" "User Commands"$`)
+	const manDir = "/usr/share/man/man"
+	pages := 0
+	for _, content := range loadGoreleaserConfig(t).NFPMs[0].Contents {
+		destination, ok := strings.CutPrefix(content.Dst, manDir)
+		if !ok {
+			continue
+		}
+		section, name, ok := strings.Cut(destination, "/")
+		if !ok || section == "" {
+			t.Errorf("invalid shipped man-page destination %q", content.Dst)
+			continue
+		}
+		binary, ok := strings.CutSuffix(name, "."+section)
+		if !ok {
+			t.Errorf("shipped man-page destination %q must end in .%s", content.Dst, section)
+			continue
+		}
+		pages++
+		path := content.Src
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		header, _, _ := strings.Cut(string(data), "\n")
+		match := headerRE.FindStringSubmatch(header)
+		wantTitle := strings.ReplaceAll(strings.ToUpper(binary), "-", `\-`)
+		if len(match) != 4 || match[1] != wantTitle || match[2] != section {
+			t.Errorf("%s: first line must be .TH %s %s \"YYYY-MM-DD\" \"network-doctor\" \"User Commands\"", path, wantTitle, section)
+			continue
+		}
+		date, err := time.Parse(time.DateOnly, match[3])
+		if err != nil {
+			t.Errorf("%s: invalid .TH date %q: %v", path, match[3], err)
+			continue
+		}
+		if date.IsZero() || date.After(time.Now().UTC().Add(24*time.Hour)) {
+			t.Errorf("%s: implausible .TH date %q", path, match[3])
+		}
+	}
+	if pages == 0 {
+		t.Fatal("GoReleaser ships no man pages")
 	}
 }
 

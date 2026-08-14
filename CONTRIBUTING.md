@@ -71,6 +71,8 @@ documented in the [README](README.md#tests) before submitting a pull request.
 Additional requirements:
 
 - Real-socket tests use the `integration` build tag and loopback only.
+- When a man page's documented behavior or other material content changes,
+  update its `.TH` date to that change's date; unrelated source edits do not.
 - Changes to `internal/textsafe` require the sanitizer fuzz test shown in the
   validation gate.
 - Platform-specific changes should compile for macOS and Windows with
