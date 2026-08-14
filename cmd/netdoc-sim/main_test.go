@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -299,14 +300,16 @@ func TestMain(m *testing.M) {
 // os.Args[0], not os.Executable: the question is which path the caller chose to
 // execute, and two hard links to one inode are two answers to that.
 func fakeNetdocRole() (string, bool) {
+	// #nosec G703 -- os.Args[0] is the test executable path selected by this test.
 	version, err := os.ReadFile(os.Args[0] + ".version")
 	if err != nil {
 		return "", false
 	}
+	// #nosec G703 -- os.Args[0] is the test executable path selected by this test.
 	log, err := os.OpenFile(os.Args[0]+".invoked", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err == nil {
 		fmt.Fprintln(log, strings.Join(os.Args[1:], " "))
-		log.Close()
+		_ = log.Close()
 	}
 	return strings.TrimSpace(string(version)), true
 }
@@ -329,10 +332,12 @@ func writeFakeNetdoc(t *testing.T, dir, version string) string {
 	// there. Elsewhere, link when the filesystems allow it and copy when not.
 	linked := runtime.GOOS != "windows" && os.Link(self, path) == nil
 	if !linked {
+		// #nosec G304 -- self comes from os.Executable, not external input.
 		body, err := os.ReadFile(self)
 		if err != nil {
 			t.Fatal(err)
 		}
+		// #nosec G306 G703 -- this test-owned path must be executable as a fake binary.
 		if err := os.WriteFile(path, body, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -347,6 +352,7 @@ func writeFakeNetdoc(t *testing.T, dir, version string) string {
 // with, newest last, and nil when it was never run at all.
 func fakeNetdocInvocations(t *testing.T, path string) []string {
 	t.Helper()
+	// #nosec G304 -- path is the fake binary this test created.
 	log, err := os.ReadFile(path + ".invoked")
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -470,7 +476,7 @@ func TestFindNetdocSearchOrder(t *testing.T) {
 			t.Skip("Windows takes executability from the PATHEXT suffix, not a mode bit")
 		}
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "netdoc"), []byte("not a binary\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "netdoc"), []byte("not a binary\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		got, err := findNetdoc("", filepath.Join(dir, "netdoc-sim"))
@@ -1059,6 +1065,38 @@ func TestHoldSaysSoWhenItCannotRecordTheSimulation(t *testing.T) {
 	// the workspace is this process's to remove either way.
 	if _, err := os.Stat(work); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the workspace outlived the hold: %v", err)
+	}
+}
+
+func TestHoldDoesNotSweepARecordItFailedToPublish(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	report := heldReport(t.TempDir())
+	original := simulation.NewState(report.ID, "pre-existing", t.TempDir(), report.StartedAt.Add(-time.Hour), nil)
+	if err := original.Save(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := simulation.LoadState(report.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := holdContext(t)
+	defer cancel()
+	w := &holdWriter{marker: "Release it with", at: cancel}
+	hold(ctx, report, w)
+
+	if !strings.Contains(w.out.String(), "netdoc-sim: cannot record this simulation:") {
+		t.Errorf("output = %q, want publication failure", w.out.String())
+	}
+	after, err := simulation.LoadState(report.ID)
+	if err != nil {
+		t.Fatalf("pre-existing record was removed: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("pre-existing record changed:\n got %+v\nwant %+v", after, before)
+	}
+	if _, err := os.Stat(report.Cleanup.Workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the run-owned workspace outlived the hold: %v", err)
 	}
 }
 

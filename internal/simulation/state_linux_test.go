@@ -41,6 +41,7 @@ func stateSandbox(t *testing.T) {
 // director, and returns it with a record that truthfully describes it.
 func startDirector(t *testing.T, id string) (*exec.Cmd, *State) {
 	t.Helper()
+	// #nosec G204 G702 -- os.Args[0] deliberately re-executes this test binary.
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 	cmd.Env = append(os.Environ(), "GO_HELPER=1")
 	if err := cmd.Start(); err != nil {
@@ -359,6 +360,7 @@ func TestLoadStateRejectsIDMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
+	// #nosec G703 -- stateSandbox confines this test-built record to throwaway directories.
 	if err := os.WriteFile(statePath(id), blob, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -380,6 +382,7 @@ func TestLoadStateRejectsSymlink(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	elsewhere := filepath.Join(t.TempDir(), "planted.json")
+	// #nosec G703 -- elsewhere is this test's temporary fixture path.
 	if err := os.WriteFile(elsewhere, blob, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -402,6 +405,7 @@ func TestLoadStateRejectsSharedRecord(t *testing.T) {
 	s := &State{ID: id, Scenario: "x", PID: os.Getpid(), Started: time.Now(),
 		Stamp: "1234", Workspace: workspaceFor(id)}
 	save(t, s)
+	// #nosec G302 -- world-writable mode is the unsafe condition this test must create.
 	if err := os.Chmod(statePath(id), 0o666); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -607,6 +611,7 @@ func TestSaveWillNotFollowASymlinkAtTheRecordPath(t *testing.T) {
 	if err := s.Save(); err == nil {
 		t.Fatal("Save wrote through a symlink")
 	}
+	// #nosec G304 -- target is this test's temporary symlink fixture.
 	got, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read back: %v", err)

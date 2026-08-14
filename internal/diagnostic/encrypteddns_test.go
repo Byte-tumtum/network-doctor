@@ -97,8 +97,9 @@ func newEncryptedDNSFixture(t *testing.T, ips []net.IP, doh *dohReply, dot *dotR
 	if doh != nil {
 		f.doh = newPipeNet(t)
 		srv := &http.Server{
-			TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
-			Handler:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, *doh) }),
+			TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
+			ReadHeaderTimeout: time.Second,
+			Handler:           http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, *doh) }),
 			// A pipe torn down at cleanup is not a finding worth printing.
 			ErrorLog: log.New(io.Discard, "", 0),
 		}
@@ -189,6 +190,7 @@ func serveDoT(t *testing.T, p *pipeNet, cert tls.Certificate, reply dotReply) {
 				frame := reply.frame
 				if frame == nil {
 					frame = func(msg []byte) []byte {
+						// #nosec G115 -- the fixture only frames the bounded query response under test.
 						return append(binary.BigEndian.AppendUint16(nil, uint16(len(msg))), msg...)
 					}
 				}
@@ -406,6 +408,7 @@ func dnsRR(name []byte, rrtype uint16, rdata []byte) []byte {
 	binary.BigEndian.PutUint16(rr[len(name):], rrtype)
 	binary.BigEndian.PutUint16(rr[len(name)+2:], dnsClassIN)
 	binary.BigEndian.PutUint32(rr[len(name)+4:], 60)
+	// #nosec G115 -- DNS test RDATA is limited to fixed IPv4/IPv6-sized fixtures.
 	rr = binary.BigEndian.AppendUint16(rr, uint16(len(rdata)))
 	return append(rr, rdata...)
 }
@@ -885,6 +888,7 @@ func TestDoTWithoutACorrelatedAnswerCannotPass(t *testing.T) {
 		{
 			name: "framing longer than the message",
 			reply: dotReply{frame: func(msg []byte) []byte {
+				// #nosec G115 -- the bounded test response plus 64 still fits DoT's uint16 frame.
 				return append(binary.BigEndian.AppendUint16(nil, uint16(len(msg)+64)), msg...)
 			}},
 			want: "truncated DNS response",

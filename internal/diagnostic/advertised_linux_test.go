@@ -25,6 +25,7 @@ func fakeAvahiBrowse(t *testing.T, exitCode int, holdStdout bool) {
 printf '%s\n' "$!" > "$AVAHI_PID_FILE"
 `
 		t.Cleanup(func() {
+			// #nosec G304 -- pidFile is this test's temporary fixture path.
 			pidText, err := os.ReadFile(pidFile)
 			if err != nil {
 				return
@@ -41,6 +42,7 @@ printf '%s\n' "$!" > "$AVAHI_PID_FILE"
 	script += `
 printf '%s\n' '=;eth0;IPv4;Kitchen Speaker;_googlecast._tcp;local;speaker.local;192.0.2.10;8009;"fn=Kitchen\032Speaker"'
 exit ` + strconv.Itoa(exitCode) + "\n"
+	// #nosec G306 -- this test-owned shell fixture must be executable via PATH.
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

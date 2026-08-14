@@ -39,6 +39,7 @@ func testSOCKSServer(t *testing.T, lookup socksLookup, dial socksDial) (*socksSe
 
 func socksTestGreeting(t *testing.T, conn net.Conn, methods ...byte) []byte {
 	t.Helper()
+	// #nosec G115 -- tests offer a small fixed method list that fits the protocol byte.
 	request := []byte{socksVersion, byte(len(methods))}
 	request = append(request, methods...)
 	if _, err := conn.Write(request); err != nil {
@@ -372,6 +373,7 @@ func TestEvidenceRecorderWritesWholeConcurrentEvents(t *testing.T) {
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// #nosec G304 -- path is this test's temporary evidence file.
 	blob, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

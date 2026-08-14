@@ -304,6 +304,7 @@ func loadHistory(path string) []string {
 	if path == "" {
 		return nil
 	}
+	// #nosec G304 -- production passes the current-user history path; this unprivileged read may follow a caller-selected symlink, but every consumed line is sanitized below.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -341,7 +342,7 @@ func saveHistory(path string, hist []string) {
 	}
 	defer func() { _ = os.Remove(f.Name()) }() // no-op once the rename lands
 	if _, err := f.WriteString(strings.Join(hist, "\n") + "\n"); err != nil {
-		f.Close()
+		_ = f.Close()
 		return
 	}
 	if err := f.Close(); err != nil {

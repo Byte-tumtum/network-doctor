@@ -342,6 +342,7 @@ func openEvidenceRecorder(path, node string) (*evidenceRecorder, error) {
 	if path == "" {
 		return &evidenceRecorder{node: node}, nil
 	}
+	// #nosec G304 -- production paths are generated inside this run's private workspace.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
@@ -397,6 +398,7 @@ func (r *evidenceRecorder) Close() error {
 func readEvidence(paths []string) (Evidence, error) {
 	var events []evidenceEvent
 	for _, path := range paths {
+		// #nosec G304 -- callers supply only run-owned evidence paths or test temp files.
 		f, err := os.Open(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -408,13 +410,13 @@ func readEvidence(paths []string) (Evidence, error) {
 		for scanner.Scan() {
 			var event evidenceEvent
 			if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-				f.Close()
+				_ = f.Close()
 				return Evidence{}, fmt.Errorf("%s: %w", path, err)
 			}
 			events = append(events, event)
 		}
 		err = scanner.Err()
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			return Evidence{}, err
 		}

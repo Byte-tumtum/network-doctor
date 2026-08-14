@@ -187,5 +187,6 @@ func randomIndex(n int) (int, error) {
 	if _, err := rand.Read(raw[:]); err != nil {
 		return 0, err
 	}
+	// #nosec G115 -- n is the non-empty starter slice length; modulo bounds the result to int.
 	return int(binary.BigEndian.Uint64(raw[:]) % uint64(n)), nil
 }

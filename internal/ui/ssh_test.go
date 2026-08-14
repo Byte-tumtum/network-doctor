@@ -284,6 +284,7 @@ func stallSSHOnPath(t *testing.T) {
 		t.Skip("needs a POSIX shell to stall with")
 	}
 	dir := t.TempDir()
+	// #nosec G306 -- this test-owned ssh stub must be executable via PATH.
 	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
 		t.Fatalf("write fake ssh: %v", err)
 	}

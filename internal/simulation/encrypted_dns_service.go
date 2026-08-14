@@ -74,8 +74,9 @@ func startEncryptedDNSServiceWith(ctx context.Context, svc Service, addresses []
 	config := &tls.Config{Certificates: []tls.Certificate{material.certificate}, MinVersion: tls.VersionTLS12}
 	server := &encryptedDNSServer{caPath: caPath, conns: make(map[net.Conn]struct{})}
 	server.doh = &http.Server{
-		Handler:   http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, zone, svc, recorder) }),
-		TLSConfig: config,
+		Handler:           http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveDoH(w, r, zone, svc, recorder) }),
+		TLSConfig:         config,
+		ReadHeaderTimeout: 5 * time.Second,
 		// A probe that connects to prove TCP works and hangs up without a
 		// ClientHello is the direct-egress check doing its job, not an error.
 		ErrorLog: log.New(io.Discard, "", 0),
@@ -183,13 +184,25 @@ func (s *encryptedDNSServer) serveDoT(listener net.Listener, config *tls.Config,
 				if reply == nil {
 					return
 				}
-				framed := binary.BigEndian.AppendUint16(make([]byte, 0, 2+len(reply)), uint16(len(reply)))
-				if _, err := conn.Write(append(framed, reply...)); err != nil {
+				framed, err := frameDoTReply(reply)
+				if err != nil {
+					return
+				}
+				if _, err := conn.Write(framed); err != nil {
 					return
 				}
 			}
 		}()
 	}
+}
+
+func frameDoTReply(reply []byte) ([]byte, error) {
+	if len(reply) > 1<<16-1 {
+		return nil, errors.New("DNS response exceeds DoT frame length")
+	}
+	// #nosec G115 -- the immediately preceding check proves the length fits this uint16 protocol field.
+	framed := binary.BigEndian.AppendUint16(make([]byte, 0, 2+len(reply)), uint16(len(reply)))
+	return append(framed, reply...), nil
 }
 
 func (s *encryptedDNSServer) track(conn net.Conn, add bool) {

@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,23 @@ import (
 	"reflect"
 	"testing"
 )
+
+func TestFrameDoTReplyBoundsLength(t *testing.T) {
+	reply := bytes.Repeat([]byte{0xab}, 1<<16-1)
+	framed, err := frameDoTReply(reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.BigEndian.Uint16(framed[:2]); got != 1<<16-1 {
+		t.Fatalf("length = %d, want %d", got, 1<<16-1)
+	}
+	if !bytes.Equal(framed[2:], reply) {
+		t.Fatal("framing changed the response")
+	}
+	if framed, err := frameDoTReply(make([]byte, 1<<16)); err == nil || framed != nil {
+		t.Fatalf("oversized response = %d bytes, %v; want rejection", len(framed), err)
+	}
+}
 
 func TestDoHInvalidResponseModeReturnsGarbage(t *testing.T) {
 	query := dnsQuery("example.test", dnsTypeA)
@@ -18,7 +36,7 @@ func TestDoHInvalidResponseModeReturnsGarbage(t *testing.T) {
 	serveDoH(rec, req, testZone(t), svc, nil)
 	resp := rec.Result()
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != encryptedDNSMediaType || string(body) != "not dns" {
 		t.Fatalf("invalid DoH response = %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}

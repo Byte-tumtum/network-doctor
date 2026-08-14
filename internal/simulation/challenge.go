@@ -694,6 +694,7 @@ func challengeSeed(version, digits string) int64 {
 	h.Write([]byte(version))
 	h.Write([]byte{0})
 	h.Write([]byte(digits))
+	// #nosec G115 -- all 64 hash bits are intentionally preserved in the signed seed.
 	return int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]))
 }
 
@@ -770,6 +771,7 @@ func buildChallengeV3(id, digits string) (*Challenge, error) {
 // exactly the accident this version exists to remove.
 func buildChallengeV4(id, digits string) (*Challenge, error) {
 	seed := challengeSeed("V4", digits)
+	// #nosec G404 -- deterministic challenge selection must reproduce from its public ID.
 	rng := mathrand.New(mathrand.NewSource(seed))
 	if rng.Intn(challengeHealthyOdds) == 0 {
 		base := challengeBasesV3[rng.Intn(len(challengeBasesV3))]
@@ -845,6 +847,7 @@ func challengeBasesForMutation(mutation string) ([]string, error) {
 // Network Doctor exists.
 func buildChallengeCase(id, version, digits string, selection challengeSelection) (*Challenge, error) {
 	seed := challengeSeed(version, digits)
+	// #nosec G404 -- deterministic challenge selection must reproduce from its public ID.
 	rng := mathrand.New(mathrand.NewSource(seed))
 	if rng.Intn(challengeHealthyOdds) == 0 {
 		base := selection.bases[rng.Intn(len(selection.bases))]

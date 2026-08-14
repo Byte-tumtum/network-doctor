@@ -178,6 +178,7 @@ func authoredSeed(slug string) int64 {
 	h.Write([]byte("seed"))
 	h.Write([]byte{0})
 	h.Write([]byte(slug))
+	// #nosec G115 -- all 64 hash bits are intentionally preserved in the signed seed.
 	return int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]))
 }
 
@@ -250,6 +251,7 @@ func (a authoredChallenge) build(id string) (*Challenge, error) {
 			a.slug, a.mutation, a.base)
 	}
 	seed := authoredSeed(a.slug)
+	// #nosec G404 -- authored challenge generation must reproduce from its stable slug.
 	rng := mathrand.New(mathrand.NewSource(seed))
 	mutation, err := operator.generate(rng, base)
 	if err != nil {

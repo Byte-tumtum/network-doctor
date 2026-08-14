@@ -460,6 +460,7 @@ var verdicts = []string{
 
 // LoadScenario reads and validates a scenario file.
 func LoadScenario(path string) (*Scenario, error) {
+	// #nosec G304 -- arbitrary user-selected files are intentional CLI input; this unprivileged read is read-only, then parsed and validated as simulator configuration.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

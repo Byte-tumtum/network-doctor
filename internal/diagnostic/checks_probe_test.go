@@ -44,12 +44,26 @@ func (resetConn) Read([]byte) (int, error) {
 }
 func (resetConn) SetReadDeadline(time.Time) error { return nil }
 
+type deadlineErrorConn struct{ fakeConn }
+
+func (deadlineErrorConn) SetReadDeadline(time.Time) error { return errors.New("unsupported") }
+
 func TestBannerProbeClassifiesWrappedReset(t *testing.T) {
 	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) { return resetConn{}, nil }}
 	probe := ops.bannerProbe(ProbeSSH, "SSH", 22)
 	r := probe.Run(context.Background(), map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}})
 	if r.Status != StatusFail || r.Cause != ConnectionCauseReset {
 		t.Fatalf("reset result = %+v", r)
+	}
+}
+
+func TestBannerProbeRejectsUnboundedRead(t *testing.T) {
+	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) { return deadlineErrorConn{}, nil }}
+	r := ops.bannerProbe(ProbeSSH, "SSH", 22).Run(context.Background(), map[ProbeID]ProbeResult{
+		ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")},
+	})
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot set banner read deadline") {
+		t.Fatalf("unbounded banner read = %+v, want failure", r)
 	}
 }
 
@@ -134,7 +148,7 @@ func TestDialIPsRacesStaggered(t *testing.T) {
 	if conn == nil || !sel.Equal(win) {
 		t.Fatalf("sel = %v, want the second address to win the race", sel)
 	}
-	conn.Close()
+	_ = conn.Close()
 	if e := time.Since(start); e > 2*time.Second {
 		t.Errorf("race took %v, want well under the hung address's deadline", e)
 	}
@@ -752,7 +766,7 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			// Take a byte before hanging up: the read blocks until the probe's
 			// Write, so the close lands during the write rather than racing the
 			// setup that precedes it.
-			serve:  func(c net.Conn) { _, _ = c.Read(make([]byte, 1)); c.Close() },
+			serve:  func(c net.Conn) { _, _ = c.Read(make([]byte, 1)); _ = c.Close() },
 			status: StatusNA,
 			detail: "inconclusive — the peer dropped the connection after 0 KiB",
 		},
@@ -1218,7 +1232,8 @@ func TestHTTPSProbeSupportsHTTP2OnlyServer(t *testing.T) {
 	var overHTTP2 atomic.Bool
 	p := newPipeNet(t)
 	srv := &http.Server{
-		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
+		ReadHeaderTimeout: time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ProtoMajor != 2 {
 				conn, _, _ := w.(http.Hijacker).Hijack()
@@ -1254,7 +1269,7 @@ func TestPortalCheck(t *testing.T) {
 
 	var chased bool
 	p := newPipeNet(t)
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/generate_204":
 			w.WriteHeader(http.StatusNoContent)
@@ -1360,12 +1375,12 @@ func (p *pipeNet) dial(ctx context.Context, _, addr string) (net.Conn, error) {
 	case p.conns <- server:
 		return client, nil
 	case <-p.closed:
-		client.Close()
-		server.Close()
+		_ = client.Close()
+		_ = server.Close()
 		return nil, net.ErrClosed
 	case <-ctx.Done():
-		client.Close()
-		server.Close()
+		_ = client.Close()
+		_ = server.Close()
 		return nil, ctx.Err()
 	}
 }

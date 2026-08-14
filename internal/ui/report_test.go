@@ -29,7 +29,7 @@ func captureStderr(t *testing.T) func() string {
 	os.Stderr = w
 	return func() string {
 		os.Stderr = old
-		w.Close()
+		_ = w.Close()
 		b, err := io.ReadAll(r)
 		if err != nil {
 			t.Fatal(err)

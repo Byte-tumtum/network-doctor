@@ -145,6 +145,7 @@ func startTLSServiceWith(ctx context.Context, svc Service, trustDir string, reco
 }
 
 func writePublicCA(path string, data []byte) error {
+	// #nosec G304 -- callers construct path in the run-owned trust directory and use O_EXCL.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create TLS trust anchor: %w", err)

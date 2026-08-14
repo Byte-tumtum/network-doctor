@@ -286,7 +286,7 @@ func file(ctx context.Context, gh ghFunc, finding *simulation.TriageFinding, rev
 	}
 	defer func() { _ = os.Remove(body.Name()) }() // gh has read it by then
 	if _, err := io.WriteString(body, finding.IssueBody(revision, runContext)); err != nil {
-		body.Close()
+		_ = body.Close()
 		return err
 	}
 	if err := body.Close(); err != nil {
@@ -302,6 +302,7 @@ func file(ctx context.Context, gh ghFunc, finding *simulation.TriageFinding, rev
 }
 
 func realGH(ctx context.Context, args ...string) ([]byte, error) {
+	// #nosec G204 -- gh is fixed and args remain separate argv elements, never shell text.
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

@@ -444,7 +444,7 @@ func opsFromSources(sources *SourceAddresses) *netops {
 		}
 		tlsConn := tls.Client(conn, cfg)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 		return tlsConn, nil
@@ -502,7 +502,7 @@ func dialContextFromSources(sources *SourceAddresses) func(context.Context, stri
 			go func(source net.IP, familyNetwork string) {
 				conn, err := dialerFromSource(source, familyNetwork, dial).DialContext(ctx, familyNetwork, addr)
 				if err == nil && ctx.Err() != nil {
-					conn.Close()
+					_ = conn.Close()
 					return
 				}
 				results <- result{conn, err}
@@ -622,7 +622,7 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 	if err != nil {
 		return 0, "", err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if u, err := resp.Location(); err == nil && u.Hostname() != "" {
 			switch strings.ToLower(u.Scheme) {
@@ -887,7 +887,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	}
 	defer prim.conn.Close()
 	if sec.conn != nil {
-		sec.conn.Close()
+		_ = sec.conn.Close()
 	}
 	src, iface := o.pathIdentity(ctx, prim.conn, prim.sel, 443)
 	// A completed handshake only proves that something answered. A captive
@@ -1089,36 +1089,42 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 			req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(proxyURL.User.Username()+":"+pw)) + "\r\n"
 		}
 		if err := conn.SetWriteDeadline(dl); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			r.Status = StatusFail
 			r.Cause = ProxyCauseProtocol
 			r.Detail = "cannot set proxy write deadline: " + err.Error()
 			return r
 		}
 		if _, err := io.WriteString(conn, req+"\r\n"); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			r.Status = StatusFail
 			r.Cause = ProxyCauseProtocol
 			r.Detail = "proxy write failed: " + err.Error()
 			return r
 		}
 		// net.Conn reads don't know ctx exists; the read deadline is the only leash.
-		conn.SetReadDeadline(dl)
+		if err := conn.SetReadDeadline(dl); err != nil {
+			_ = conn.Close()
+			r.Status = StatusFail
+			r.Cause = ProxyCauseProtocol
+			r.Detail = "cannot set proxy read deadline: " + err.Error()
+			return r
+		}
 		// Bounded read: the response is attacker-controlled.
 		resp, err = http.ReadResponse(bufio.NewReader(io.LimitReader(conn, 4096)), &http.Request{Method: http.MethodConnect})
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			r.Status = StatusFail
 			r.Cause = ProxyCauseProtocol
 			r.Detail = "no CONNECT response from proxy " + addr + ": " + err.Error()
 			r.Fix = "proxy reachable but not speaking HTTP — wrong port or scheme?"
 			return r
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusProxyAuthRequired || proxyURL.User == nil || auth {
 			break
 		}
-		conn.Close()
+		_ = conn.Close()
 		if proxyURL.Scheme == "http" {
 			r.Status = StatusFail
 			r.Cause = ProxyCauseProtocol
@@ -1265,6 +1271,7 @@ func socks5Request(conn net.Conn, destination socks5Destination) error {
 		if len(destination.host) == 0 || len(destination.host) > 255 {
 			return errors.New("destination hostname is too long for SOCKS5")
 		}
+		// #nosec G115 -- the preceding bound proves the length fits one SOCKS byte.
 		req = append(req, 3, byte(len(destination.host)))
 		req = append(req, destination.host...)
 	} else if ip4 := destination.ip.To4(); ip4 != nil {
@@ -1276,6 +1283,7 @@ func socks5Request(conn net.Conn, destination socks5Destination) error {
 	} else {
 		return errors.New("local DNS returned an invalid address")
 	}
+	// #nosec G115 -- the only caller supplies the fixed HTTPS port 443.
 	req = binary.BigEndian.AppendUint16(req, uint16(destination.port))
 	if _, err := conn.Write(req); err != nil {
 		return fmt.Errorf("CONNECT failed: %w", err)
@@ -1548,7 +1556,7 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			}
 			return r
 		}
-		conn.Close()
+		_ = conn.Close()
 		r.Status, r.SelectedIP, r.Detail = StatusPass, ip, "TLS handshake OK (SNI "+host+")"
 		return r
 	}
@@ -1650,7 +1658,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 			r.Fix = protocol + " blocked — proxy or firewall?"
 			return r
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		r.Status = StatusPass
 		r.Detail = fmt.Sprintf("%s %d (responded)", protocol, resp.StatusCode)
 		return r
@@ -1922,7 +1930,11 @@ func (o *netops) bannerProbe(id ProbeID, label string, port int) Probe {
 		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 			deadline = ctxDeadline
 		}
-		conn.SetReadDeadline(deadline)
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			r.Status, r.SelectedIP = StatusFail, ip
+			r.Detail = "cannot set banner read deadline: " + err.Error()
+			return r
+		}
 		// Strict byte limit: a hostile server streaming without a newline can't
 		// exhaust memory.
 		br := bufio.NewReader(io.LimitReader(conn, 1024))
@@ -2109,7 +2121,7 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 				select {
 				case winner <- result{conn, att}:
 				case <-dctx.Done():
-					conn.Close() // lost the race
+					_ = conn.Close() // lost the race
 				}
 			}(ip)
 		}
@@ -2156,7 +2168,7 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 			if la, ok := c.LocalAddr().(*net.UDPAddr); ok {
 				src = la.IP
 			}
-			c.Close()
+			_ = c.Close()
 		}
 	}
 	if src == nil {

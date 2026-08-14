@@ -26,6 +26,7 @@ func SSHHostAliases() map[string]string {
 	if err != nil {
 		return nil
 	}
+	// #nosec G304 -- this intentionally reads the current user's fixed SSH config path.
 	f, err := os.Open(filepath.Join(home, ".ssh", "config"))
 	if err != nil {
 		return nil

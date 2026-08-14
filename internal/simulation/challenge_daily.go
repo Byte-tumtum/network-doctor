@@ -122,6 +122,7 @@ func dailyChallengeID(version, date string, attempt int) string {
 	h.Write([]byte(date))
 	h.Write([]byte{0})
 	var raw [8]byte
+	// #nosec G115 -- attempt is a non-negative loop index with a stable hash encoding.
 	binary.BigEndian.PutUint64(raw[:], uint64(attempt))
 	h.Write(raw[:])
 	value := binary.BigEndian.Uint32(h.Sum(nil)[:4]) & 0xFFFFFF

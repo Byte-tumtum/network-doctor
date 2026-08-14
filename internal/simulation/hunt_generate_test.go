@@ -283,6 +283,7 @@ func huntOperator(t testing.TB, id string) mutationOperator {
 	return mutationOperator{}
 }
 
+// #nosec G404 -- fixed pseudo-randomness makes mutation tests deterministic.
 func newTestRNG() *mathrand.Rand { return mathrand.New(mathrand.NewSource(12345)) }
 
 func namedService(t testing.TB, s *Scenario, name string) Service {

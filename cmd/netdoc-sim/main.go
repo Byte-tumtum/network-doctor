@@ -799,8 +799,11 @@ func direct(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // inside it. The record it leaves is what `list`, `inspect` and `cleanup` read.
 func hold(ctx context.Context, report *simulation.Report, w io.Writer) {
 	state := simulation.NewState(report.ID, report.Scenario, report.Cleanup.Workspace, report.StartedAt, report.Topology)
+	published := false
 	if err := state.Save(); err != nil {
 		fmt.Fprintln(w, "netdoc-sim: cannot record this simulation:", err)
+	} else {
+		published = true
 	}
 	fmt.Fprintf(w, "\nSimulation %s is still up. Enter a node with:\n", report.ID)
 	for _, n := range report.Topology {
@@ -811,9 +814,13 @@ func hold(ctx context.Context, report *simulation.Report, w io.Writer) {
 	// The namespaces go when this process does; the record must not outlive
 	// them or `list` would advertise a simulation nobody can enter. A sweep
 	// that failed gets said out loud — `cleanup` can still finish the job.
-	if err := os.Remove(filepath.Join(simulation.StateDir(), report.ID+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(w, "netdoc-sim: cleanup:", err)
+	if published {
+		// #nosec G703 -- state.Save validated this ID and exclusively created the exact record removed here.
+		if err := os.Remove(filepath.Join(simulation.StateDir(), report.ID+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(w, "netdoc-sim: cleanup:", err)
+		}
 	}
+	// #nosec G703 -- Run returns only the workspace its backend exclusively created.
 	if err := os.RemoveAll(report.Cleanup.Workspace); err != nil {
 		fmt.Fprintln(w, "netdoc-sim: cleanup:", err)
 	}

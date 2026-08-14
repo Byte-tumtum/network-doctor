@@ -240,6 +240,7 @@ func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out 
 			if err != nil {
 				return fmt.Errorf("observe controlled target %s from %s: %w", target.Raw, test.Node, err)
 			}
+			// #nosec G115 -- ParseTarget already restricts ports to 1..65535.
 			out.ControlledTargets = append(out.ControlledTargets, ControlledTargetEvidence{
 				From: test.Node, To: netip.AddrPortFrom(netip.MustParseAddr(addr), uint16(target.Port)).String(),
 				Family: addressFamily(netip.MustParseAddr(addr)), Via: selectedDestinationPath(out.Routes, test.Node, addr),

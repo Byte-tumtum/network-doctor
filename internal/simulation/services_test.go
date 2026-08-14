@@ -14,6 +14,7 @@ func dnsQuery(name string, qtype uint16) []byte {
 	binary.BigEndian.PutUint16(msg[2:4], dnsFlagRD)
 	binary.BigEndian.PutUint16(msg[4:6], 1)
 	for _, label := range strings.Split(name, ".") {
+		// #nosec G115 -- test names use ordinary DNS labels shorter than 64 bytes.
 		msg = append(msg, byte(len(label)))
 		msg = append(msg, label...)
 	}

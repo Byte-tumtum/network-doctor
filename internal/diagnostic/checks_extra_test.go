@@ -205,7 +205,7 @@ func TestDialIPsRefused(t *testing.T) {
 
 	conn, _, attempts, _ := ops.dialIPs(context.Background(), []net.IP{net.ParseIP("192.0.2.1")}, 80)
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatal("expected no connection from the failing dialer")
 	}
 	if len(attempts) != 1 || !errors.Is(attempts[0].Err, errRefused) {
@@ -235,7 +235,7 @@ func TestDialIPsKeepsFailuresThatLostToTheWinner(t *testing.T) {
 		if conn == nil {
 			t.Fatalf("round %d: expected the last address to win", round)
 		}
-		conn.Close()
+		_ = conn.Close()
 		if len(attempts) != len(ips) {
 			t.Fatalf("round %d: recorded %d of %d attempts: %+v", round, len(attempts), len(ips), attempts)
 		}
@@ -354,14 +354,15 @@ func TestApplyDialWarnings(t *testing.T) {
 // the wire in the CONNECT probe tests.
 type scriptConn struct {
 	fakeConn
-	r             io.Reader
-	w             strings.Builder
-	writeDeadline time.Time
+	r               io.Reader
+	w               strings.Builder
+	readDeadlineErr error
+	writeDeadline   time.Time
 }
 
 func (c *scriptConn) Read(p []byte) (int, error)         { return c.r.Read(p) }
 func (c *scriptConn) Write(p []byte) (int, error)        { return c.w.Write(p) }
-func (*scriptConn) SetReadDeadline(time.Time) error      { return nil }
+func (c *scriptConn) SetReadDeadline(time.Time) error    { return c.readDeadlineErr }
 func (c *scriptConn) SetWriteDeadline(d time.Time) error { c.writeDeadline = d; return nil }
 func (c *scriptConn) SetDeadline(d time.Time) error      { c.writeDeadline = d; return nil }
 
@@ -671,6 +672,17 @@ func TestProxyProbeConnectOK(t *testing.T) {
 	}
 	if deadline, _ := ctx.Deadline(); !conn.writeDeadline.Equal(deadline) {
 		t.Errorf("CONNECT write deadline = %v, want %v", conn.writeDeadline, deadline)
+	}
+}
+
+func TestProxyProbeRejectsUnboundedRead(t *testing.T) {
+	conn := &scriptConn{r: strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n"), readDeadlineErr: errors.New("unsupported")}
+	ops := proxyOps("http://proxy.corp:3128", func(context.Context, string, string) (net.Conn, error) {
+		return conn, nil
+	})
+	r := ops.proxyProbe(context.Background(), nil)
+	if r.Status != StatusFail || r.Cause != ProxyCauseProtocol || !strings.Contains(r.Detail, "cannot set proxy read deadline") {
+		t.Fatalf("unbounded CONNECT read = %+v, want protocol failure", r)
 	}
 }
 

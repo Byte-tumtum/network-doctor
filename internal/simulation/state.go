@@ -98,7 +98,7 @@ func (s *State) Save() error {
 		return err
 	}
 	if _, err := f.Write(blob); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()
@@ -141,6 +141,7 @@ func readStateFile(path string) ([]byte, error) {
 	if before.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%s: is a symlink, not a simulation record", path)
 	}
+	// #nosec G304 -- LoadState validated the ID and lstat rejects symlinks before opening.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

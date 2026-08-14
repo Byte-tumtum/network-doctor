@@ -119,6 +119,7 @@ func RandomSeed() (int64, error) {
 	if _, err := rand.Read(raw[:]); err != nil {
 		return 0, err
 	}
+	// #nosec G115 -- all 64 random bits are intentionally preserved in the signed seed.
 	return int64(binary.BigEndian.Uint64(raw[:])), nil
 }
 
@@ -129,14 +130,17 @@ func DeriveIterationSeed(seed int64, scenario string, iteration int) int64 {
 	h.Write([]byte(campaignSeedDomain))
 	h.Write([]byte{0})
 	var raw [8]byte
+	// #nosec G115 -- two's-complement seed bits are part of the reproduction contract.
 	binary.BigEndian.PutUint64(raw[:], uint64(seed))
 	h.Write(raw[:])
 	h.Write([]byte{0})
 	h.Write([]byte(scenario))
 	h.Write([]byte{0})
+	// #nosec G115 -- deterministic seed derivation hashes the stable two's-complement bits of every iteration, including negatives; no numeric value is narrowed.
 	binary.BigEndian.PutUint64(raw[:], uint64(iteration))
 	h.Write(raw[:])
 	sum := h.Sum(nil)
+	// #nosec G115 -- all 64 hash bits are intentionally preserved in the signed seed.
 	return int64(binary.BigEndian.Uint64(sum[:8]))
 }
 
@@ -232,6 +236,7 @@ func compileCampaignIteration(base *Scenario, seed int64) (*Scenario, []FaultEve
 	scenario := cloneScenario(base)
 	// The base was already validated. The compiled fields below are validated
 	// again before execution.
+	// #nosec G404 -- deterministic scenario generation must be reproducible from seed.
 	rng := mathrand.New(mathrand.NewSource(seed))
 	var schedule []FaultEvent
 	if c := base.Campaign.Netem; c != nil {

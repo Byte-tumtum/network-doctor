@@ -196,6 +196,7 @@ func userNamespaceReason() string {
 // the terminal — and is the caller's terminal only for Challenge Mode, where a
 // person is the one being asked.
 func LaunchDirector(ctx context.Context, self string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	// #nosec G204 -- self comes from os.Executable and argv is built as discrete arguments.
 	cmd := exec.CommandContext(ctx, self, argv...)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = stdout, stderr, stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -385,6 +386,7 @@ func (e *netnsEnv) startHolder(ctx context.Context, np *nodeProc) error {
 	if e.backend.dry {
 		return nil
 	}
+	// #nosec G204 -- self comes from os.Executable and path is this run's private config.
 	cmd := exec.CommandContext(e.holderCtx, self, NodeCommand, path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags:   syscall.CLONE_NEWNET | syscall.CLONE_NEWNS,
@@ -980,6 +982,7 @@ func (e *netnsEnv) Exec(ctx context.Context, node string, argv, env []string) Ex
 	// measuring the wrong machine.
 	full := append([]string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "-m", "--"}, argv...)
 	start := time.Now()
+	// #nosec G204 -- full[0] is fixed nsenter; argv stays an argument vector after --.
 	cmd := exec.CommandContext(ctx, full[0], full[1:]...)
 	cmd.Env = append(simEnv(), env...)
 	var stdout, stderr bytes.Buffer
@@ -1019,6 +1022,7 @@ func (e *netnsEnv) ExecInteractive(ctx context.Context, node string, argv, env [
 		return errors.New("empty command")
 	}
 	full := append([]string{"nsenter", "-t", strconv.Itoa(np.pid), "-n", "-m", "--"}, argv...)
+	// #nosec G204 -- full[0] is fixed nsenter; argv stays an argument vector after --.
 	cmd := exec.CommandContext(ctx, full[0], full[1:]...)
 	cmd.Env = append(simEnv(), env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
@@ -1121,7 +1125,7 @@ func (np *nodeProc) stop(ctx context.Context) error {
 	np.stopped = true
 	np.mu.Unlock()
 	if np.stdin != nil {
-		np.stdin.Close()
+		_ = np.stdin.Close()
 	}
 	done := make(chan error, 1)
 	go func() { done <- np.cmd.Wait() }()
@@ -1191,6 +1195,7 @@ func (e *netnsEnv) run(ctx context.Context, argv ...string) error {
 	if e.backend.dry {
 		return nil
 	}
+	// #nosec G204 -- validated simulator operations build argv; no shell interprets it.
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

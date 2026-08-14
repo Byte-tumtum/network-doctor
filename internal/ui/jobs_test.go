@@ -42,6 +42,7 @@ func TestHelperProcess(t *testing.T) {
 		// A child of the child, reachable only through the managed tree. Its
 		// output is discarded rather than inherited, so it can't hold our
 		// stdout pipe open and stall the drain after we die.
+		// #nosec G204 G702 -- os.Args[0] deliberately re-executes this test binary.
 		child := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
 		child.Env = append(os.Environ(), "GO_HELPER=1", "GO_HELPER_MODE=descendant")
 		child.Stdout, child.Stderr = io.Discard, io.Discard

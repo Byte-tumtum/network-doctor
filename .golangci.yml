@@ -7,6 +7,10 @@ formatters:
     - gofmt
 
 linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
   settings:
     errcheck:
       # Writes to stdout/stderr and deferred closes on read-only fds carry no

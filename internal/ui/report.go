@@ -57,12 +57,13 @@ var (
 // filename is timestamped and predictable, so refusing to write through an
 // existing name (or a symlink planted at it) beats silently overwriting.
 func writeFileExcl(path string, data []byte, perm os.FileMode) error {
+	// #nosec G304 -- exportReport generates path in cwd or the user's home and uses O_EXCL.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
 	if _, err = f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()

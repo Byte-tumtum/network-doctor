@@ -141,6 +141,7 @@ func dnsQuestion(name string) ([]byte, error) {
 		if len(label) == 0 || len(label) > 63 {
 			return nil, fmt.Errorf("%q is not a usable DNS name", name)
 		}
+		// #nosec G115 -- DNS labels are bounded to 63 bytes immediately above.
 		out = append(out, byte(len(label)))
 		out = append(out, label...)
 	}
@@ -475,6 +476,7 @@ func (o *netops) dotExchange(ctx context.Context, ep encryptedDNSEndpoint, query
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return finish(fmt.Errorf("TLS to port %d failed: %w", ep.dotPort, err))
 	}
+	// #nosec G115 -- dnsQuestion bounds this one-question query far below 65535 bytes.
 	framed := binary.BigEndian.AppendUint16(make([]byte, 0, 2+len(query.wire)), uint16(len(query.wire)))
 	if _, err := tlsConn.Write(append(framed, query.wire...)); err != nil {
 		return finish(fmt.Errorf("cannot send the DNS query: %w", err))

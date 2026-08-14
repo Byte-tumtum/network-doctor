@@ -46,6 +46,7 @@ func ssid(_ context.Context, iface string) string {
 	req := iwreq{pointer: &buf[0], length: iwEssidMaxSize}
 	copy(req.name[:len(req.name)-1], iface) // leave room for NUL; long names won't be wireless anyway
 
+	// #nosec G103 -- ioctl requires a pointer to this fixed-size iwreq structure.
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), siocgiwessid, uintptr(unsafe.Pointer(&req)))
 	if errno != 0 {
 		return ""

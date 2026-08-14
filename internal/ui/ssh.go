@@ -47,7 +47,7 @@ const (
 // AskpassEnv carries the password to the askpass helper, which is this binary
 // re-executed by ssh: main reads the variable and writes the secret to stdout,
 // which is where ssh expects an askpass helper's answer.
-const AskpassEnv = "NETDOC_ASKPASS"
+const AskpassEnv = "NETDOC_ASKPASS" // #nosec G101 -- this is an environment key, not a credential.
 
 // AskpassHostEnv names the host the password was collected for. ssh's whole
 // subtree inherits the askpass setting, so a ProxyJump child asking for the
@@ -57,14 +57,14 @@ const AskpassEnv = "NETDOC_ASKPASS"
 // It holds the HostName ssh_config resolves the target to, not what was typed:
 // ssh substitutes the real name before it asks, so an alias would never match
 // its own prompt.
-const AskpassHostEnv = "NETDOC_ASKPASS_HOST"
+const AskpassHostEnv = "NETDOC_ASKPASS_HOST" // #nosec G101 -- this is an environment key, not a credential.
 
 // AskpassProxyEnv marks a connection that goes through a jump host or a proxy
 // command. Those run an ssh of their own that inherits the helper, so a prompt
 // naming no host — an old client's keyboard-interactive PAM question — could
 // be either end's. With a proxy in play the helper refuses those instead of
 // guessing; without one there is only one machine it could be.
-const AskpassProxyEnv = "NETDOC_ASKPASS_PROXY"
+const AskpassProxyEnv = "NETDOC_ASKPASS_PROXY" // #nosec G101 -- this is an environment key, not a credential.
 
 // sshForm is the SSH login prompt. The host is the run target, not a field:
 // the form logs in to the machine the checks are about.
@@ -263,7 +263,7 @@ func sshCommand(host, login, key, password, self, goos string) (args, env []stri
 		if goos == "windows" {
 			version, err := sshVersion()
 			if err != nil {
-				return nil, nil, fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%v) — retry with the password field blank and let ssh ask", err)
+				return nil, nil, fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%w) — retry with the password field blank and let ssh ask", err)
 			}
 			if err := windowsForcedAskpass(version); err != nil {
 				return nil, nil, err
@@ -279,7 +279,7 @@ func sshCommand(host, login, key, password, self, goos string) (args, env []stri
 			// ordinary login quietly loses the answer it asked for. Say which
 			// step failed instead — with the field blank ssh asks on the
 			// terminal, where the user can see who is asking.
-			return nil, nil, fmt.Errorf("cannot read ssh config for %s (%v) — retry with the password field blank and let ssh ask", t.Host, err)
+			return nil, nil, fmt.Errorf("cannot read ssh config for %s (%w) — retry with the password field blank and let ssh ask", t.Host, err)
 		}
 		if effective == "" {
 			effective = t.Host // ssh had nothing to say
@@ -348,6 +348,7 @@ var sshEffective = func(args []string) (host string, proxied bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
 	defer cancel()
 	// -G prints the resolved config and connects to nothing.
+	// #nosec G204 -- ssh is fixed and args remain separate argv elements, never shell text.
 	cmd := exec.CommandContext(ctx, "ssh", append([]string{"-G"}, args...)...)
 	cmd.WaitDelay = time.Second // don't hang on Wait if one of them holds the pipe
 	var out, stderr bytes.Buffer
@@ -356,7 +357,8 @@ var sshEffective = func(args []string) (host string, proxied bool, err error) {
 	if err == nil {
 		err = cmd.Wait()
 		cleanup()
-		if exit, ok := err.(*exec.ExitError); ok {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
 			exit.Stderr = stderr.Bytes()
 		}
 	}
@@ -392,6 +394,7 @@ func parseSSHConfig(out string) (host string, proxied bool) {
 // session, and the copy comes back with the terminal so "Permission denied"
 // survives in a job pane instead of being painted over by the restored TUI.
 func runSSH(args, env []string) tea.Cmd {
+	// #nosec G204 -- ssh is fixed and args remain separate argv elements, never shell text.
 	cmd := exec.Command("ssh", args...)
 	cmd.Env = env // nil inherits
 	tee := &capWriter{}

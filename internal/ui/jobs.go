@@ -3,6 +3,7 @@ package ui
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"sync"
@@ -82,6 +83,7 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 		timeout = toolTimeout
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
+	// #nosec G204 G702 -- name comes from the fixed tool table; args are never shell text.
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = env
 	cmd.WaitDelay = 2 * time.Second // don't hang on Wait if a child holds the pipe
@@ -219,10 +221,11 @@ func classifyJob(ctx context.Context, werr error) JobStatus {
 	if werr == nil {
 		return JobDone
 	}
-	switch context.Cause(ctx) {
-	case context.Canceled:
+	cause := context.Cause(ctx)
+	switch {
+	case errors.Is(cause, context.Canceled):
 		return JobCanceled
-	case context.DeadlineExceeded:
+	case errors.Is(cause, context.DeadlineExceeded):
 		return JobTimedOut
 	default:
 		return JobFailed

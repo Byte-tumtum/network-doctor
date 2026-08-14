@@ -108,6 +108,7 @@ func (s *socksServer) handle(client net.Conn) {
 	request, reply, err := readSOCKSRequest(client)
 	if err != nil {
 		if reply != 0 {
+			// #nosec G115 -- reply is one of the byte-sized SOCKS reply constants.
 			_ = writeSOCKSReply(client, byte(reply), netip.AddrPort{})
 		}
 		return
@@ -315,6 +316,7 @@ func dialResult(err error) string {
 func addrPort(addr net.Addr) netip.AddrPort {
 	if tcp, ok := addr.(*net.TCPAddr); ok {
 		if ip, valid := netip.AddrFromSlice(tcp.IP); valid {
+			// #nosec G115 -- net.TCPAddr ports supplied by the network stack fit uint16.
 			return netip.AddrPortFrom(ip.Unmap(), uint16(tcp.Port))
 		}
 	}

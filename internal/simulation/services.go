@@ -123,7 +123,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			pc, err := net.ListenPacket("udp", net.JoinHostPort(a, port))
 			if err != nil {
 				for _, c := range open {
-					c.Close()
+					_ = c.Close()
 				}
 				_ = delays.Close()
 				return nil, nil, err
@@ -689,6 +689,7 @@ func dnsReply(msg []byte, zone map[string][]netip.Addr) []byte {
 	}
 	reply := append(dnsHeader(id, out, dnsRcodeSuccess, 1, len(matches)), question...)
 	for _, addr := range matches {
+		// #nosec G602 -- dnsParseQuestion only returns qend after a complete four-byte suffix.
 		reply = append(reply, dnsAnswer(question[:len(question)-4], qtype, addr)...)
 	}
 	return reply
@@ -698,7 +699,9 @@ func dnsHeader(id, flags, rcode uint16, qd, an int) []byte {
 	h := make([]byte, dnsHeaderLen)
 	binary.BigEndian.PutUint16(h[0:2], id)
 	binary.BigEndian.PutUint16(h[2:4], flags|rcode)
+	// #nosec G115 -- this server emits exactly one question and a bounded static-zone answer set.
 	binary.BigEndian.PutUint16(h[4:6], uint16(qd))
+	// #nosec G115 -- this server emits exactly one question and a bounded static-zone answer set.
 	binary.BigEndian.PutUint16(h[6:8], uint16(an))
 	return h
 }
@@ -738,6 +741,7 @@ func dnsAnswer(name []byte, qtype uint16, addr netip.Addr) []byte {
 	rr = binary.BigEndian.AppendUint16(rr, qtype)
 	rr = binary.BigEndian.AppendUint16(rr, dnsClassIN)
 	rr = binary.BigEndian.AppendUint32(rr, dnsTTL)
+	// #nosec G115 -- netip addresses have exactly 4 or 16 bytes of RDATA.
 	rr = binary.BigEndian.AppendUint16(rr, uint16(len(rdata)))
 	return append(rr, rdata...)
 }
@@ -842,7 +846,7 @@ func holderProbeReply(fields []string) string {
 		}
 		return holderProbeResult + " " + holderProbeFailed
 	}
-	conn.Close()
+	_ = conn.Close()
 	return holderProbeResult + " " + holderProbeReached
 }
 

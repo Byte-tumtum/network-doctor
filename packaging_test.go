@@ -266,6 +266,7 @@ func TestShippedSurfacesDeclareExactlyTheRealFlags(t *testing.T) {
 	slices.Sort(want)
 
 	for path, declared := range flagSurfaces {
+		// #nosec G304 -- path is a repository-owned key from the fixed flagSurfaces table.
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -374,6 +375,7 @@ func TestShippedManPagesHaveValidMetadata(t *testing.T) {
 		}
 		pages++
 		path := content.Src
+		// #nosec G304 -- path comes from this repository's checked-in GoReleaser config.
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Error(err)

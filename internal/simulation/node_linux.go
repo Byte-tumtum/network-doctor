@@ -29,6 +29,7 @@ const resolvConf = "/etc/resolv.conf"
 // It never touches the network itself — the director does the wiring from
 // outside via nsenter — which keeps the holder small enough to read in one go.
 func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
+	// #nosec G304 -- production supplies a run-owned path; the internal command can select another, but this unprivileged read is parsed before use and performs no write.
 	blob, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return err
@@ -123,6 +124,7 @@ func enableForwarding(path, family string) error {
 	if err := os.WriteFile(path, []byte("1\n"), 0o600); err != nil {
 		return fmt.Errorf("enable namespace %s forwarding: %w", family, err)
 	}
+	// #nosec G304 -- callers pass only the fixed namespaced forwarding sysctls above.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("verify namespace %s forwarding: %w", family, err)
@@ -138,6 +140,7 @@ func enableIPv6() error {
 		if err := os.WriteFile(path, []byte("0\n"), 0o600); err != nil {
 			return fmt.Errorf("enable IPv6 in simulator namespace through %s: %w", path, err)
 		}
+		// #nosec G304 -- ipv6DisablePaths is the fixed sysctl list above.
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("verify IPv6 in simulator namespace through %s: %w", path, err)
@@ -156,6 +159,7 @@ func enableIPv6() error {
 // two simulated machines disagree about who their resolver is.
 func bindResolver(dir, node, resolver string) error {
 	src := filepath.Join(dir, node+"-resolv.conf")
+	// #nosec G306 -- resolv.conf is conventionally world-readable and contains no secret.
 	if err := os.WriteFile(src, []byte("nameserver "+resolver+"\n"), 0o644); err != nil {
 		return err
 	}

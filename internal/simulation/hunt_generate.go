@@ -185,13 +185,16 @@ func DeriveHuntCaseSeed(seed int64, base string, caseNumber int) int64 {
 	h.Write([]byte(huntSeedDomain))
 	h.Write([]byte{0})
 	var raw [8]byte
+	// #nosec G115 -- two's-complement seed bits are part of the reproduction contract.
 	binary.BigEndian.PutUint64(raw[:], uint64(seed))
 	h.Write(raw[:])
 	h.Write([]byte{0})
 	h.Write([]byte(base))
 	h.Write([]byte{0})
+	// #nosec G115 -- deterministic seed derivation hashes the stable two's-complement bits of every case number, including negatives; no numeric value is narrowed.
 	binary.BigEndian.PutUint64(raw[:], uint64(caseNumber))
 	h.Write(raw[:])
+	// #nosec G115 -- all 64 hash bits are intentionally preserved in the signed seed.
 	return int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]))
 }
 
@@ -225,6 +228,7 @@ func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, ca
 		return nil, fmt.Errorf("base scenario: %w", err)
 	}
 	caseSeed := DeriveHuntCaseSeed(huntSeed, baseID, caseNumber)
+	// #nosec G404 -- hunt cases must reproduce exactly from their published seed.
 	rng := mathrand.New(mathrand.NewSource(caseSeed))
 	var applicable []mutationOperator
 	for _, op := range huntOperators(version) {
@@ -748,6 +752,7 @@ func controlledTargetOnRoute(s *Scenario, client string, family routeFamily, wan
 		}
 		selected, ok := configuredRouteTo(s.Topology.Routes, client, netip.MustParseAddr(target.IP.String()))
 		if ok && selected.Via == want.Via {
+			// #nosec G115 -- ParseTarget already restricts ports to 1..65535.
 			return netip.AddrPortFrom(netip.MustParseAddr(target.IP.String()), uint16(target.Port)).String(), true
 		}
 	}
@@ -964,6 +969,7 @@ func briefedTargetEndpoint(s *Scenario) string {
 		if err != nil {
 			continue
 		}
+		// #nosec G115 -- ParseTarget already restricts ports to 1..65535.
 		owned = append(owned, netip.AddrPortFrom(addr, uint16(target.Port)).String())
 	}
 	if len(owned) == 0 {
@@ -1180,6 +1186,7 @@ func controlOnSpecificRoute(s *Scenario, client string, family routeFamily, via 
 		}
 		selected, ok := configuredRouteTo(s.Topology.Routes, client, addr)
 		if ok && !selected.Default && selected.Via == via {
+			// #nosec G115 -- ParseTarget already restricts ports to 1..65535.
 			return netip.AddrPortFrom(addr, uint16(target.Port)).String(), true
 		}
 	}

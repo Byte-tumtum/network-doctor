@@ -566,7 +566,8 @@ func TestLaunchToolStartErrorClearsPreviousJobState(t *testing.T) {
 		name += ".exe"
 	}
 	bin := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(bin, []byte("not an executable format"), 0755); err != nil {
+	// #nosec G306 -- the fixture must be executable to reach the exec-format failure path.
+	if err := os.WriteFile(bin, []byte("not an executable format"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	tool := Tool{
@@ -827,6 +828,7 @@ func TestEmptyHistoryPathNeitherLoadsNorWrites(t *testing.T) {
 		t.Fatalf("in-session history = %q, want both targets", got)
 	}
 
+	// #nosec G304 -- path is this test's temporary history fixture.
 	if b, err := os.ReadFile(path); err != nil || string(b) != existing {
 		t.Fatalf("history file = %q (err %v), want it untouched", b, err)
 	}
@@ -845,6 +847,7 @@ func TestSaveHistoryDoesNotFollowSymlink(t *testing.T) {
 
 	saveHistory(path, []string{"one.test"})
 
+	// #nosec G304 -- victim is this test's temporary symlink target.
 	if b, err := os.ReadFile(victim); err != nil || string(b) != "precious\n" {
 		t.Fatalf("symlink target = %q (err %v), want it untouched", b, err)
 	}
