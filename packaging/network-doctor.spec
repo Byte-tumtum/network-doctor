@@ -42,7 +42,7 @@ go build -ldflags "-s -w -X main.version=%{version}" -o netdoc .
 # Shipped from the same source and version as netdoc, to keep this package's
 # installed binaries identical to the nfpm-built deb/rpm/apk on the release
 # page. netdoc-sim needs a netdoc beside it, which %{_bindir} gives it.
-go build -ldflags "-s -w" -o netdoc-sim ./cmd/netdoc-sim
+go build -ldflags "-s -w -X main.version=%{version}" -o netdoc-sim ./cmd/netdoc-sim
 
 %install
 install -Dpm0755 netdoc %{buildroot}%{_bindir}/netdoc

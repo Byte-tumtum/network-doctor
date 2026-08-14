@@ -490,6 +490,45 @@ func TestRPMSpecShipsTheSameBinariesAsNFPM(t *testing.T) {
 			t.Errorf("spec %%install never installs %s", name)
 		}
 	}
+
+	builds := make(map[string][]string)
+	for _, command := range specSection(t, spec, "%build") {
+		command, _, _ = strings.Cut(command, " #")
+		fields := strings.Fields(command)
+		if len(fields) < 2 || fields[0] != "go" || fields[1] != "build" {
+			continue
+		}
+		if strings.Contains(command, " && ") || strings.Contains(command, " || ") || strings.Contains(command, ";") {
+			t.Errorf("ambiguous RPM go build command %q; keep each build in its own command", command)
+			continue
+		}
+		var outputs []string
+		for i := 2; i < len(fields); i++ {
+			switch {
+			case fields[i] == "-o" && i+1 < len(fields):
+				outputs = append(outputs, fields[i+1])
+			case strings.HasPrefix(fields[i], "-o="):
+				outputs = append(outputs, strings.TrimPrefix(fields[i], "-o="))
+			}
+		}
+		if len(outputs) != 1 {
+			t.Errorf("RPM go build command %q has outputs %v, want exactly one", command, outputs)
+			continue
+		}
+		output := strings.Trim(outputs[0], `'"`)
+		builds[output] = append(builds[output], command)
+	}
+	for _, name := range want {
+		commands := builds[name]
+		if len(commands) != 1 {
+			t.Errorf("RPM %%build has %d go build commands producing %s, want exactly one", len(commands), name)
+			continue
+		}
+		if !strings.Contains(commands[0], "-X main.version=%{version}") {
+			t.Errorf("RPM go build command producing %s does not inject -X main.version=%%{version}: %s", name, commands[0])
+		}
+	}
+
 	if !strings.Contains(strings.Join(specSection(t, spec, "%build"), "\n"), "./cmd/netdoc-sim") {
 		t.Error("the spec's build section never compiles ./cmd/netdoc-sim")
 	}
