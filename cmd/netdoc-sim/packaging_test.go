@@ -453,6 +453,7 @@ func TestCurrentChallengeExamplesUseCurrentGeneration(t *testing.T) {
 	}
 	for _, name := range []string{"Dockerfile", "README.md", filepath.Join("docs", "simulation.md"),
 		filepath.Join("cmd", "netdoc-sim", "challenge.go")} {
+		// #nosec G304 -- name comes from the fixed repository-owned list above.
 		data, err := os.ReadFile(filepath.Join("..", "..", name))
 		if err != nil {
 			t.Fatal(err)
