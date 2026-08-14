@@ -145,6 +145,7 @@ Builds a virtual network from a scenario, runs netdoc inside it, and reports
 whether netdoc's diagnosis matched what the scenario broke.
 
 Commands:
+  help                     print this help
   run <scenario> [flags]   build the network, run the tests, print the report
   campaign <scenario>      run a seeded scenario campaign sequentially
   hunt [base] [flags]      generate deterministic faults and rank likely bugs
@@ -195,7 +196,7 @@ Flags for hunt:
   -v                       log each privileged command as it runs
 
 Flags for triage:
-  -scenarios <list>        comma-separated baselines (default: all three)
+  -scenarios <list>        comma-separated baselines (default: all)
   -cases <n>               unique generated cases per baseline (default 20)
   -seed <int64>            override the fixed seed of every selected baseline
   -max-faults <n>          maximum mutations per case (default 2, maximum 3)
@@ -233,6 +234,9 @@ Flags for challenge:
   -netdoc <path>           the netdoc binary to run
   -timeout <duration>      netdoc's per-probe timeout (default 4s)
   -v                       log each privileged command as it runs
+
+Flags for cleanup:
+  -all                     release every kept simulation
 
 Exit codes: 0 the diagnosis matched, 1 it did not, 2 bad arguments,
 3 the simulation could not run.

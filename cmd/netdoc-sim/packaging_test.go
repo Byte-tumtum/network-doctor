@@ -17,13 +17,12 @@ import (
 	"github.com/heymaikol/network-doctor/internal/simulation"
 )
 
-// The man page and the three completion files are hand-maintained copies of
-// netdoc-sim's command and flag surface, so a new command or flag silently
-// ships undocumented and uncompletable, and a deleted one stays advertised.
-// Nothing here keeps a list of that surface: the commands come out of the
-// dispatch switch and the flags out of the real flag sets, and every shipped
-// file has to declare exactly that — in its own declaration syntax, so a name
-// that only appears in prose, a comment or an example does not count.
+// The man page, three completion files, and rendered usage expose copies of
+// netdoc-sim's command and flag surface. Nothing here keeps a list of that
+// surface: the commands come out of the dispatch switch and the flags out of
+// the real flag sets, and every shipped surface has to declare exactly that —
+// in its own declaration syntax, so a name that only appears in prose, a
+// comment or an example does not count.
 //
 // netdoc-sim is hierarchical, so every check below is per command: -cases
 // belongs to hunt and triage, and finding the word somewhere in a file is not
@@ -227,6 +226,74 @@ func manFlags(data string) map[string][]string {
 	return out
 }
 
+// usageCommands reads only the command declarations in the Commands block.
+func usageCommands(data string) []string {
+	_, body, ok := strings.Cut(data, "\nCommands:\n")
+	if !ok {
+		return nil
+	}
+	body, _, _ = strings.Cut(body, "\n\n")
+	var names []string
+	for _, line := range strings.Split(body, "\n") {
+		line, ok := strings.CutPrefix(line, "  ")
+		fields := strings.Fields(line)
+		if !ok || len(fields) == 0 {
+			continue
+		}
+		names = append(names, fields[0])
+	}
+	return sorted(names)
+}
+
+// usageFlagDeclarations reads only declarations in Flags for <command> blocks.
+func usageFlagDeclarations(data string) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	command := ""
+	for _, line := range strings.Split(data, "\n") {
+		if name, ok := strings.CutPrefix(line, "Flags for "); ok && strings.HasSuffix(name, ":") {
+			command = strings.TrimSuffix(name, ":")
+			continue
+		}
+		if command == "" {
+			continue
+		}
+		if line == "" {
+			command = ""
+			continue
+		}
+		declaration, ok := strings.CutPrefix(line, "  -")
+		fields := strings.Fields(declaration)
+		if !ok || len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		name, _, _ = strings.Cut(name, "[")
+		if out[command] == nil {
+			out[command] = map[string]string{}
+		}
+		out[command][name] = line
+	}
+	return out
+}
+
+func usageFlags(data string) map[string][]string {
+	out := map[string][]string{}
+	for command, declarations := range usageFlagDeclarations(data) {
+		for name := range declarations {
+			out[command] = append(out[command], name)
+		}
+		out[command] = sorted(out[command])
+	}
+	return out
+}
+
+func renderedUsage(t *testing.T) string {
+	t.Helper()
+	var out strings.Builder
+	usage(&out)
+	return out.String()
+}
+
 var (
 	bashCommandList = regexp.MustCompile(`(?s)_netdoc_sim_commands="([^"]*)"`)
 	bashFlagList    = regexp.MustCompile(`(?m)^\s+([a-z-]+)\)\s+echo "([^"]*)"`)
@@ -352,8 +419,18 @@ func sorted(names []string) []string {
 
 type shippedSurface struct {
 	path     []string
+	name     string
+	content  func(*testing.T) string
 	commands func(string) []string
 	flags    func(string) map[string][]string
+}
+
+func (s shippedSurface) read(t *testing.T) (string, string) {
+	t.Helper()
+	if s.content != nil {
+		return s.name, s.content(t)
+	}
+	return filepath.Join(s.path...), packagingFile(t, s.path...)
 }
 
 var shippedSurfaces = []shippedSurface{
@@ -361,13 +438,14 @@ var shippedSurfaces = []shippedSurface{
 	{path: []string{"completions", "netdoc-sim.bash"}, commands: bashCommands, flags: bashFlags},
 	{path: []string{"completions", "netdoc-sim.zsh"}, commands: zshCommands, flags: zshFlags},
 	{path: []string{"completions", "netdoc-sim.fish"}, commands: fishCommands, flags: fishFlags},
+	{name: "netdoc-sim help", content: renderedUsage, commands: usageCommands, flags: usageFlags},
 }
 
 func TestShippedSurfacesDeclareExactlyTheRealCommands(t *testing.T) {
 	want := publicCommands(t)
 	for _, surface := range shippedSurfaces {
-		name := filepath.Join(surface.path...)
-		got := surface.commands(packagingFile(t, surface.path...))
+		name, content := surface.read(t)
+		got := surface.commands(content)
 		if len(got) == 0 {
 			t.Fatalf("%s: parsed no command declarations at all; the file's syntax changed", name)
 		}
@@ -388,8 +466,8 @@ func TestShippedSurfacesDeclareExactlyTheRealFlagsPerCommand(t *testing.T) {
 	commands := publicCommands(t)
 	want := commandFlags(t)
 	for _, surface := range shippedSurfaces {
-		name := filepath.Join(surface.path...)
-		got := surface.flags(packagingFile(t, surface.path...))
+		name, content := surface.read(t)
+		got := surface.flags(content)
 		if len(got) == 0 {
 			t.Fatalf("%s: parsed no flag declarations at all; the file's syntax changed", name)
 		}
@@ -421,7 +499,7 @@ func TestShippedSurfacesDeclareExactlyTheRealFlagsPerCommand(t *testing.T) {
 // the list is the program's own. Comparing the whole list as one string checks
 // both directions at once: a value added, removed or renamed in the simulation
 // package stops matching what the completions offer.
-func TestCompletionsOfferTheRealFixedVocabularies(t *testing.T) {
+func TestShippedSurfacesOfferTheRealFixedVocabularies(t *testing.T) {
 	vocabularies := []struct {
 		what   string
 		values []string
@@ -452,6 +530,23 @@ func TestCompletionsOfferTheRealFixedVocabularies(t *testing.T) {
 				t.Errorf("netdoc-sim.1 never names %s %q", vocabulary.what, value)
 			}
 		}
+	}
+	helpDifficulties := usageFlagDeclarations(renderedUsage(t))["challenge"]["difficulty"]
+	if helpDifficulties == "" {
+		t.Fatal("netdoc-sim help has no structured -difficulty declaration")
+	}
+	if len(simulation.ChallengeDifficulties) == 0 {
+		t.Fatal("the challenge difficulty vocabulary is empty")
+	}
+	wantDifficulties := strings.Join(simulation.ChallengeDifficulties[:len(simulation.ChallengeDifficulties)-1], ", ")
+	if len(simulation.ChallengeDifficulties) > 1 {
+		wantDifficulties += " or "
+	}
+	wantDifficulties += simulation.ChallengeDifficulties[len(simulation.ChallengeDifficulties)-1]
+	_, gotDifficulties, hasPrefix := strings.Cut(helpDifficulties, "draw an ")
+	gotDifficulties, hasSuffix := strings.CutSuffix(gotDifficulties, " challenge")
+	if !hasPrefix || !hasSuffix || gotDifficulties != wantDifficulties {
+		t.Errorf("netdoc-sim help offers challenge difficulties %q, want %q", gotDifficulties, wantDifficulties)
 	}
 	// The triage baselines are documented but not completed: -scenarios takes a
 	// comma-separated list, which none of the three shells completes usefully,
