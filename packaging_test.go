@@ -178,36 +178,102 @@ func TestReleaseWorkflowPublishesTheImageAtTheTag(t *testing.T) {
 
 // The man page and the three completion files are hand-maintained copies of the
 // flag list in main.go, so a new flag silently ships undocumented and
-// uncompletable. Read the flags back out of the real usage output and require
-// each shipped surface to mention every one, in that surface's own spelling.
-func TestShippedSurfacesDocumentEveryFlag(t *testing.T) {
+// uncompletable, and a deleted one stays advertised. Read the flags back out of
+// the real usage output and require every shipped surface to declare exactly
+// that set — in that surface's own declaration syntax, so a name that only
+// turns up in prose, a comment, or an example does not count as documented.
+
+// flagNames pulls capture group 1 out of every match, which is the flag name in
+// each of the patterns below.
+func flagNames(re *regexp.Regexp, data string) []string {
+	var names []string
+	for _, m := range re.FindAllStringSubmatch(data, -1) {
+		// Single letters are aliases (-h), which the flag package never
+		// defines and PrintDefaults never prints; only the long spelling is
+		// compared.
+		if len(m[1]) > 1 {
+			names = append(names, m[1])
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// declaredBy reads flag names straight out of a file with one pattern.
+func declaredBy(pattern string) func(string) []string {
+	re := regexp.MustCompile(pattern)
+	return func(data string) []string { return flagNames(re, data) }
+}
+
+// manOptions reads the OPTIONS section of the man page. An option is declared
+// on the line after a .TP, so the flags named in a body paragraph (-toolbox's
+// "Cannot be combined with \-json") and in the EXAMPLES section are not
+// mistaken for declarations of their own.
+func manOptions(data string) []string {
+	_, opts, ok := strings.Cut(data, "\n.SH OPTIONS\n")
+	if !ok {
+		return nil
+	}
+	opts, _, _ = strings.Cut(opts, "\n.SH ")
+	lines := strings.Split(opts, "\n")
+	var decls []string
+	for i, line := range lines {
+		if strings.TrimSpace(line) == ".TP" && i+1 < len(lines) {
+			// \- is roff for a literal hyphen; drop the escapes so the names
+			// read the way they do on the command line.
+			decls = append(decls, strings.ReplaceAll(lines[i+1], `\`, ""))
+		}
+	}
+	return flagNames(regexp.MustCompile(`-([a-zA-Z0-9][a-zA-Z0-9-]*)`), strings.Join(decls, "\n"))
+}
+
+var flagSurfaces = map[string]func(string) []string{
+	"packaging/netdoc.1": manOptions,
+	// The compgen word list spells every flag both ways on one line
+	// ("-json --json"). The case labels above it separate the two spellings
+	// with a pipe, so only the list matches.
+	"packaging/completions/netdoc.bash": declaredBy(`-[a-zA-Z0-9-]+ --([a-zA-Z0-9-]+)`),
+	// _arguments option specs: {--json,-json}. The exclusion lists in front of
+	// them are parenthesized, not braced.
+	"packaging/completions/netdoc.zsh": declaredBy(`\{--([a-zA-Z0-9-]+),`),
+	// complete -c netdoc -o json -l json -d '...'; -l is the long option.
+	"packaging/completions/netdoc.fish": declaredBy(`(?m)^complete\b.*? -l ([a-zA-Z0-9-]+)`),
+}
+
+func TestShippedSurfacesDeclareExactlyTheRealFlags(t *testing.T) {
 	var usage bytes.Buffer
 	if code := run([]string{"--help"}, &usage, io.Discard); code != 0 {
 		t.Fatalf("run(--help) = %d, want 0", code)
 	}
 	// PrintDefaults writes "  -name value", then the usage text on its own
 	// indented line.
-	flags := regexp.MustCompile(`(?m)^  -(\S+)`).FindAllStringSubmatch(usage.String(), -1)
-	if len(flags) < 2 {
-		t.Fatalf("parsed %d flags out of the usage output:\n%s", len(flags), usage.String())
+	want := flagNames(regexp.MustCompile(`(?m)^  -(\S+)`), usage.String())
+	if len(want) < 2 {
+		t.Fatalf("parsed %d flags out of the usage output:\n%s", len(want), usage.String())
 	}
+	// The one flag PrintDefaults cannot report: the flag package answers -help
+	// itself, by returning flag.ErrHelp rather than by being a defined flag.
+	// The successful run above is the proof that netdoc still accepts it.
+	want = append(want, "help")
+	slices.Sort(want)
 
-	// How each file spells a flag, so "documented" means the real declaration
-	// and not a passing mention in a comment or an example.
-	surfaces := map[string]func(name string) string{
-		"packaging/netdoc.1":                func(n string) string { return `\-` + strings.ReplaceAll(n, "-", `\-`) },
-		"packaging/completions/netdoc.bash": func(n string) string { return "-" + n + " --" + n },
-		"packaging/completions/netdoc.zsh":  func(n string) string { return "{--" + n + ",-" + n + "}" },
-		"packaging/completions/netdoc.fish": func(n string) string { return "-o " + n + " -l " + n },
-	}
-	for path, spelling := range surfaces {
+	for path, declared := range flagSurfaces {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, f := range flags {
-			if want := spelling(f[1]); !strings.Contains(string(data), want) {
-				t.Errorf("%s never declares -%s (looked for %q)", path, f[1], want)
+		got := declared(string(data))
+		if len(got) == 0 {
+			t.Fatalf("%s: parsed no flag declarations at all; the file's syntax changed", path)
+		}
+		for _, name := range want {
+			if !slices.Contains(got, name) {
+				t.Errorf("%s never declares --%s; netdoc accepts it, so this surface has to ship it too", path, name)
+			}
+		}
+		for _, name := range got {
+			if !slices.Contains(want, name) {
+				t.Errorf("%s declares --%s, which netdoc does not accept; drop it or restore the flag", path, name)
 			}
 		}
 	}
