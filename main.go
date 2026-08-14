@@ -186,7 +186,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&checks, "check", "run stable probe IDs in `probe[,probe...]` form; repeatable")
 	fs.Var(&skips, "skip", "skip stable probe IDs in `probe[,probe...]` form; repeatable")
 	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
-	keys := fs.String("keys", "", "keybinding `preset` for the TUI: default or vim")
+	keys := fs.String("keys", "", "keybinding `preset` for the TUI: "+strings.Join(ui.KeyPresets(), " or "))
 	showVersion := fs.Bool("version", false, "print version and exit")
 	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
 

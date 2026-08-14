@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -253,8 +254,9 @@ func TestRunRejectsUnknownKeyPreset(t *testing.T) {
 	if code := run([]string{"-keys", "emacs", "-json"}, &stdout, &stderr); code != 2 {
 		t.Errorf("run(-keys emacs) = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "unknown key preset") || !strings.Contains(stderr.String(), "vim") {
-		t.Errorf("stderr = %q, want the rejection and the valid names", stderr.String())
+	want := fmt.Sprintf("netdoc: -keys: unknown key preset %q (have: %s)\n", "emacs", strings.Join(ui.KeyPresets(), ", "))
+	if stderr.String() != want {
+		t.Errorf("stderr = %q, want %q", stderr.String(), want)
 	}
 	if stdout.Len() > 0 {
 		t.Errorf("stdout = %q, want nothing", stdout.String())

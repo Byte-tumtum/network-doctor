@@ -159,9 +159,21 @@ var vimPreset = func() keyPreset {
 	return p
 }()
 
-var presets = map[string]keyPreset{
-	"default": defaultPreset,
-	"vim":     vimPreset,
+var presets = []struct {
+	name   string
+	preset keyPreset
+}{
+	{"default", defaultPreset},
+	{"vim", vimPreset},
+}
+
+// KeyPresets lists the built-in presets in user-facing order.
+func KeyPresets() []string {
+	names := make([]string, len(presets))
+	for i, preset := range presets {
+		names[i] = preset.name
+	}
+	return names
 }
 
 func clonePreset(p keyPreset) keyPreset {
@@ -175,13 +187,14 @@ func clonePreset(p keyPreset) keyPreset {
 // PresetKeymap resolves one built-in preset. Empty selects the default.
 func PresetKeymap(name string) (Keymap, error) {
 	if name == "" {
-		name = "default"
+		name = presets[0].name
 	}
-	preset, ok := presets[name]
-	if !ok {
-		return Keymap{}, fmt.Errorf("unknown key preset %q (have: default, vim)", name)
+	for _, preset := range presets {
+		if preset.name == name {
+			return newKeymap(preset.preset), nil
+		}
 	}
-	return newKeymap(preset), nil
+	return Keymap{}, fmt.Errorf("unknown key preset %q (have: %s)", name, strings.Join(KeyPresets(), ", "))
 }
 
 // Keymap resolves keys to actions. Its zero value is the default keymap.

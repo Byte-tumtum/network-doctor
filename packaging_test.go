@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heymaikol/network-doctor/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -285,6 +286,79 @@ func TestShippedSurfacesDeclareExactlyTheRealFlags(t *testing.T) {
 				t.Errorf("%s declares --%s, which netdoc does not accept; drop it or restore the flag", path, name)
 			}
 		}
+	}
+}
+
+func completionVocabulary(t *testing.T, path, pattern string) []string {
+	t.Helper()
+	// #nosec G304 -- path is a repository-owned value from the fixed completions table.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(pattern).FindStringSubmatch(string(data))
+	if match == nil {
+		t.Fatalf("%s: could not parse the -keys completion", path)
+	}
+	return strings.Fields(match[1])
+}
+
+func manOptionBody(data, name string) string {
+	_, options, ok := strings.Cut(data, "\n.SH OPTIONS\n")
+	if !ok {
+		return ""
+	}
+	options, _, _ = strings.Cut(options, "\n.SH ")
+	lines := strings.Split(options, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != ".TP" || !slices.Contains(flagNames(regexp.MustCompile(`-([a-zA-Z0-9][a-zA-Z0-9\\-]*)`), strings.ReplaceAll(lines[i+1], `\`, "")), name) {
+			continue
+		}
+		end := len(lines)
+		for j := i + 2; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == ".TP" {
+				end = j
+				break
+			}
+		}
+		return strings.Join(lines[i+2:end], "\n")
+	}
+	return ""
+}
+
+func manKeyPresets(data string) []string {
+	body := manOptionBody(data, "keys")
+	_, values, ok := strings.Cut(body, "Keybinding preset for the terminal UI, either\n")
+	if !ok {
+		return nil
+	}
+	values, _, ok = strings.Cut(values, "\nThe\n")
+	if !ok {
+		return nil
+	}
+	return flagNames(regexp.MustCompile(`(?m)^\.BR? ([a-zA-Z0-9][a-zA-Z0-9-]*)`), values)
+}
+
+func TestShippedSurfacesOfferTheRealKeyPresets(t *testing.T) {
+	want := ui.KeyPresets()
+	completions := []struct {
+		path, pattern string
+	}{
+		{"packaging/completions/netdoc.bash", `(?s)-keys \| --keys\).*?compgen -W "([^"]*)".*?\n\s*;;`},
+		{"packaging/completions/netdoc.zsh", `(?m)^.*\{--keys,-keys\}.*:preset:\(([^)]*)\).*$`},
+		{"packaging/completions/netdoc.fish", `(?m)^complete -c netdoc [^\n]* -l keys [^\n]*\\\n[ \t]*-a '([^']*)'$`},
+	}
+	for _, completion := range completions {
+		if got := completionVocabulary(t, completion.path, completion.pattern); !slices.Equal(got, want) {
+			t.Errorf("%s offers -keys values %v, want %v", completion.path, got, want)
+		}
+	}
+	data, err := os.ReadFile("packaging/netdoc.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manKeyPresets(string(data)); !slices.Equal(got, want) {
+		t.Errorf("packaging/netdoc.1 documents -keys values %v, want %v", got, want)
 	}
 }
 

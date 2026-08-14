@@ -183,13 +183,12 @@ func TestVimMotionsDispatch(t *testing.T) {
 }
 
 func TestBuiltInPresetsHaveNoConflicts(t *testing.T) {
-	for _, name := range []string{"default", "vim"} {
-		t.Run(name, func(t *testing.T) {
-			preset := presets[name]
+	for _, preset := range presets {
+		t.Run(preset.name, func(t *testing.T) {
 			for ctx := range numContexts {
 				owner := map[string]string{}
 				for _, def := range actionDefs {
-					for _, seq := range preset[ctx][def.act] {
+					for _, seq := range preset.preset[ctx][def.act] {
 						if held := owner[seq]; held != "" {
 							t.Errorf("%q is bound to both %s and %s", seq, held, def.name)
 						}
@@ -204,11 +203,28 @@ func TestBuiltInPresetsHaveNoConflicts(t *testing.T) {
 					}
 				}
 			}
-			if len(preset[ctxList][actQuit]) == 0 ||
-				(len(preset[ctxViewer][actBack]) == 0 && len(preset[ctxViewer][actClearFilter]) == 0) {
+			if len(preset.preset[ctxList][actQuit]) == 0 ||
+				(len(preset.preset[ctxViewer][actBack]) == 0 && len(preset.preset[ctxViewer][actClearFilter]) == 0) {
 				t.Error("preset is missing an exit")
 			}
 		})
+	}
+}
+
+func TestKeyPresetsAreStableAndResolvable(t *testing.T) {
+	want := []string{"default", "vim"}
+	got := KeyPresets()
+	if !slices.Equal(got, want) {
+		t.Fatalf("KeyPresets() = %v, want %v", got, want)
+	}
+	got[0] = "changed"
+	if !slices.Equal(KeyPresets(), want) {
+		t.Fatalf("mutating KeyPresets() changed later calls: %v", KeyPresets())
+	}
+	for _, name := range KeyPresets() {
+		if _, err := PresetKeymap(name); err != nil {
+			t.Errorf("PresetKeymap(%q): %v", name, err)
+		}
 	}
 }
 
@@ -251,8 +267,9 @@ func TestActionMetadataMatchesDispatchAndHelp(t *testing.T) {
 }
 
 func TestPresetKeymapRejectsUnknownName(t *testing.T) {
-	if _, err := PresetKeymap("emacs"); err == nil || !strings.Contains(err.Error(), "default, vim") {
-		t.Fatalf("PresetKeymap(emacs) error = %v", err)
+	want := fmt.Sprintf("unknown key preset %q (have: %s)", "emacs", strings.Join(KeyPresets(), ", "))
+	if _, err := PresetKeymap("emacs"); err == nil || err.Error() != want {
+		t.Fatalf("PresetKeymap(emacs) error = %v, want %q", err, want)
 	}
 }
 
