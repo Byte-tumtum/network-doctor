@@ -194,10 +194,11 @@ func unrecognizedConditionFindings(report *Report, truth ObservedTruth) []HuntCa
 	if diagnosis == nil {
 		return nil
 	}
+	observed := observedConditions(report.Evidence, truth)
 	recognized := recognizedConditions(diagnosis)
 	var findings []HuntCaseFinding
 	for _, rule := range conditionOracle {
-		if !rule.observed(report.Evidence, truth) || slices.Contains(recognized, rule.condition) {
+		if !slices.Contains(observed, rule.condition) || slices.Contains(recognized, rule.condition) {
 			continue
 		}
 		findings = append(findings, HuntCaseFinding{Category: FindingFalseNegative, Severity: SeverityHigh,

@@ -146,6 +146,20 @@ func TestHuntOracleAccusesOnlyUnrecognizedObservedConditions(t *testing.T) {
 	}
 }
 
+func TestUnrecognizedConditionFinding(t *testing.T) {
+	got := unrecognizedConditionFindings(oracleReport(
+		oracleDiagnosis(DiagnosisCheck{ID: "tls", Status: "PASS"}), expiredTLSEvidence()), ObservedTruth{})
+	want := []HuntCaseFinding{{
+		Category: FindingFalseNegative, Severity: SeverityHigh, Code: "unrecognized_network_condition",
+		Expected: string(ConditionTLSCertificateExpired), Actual: "unrecognized",
+		Summary:  "The simulator independently observed a target serving an expired TLS certificate, but the diagnosis did not recognize it.",
+		Evidence: "a controlled TLS service presented an expired certificate and watched a client refuse it",
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unrecognized condition finding = %+v, want %+v", got, want)
+	}
+}
+
 // TestHuntOracleAcceptsEquivalentRecognition proves the oracle asks whether the
 // condition was communicated, not which row communicated it. Both alternatives
 // are things netdoc genuinely produces.
@@ -882,6 +896,9 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 	// and the oracle must hold no condition that no family claims.
 	conditions := map[NetworkCondition]bool{}
 	for _, rule := range conditionOracle {
+		if conditions[rule.condition] {
+			t.Errorf("oracle condition %q is defined more than once", rule.condition)
+		}
 		conditions[rule.condition] = true
 	}
 	for _, pair := range []struct {
