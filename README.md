@@ -151,6 +151,54 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 
 The full probe table — exact pass conditions, JSON causes, and how the unprivileged Path MTU check works — is in **[docs/reference.md](docs/reference.md#how-it-diagnoses)**. See the wiki's [How Network Doctor Works](https://github.com/heymaikol/network-doctor/wiki/How-Network-Doctor-Works) for why the branches are independent, and [Understanding Your Diagnosis](https://github.com/heymaikol/network-doctor/wiki/Understanding-Your-Diagnosis) for turning a row into a next action.
 
+## Think you can beat Network Doctor?
+
+Challenge Mode drops you into a deliberately broken network without telling you
+what's wrong. Investigate it, commit to a diagnosis, then let Network Doctor take
+a shot at the exact same problem — both graded against the simulator's
+independently observed ground truth.
+
+There's a daily challenge, and everybody who plays that day gets the same
+broken network:
+
+```sh
+netdoc-sim challenge -daily         # today's, the same one for everybody
+netdoc-sim challenge                # draw one at random
+netdoc-sim challenge -id V4-8F42C1  # replay the one a friend sent you
+```
+
+It ends with a result you can post. It names no fault, so it spoils nothing for
+the next player, and `-daily` sends it to your clipboard for you (OSC 52, which
+survives SSH and the container; if your terminal doesn't do it, the block is
+printed anyway):
+
+```
+🩺 Network Doctor Challenge V4-8F42C1 (easy)
+📅 Daily 2026-03-04
+🧑 Me ✅   🤖 Network Doctor ❌
+🏆 I beat Network Doctor in 3m 20s
+🔁 Your turn: netdoc-sim challenge -id V4-8F42C1
+```
+
+On **macOS, Windows or Linux**, one container image is the whole install — the
+real Linux namespace simulator inside a Linux container, not an imitation of it:
+
+```sh
+docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest challenge -daily
+```
+
+`podman run --rm -it` works too, without needing the added capability. On Linux,
+any [package](#linux) installs `netdoc-sim` natively.
+
+Everything is local and reproducible: no account, no server, no leaderboard —
+a challenge id is the whole puzzle, so the same id is the same broken network
+on anyone's machine. See the wiki's
+[Challenge Mode](https://github.com/heymaikol/network-doctor/wiki/Challenge-Mode)
+guide for the full walkthrough, the daily challenge, and starter packs, and
+**[docs/simulation-challenge.md](docs/simulation-challenge.md)** for the
+contract behind scoring and why Network Doctor never gets to see the answer
+either.
+
 ## Usage
 
 ```sh
@@ -372,37 +420,9 @@ triage, and tests, or the wiki's [Simulator
 Overview](https://github.com/heymaikol/network-doctor/wiki/Simulator-Overview)
 for an orientation.
 
-### Think you can beat Network Doctor?
-
-Challenge Mode drops you into a deliberately broken network without telling you
-what's wrong. Investigate it, commit to a diagnosis, then let Network Doctor take
-a shot at the exact same problem — both graded against the simulator's
-independently observed ground truth.
-
-On **macOS, Windows or Linux**, one container image is the whole install:
-
-```sh
-docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest challenge
-```
-
-That runs the real Linux namespace simulator inside a Linux container, not an
-imitation of it; `podman run --rm -it` works too, without needing the added
-capability. On Linux, any [package](#linux) installs `netdoc-sim` natively:
-
-```sh
-netdoc-sim challenge                # draw a challenge and play it
-netdoc-sim challenge -daily         # today's, the same one for everybody
-netdoc-sim challenge -id V4-8F42C1  # play the one a friend sent you
-```
-
-Everything is local and reproducible: no account, no server, no leaderboard —
-a challenge id is the whole puzzle, so the same id is the same broken network
-on anyone's machine. See the wiki's
-[Challenge Mode](https://github.com/heymaikol/network-doctor/wiki/Challenge-Mode)
-guide for the full walkthrough, the daily challenge, and starter packs, and
-**[docs/simulation-challenge.md](docs/simulation-challenge.md)** for the
-contract behind scoring and why Network Doctor never gets to see the answer
-either.
+The simulator is also what [Challenge Mode](#think-you-can-beat-network-doctor)
+runs on: the same virtual network, with the fault hidden from you instead of
+named for you.
 
 ## Development
 
