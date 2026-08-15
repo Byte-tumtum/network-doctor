@@ -192,7 +192,7 @@ Exit codes and stdout are the ones documented for each command; `-json` on
 stdout stays parseable because the session prints to stderr.
 
 Tags are immutable per release — `ghcr.io/heymaikol/netdoc-sim:v1.11.3` — with
-`latest` following the newest release the way the Homebrew cask and the Scoop
+`latest` following the newest release the way the Homebrew formula and the Scoop
 bucket do. Pin the version tag in anything automated.
 
 The image is published for `linux/amd64` and `linux/arm64`, and those two claims

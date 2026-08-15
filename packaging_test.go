@@ -607,3 +607,31 @@ func TestRPMSpecShipsTheSameBinariesAsNFPM(t *testing.T) {
 		t.Error("the spec's build section never compiles ./cmd/netdoc-sim")
 	}
 }
+
+// GoReleaser still publishes the cask to heymaikol/tap so existing installs of
+// it keep upgrading, but homebrew/core carries the formula now. The README is
+// the page that converts a new user, so it hands out the Core one-liner and
+// never the tap, the cask, or the quarantine dance the unsigned cask needed.
+func TestREADMEInstallsHomebrewFromCore(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, install, ok := strings.Cut(string(readme), "\n## Install\n")
+	if !ok {
+		t.Fatal("README.md has no `## Install` section")
+	}
+	install, _, ok = strings.Cut(install, "\n## ")
+	if !ok {
+		t.Fatal("README.md's `## Install` section never ends; the heading structure changed")
+	}
+
+	if !strings.Contains(install, "brew install network-doctor") {
+		t.Error("README Install section never hands out `brew install network-doctor`")
+	}
+	for _, stale := range []string{"heymaikol/tap", "brew install --cask", "com.apple.quarantine", "Gatekeeper", "xattr"} {
+		if strings.Contains(install, stale) {
+			t.Errorf("README Install section still advertises %q; homebrew/core replaced the cask", stale)
+		}
+	}
+}

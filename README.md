@@ -64,14 +64,13 @@ winget install heymaikol.NetworkDoctor
 
 A release reaches the Scoop bucket right away; winget lands whenever Microsoft merges the manifest PR, so it can trail a version behind.
 
-### macOS (Homebrew)
-
-The binary is unsigned, so the cask strips the quarantine attribute and Gatekeeper does not prompt. Verify your download yourself ([below](#verify-your-download)) rather than relying on that:
+### macOS and Linux (Homebrew)
 
 ```sh
-brew tap heymaikol/tap
-brew install --cask network-doctor
+brew install network-doctor
 ```
+
+The Homebrew Core formula, bottled for both platforms, so `brew upgrade` picks up releases like any other formula. It installs `netdoc` alone — for `netdoc-sim` too, take a [Linux package](#linux).
 
 ### Linux
 
