@@ -95,6 +95,14 @@ redefine a day somebody has already played and posted.
 challenge — an explicit id, `-difficulty`, `-starter` — by name rather than by
 inventing a precedence.
 
+Because a daily is the result people post, playing one also puts its
+[share block](#the-share-block) on the clipboard once the matchup is decided,
+using the terminal's own OSC 52 clipboard request. That is a best-effort output
+side effect and nothing more: it happens only after the result exists, only for
+`-daily`, and a terminal that does not honour the request (or a run that was
+never attached to one) changes neither the result, the exit status, nor what is
+printed. The block is printed either way, so copying it by hand always works.
+
 ### Starter packs
 
 ```sh
@@ -452,12 +460,44 @@ The host name is a function of the id alone (not the base scenario's own YAML
 name, which used to leak the answer for two conditions), and a test checks that
 no name fingerprints the base, case, or fault.
 
-The share block carries two check marks, the id, and the date if it was a
-daily — never the fault, and never a starter pack's name, since a pack names a
-layer that would narrow the answer for the next player.
+The [share block](#the-share-block) carries two marks, the id, and the date if
+it was a daily — never the fault, and never a starter pack's name, since a pack
+names a layer that would narrow the answer for the next player.
 
 `-v`, a JSON report, or reading the source obviously defeats all of this. It is
 a game, not a security boundary.
+
+### The share block
+
+The reveal ends with the one part of a result written for somebody who was not
+there:
+
+```
+🩺 Network Doctor Challenge V4-8F42C1 (easy)
+📅 Daily 2026-03-04
+🧑 Me ✅   🤖 Network Doctor ❌
+🏆 I beat Network Doctor in 3m 20s
+🔁 Your turn: netdoc-sim challenge -id V4-8F42C1
+```
+
+It is rendered by `Share` in `internal/simulation/challenge_share.go`, which is
+a separate renderer from the reveal on purpose: the reveal explains the fault to
+the person who just played, and one function licensed to do both would
+eventually do it in the wrong place. The block is plain UTF-8 with no ANSI, no
+column alignment a proportional font would break, and no table, because it is
+pasted into a chat client rather than printed to a terminal.
+
+What it carries is the identity — the id, the difficulty, the date if it was a
+daily, and the command that replays it — plus the two verdicts. Both losses
+render the same mark: "not recognized" would tell a reader that the fault is one
+netdoc has no words for, which narrows the answer for whoever plays the id next.
+A submission with no session behind it (`-answer`) posts no time rather than
+`0s`. The same completed result renders the same bytes every time, and
+`TestChallengeShareBlockIsAPostableResult` freezes them, because a block people
+compare cannot depend on where it was rendered.
+
+There is exactly one share payload: what `-daily` copies to the clipboard is the
+string this prints, not a variant of it.
 
 ### Requirements and cleanup
 

@@ -153,42 +153,6 @@ func challengeResultLine(result string) string {
 	}
 }
 
-// Share is the copyable block. It carries the id, the difficulty and two
-// verdicts, and deliberately never names the fault: a result that gives the
-// answer away cannot be posted where the next player will read it.
-func (r *ChallengeResult) Share() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Network Doctor Challenge %s (%s)\n", r.ChallengeID, r.Difficulty)
-	if r.Daily != "" {
-		// The date is the thing people compare a daily on, and it names no fault,
-		// so it belongs in the block that gets posted.
-		fmt.Fprintf(&b, "Daily %s\n", r.Daily)
-	}
-	fmt.Fprintf(&b, "Me:             %s\n", shareMark(r.Human.Score))
-	fmt.Fprintf(&b, "Network Doctor: %s\n", shareMark(r.NetworkDoctor.Score))
-	fmt.Fprintf(&b, "%s in %s\n", challengeResultLine(r.Result), formatElapsed(msDuration(r.Timing.HumanMS)))
-	// The same invitation the reveal prints, so a reader of the share block and
-	// a reader of the full result are told to run the same thing.
-	fmt.Fprintf(&b, "Your turn: %s\n", r.Replay)
-	return b.String()
-}
-
-func shareMark(score string) string {
-	switch score {
-	case ChallengeCorrect:
-		return "✓"
-	case ChallengeIncorrect, ChallengeUnrecognized:
-		// One mark for both losses. "not recognized" would tell a reader of the
-		// share block that the fault is one netdoc has no words for, which
-		// narrows the answer for whoever plays the id next.
-		return "✗"
-	case ChallengeGaveUp:
-		return "— (gave up)"
-	default:
-		return "— (no result)"
-	}
-}
-
 func indentBlock(text, prefix string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {

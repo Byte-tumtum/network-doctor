@@ -279,6 +279,12 @@ block invite readers with a `docker run` command rather than with a `netdoc-sim`
 they may not have. It changes nothing about the puzzle or the scoring; override
 it with `-e NETDOC_SIM_CHALLENGE_COMMAND=...` for another runtime.
 
+A `-daily` played in the image can still put its share block on the host
+clipboard, and needs no mount, socket or extra capability to do it: the request
+is an OSC 52 escape written to the terminal `-it` already attached, and the
+terminal is on the host. A runtime or terminal that does not carry it through
+simply leaves the printed block to be copied by hand.
+
 Nothing survives a container: a challenge keeps no simulation, writes no state,
 and an interrupted or failed run leaves neither processes nor namespaces behind
 even in a container that is reused for another run.

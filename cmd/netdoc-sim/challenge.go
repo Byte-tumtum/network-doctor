@@ -340,21 +340,49 @@ func directChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitError
 	}
-	if *f.json {
+	code, err := reportChallenge(result, *f.json, stdout, console)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim:", err)
+	}
+	return code
+}
+
+// reportChallenge is everything that happens once the matchup is decided: the
+// result, the clipboard, and the exit status. Keeping the three in one function
+// is what makes the order structural rather than remembered — there is no point
+// in it where a share block could be copied before the result it summarises
+// exists, and no path where the clipboard is consulted about an exit status.
+//
+// console is where the session has been talking: stdout normally, stderr under
+// -json, where stdout is the machine's.
+func reportChallenge(result *simulation.ChallengeResult, asJSON bool, stdout, console io.Writer) (int, error) {
+	if asJSON {
 		if err := result.WriteJSON(stdout); err != nil {
-			fmt.Fprintln(stderr, "netdoc-sim:", err)
-			return exitError
+			return exitError, err
 		}
 	} else {
 		result.WriteText(stdout)
 	}
+	// The daily is the one worth posting: everybody who played that day played
+	// this puzzle, so a reader can compare. Copying it is best effort and
+	// deliberately incapable of changing anything below it — a terminal without
+	// OSC 52 is not a failed challenge, it is a challenge somebody copies by
+	// hand from the block that was printed anyway. A run that could not be
+	// scored is not offered at all: there is nothing to compare.
+	if result.Daily != "" && result.Result != simulation.ChallengeNoResult {
+		if clipboardCopy(console, result.Share()) {
+			// "sent", not "copied": OSC 52 is unacknowledged, so all this
+			// process ever knows is that the request went out.
+			fmt.Fprintln(console, "\nShare result sent to clipboard via OSC 52.")
+		}
+	}
 	switch {
 	case result.Result == simulation.ChallengeNoResult:
-		return exitError
+		return exitError, nil
 	case result.Human.Score == simulation.ChallengeCorrect:
-		return exitOK
+		return exitOK, nil
 	default:
-		return exitMismatch
+		return exitMismatch, nil
 	}
 }
 
