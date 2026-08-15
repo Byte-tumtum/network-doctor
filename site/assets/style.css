@@ -1,0 +1,174 @@
+/* One stylesheet, no build step, no web fonts: the site is documentation and
+   the pages are long, so this only has to be readable in both themes and out
+   of the way on a phone. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1b1f24;
+  --muted: #57606a;
+  --rule: #d8dee4;
+  --surface: #f6f8fa;
+  --link: #0a5ca8;
+  --accent: #1f883d;
+  --max: 46rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --rule: #30363d;
+    --surface: #161b22;
+    --link: #6cb6ff;
+    --accent: #3fb950;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+a { color: var(--link); }
+a[aria-current="page"] { font-weight: 600; color: var(--fg); }
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+.skip:focus {
+  left: 0.5rem;
+  top: 0.5rem;
+  z-index: 10;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.25rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-decoration: none;
+  color: var(--fg);
+}
+
+.topnav { display: flex; flex-wrap: wrap; gap: 1rem; }
+.topnav a { font-size: 0.92rem; }
+
+.page {
+  display: grid;
+  grid-template-columns: minmax(13rem, 15rem) minmax(0, 1fr);
+  gap: 2.5rem;
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: 1.75rem 1.25rem 3rem;
+}
+
+.sidebar { font-size: 0.92rem; }
+.sidebar h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 1.5rem 0 0.4rem;
+}
+.sidebar h2:first-child { margin-top: 0; }
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0.28rem 0; }
+
+main { min-width: 0; max-width: var(--max); }
+
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 {
+  font-size: 1.35rem;
+  margin: 2.25rem 0 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--rule);
+}
+h3 { font-size: 1.1rem; margin: 1.75rem 0 0.5rem; }
+
+img { max-width: 100%; height: auto; }
+
+code, pre {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+code { background: var(--surface); padding: 0.12em 0.35em; border-radius: 5px; }
+pre {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+}
+pre code { background: none; padding: 0; }
+
+blockquote {
+  margin: 1rem 0;
+  padding: 0.1rem 1rem;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+
+/* Long reference tables are the reason for the scroll container: they must
+   never make the page itself scroll sideways. */
+.table-wrap, main > table { display: block; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+th, td { border: 1px solid var(--rule); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2rem 0; }
+
+.hero h1 { margin-bottom: 0.6rem; }
+
+.cards ul { list-style: none; padding: 0; }
+.cards > ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.cards > ul > li {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 0.85rem 1.1rem 1rem;
+}
+.cards h3 { margin-top: 0.2rem; }
+
+.editlink { color: var(--muted); font-size: 0.9rem; }
+
+.sitefoot {
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.88rem;
+  padding: 1.25rem;
+}
+.sitefoot p { max-width: 60rem; margin: 0.4rem auto; }
+
+@media (max-width: 52rem) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+  .sidebar {
+    order: 2;
+    border-top: 1px solid var(--rule);
+    padding-top: 1rem;
+  }
+}

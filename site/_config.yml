@@ -1,0 +1,51 @@
+# Jekyll shell for the documentation site. It is built from a staging tree that
+# cmd/docsite writes, not from this directory directly: the pages themselves
+# come from docs/ and from the GitHub wiki, and are copied in at build time so
+# neither is duplicated here. See .github/workflows/pages.yml.
+#
+# The GitHub Pages plugin set does most of the work and is on by default:
+# jekyll-optional-front-matter publishes plain Markdown, jekyll-default-layout
+# and jekyll-titles-from-headings give each page a layout and a title from its
+# own H1, and jekyll-relative-links turns docs/*.md cross-links into site links.
+#
+# url + baseurl are the project-page address. cmd/docsite reads baseurl from
+# this file to build every internal link, and docs_site_test.go checks both
+# against the repository's owner and name, so a wrong base path fails the build
+# rather than shipping a site of broken links and 404 assets.
+title: Network Doctor
+description: >-
+  Find exactly where a connection breaks. Network Doctor is a cross-platform
+  network troubleshooting TUI that turns interface, DNS, TCP, TLS, HTTP, proxy,
+  and path-MTU checks into one plain-English diagnosis.
+url: https://heymaikol.github.io
+baseurl: /network-doctor
+lang: en
+image: /assets/social-preview.png
+
+# jekyll-seo-tag writes the title, description, canonical link, and Open Graph
+# tags from each page's front matter; jekyll-sitemap writes sitemap.xml. Both
+# are in the GitHub Pages plugin set, so nothing has to be vendored.
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# docs/reference.md is served at /docs/reference/, which is also the URL the
+# staged links and the navigation are written against.
+permalink: pretty
+
+# Set once here rather than in every staged page's front matter. The social card
+# is the README's, copied in at build time; the landing page overrides the
+# layout with its own.
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: doc
+      image: /assets/social-preview.png
+
+# The GFM parser gives every heading the same anchor GitHub gives it, so a link
+# written against github.com works unchanged on the site.
+kramdown:
+  input: GFM
+  auto_ids: true
+  syntax_highlighter: rouge

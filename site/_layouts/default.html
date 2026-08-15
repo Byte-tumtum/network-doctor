@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="{{ site.lang | default: 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {%- comment -%}
+  jekyll-seo-tag emits <title>, the meta description, the canonical link, and
+  the Open Graph tags. The title is each document's own H1, by way of
+  jekyll-titles-from-headings, so a page's search result is written by the page.
+  {%- endcomment -%}
+  {% seo %}
+  <link rel="stylesheet" href="{{ '/assets/style.css' | relative_url }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#129657;</text></svg>">
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+
+  <header class="topbar">
+    <a class="brand" href="{{ '/' | relative_url }}">Network&nbsp;Doctor</a>
+    <nav class="topnav" aria-label="Project">
+      <a href="{{ '/wiki/Getting-Started/' | relative_url }}">Getting started</a>
+      <a href="{{ '/docs/reference/' | relative_url }}">Reference</a>
+      <a href="{{ '/wiki/Troubleshooting-and-FAQ/' | relative_url }}">Troubleshooting</a>
+      <a href="https://github.com/heymaikol/network-doctor">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="page">
+    <nav class="sidebar" aria-label="Documentation">
+      {%- for group in site.data.nav %}
+      <h2>{{ group.title }}</h2>
+      <ul>
+        {%- for item in group.items %}
+        <li><a href="{{ item.url | relative_url }}"{% if item.url == page.url %} aria-current="page"{% endif %}>{{ item.title }}</a></li>
+        {%- endfor %}
+      </ul>
+      {%- endfor %}
+    </nav>
+
+    <main id="content">
+      {{ content }}
+    </main>
+  </div>
+
+  <footer class="sitefoot">
+    <p>
+      <a href="https://github.com/heymaikol/network-doctor">Repository</a> ·
+      <a href="https://github.com/heymaikol/network-doctor/releases/latest">Download the latest release</a> ·
+      <a href="https://github.com/heymaikol/network-doctor/issues">Issues</a> ·
+      <a href="https://github.com/heymaikol/network-doctor/blob/main/SECURITY.md">Security</a>
+    </p>
+    <p>
+      Exact flags, defaults, and exit codes are authoritative in the repository
+      and in each command's own <code>--help</code>. Where this site and the
+      repository disagree, the repository is right.
+      Licensed under the
+      <a href="https://github.com/heymaikol/network-doctor/blob/main/LICENSE">Apache License 2.0</a>.
+    </p>
+  </footer>
+</body>
+</html>

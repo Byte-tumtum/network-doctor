@@ -1,0 +1,11 @@
+---
+permalink: /robots.txt
+---
+# github.io serves the robots.txt that crawlers actually read from the domain
+# root, which this project does not own. This copy exists so the sitemap is
+# still declared next to the site, and becomes the effective policy if the
+# project ever moves to its own domain.
+User-agent: *
+Allow: /
+
+Sitemap: {{ "/sitemap.xml" | absolute_url }}

@@ -3,6 +3,7 @@
 [![CI](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/heymaikol/network-doctor)](https://github.com/heymaikol/network-doctor/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/github/license/heymaikol/network-doctor)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-heymaikol.github.io-1f6feb)](https://heymaikol.github.io/network-doctor/)
 
 **Find exactly where your connection breaks.** Network Doctor is a
 cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
@@ -333,6 +334,19 @@ and `--watch`.
 
 ![Network Doctor against github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, the mtr report, toolbox mode, probe selection with --check, headless --json, and watch mode](assets/demo.gif)
 
+## Documentation
+
+Everything explanatory is published at
+**[heymaikol.github.io/network-doctor](https://heymaikol.github.io/network-doctor/)**:
+
+- [Getting Started](https://heymaikol.github.io/network-doctor/wiki/Getting-Started/) — install, first run, and what the screen is showing you.
+- [Understanding Your Diagnosis](https://heymaikol.github.io/network-doctor/wiki/Understanding-Your-Diagnosis/) — turning a verdict into a next action, including telling "my network" and "their service" apart.
+- [How Network Doctor Works](https://heymaikol.github.io/network-doctor/wiki/How-Network-Doctor-Works/) — why the probe branches are independent, and how path MTU is measured without root.
+- [Troubleshooting and FAQ](https://heymaikol.github.io/network-doctor/wiki/Troubleshooting-and-FAQ/) — the rows that behave surprisingly, and the questions that come up most.
+- [Reference](https://heymaikol.github.io/network-doctor/docs/reference/) and the [simulator guide](https://heymaikol.github.io/network-doctor/docs/simulation/) — the same `docs/` files that live beside the code.
+
+The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/network-doctor/wiki), so each page is still edited exactly where it lives; nothing is duplicated to publish it.
+
 ## Feature summary
 
 Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
@@ -385,6 +399,21 @@ the gate above:
 ```sh
 docker build --build-arg VERSION=dev -t netdoc-sim:test .
 NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
+```
+
+If the change touched `docs/`, `site/`, or `cmd/docsite`, also build the
+documentation site the way [the pages workflow](.github/workflows/pages.yml)
+does. It needs the wiki checkout and the same container image GitHub Pages
+builds with, which is why it is not in the gate above:
+
+```sh
+git clone --depth 1 https://github.com/heymaikol/network-doctor.wiki.git ../network-doctor.wiki
+go run ./cmd/docsite -wiki ../network-doctor.wiki -out _docsite
+docker run --rm -v "$PWD":/gh -e GITHUB_WORKSPACE=/gh \
+  -e INPUT_SOURCE=_docsite -e INPUT_DESTINATION=_site \
+  -e GITHUB_REPOSITORY=heymaikol/network-doctor \
+  ghcr.io/actions/jekyll-build-pages:v1.0.13
+go run ./cmd/docsite -verify _site
 ```
 
 If the change touched a build-tagged or `_linux`/`_darwin`/`_windows` suffixed

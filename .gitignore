@@ -13,6 +13,12 @@ dist/
 /vendor/
 /network-doctor-*-vendor.tar.gz
 
+# Documentation site: the staging tree cmd/docsite writes and the site Jekyll
+# renders from it. Both are built from docs/, the wiki, and site/, so neither is
+# committed.
+/_docsite/
+/_site/
+
 # Graphify
 graphify-out/
 

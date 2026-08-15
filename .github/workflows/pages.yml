@@ -1,0 +1,77 @@
+name: pages
+
+# Publishes the documentation site at https://heymaikol.github.io/network-doctor/.
+#
+# The site has two sources and copies neither into this repository: docs/*.md
+# lives here, and the explanatory pages live in the GitHub wiki, which is its own
+# git repository. cmd/docsite reads both and writes one Jekyll source tree, so a
+# page is still edited exactly where it was always edited. That is also why the
+# `gollum` trigger is here: editing a wiki page republishes the site without
+# anyone remembering to.
+#
+# Every step before deployment can fail the deployment. A wiki that will not
+# clone, a link that resolves to nothing, a heading anchor that moved, or a base
+# path that stopped matching the project page all stop the run rather than
+# publishing a site with holes in it.
+
+on:
+  push:
+    branches: [main]
+  # A wiki page was created or edited.
+  gollum:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a deploy in flight: a half-replaced site is worse than a late one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The wiki is a public repository of its own, so this needs no token. A
+      # failure here fails the build, which is the point: the site is not
+      # complete without it.
+      - name: Check out the wiki
+        run: git clone --depth 1 "${{ github.server_url }}/${{ github.repository }}.wiki.git" wiki
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The generator's own tests, so a broken generator fails before it has
+      # written a broken site.
+      - run: go test ./cmd/docsite/...
+      - name: Stage the Jekyll source from docs/ and the wiki
+        run: go run ./cmd/docsite -wiki wiki -out _docsite
+      - uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+        with:
+          source: _docsite
+          destination: _site
+      # Checks the bytes that would be published: every internal link resolves
+      # to a page the site serves, every anchor exists, nothing dropped the
+      # /network-doctor base path, and the sitemap was written.
+      - name: Verify the built site
+        run: go run ./cmd/docsite -verify _site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

@@ -1,0 +1,44 @@
+# Sidebar navigation, in reading order. Hand-written because the order is a
+# judgement, not something derivable from the two source directories.
+#
+# It is not a second source of truth: these URLs are checked against the pages
+# the site actually built, so renaming or deleting a page fails the build here
+# rather than leaving a dead link in every page's sidebar.
+- title: Diagnosing with netdoc
+  items:
+    - title: Getting Started
+      url: /wiki/Getting-Started/
+    - title: Understanding Your Diagnosis
+      url: /wiki/Understanding-Your-Diagnosis/
+    - title: How Network Doctor Works
+      url: /wiki/How-Network-Doctor-Works/
+    - title: Troubleshooting and FAQ
+      url: /wiki/Troubleshooting-and-FAQ/
+    - title: Network Doctor reference
+      url: /docs/reference/
+
+- title: Simulator and Challenge Mode
+  items:
+    - title: Challenge Mode
+      url: /wiki/Challenge-Mode/
+    - title: Simulator Overview
+      url: /wiki/Simulator-Overview/
+    - title: Hunts and Triage
+      url: /wiki/Hunts-and-Triage/
+    - title: Network simulation (netdoc-sim)
+      url: /docs/simulation/
+    - title: Challenge Mode reference
+      url: /docs/simulation-challenge/
+    - title: Scenario authoring reference
+      url: /docs/simulation-scenarios/
+    - title: Hunts and triage reference
+      url: /docs/simulation-hunts/
+
+- title: Contributing
+  items:
+    - title: Architecture
+      url: /wiki/Architecture/
+    - title: Development and Contributing
+      url: /wiki/Development-and-Contributing/
+    - title: Documentation Map
+      url: /wiki/Documentation-Map/

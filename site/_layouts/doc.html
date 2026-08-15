@@ -1,0 +1,13 @@
+---
+layout: default
+---
+<article class="prose">
+  {{ content }}
+  {%- if page.source %}
+  <hr>
+  <p class="editlink">
+    This page has one editable copy:
+    <a href="{{ page.source }}">edit it at the source</a>.
+  </p>
+  {%- endif %}
+</article>
