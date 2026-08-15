@@ -11,4 +11,4 @@ vendor
 netdoc
 netdoc-sim
 *.tar.gz
-demo.tape
+*.tape

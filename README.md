@@ -8,7 +8,7 @@
 cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
 TLS, HTTP, proxy, and path-MTU checks into one plain-English diagnosis.
 
-![Network Doctor diagnosing github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, the mtr report, toolbox mode, probe selection with --check, headless --json, and watch mode](assets/demo.gif)
+![Network Doctor diagnosing a host that will not resolve: the DNS row fails, every check that depended on it is skipped, and the verdict names the missing DNS record as the fix](assets/hero.gif)
 
 Instead of handing you a wall of `ping`, `dig`, and `curl` output, Network
 Doctor answers the useful question: **is the problem on my network, along the
@@ -275,6 +275,15 @@ netdoc github.com || echo "path to github is broken"
 All probes, the diagnosis engine, and the TUI are pure Go and identical on Linux, macOS, and Windows. Platform-specific garnish (the default gateway, the Wi-Fi SSID) degrades to empty rather than failing the probe when the OS lookup fails.
 
 `netdoc-sim` and Challenge Mode are the exception: their backend is Linux namespaces and there is no other one, so macOS and Windows run [the published image](docs/simulation.md#running-it-in-a-container) on a Linux container runtime rather than a port. `netdoc` itself needs no container anywhere.
+
+## Full tour
+
+The rest of it in one recording: the check list against a healthy host, a
+traceroute and an mtr running side by side, the filtered output viewer, a LAN
+scan, the SSH login form, toolbox mode, `--check` selection, headless `--json`,
+and `--watch`.
+
+![Network Doctor against github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, the mtr report, toolbox mode, probe selection with --check, headless --json, and watch mode](assets/demo.gif)
 
 ## Feature summary
 

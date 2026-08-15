@@ -1,4 +1,7 @@
-# VHS tape for the README demo GIF (https://github.com/charmbracelet/vhs).
+# VHS tape for the README's full-tour GIF (https://github.com/charmbracelet/vhs) —
+# every feature, for a reader who is already interested. The README's hero clip
+# is one diagnosis instead, and comes from hero.tape.
+#
 # Regenerate with:
 #
 #   go build -o netdoc . && HOME=$(mktemp -d) vhs demo.tape
