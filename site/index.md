@@ -25,28 +25,6 @@ service?**
 
 ![Network Doctor diagnosing a host that will not resolve: the DNS row fails, every check that depended on it is skipped, and the verdict names the missing DNS record as the fix]({{ '/assets/hero.gif' | relative_url }})
 
-## Install and run
-
-```sh
-brew install network-doctor          # macOS and Linux
-scoop install network-doctor         # Windows, after adding the bucket
-go install github.com/heymaikol/network-doctor/cmd/netdoc@latest
-```
-
-```sh
-netdoc github.com       # DNS → TCP → TLS → HTTP diagnosis
-netdoc github.com:22    # SSH path and banner diagnosis
-netdoc --watch host     # catch intermittent failures
-netdoc --json host      # structured report for scripts or bug reports
-```
-
-Run `netdoc` with no target to check the local interface, internet egress,
-configured proxy, public DNS, and Wi-Fi metadata. Every platform's package,
-including the `.deb`, `.rpm`, and `.apk` builds, is listed in the
-[README on GitHub](https://github.com/heymaikol/network-doctor#install) and
-walked through in
-[Getting Started]({{ '/wiki/Getting-Started/' | relative_url }}).
-
 ## Start here
 
 <div class="cards" markdown="1">
