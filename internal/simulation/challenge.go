@@ -739,12 +739,15 @@ func buildChallengeV2(id, digits string) (*Challenge, error) {
 	})
 }
 
-// buildChallengeV3 is the current selection: the v4 hunt generator, the
-// two-router control, and every condition the challenge contract admits,
-// including the ones netdoc has no vocabulary for.
+// buildChallengeV3 selects from the two-router control and every condition the
+// challenge contract admits, including the ones netdoc has no vocabulary for,
+// through the v4 hunt generator. Frozen for the same reason, and note that the
+// hunt version is the literal V3 shipped with rather than HuntGeneratorVersion:
+// the generator behind a published id is part of what that id means, so it has
+// to stay where it was even after the hunt generator moves on.
 func buildChallengeV3(id, digits string) (*Challenge, error) {
 	return buildChallengeCase(id, "V3", digits, challengeSelection{
-		bases: challengeBasesV3, generatorVersion: HuntGeneratorVersion,
+		bases: challengeBasesV3, generatorVersion: "v4",
 		selectable: func(string) bool { return true },
 	})
 }
@@ -769,13 +772,16 @@ func buildChallengeV3(id, digits string) (*Challenge, error) {
 // Uniform over answers rather than over mutations, deliberately. dns.servfail
 // and dns.drop are one diagnosis to a player, and weighting by mutation is
 // exactly the accident this version exists to remove.
+//
+// The "v4" literals below are the hunt generator V4 ids were minted under, held
+// as a literal for the reason given on buildChallengeV3.
 func buildChallengeV4(id, digits string) (*Challenge, error) {
 	seed := challengeSeed("V4", digits)
 	// #nosec G404 -- deterministic challenge selection must reproduce from its public ID.
 	rng := mathrand.New(mathrand.NewSource(seed))
 	if rng.Intn(challengeHealthyOdds) == 0 {
 		base := challengeBasesV3[rng.Intn(len(challengeBasesV3))]
-		return healthyChallenge(id, base, seed, HuntGeneratorVersion,
+		return healthyChallenge(id, base, seed, "v4",
 			ChallengeDifficulties[rng.Intn(len(ChallengeDifficulties))])
 	}
 	answers := challengePlayableAnswers()
@@ -800,7 +806,7 @@ func buildChallengeV4(id, digits string) (*Challenge, error) {
 		if err != nil {
 			return nil, err
 		}
-		generated, err := generateHuntCase(HuntGeneratorVersion, base, scenario, seed, caseNumber, 1)
+		generated, err := generateHuntCase("v4", base, scenario, seed, caseNumber, 1)
 		if err != nil || len(generated.Manifest.Mutations) != 1 {
 			continue
 		}
@@ -822,9 +828,9 @@ func buildChallengeV4(id, digits string) (*Challenge, error) {
 // operator itself, so it cannot fall out of step with the hunt registry the way
 // a written-down compatibility list would.
 func challengeBasesForMutation(mutation string) ([]string, error) {
-	operator, ok := huntOperatorByID(HuntGeneratorVersion, mutation)
+	operator, ok := huntOperatorByID("v4", mutation)
 	if !ok {
-		return nil, fmt.Errorf("hunt generator %s has no %q operator", HuntGeneratorVersion, mutation)
+		return nil, fmt.Errorf("hunt generator v4 has no %q operator", mutation)
 	}
 	var out []string
 	for _, name := range challengeBasesV3 {

@@ -39,7 +39,11 @@ const (
 // base and the case number only, so v3 and v4 draw the same numbers and differ
 // exactly where the operator list differs, which is the smallest possible
 // difference between two generators.
-var huntGeneratorVersions = []string{"v3", HuntGeneratorVersion}
+//
+// Literals, not HuntGeneratorVersion. A published version has to stay
+// resolvable after the constant moves on, so a bump appends an entry here
+// rather than replacing the last one.
+var huntGeneratorVersions = []string{"v3", "v4"}
 
 // huntGeneratorIndex places a version on that list. An operator with no `since`
 // belongs to the first version, which is where all of them started.

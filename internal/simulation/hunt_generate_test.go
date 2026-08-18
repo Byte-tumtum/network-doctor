@@ -378,6 +378,27 @@ func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
 	}
 }
 
+// Challenge versions V3, V4 and A1 name "v4" as a literal so that moving
+// HuntGeneratorVersion cannot repoint the ids they have already published. That
+// only holds while "v4" is still a version this build can materialize a case
+// for, so a bump has to append to huntGeneratorVersions rather than replace the
+// entry it finds there. This is what fails if it replaces instead.
+func TestPublishedHuntGeneratorVersionsStayResolvable(t *testing.T) {
+	// Every version any published artifact records: a challenge manifest, a
+	// filed triage finding, a shared hunt reproduction.
+	for _, version := range []string{"v3", "v4"} {
+		if huntGeneratorIndex(version) < 0 {
+			t.Errorf("hunt generator %s was published but this build can no longer materialize a case for it;"+
+				" add it back to huntGeneratorVersions, since challenge ids and filed findings still name it", version)
+		}
+	}
+	if newest := huntGeneratorVersions[len(huntGeneratorVersions)-1]; newest != HuntGeneratorVersion {
+		t.Errorf("HuntGeneratorVersion is %s but the newest listed version is %s;"+
+			" new cases would be minted at a version huntOperators cannot place, so append rather than edit",
+			HuntGeneratorVersion, newest)
+	}
+}
+
 func TestGeneratedHuntCasesValidateAndStayBounded(t *testing.T) {
 	seen := make(map[string]bool)
 	for _, baseID := range HuntBaseNames() {

@@ -241,10 +241,14 @@ func (a authoredChallenge) build(id string) (*Challenge, error) {
 	if err := base.Validate(); err != nil {
 		return nil, fmt.Errorf("authored challenge %s: base %s: %w", a.slug, a.base, err)
 	}
-	operator, ok := huntOperatorByID(HuntGeneratorVersion, a.mutation)
+	// The hunt generator A1 ids were minted under, as a literal. An authored id
+	// is published the moment its slug is, so the operator it draws and the
+	// version its manifest records both have to survive HuntGeneratorVersion
+	// moving on; see buildChallengeV3.
+	operator, ok := huntOperatorByID("v4", a.mutation)
 	if !ok {
-		return nil, fmt.Errorf("authored challenge %s: hunt generator %s has no %q operator",
-			a.slug, HuntGeneratorVersion, a.mutation)
+		return nil, fmt.Errorf("authored challenge %s: hunt generator v4 has no %q operator",
+			a.slug, a.mutation)
 	}
 	if !operator.applicable(base) {
 		return nil, fmt.Errorf("authored challenge %s: %q does not apply to base %s",
@@ -279,7 +283,7 @@ func (a authoredChallenge) build(id string) (*Challenge, error) {
 	if err := scenario.Validate(); err != nil {
 		return nil, fmt.Errorf("authored challenge %s: generated scenario validation: %w", a.slug, err)
 	}
-	manifest := GeneratedCaseManifest{GeneratorVersion: HuntGeneratorVersion, BaseScenario: a.base,
+	manifest := GeneratedCaseManifest{GeneratorVersion: "v4", BaseScenario: a.base,
 		HuntSeed: seed, Case: authoredCaseNumber, CaseSeed: seed, Mutations: []GeneratedMutation{mutation}}
 	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
 	return newChallenge(id, a.base, seed, authoredCaseNumber, condition.difficulty, manifest, scenario, condition)
