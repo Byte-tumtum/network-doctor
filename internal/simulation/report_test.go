@@ -1,15 +1,29 @@
 package simulation
 
-import "testing"
+import (
+	"testing"
 
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
+)
+
+// routeCase is a finished two-test run whose client independently could not
+// reach a whole address family. That measurement is what makes the run about
+// routing at all, so it belongs in the shared fixture rather than in the cases
+// that happen to want it.
 func routeCase(first, second TestOutcome, routes ...RouteEvidence) *Report {
 	report := &Report{Tests: []TestOutcome{first, second}}
 	report.Evidence.Routes = routes
+	report.Evidence.FamilyReachability = []FamilyReachabilityEvidence{
+		{Node: "client", Family: "ipv4", State: FamilyStateUnreachable}}
 	return report
 }
 
 func diagnosisWith(id, status string) *Diagnosis {
 	return &Diagnosis{Checks: []DiagnosisCheck{{ID: id, Status: status}}}
+}
+
+func diagnosisWithCause(id, status, cause string) *Diagnosis {
+	return &Diagnosis{Checks: []DiagnosisCheck{{ID: id, Status: status, Cause: cause}}}
 }
 
 func TestRouteSuggestionsNeedAControlOnAnotherPath(t *testing.T) {
@@ -67,6 +81,33 @@ func TestRouteSuggestionsNeedAControlOnAnotherPath(t *testing.T) {
 		{
 			name: "selected path worked",
 			report: routeCase(TestOutcome{Node: "client", Diagnosis: diagnosisWith("internet_tcp", "PASS")},
+				TestOutcome{Node: "client", Target: "routed-target.test:80", Diagnosis: reachedTarget},
+				selectedDefault),
+		},
+		{
+			// The egress row warned, but the client's own dial still reached
+			// the family. That is latency, a cold first packet, or one address
+			// of several, and none of them is a routing fact. On a two-test
+			// scenario the control passes regardless, so without the
+			// reachability requirement this fires for whatever the run broke.
+			name: "egress warned while the family still answered",
+			report: func() *Report {
+				report := routeCase(failedDefault,
+					TestOutcome{Node: "client", Target: "routed-target.test:80", Diagnosis: reachedTarget},
+					selectedDefault)
+				report.Evidence.FamilyReachability = []FamilyReachabilityEvidence{
+					{Node: "client", Family: "ipv4", State: FamilyStateReachable}}
+				return report
+			}(),
+		},
+		{
+			// The family really is gone and netdoc named the route cause. The
+			// user has been sent to their routing table already, so what is
+			// left is a wish about how much route detail to print.
+			name: "netdoc already named the route cause",
+			report: routeCase(
+				TestOutcome{Node: "client", Target: "target.test:80",
+					Diagnosis: diagnosisWithCause("internet_tcp", "WARN", diagnostic.RouteCauseNoDefaultRoute)},
 				TestOutcome{Node: "client", Target: "routed-target.test:80", Diagnosis: reachedTarget},
 				selectedDefault),
 		},

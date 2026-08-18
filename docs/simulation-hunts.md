@@ -85,6 +85,18 @@ Determinism is campaign mode's question. `--iteration N --runs K` repeats one
 fixed schedule through a whole fresh topology per run, which is the comparison
 this one cannot make, and it already reports divergence as `nondeterministic`.
 
+### Route findings need routing evidence
+
+`alternate_route_available` and `wrong_default_route_evidence` are the two
+findings about a path the diagnosis did not describe, and both are gated twice.
+A warning on the egress row is not a routing fact, so the client's own dial has
+to have found an address family with nothing answering; latency, a cold first
+packet, or one address of several failing all raise that row while the path is
+fine, and on a two-test scenario the control keeps passing regardless. And a
+diagnosis that already named a route cause has told the user which route failed,
+so what is left is a wish about how much route detail to print, not a gap in
+what was communicated.
+
 A generated mutation records intent; it is not automatically observed truth.
 `observed_faults` contains a mutation only when service, event, kernel-fault, or
 independent reachability evidence from the executed simulation supports it.

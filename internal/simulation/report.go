@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
@@ -242,6 +244,24 @@ func (r *Report) routeSuggestions() []Suggestion {
 	if diagnosisStatus(control.Diagnosis, "target_tcp") != "PASS" {
 		return nil
 	}
+	// A warning on the egress row is not a routing fact. High latency, a first
+	// SYN paid for behind cold neighbour discovery, or one address of several
+	// failing all raise it while the path is perfectly fine, and on a two-test
+	// scenario the control keeps passing either way. Without this the
+	// suggestion fires for whatever the run actually broke, routing or not. The
+	// client's own dial of the controlled endpoints is the independent evidence
+	// that the selected path really is down.
+	if !familyUnreachableAt(r, r.Tests[0].Node) {
+		return nil
+	}
+	// A diagnosis that named a route cause has already told the user which
+	// route failed and what to do about it. What is left is a wish about how
+	// much route detail to print alongside it, which is not a gap in what the
+	// diagnosis communicated, and reporting it as one buries the cases where
+	// netdoc really did stay silent.
+	if routeCauseNamed(r.Tests[0].Diagnosis) {
+		return nil
+	}
 	selectedSegment := ""
 	for _, route := range r.Evidence.Routes {
 		if route.Node == r.Tests[0].Node && route.Selected && isInternetEndpoint("ipv4", route.Destination) {
@@ -266,6 +286,29 @@ func (r *Report) routeSuggestions() []Suggestion {
 	}
 	return []Suggestion{{Code: code, Message: message,
 		Evidence: fmt.Sprintf("%s failed; %s reached %s", selected, reached, control.Target)}}
+}
+
+// familyUnreachableAt reports whether the simulator's own dial from this node
+// found an address family with nothing answering. Holder-side, so no part of it
+// can be satisfied by something netdoc said.
+func familyUnreachableAt(r *Report, node string) bool {
+	return slices.ContainsFunc(r.Evidence.FamilyReachability, func(item FamilyReachabilityEvidence) bool {
+		return item.Node == node && item.State == FamilyStateUnreachable
+	})
+}
+
+// routeCauseNamed reports whether the diagnosis pointed at a route on any row.
+// Which route cause it chose is a separate question, graded elsewhere; this
+// only asks whether the user was sent to look at their routing table at all.
+func routeCauseNamed(d *Diagnosis) bool {
+	for _, check := range d.Checks {
+		switch check.Cause {
+		case diagnostic.RouteCauseNoDefaultRoute, diagnostic.RouteCauseGatewayUnreachable,
+			diagnostic.RouteCauseSelectedPathFailed, diagnostic.RouteCausePreferredPathFailed:
+			return true
+		}
+	}
+	return false
 }
 
 func offsetLabel(d time.Duration) string {
