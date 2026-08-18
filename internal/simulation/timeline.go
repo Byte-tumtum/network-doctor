@@ -102,7 +102,7 @@ type FaultEventEvidence struct {
 	ScheduledOffset time.Duration `json:"scheduled_offset_ms"`
 	AppliedOffset   time.Duration `json:"applied_offset_ms"`
 	State           string        `json:"state"`
-	// Observed is what the environment read back after applying the event —
+	// Observed is what the environment read back after applying the event:
 	// the kernel's own rendering of the new qdisc or link state, with the
 	// generated device name and qdisc handle left out.
 	Observed string `json:"observed,omitempty"`
@@ -316,7 +316,7 @@ type scheduler struct {
 }
 
 // startScheduler begins applying events. t0 is the simulation epoch every
-// offset is measured from — the instant just before the first netdoc process
+// offset is measured from, the instant just before the first netdoc process
 // starts. Cancelling ctx stops the scheduler; wait joins it.
 func startScheduler(ctx context.Context, env Env, events []TimedEvent, t0 time.Time) *scheduler {
 	s := &scheduler{done: make(chan struct{}), ready: make(chan struct{})}

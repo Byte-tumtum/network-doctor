@@ -16,7 +16,7 @@ import (
 type Proto int
 
 const (
-	ProtoNone Proto = iota // stop at Target TCP — no protocol-specific check
+	ProtoNone Proto = iota // stop at Target TCP, no protocol-specific check
 	ProtoTLSHTTP
 	ProtoHTTP
 	ProtoSSH
@@ -45,14 +45,14 @@ type Target struct {
 }
 
 // TargetForms documents the grammar ParseTarget accepts. --help and the
-// restart prompt render it verbatim; no trailing newline — the seams around
+// restart prompt render it verbatim; no trailing newline, since the seams around
 // the block belong to the callers.
 const TargetForms = `  example.com            hostname (default port 443)
   example.com:8022       hostname with port (protocol inferred from the port)
   ssh://example.com:8022 URL (scheme sets protocol and default port; path ignored)
   192.0.2.1, 2001:db8::1 IP literal
   [2001:db8::1]:443      IP literal with port (IPv6 needs the brackets)
-  (nothing)              no target — runs the generic checks`
+  (nothing)              no target, runs the generic checks`
 
 // hostnameRe is a strict RFC-1123-ish hostname allowlist (labels of
 // alphanumerics + internal hyphens, dot-separated). Everything else is rejected
@@ -66,7 +66,7 @@ var hostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])
 //
 // The error is sanitized here rather than at each caller: every one of them
 // prints it straight at a terminal (stderr, the restart prompt, the SSH form),
-// and not every error we wrap quotes what it echoes — net.AddrError embeds the
+// and not every error we wrap quotes what it echoes: net.AddrError embeds the
 // host verbatim, so a target carrying U+202E would reorder the line it lands
 // in. Replaced, not wrapped: nothing unwraps a parse error, it only gets shown.
 func ParseTarget(raw string) (*Target, error) {

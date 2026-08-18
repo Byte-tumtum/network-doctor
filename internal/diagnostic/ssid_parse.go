@@ -16,7 +16,7 @@ func parseAirportSSID(out string) string {
 
 // parseNetshSSID extracts iface's SSID from `netsh wlan show interfaces`.
 // Blocks are blank-line separated; a block matches only when some line's
-// *value* (text after the first ':', trimmed) equals iface — value comparison,
+// *value* (text after the first ':', trimmed) equals iface, a value comparison,
 // so the localized "Name" label is never consulted. Within the matching block
 // the line whose key is exactly "SSID" wins (netsh does not translate that
 // label; the exact match excludes "BSSID"). No fallback: netsh lists only WLAN

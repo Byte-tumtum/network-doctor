@@ -78,7 +78,7 @@ func TestRun(t *testing.T) {
 }
 
 // Run as ssh's askpass helper, netdoc prints the secret it was handed and
-// nothing else — no flag parsing, no TUI. Only a password or passphrase
+// nothing else, with no flag parsing and no TUI. Only a password or passphrase
 // question earns the secret; everything else, a missing prompt included, gets
 // nothing: forced askpass sees the host-key question too, and that one must not
 // be answered with a secret.
@@ -119,7 +119,7 @@ func TestRunAsAskpass(t *testing.T) {
 		},
 		// A PAM prompt from a client too old to prefix them names no host, and
 		// refusing those outright would break the logins netdoc is there to
-		// make — as long as only one machine could be asking.
+		// make, as long as only one machine could be asking.
 		{name: "hostless PAM prompt", prompt: "Password: ", want: 0, wantStdout: "hunter2\n"},
 		{
 			// With a jump host in the way, either end could have sent it.
@@ -219,7 +219,7 @@ func TestRunBadArgsAreInert(t *testing.T) {
 
 // Pins the seams around the shared TargetForms const: the "Target forms:"
 // header, the blank line before "Flags:", and no trailing newline in the
-// const itself — without freezing stdlib flag formatting.
+// const itself, without freezing stdlib flag formatting.
 func TestPrintUsageTargetForms(t *testing.T) {
 	var buf bytes.Buffer
 	printUsage(&buf, flag.NewFlagSet("netdoc", flag.ContinueOnError))
@@ -246,7 +246,7 @@ func TestHistoryFile(t *testing.T) {
 	}
 }
 
-// A misspelled preset is rejected before anything runs — including under
+// A misspelled preset is rejected before anything runs, including under
 // -json, where the keymap has no effect but the typo is still worth hearing
 // about on the run that carries it.
 func TestRunRejectsUnknownKeyPreset(t *testing.T) {
@@ -649,7 +649,7 @@ func (c *cancelAfter) Write(p []byte) (int, error) {
 }
 
 // The watch stream's promise is one self-contained, timestamped report per
-// line — anything indented or unterminated breaks every line-oriented reader.
+// line, and anything indented or unterminated breaks every line-oriented reader.
 func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	origRun, origEvery := runAll, ui.WatchEvery
 	t.Cleanup(func() { runAll, ui.WatchEvery = origRun, origEvery })
@@ -719,7 +719,7 @@ func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
 }
 
 // If the context is already cancelled before the first pass completes, there
-// is no report to trust — runJSON must fail closed rather than default to 0.
+// is no report to trust, so runJSON must fail closed rather than default to 0.
 func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
@@ -744,7 +744,7 @@ func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 
 // ms is the one field with an out-of-band meaning: 0 has to keep saying "never
 // ran", which a sub-millisecond check would otherwise steal. Per-attempt ms
-// carries the same promise — a LAN connect lands under a millisecond often.
+// carries the same promise, since a LAN connect lands under a millisecond often.
 func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 	probes := []diagnostic.Probe{
 		{ID: diagnostic.ProbeIface, Name: "Interface"},
@@ -877,7 +877,7 @@ func TestBuildReport(t *testing.T) {
 	if !strings.Contains(rep.Summary, "Cannot resolve example.com") {
 		t.Errorf("summary = %q", rep.Summary)
 	}
-	// The first failing row, not merely a failing one — scripts route on this.
+	// The first failing row, not merely a failing one, since scripts route on this.
 	if rep.FailedStage != string(diagnostic.ProbeDNS) {
 		t.Errorf("failed_stage = %q, want %q", rep.FailedStage, diagnostic.ProbeDNS)
 	}

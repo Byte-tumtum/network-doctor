@@ -16,7 +16,7 @@ import (
 )
 
 // resolvConf is the path a node's resolver configuration is bound over. The
-// bind lives in the node's own mount namespace — the host's file is not
+// bind lives in the node's own mount namespace, since the host's file is not
 // writable from the director's user namespace, and would not be touched even
 // if it were.
 const resolvConf = "/etc/resolv.conf"
@@ -26,8 +26,8 @@ const resolvConf = "/etc/resolv.conf"
 // `netdoc-sim __node <config.json>` with those namespaces already created by
 // clone(2), so all it has to do is furnish them and stay alive.
 //
-// It never touches the network itself — the director does the wiring from
-// outside via nsenter — which keeps the holder small enough to read in one go.
+// It never touches the network itself. The director does the wiring from
+// outside via nsenter, which keeps the holder small enough to read in one go.
 func RunNode(ctx context.Context, cfgPath string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	// #nosec G304 -- production supplies a run-owned path; the internal command can select another, but this unprivileged read is parsed before use and performs no write.
 	blob, err := os.ReadFile(cfgPath)
@@ -155,7 +155,7 @@ func enableIPv6() error {
 // bindResolver points this node at its own nameserver by bind-mounting a
 // generated resolv.conf over the system one. The mount is confined to this
 // process's mount namespace, which was created with clone(2) and made private,
-// so it is invisible to the host and to every other node — that is what lets
+// so it is invisible to the host and to every other node, which is what lets
 // two simulated machines disagree about who their resolver is.
 func bindResolver(dir, node, resolver string) error {
 	src := filepath.Join(dir, node+"-resolv.conf")

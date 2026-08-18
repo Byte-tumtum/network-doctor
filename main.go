@@ -34,7 +34,7 @@ func init() {
 }
 
 // versionString picks what -version reports: the GoReleaser-injected value
-// when there is one, else the module version stamped into the binary — so a
+// when there is one, else the module version stamped into the binary, so a
 // plain `go install ...@vX.Y.Z` build doesn't introduce itself as "dev".
 func versionString(injected, module string) string {
 	if injected == "dev" && module != "" && module != "(devel)" {
@@ -48,7 +48,7 @@ func main() {
 }
 
 // askpass answers one ssh prompt, whose text arrives as the argument. ssh is
-// told to force askpass, which routes *every* prompt here — including the
+// told to force askpass, which routes *every* prompt here, including the
 // unknown-host-key question, where handing over the password would silently
 // spend it on a host nobody vouched for. So only a password or passphrase
 // prompt is answered; anything else is refused and ssh says so on the
@@ -57,7 +57,7 @@ func main() {
 // host is the machine the password was collected for; a prompt naming any
 // other one is refused, since ssh's whole subtree inherits the helper. proxied
 // says a jump host or proxy command is in the way, which is the one case where
-// a prompt that names nobody is refused too — see promptHost.
+// a prompt that names nobody is refused too; see promptHost.
 func askpass(args []string, secret, host string, proxied bool, stdout, stderr io.Writer) int {
 	prompt := strings.ToLower(strings.Join(args, " "))
 	// The host-key question embeds the host name, so a target like
@@ -79,7 +79,7 @@ func askpass(args []string, secret, host string, proxied bool, stdout, stderr io
 	// the wording is no help: a keyboard-interactive prompt is the far end's to
 	// write, so a jump host that calls its question a passphrase would collect
 	// the target's password. Nothing in the text is evidence, so refuse them
-	// all — the run with the password field blank puts the question back on the
+	// all, since the run with the password field blank puts the question back on the
 	// terminal, where the user can see who is asking.
 	if h == "" && proxied {
 		fmt.Fprintln(stderr, "netdoc: not answering an unattributed prompt on a proxied connection")
@@ -93,7 +93,7 @@ func askpass(args []string, secret, host string, proxied bool, stdout, stderr io
 // prompt names none. ssh asks two ways: "user@host's password:" for password
 // auth, and "(user@host) " in front of whatever the server sent for
 // keyboard-interactive. A ProxyJump or ProxyCommand child asks in the same
-// shapes for the jump host — a prompt that matches on "password" but wants a
+// shapes for the jump host: a prompt that matches on "password" but wants a
 // secret this form never collected.
 //
 // The parenthesized form is read first, and it settles the question: it is
@@ -103,7 +103,7 @@ func askpass(args []string, secret, host string, proxied bool, stdout, stderr io
 //
 // A key passphrase carries no host, and neither does a keyboard-interactive
 // prompt from a client too old to prefix them (< OpenSSH 8.6). Both stay
-// answerable only while there is one machine it could be — a proxy makes them
+// answerable only while there is one machine it could be, since a proxy makes them
 // indistinguishable from each other, and the wording can't tell them apart.
 func promptHost(prompt string) string {
 	if rest, ok := strings.CutPrefix(prompt, "("); ok {
@@ -233,7 +233,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// An IP, never a hostname: resolving the second opinion through the
 	// resolver it exists to cross-check would defeat the check. Empty is a
-	// deliberate opt-out and the one value that isn't validated — nothing is
+	// deliberate opt-out and the one value that isn't validated, because nothing is
 	// dialed, so there is nothing to parse.
 	if *publicDNS != "" {
 		ip := net.ParseIP(*publicDNS)
@@ -295,8 +295,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // historyFile is where target history persists between sessions. "" is the
-// UI's existing "in-memory only" path — it neither loads nor writes the file,
-// and leaves any existing one alone — so -no-history is just that path taken
+// UI's existing "in-memory only" path: it neither loads nor writes the file,
+// and leaves any existing one alone, so -no-history is just that path taken
 // on purpose rather than a second opt-out mechanism.
 func historyFile(disabled bool) string {
 	dir, err := os.UserConfigDir()
@@ -328,14 +328,14 @@ var runAll = diagnostic.RunAll
 // mirrors the TUI contract: 1 if any check failed, else 0.
 //
 // With watch it never stops on its own: one compact report per line, forever,
-// until the terminal interrupts it. That's NDJSON, but not a new schema — the
+// until the terminal interrupts it. That's NDJSON, but not a new schema: the
 // line is the same report struct, plus the ts that makes a stream readable.
 func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, selection diagnostic.ProbeSelection, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	if !watch {
 		enc.SetIndent("", "  ")
 	} else {
-		// Ctrl-C — or the SIGTERM a supervisor sends — has to end the stream
+		// Ctrl-C, or the SIGTERM a supervisor sends, has to end the stream
 		// at a line boundary rather than cut one in half, and it cancels the
 		// in-flight probes on the way out.
 		var stop context.CancelFunc
@@ -377,7 +377,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 }
 
 // buildReport flattens probe results into the stable JSON shape, preserving
-// probe order. OK means "no check failed" — Warn, Skip, and N/A don't count
+// probe order. OK means "no check failed"; Warn, Skip, and N/A don't count
 // against it, same as everywhere else in the app.
 func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) report.Report {
 	rep := report.Report{Version: version, Checks: []report.Check{}, OK: true}

@@ -6,7 +6,7 @@
 //
 // No root needed: the simulator runs in an unprivileged user namespace. The
 // tests skip themselves on a host where that is unavailable, and nothing they
-// create is reachable from — or visible to — the host network.
+// create is reachable from, or visible to, the host network.
 
 package simulation
 
@@ -37,7 +37,7 @@ const proxyProbeName = diagnostic.ConnectivityProbeHost
 // simulates anything. A cgo build resolves through glibc's getaddrinfo, which
 // inside a node namespace does not use the node's resolver: on a systemd-resolved
 // host it reaches the host's resolver over a Unix socket in the shared /run, and
-// where that is absent it blocks — ignoring the probe's context — until the probe
+// where that is absent it blocks, ignoring the probe's context, until the probe
 // deadline expires. Either way the run measures the host, not the simulation.
 func buildBinaries(t *testing.T) (netdoc, sim string) {
 	t.Helper()
@@ -59,7 +59,7 @@ func buildBinaries(t *testing.T) (netdoc, sim string) {
 
 // RequireNetnsEnv turns "this host cannot simulate" from a skip into a failure.
 // A CI job that is supposed to exercise namespaces has to fail when it silently
-// stops doing so — a green run full of skips is how a backend regression hides
+// stops doing so: a green run full of skips is how a backend regression hides
 // for a release cycle. Developers on a host without user namespaces leave it
 // unset and get the skip.
 const RequireNetnsEnv = "NETDOC_SIM_REQUIRE_NETNS"
@@ -164,7 +164,7 @@ func TestBrokenDNSScenario(t *testing.T) {
 		t.Errorf("dns = %s, want FAIL", byID["dns"])
 	}
 	if byID["internet_tcp"] != "PASS" {
-		t.Errorf("internet_tcp = %s, want PASS — the point is that the path still works", byID["internet_tcp"])
+		t.Errorf("internet_tcp = %s, want PASS: the point is that the path still works", byID["internet_tcp"])
 	}
 	if out.ActualVerdict != "dns" {
 		t.Errorf("verdict = %s, want dns", out.ActualVerdict)
@@ -535,7 +535,7 @@ func TestFaultDuringProbeScenario(t *testing.T) {
 	// The point of the scenario: the transition provably happened while an
 	// answer was still being held, and that answer was still delivered. The
 	// service's own record of when the query arrived and how long it was held
-	// is the synchronisation — nothing here waits and hopes.
+	// is the synchronisation, and nothing here waits and hopes.
 	held := 0
 	for _, q := range rep.Evidence.DNSQueries {
 		if q.Service != "inflight-resolver" || q.ScheduledOutcome != DNSOutcomeDelay {
@@ -680,7 +680,7 @@ func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 // dns-timeout-boundary only exists as a campaign: the delay it walks is drawn
 // per iteration, so `run` on the base scenario impairs nothing. Pinning one
 // iteration makes the draw a constant, and then the deadline is the only thing
-// left to move — the same held answer resolves under a timeout above the swept
+// left to move: the same held answer resolves under a timeout above the swept
 // range and is classified as a DNS timeout under one below it.
 func TestDNSTimeoutBoundaryCampaignCrossesTheDeadline(t *testing.T) {
 	requireBackend(t)
@@ -1720,7 +1720,7 @@ func TestSOCKS5hRemoteDNSScenario(t *testing.T) {
 	}
 	// The direct-egress row's captive-portal check asks the client's own
 	// resolver for this name, and should: it is not the proxied path. What
-	// socks5h promises is that the client never *learns* the address — the
+	// socks5h promises is that the client never *learns* the address: the
 	// client's view answers NXDOMAIN and only the proxy resolves it.
 	if hasDNSEvidence(rep, "client-dns", "10.77.0.10", proxyProbeName, "ANSWER") {
 		t.Errorf("the client's own resolver answered the proxied name: %+v", rep.Evidence.DNS)
@@ -1861,7 +1861,7 @@ func TestPMTUBlackholeScenario(t *testing.T) {
 	// rather than failing on anything about the certificate.
 	tls := diagnosisCheck(bulk, string(diagnostic.ProbeTLS))
 	if tls.Status != "FAIL" || tls.Cause != diagnostic.TLSCauseTimeout {
-		t.Errorf("tls = %+v, want FAIL with cause %q — a size-selective stall, not a certificate problem",
+		t.Errorf("tls = %+v, want FAIL with cause %q: a size-selective stall, not a certificate problem",
 			tls, diagnostic.TLSCauseTimeout)
 	}
 	if !strings.Contains(tls.Fix, "Path MTU") {
@@ -2112,7 +2112,7 @@ expect:
 
 // TestIPv6OnlyClientSeparatesUnavailableFromUnreachable is the case that fails
 // if the two states are ever collapsed. The client has no IPv4 address at all,
-// so IPv4 is unavailable — nothing was dialed, and no claim is made about a
+// so IPv4 is unavailable: nothing was dialed, and no claim is made about a
 // path that does not exist. IPv6 is reachable across a router, so the same run
 // also shows the measurement is not merely "the neighbor answered".
 //
@@ -2514,8 +2514,8 @@ func hasDefaultRoute(rep Report, node string) bool {
 	return false
 }
 
-// assertCleanedUp proves the run released everything, and — the part that
-// matters — that the host never had any of it in the first place.
+// assertCleanedUp proves the run released everything, and, the part that
+// matters, that the host never had any of it in the first place.
 func assertCleanedUp(t *testing.T, rep Report) {
 	t.Helper()
 	if !rep.Cleanup.Done || len(rep.Cleanup.Errors) > 0 {
@@ -2648,7 +2648,7 @@ func TestChallengeReplayIsStableAndHumanAnswerMovesNothingElse(t *testing.T) {
 }
 
 // The hostname in the briefing has to be a real part of the simulated network,
-// answered by real DNS over real sockets from inside the node — not a label
+// answered by real DNS over real sockets from inside the node, not a label
 // printed beside a topology that knows it by another name. A player who is
 // handed a name they cannot resolve is debugging the game.
 //

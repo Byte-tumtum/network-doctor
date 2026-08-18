@@ -34,7 +34,7 @@ import (
 //
 // The user namespace is what makes this rootless: inside it the director holds
 // CAP_NET_ADMIN and CAP_NET_BIND_SERVICE, so it can create bridges, veths,
-// routes, nftables rules, tc qdiscs and privileged listeners — all of which
+// routes, nftables rules, tc qdiscs and privileged listeners, all of which
 // exist only inside namespaces it owns. It has no capabilities in the host
 // namespaces at all, so the safety rules this package promises (never touch the
 // host's routes, resolver, or firewall) are enforced by the kernel rather than
@@ -141,7 +141,7 @@ func kernelLinkName(prefix, id string, index int) string {
 //
 // There is no fallback to look for. Without a user namespace the simulator
 // would have to run privileged against the host's real network stack, which is
-// exactly the thing this design exists to make impossible — so an unsupported
+// exactly the thing this design exists to make impossible, so an unsupported
 // host is reported and the run stops.
 func userNamespaceReason() string {
 	// Root can always unshare, and still does: running as root does not switch
@@ -180,7 +180,7 @@ func userNamespaceReason() string {
 		}
 		if blocked {
 			return fmt.Sprintf(
-				"cannot simulate: unprivileged user namespaces are unavailable — %s is %d, wanted %s. %s. "+
+				"cannot simulate: unprivileged user namespaces are unavailable, %s is %d, wanted %s. %s. "+
 					"netdoc-sim will not fall back to the host network stack or ask for elevated privileges.",
 				k.path, n, k.wants, k.why)
 		}
@@ -192,8 +192,8 @@ func userNamespaceReason() string {
 // network and mount namespace, and returns its exit code. The child is where
 // the backend actually runs; the parent keeps no privileges and no namespaces.
 //
-// stdin is nil for every automated command — a simulation reads nothing from
-// the terminal — and is the caller's terminal only for Challenge Mode, where a
+// stdin is nil for every automated command, since a simulation reads nothing
+// from the terminal, and is the caller's terminal only for Challenge Mode, where a
 // person is the one being asked.
 func LaunchDirector(ctx context.Context, self string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	// #nosec G204 -- self comes from os.Executable and argv is built as discrete arguments.
@@ -218,7 +218,7 @@ func LaunchDirector(ctx context.Context, self string, argv []string, stdin io.Re
 	}
 	if err != nil {
 		// Reached only when the capability check passed and the kernel still
-		// refused — a container seccomp profile, an LSM, or a knob that changed
+		// refused: a container seccomp profile, an LSM, or a knob that changed
 		// underneath us. Say what was attempted; never retry without the
 		// namespace, which would put the simulation on the host's real stack.
 		return 1, fmt.Errorf(
@@ -289,7 +289,7 @@ func (b *netnsBackend) Prepare(ctx context.Context, s *Scenario, id string) (Env
 	// cleanup <id>` can rebuild the workspace path of a run whose process is
 	// gone, rather than trusting the one written into its record. Exclusive, and
 	// done before there is an Env to hand back, so e.work only ever names a
-	// directory this call created — and Cleanup can only ever remove that one.
+	// directory this call created, and Cleanup can only ever remove that one.
 	work, err := createWorkspace(id)
 	if err != nil {
 		return nil, err
@@ -504,7 +504,7 @@ func (e *netnsEnv) startServices(ctx context.Context, np *nodeProc) error {
 
 // safeLog collects a holder's stderr. os/exec copies into it from a goroutine
 // of its own for as long as the holder runs, while await reads it to explain a
-// holder that answered wrongly — two goroutines on one buffer, so it needs the
+// holder that answered wrongly, so two goroutines share one buffer and it needs the
 // lock.
 type safeLog struct {
 	mu  sync.Mutex
@@ -705,7 +705,7 @@ func (e *netnsEnv) observeNetem(ctx context.Context, node string, iface *interfa
 }
 
 // netemParameters extracts the shaping parameters tc reports, dropping the
-// qdisc handle, refcnt and queue limit — implementation detail on one side, and
+// qdisc handle, refcnt and queue limit: implementation detail on one side, and
 // on the other a generated name this package never exposes.
 func netemParameters(raw []byte) string {
 	line, _, _ := strings.Cut(string(raw), "\n")
@@ -747,7 +747,7 @@ func (np *nodeProc) setDNSOutcome(ctx context.Context, service, outcome string, 
 // what it answers is an observation of the simulated network rather than a
 // restatement of the diagnosis.
 // It answers with one of FamilyStateReachable, TargetStateRefused or
-// FamilyStateUnreachable — the three outcomes a TCP connection attempt can
+// FamilyStateUnreachable, the three outcomes a TCP connection attempt can
 // actually have, kept apart because a reset and a timeout are different faults.
 func (np *nodeProc) probeTCP(ctx context.Context, address string, port int, timeout time.Duration) (string, error) {
 	if np.stdin == nil || np.stdout == nil {
@@ -803,9 +803,9 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 	switch f.Type {
 	case FaultDrop:
 		// Outbound drops on the way out, which the kernel reports back to the
-		// local sender as EPERM — a refusal, the way a host firewall behaves.
+		// local sender as EPERM, a refusal, the way a host firewall behaves.
 		// Inbound drops on arrival at this node, so the sender is told nothing
-		// and waits out its timeout — the way a black hole in the path behaves.
+		// and waits out its timeout, the way a black hole in the path behaves.
 		chain, hook, where := "out", "postrouting", "refuses"
 		if f.Direction == DirectionInbound {
 			chain, hook, where = "in", "input", "swallows"
@@ -912,7 +912,7 @@ func (e *netnsEnv) faultSteps(f Fault, np *nodeProc) ([][]string, string, error)
 		}
 		// Output, not forward: the only packets suppressed are the PMTU errors
 		// this router itself generates about the narrowed hop. ICMP it merely
-		// forwards, and every other type it originates, still flow — a black
+		// forwards, and every other type it originates, still flow. A black
 		// hole is one missing signal, not a dead control plane.
 		steps = append(steps,
 			in("nft", "add", "rule", "inet", nftTable, pmtuChain,
@@ -952,12 +952,12 @@ func isNftNameRune(r rune) bool {
 }
 
 // nftTable is the simulator's own table name. Rules only ever go here, and only
-// ever inside a simulated node's namespace — the host ruleset is unreachable
+// ever inside a simulated node's namespace; the host ruleset is unreachable
 // from the director's user namespace in the first place.
 const nftTable = "netdocsim"
 
 // pmtuChain holds the PMTU black hole's suppression rules. Its own chain, so
-// the hook it needs — locally originated traffic only — cannot be confused with
+// the hook it needs, locally originated traffic only, cannot be confused with
 // the drop fault's chains.
 const pmtuChain = "pmtu"
 
@@ -1113,7 +1113,7 @@ func (e *netnsEnv) Cleanup(ctx context.Context, keep bool) CleanupInfo {
 }
 
 // stop ends a holder: closing its stdin is the polite request, SIGKILL is the
-// answer to one that will not go. Idempotent, and it has to be — a holder may
+// answer to one that will not go. Idempotent, and it has to be, since a holder may
 // already have exited on its own, been killed with the process group, or been
 // stopped by an earlier Cleanup.
 func (np *nodeProc) stop(ctx context.Context) error {

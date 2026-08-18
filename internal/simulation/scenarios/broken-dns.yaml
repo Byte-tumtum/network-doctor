@@ -2,7 +2,7 @@ name: broken-dns-with-working-ip-connectivity
 description: >-
   The client's configured resolver is silently unreachable while direct IP
   connectivity still works. netdoc should say the name did not resolve and, in
-  the same breath, that the network itself is fine — the distinction between a
+  the same breath, that the network itself is fine, which is the distinction between a
   DNS problem and being offline.
 
 topology:

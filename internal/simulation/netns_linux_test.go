@@ -200,7 +200,7 @@ func TestDropFaultArgvCountsWhatItDrops(t *testing.T) {
 // The black hole is two commands that have to arrive together: narrowing the
 // hop without suppressing the report produces ordinary PMTU discovery, and
 // suppressing without narrowing produces nothing at all. The suppression must
-// also be narrow — the output hook, one ICMP code per family — or the fault
+// also be narrow, the output hook and one ICMP code per family, or the fault
 // stops being a black hole and becomes a dead control plane.
 func TestPMTUBlackholeFaultArgv(t *testing.T) {
 	logical := &Interface{Segment: "transit"}

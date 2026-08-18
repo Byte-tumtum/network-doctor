@@ -54,7 +54,7 @@ func challengeWithMutation(t *testing.T, mutation string) *Challenge {
 //
 // A failure here is not a broken test. It means a change repointed ids that may
 // already be in circulation, and the fix is to leave V1 alone and add a V2
-// entry to challengeGenerators — never to update these rows.
+// entry to challengeGenerators, never to update these rows.
 func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 	for _, tt := range []struct {
 		id, base    string
@@ -71,7 +71,7 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 		{"V1-01B112", "dual-stack-healthy", 715611, "service.tcp_reset", "easy", "059f3d44d5c36606"},
 		{"V1-04977A", "dual-stack-healthy", 476967, "family.ipv4_drop", "medium", "3faa09b3c67c5370"},
 		{"V1-04B669", "dual-stack-healthy", 538431, "family.ipv6_drop", "hard", "2e5c19bb54c29117"},
-		// V2 added netem.loss, which V1 must never start selecting — the two
+		// V2 added netem.loss, which V1 must never start selecting. The two
 		// blocks below are one table on purpose, so a change that repoints either
 		// version fails in the same place.
 		{"V2-000000", "dual-stack-healthy", 167361, "family.ipv6_drop", "hard", "2e5c19bb54c29117"},
@@ -656,7 +656,7 @@ func TestHealthyChallengeCoversEveryCondition(t *testing.T) {
 
 // The recognition half of every condition, as a table. Network Doctor is graded on
 // what its own report says about the network, never on a Challenge-only
-// expected label — for the three conditions the hunt oracle already grades, the
+// expected label. For the three conditions the hunt oracle already grades, the
 // rule here is that oracle's, reused rather than restated.
 func TestChallengeRecognizesNetdocsOwnVocabulary(t *testing.T) {
 	fail := func(id, cause string) *Diagnosis {
@@ -784,7 +784,7 @@ func lossChallengeReport(t *testing.T, challenge *Challenge) *Report {
 func TestChallengeTCPResetGapIsAChallengerWin(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")
 	report := resetChallengeReport(t, challenge, "")
-	report.Tests[0].Diagnosis.Summary = "No HTTP response from the target — application-layer or proxy block."
+	report.Tests[0].Diagnosis.Summary = "No HTTP response from the target: application-layer or proxy block."
 	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerReset})
 
 	if !result.Truth.Scoreable || result.Truth.Answer != AnswerReset {
@@ -828,7 +828,7 @@ func TestChallengeRecognizedConditionIsANetdocWin(t *testing.T) {
 
 // 3. Eligibility does not need a diagnosis mapping to exist. netem.loss is a
 // real condition the simulator can prove and netdoc's cause vocabulary has no
-// verdict for at all — it is generated anyway, and netdoc loses it as
+// verdict for at all. It is generated anyway, and netdoc loses it as
 // unrecognized rather than as a wrong answer.
 func TestChallengeAdmitsAConditionNetdocCannotState(t *testing.T) {
 	challenge := challengeWithMutation(t, "netem.loss")
@@ -928,7 +928,7 @@ func TestChallengeWithoutEvidenceIsInconclusiveNotAWin(t *testing.T) {
 // The packaging around this binary decides how a reader of a result should run
 // it: the container image sets its own `docker run …` line, because whoever
 // reads a posted result may have no netdoc-sim and no Linux. Only the printed
-// invitation moves — the id, and therefore the puzzle, is untouched — and the
+// invitation moves, the id and therefore the puzzle is untouched, and the
 // value is external input on its way to a terminal and a forum post, so it is
 // sanitized and bounded like everything else this package prints.
 func TestChallengeCommandComesFromTheEnvironment(t *testing.T) {
@@ -1095,7 +1095,7 @@ func TestChallengeJSONIsDeterministicExceptTiming(t *testing.T) {
 }
 
 // A challenge result is only reproducible if it says which Network Doctor
-// produced it. The path is not carried alongside the run — it is read back off
+// produced it. The path is not carried alongside the run; it is read back off
 // the argv the run was built from, so a result cannot name a binary other than
 // the one that executed.
 func TestChallengeResultRecordsTheNetdocThatRan(t *testing.T) {
@@ -1181,7 +1181,7 @@ func TestChallengeShareBlockNamesNoFault(t *testing.T) {
 
 func TestNormalizeChallengeID(t *testing.T) {
 	// Bare, prefixed, lowercase and hash-prefixed are all one id, and a bare id
-	// means V1 permanently — it was the only form the first release printed.
+	// means V1 permanently, since it was the only form the first release printed.
 	for _, raw := range []string{"8f42c1", " #8F42C1 ", "8F42C1", "v1-8f42c1", "#V1-8F42C1"} {
 		got, err := NormalizeChallengeID(raw)
 		if err != nil || got != "V1-8F42C1" {

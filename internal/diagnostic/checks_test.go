@@ -47,7 +47,7 @@ func TestBuildProbesShape(t *testing.T) {
 		target string // empty means no target
 		want   int
 	}{
-		{"", 8},                    // no target — no target_tcp/path_mtu/protocol rows
+		{"", 8},                    // no target, so no target_tcp/path_mtu/protocol rows
 		{"github.com", 13},         // + tls, http, https
 		{"http://example.com", 11}, // + http
 		{"host:22", 11},            // + ssh banner
@@ -55,7 +55,7 @@ func TestBuildProbesShape(t *testing.T) {
 		{"host:25", 11},            // + smtp banner
 		{"host:587", 11},           // + smtp banner
 		{"smtp://host:2525", 11},   // + smtp banner
-		{"host:9999", 10},          // ProtoNone — stops at path_mtu
+		{"host:9999", 10},          // ProtoNone, stops at path_mtu
 	}
 	for _, c := range cases {
 		var tg *Target
@@ -79,7 +79,7 @@ func TestBuildProbesPublicDNSIsConfigurable(t *testing.T) {
 		{"default", DefaultPublicDNS, "DNS (public 8.8.8.8)"},
 		{"custom IPv4", "9.9.9.9", "DNS (public 9.9.9.9)"},
 		{"custom IPv6", "2620:fe::fe", "DNS (public 2620:fe::fe)"},
-		{"disabled", "", ""}, // absent — the loop below leaves want empty
+		{"disabled", "", ""}, // absent, so the loop below leaves want empty
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, target := range []*Target{nil, mustTarget(t, "example.com:443")} {
@@ -98,7 +98,7 @@ func TestBuildProbesPublicDNSIsConfigurable(t *testing.T) {
 }
 
 // The opt-out has to be real rather than cosmetic: with the row disabled, no
-// probe in the DAG may quietly reach a resolver. Port 53 is the assertion —
+// probe in the DAG may quietly reach a resolver. Port 53 is the assertion:
 // 8.8.8.8:443 stays a fixed direct-egress endpoint, which is a different row
 // with a different question.
 func TestDisabledPublicDNSNeverQueriesTheResolver(t *testing.T) {

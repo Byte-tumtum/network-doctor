@@ -81,7 +81,7 @@ func (m model) jobContent() string {
 // tail in follow mode.
 // Every appended line rebuilds the whole content instead of appending to it.
 // The ring buffer caps at maxJobLines, so the join and wrap stay bounded, and
-// the rebuild is cheap next to the terminal redraw it feeds — an incremental
+// the rebuild is cheap next to the terminal redraw it feeds, and an incremental
 // path would have to re-derive the same wrapping anyway to keep the context
 // line's display-line numbers honest.
 func (m *model) refreshViewport() {

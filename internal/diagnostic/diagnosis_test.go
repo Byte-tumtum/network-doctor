@@ -49,7 +49,7 @@ func TestDiagnoseProxy(t *testing.T) {
 		{"proxy-only network", StatusWarn, StatusWarn, StatusPass, true, "Online via the environment proxy"},
 		{"degraded direct with proxy", StatusWarn, StatusPass, StatusPass, false, "Online but degraded"},
 		{"proxy failed, direct fine", StatusPass, StatusFail, StatusPass, false, "proxy check failed"},
-		{"no proxy configured", StatusPass, StatusNA, StatusPass, false, "Online — direct TCP egress"},
+		{"no proxy configured", StatusPass, StatusNA, StatusPass, false, "Online: direct TCP egress"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -276,7 +276,7 @@ func TestVerdict(t *testing.T) {
 			ProbePMTU: {Status: StatusWarn},
 			ProbeTLS:  {Status: StatusFail},
 		}, VerdictService},
-		// On its own it's only a warning — nothing the caller asked for broke,
+		// On its own it's only a warning, since nothing the caller asked for broke,
 		// and a stalled write has innocent explanations.
 		{"black hole evidence alone", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbePMTU: {Status: StatusWarn},

@@ -150,7 +150,7 @@ func TestV4BasesForMutationAreDerivedFromTheOperator(t *testing.T) {
 
 // Adding V4 must not have moved anything a V3 id resolves to. The golden rows
 // live in TestChallengeIDsResolveToTheSameCaseForever; this is the cheaper
-// structural half — every earlier version still resolves, and each keeps its
+// structural half: every earlier version still resolves, and each keeps its
 // own frozen condition list.
 func TestEarlierChallengeVersionsStillResolve(t *testing.T) {
 	for _, version := range []string{"V1", "V2", "V3"} {

@@ -87,7 +87,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.entering, m.sshPrompt, m.inputErr = true, false, ""
 		ti := textinput.New()
 		ti.Prompt = "netdoc "
-		ti.Placeholder = "example.com:443 — empty for a general check"
+		ti.Placeholder = "example.com:443, or empty for a general check"
 		ti.PromptStyle = keyStyle
 		if m.target != nil {
 			ti.SetValue(m.target.Raw)
@@ -102,10 +102,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// handshake check, which only fits an SSH one. It logs in to the
 		// machine under test, so it needs a target and takes the host from it.
 		if m.target == nil {
-			return m, m.setNotice("SSH needs a target — press r to set one", false)
+			return m, m.setNotice("SSH needs a target: press r to set one", false)
 		}
 		if _, err := toolLookPath("ssh"); err != nil {
-			return m, m.setNotice("ssh not found — install an OpenSSH client", false)
+			return m, m.setNotice("ssh not found: install an OpenSSH client", false)
 		}
 		m.sshPrompt, m.ssh = true, newSSHForm(m.target)
 		return m, textinput.Blink
@@ -235,7 +235,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleConfirmKey handles keys while an advanced tool's command is shown: 'y'
 // runs it (deferred if a job is still live), esc cancels, and anything else is
-// ignored — a stray j/k mid-browse shouldn't silently eat the prompt.
+// ignored, since a stray j/k mid-browse shouldn't silently eat the prompt.
 func (m model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y":
@@ -298,7 +298,7 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case actCopy:
 		notice, ok := "output sent to clipboard (OSC 52)", true
 		if m.keys.bound(ctxViewer, actSave) {
-			notice += " — " + m.keys.label(ctxViewer, actSave) + " saves a file"
+			notice += "; " + m.keys.label(ctxViewer, actSave) + " saves a file"
 		}
 		if err := copyReport(strings.Join(m.visibleJobLines(), "\n")); err != nil {
 			notice, ok = "copy failed: "+err.Error(), false
@@ -416,7 +416,7 @@ func parseRunArgs(line string) (*diagnostic.Target, error) {
 	case len(fields) > 1:
 		return nil, errors.New("one target only, e.g. example.com:443")
 	case strings.HasPrefix(fields[0], "-"):
-		return nil, errors.New("flags aren't supported here — enter a target")
+		return nil, errors.New("flags aren't supported here: enter a target")
 	}
 	return diagnostic.ParseTarget(fields[0])
 }
@@ -470,11 +470,11 @@ func (m *model) doRestart() tea.Cmd {
 }
 
 func (m *model) launchTool(tool Tool) tea.Cmd {
-	// Refuse before stashing — stashJob clears the slot, so a late bail would
+	// Refuse before stashing: stashJob clears the slot, so a late bail would
 	// blank the pane the user is looking at. A missing binary spawns nothing,
 	// so "not found" still gets through at the limit.
 	if tool.Available && m.runningJobs() >= maxActiveJobs {
-		return m.setNotice(fmt.Sprintf("%d tools already running — wait for one to finish", maxActiveJobs), false)
+		return m.setNotice(fmt.Sprintf("%d tools already running: wait for one to finish", maxActiveJobs), false)
 	}
 	m.stashJob()
 	m.networkMap = tool.Key == "v"
@@ -483,7 +483,7 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 	}
 	if !tool.Available {
 		m.cur.name, m.cur.status = tool.Name, JobFailed
-		m.cur.lines, m.cur.dropped, m.cur.evicted = []string{tool.Bin + " not found — install it"}, 0, 0
+		m.cur.lines, m.cur.dropped, m.cur.evicted = []string{tool.Bin + " not found: install it"}, 0, 0
 		m.cur.dur = 0
 		m.cur.display = tool.Name
 		return nil
@@ -492,7 +492,7 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 	args, env, display := tool.Build(m.target, m.selectedIP())
 	id := fmt.Sprintf("%s-%d-%d", tool.Key, m.generation, time.Now().UnixNano())
 	// Toolbox mode: a tool can launch before the first 'r' creates the
-	// generation context — initialize it lazily, exactly as scheduleMsg does.
+	// generation context, so initialize it lazily, exactly as scheduleMsg does.
 	if m.ctx == nil {
 		m.ctx, m.cancel = context.WithCancel(context.Background())
 	}

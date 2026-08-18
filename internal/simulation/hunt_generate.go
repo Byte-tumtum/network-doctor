@@ -32,8 +32,8 @@ const (
 // case for, oldest first. A version is the set of mutation operators that were
 // available when it was published: adding an operator changes which mutation
 // every case number lands on, so it adds a version here rather than editing
-// one, and anything holding an old case — a shared challenge id, a filed triage
-// finding — keeps resolving through the rules it was minted under.
+// one, and anything holding an old case, whether a shared challenge id or a filed
+// triage finding, keeps resolving through the rules it was minted under.
 //
 // The seed domain is deliberately not versioned. A case seed depends on the
 // base and the case number only, so v3 and v4 draw the same numbers and differ
@@ -166,7 +166,7 @@ var huntMutationRegistry = []mutationOperator{
 
 // huntOperators is the operator list one generator version sees: this registry
 // truncated at that version. Order and length are preserved, which is the whole
-// point — selection draws from a permutation of the applicable list, so an
+// point: selection draws from a permutation of the applicable list, so an
 // operator appearing earlier or a list growing longer would move every case.
 func huntOperators(version string) []mutationOperator {
 	want := huntGeneratorIndex(version)
@@ -1086,7 +1086,7 @@ func clientDefaults(s *Scenario) (string, map[routeFamily][]string) {
 // soleDefaultRoute is the client's one default route in the one family it has
 // defaults in. Both halves matter. A client with defaults in two families that
 // loses one has lost a family, not its way out, and a client with two defaults
-// in one family that loses one still has the other — either would be a
+// in one family that loses one still has the other, and either would be a
 // different fault wearing this one's name.
 func soleDefaultRoute(s *Scenario) (client string, family routeFamily, via, segment string, ok bool) {
 	client, defaults := clientDefaults(s)
@@ -1128,7 +1128,7 @@ func generateNoDefaultRoute(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, e
 // routerReachesPrefix reports whether this router has any configured way to a
 // prefix: an interface on it, or a route covering it. It is a question about
 // the scenario rather than about a run, and it is what makes "wrong" mean
-// something — a next hop that does reach the destination is a working gateway,
+// something: a next hop that does reach the destination is a working gateway,
 // however unusual a choice it would be.
 func routerReachesPrefix(s *Scenario, router string, prefix netip.Prefix) bool {
 	node := s.Topology.node(router)
@@ -1202,7 +1202,7 @@ type wrongDefaultRouteCandidate struct {
 // findWrongDefaultRouteCandidate looks for a second router on the client's own
 // link that answers but cannot reach the internet. The router the default
 // already names is skipped, and so is any router that can reach the internet
-// endpoints — a default pointed at those would still work, which is not this
+// endpoints, since a default pointed at those would still work, which is not this
 // fault.
 func findWrongDefaultRouteCandidate(s *Scenario) (wrongDefaultRouteCandidate, bool) {
 	client, family, via, segment, ok := soleDefaultRoute(s)

@@ -22,7 +22,7 @@ import (
 
 // The two process seams, faked. Between them they are every namespace this
 // tool would create, so a test that swaps both can drive any command to its
-// end on a host with no privileges — and can see exactly what each command
+// end on a host with no privileges, and can see exactly what each command
 // asked the host for.
 
 // stubBackend answers the capability question and builds nothing. A backend
@@ -51,7 +51,7 @@ type fakeBackends struct {
 }
 
 // stubBackends replaces the backend constructor for the test and records how
-// each command asked for one — dry or live, logging or silent.
+// each command asked for one: dry or live, logging or silent.
 func stubBackends(t *testing.T, supported bool) *fakeBackends {
 	t.Helper()
 	f := &fakeBackends{supported: supported}
@@ -188,7 +188,7 @@ func TestRunDispatch(t *testing.T) {
 		{name: "validate extra scenario", args: []string{"validate", "healthy", "healthy"}, code: exitUsage,
 			stderr: "netdoc-sim: validate takes one scenario\n"},
 		{name: "validate scenario", args: []string{"validate", "healthy"}, code: exitOK,
-			stdout: "ok: healthy-network — 3 node(s), 0 fault(s), 1 test(s), 6 expected check(s)\n"},
+			stdout: "ok: healthy-network (3 node(s), 0 fault(s), 1 test(s), 6 expected check(s))\n"},
 		{name: "inspect missing id", args: []string{"inspect"}, code: exitUsage,
 			stderr: "netdoc-sim: inspect takes one simulation id\n"},
 		{name: "cleanup all with id", args: []string{"cleanup", "-all", "123"}, code: exitUsage,
@@ -231,7 +231,7 @@ func TestRunDispatchKeepsArgvAligned(t *testing.T) {
 }
 
 // netdoc-sim answers for its own build, the way netdoc does. Anything that
-// packages the two together — a Linux package, the container image — has to be
+// packages the two together, whether a Linux package or the container image, has to be
 // able to prove it shipped one release rather than two, and asking each binary
 // is the only check that reads the binaries instead of the packaging.
 func TestRunDispatchVersion(t *testing.T) {
@@ -279,7 +279,7 @@ func TestRunDispatchCapabilities(t *testing.T) {
 // that binary for its version. A shell script is not that on Windows, and
 // building one would need a toolchain mid-test, so the stand-in is a copy of
 // this test binary. TestMain turns any copy with a .version file beside it into
-// a fake netdoc, and each copy reports the version written next to it — which
+// a fake netdoc, and each copy reports the version written next to it, which
 // is what lets one test give two binaries two different identities.
 
 const fakeNetdocDefaultVersion = "netdoc v0.0.0-fake"
@@ -679,7 +679,7 @@ func TestNetdocEqualsFormReachesDirectorResolved(t *testing.T) {
 
 // TestDirectorCannotBeGivenTwoNetdocs is the regression: forwarding the user's
 // argv verbatim left a second -netdoc on the line, and the flag package takes
-// the last one — so the unresolved spelling won and the launcher's resolution
+// the last one, so the unresolved spelling won and the launcher's resolution
 // was dead code.
 func TestDirectorCannotBeGivenTwoNetdocs(t *testing.T) {
 	abs := fakeNetdoc(t)
@@ -851,7 +851,7 @@ func TestDirectAsksForTheBackendItsFlagsDescribe(t *testing.T) {
 }
 
 // -dry-run announces what a run would do and stops: no report on stdout, and
-// — even with -keep — nothing held open afterwards. Which commands the
+// even with -keep, nothing held open afterwards. Which commands the
 // announcement lists is the backend's business, and the backend's own tests.
 func TestDirectDryRunAnnouncesTheRunAndHoldsNothing(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -1040,7 +1040,7 @@ func TestHoldPublishesTheRecordThenSweepsIt(t *testing.T) {
 	}
 }
 
-// A record that cannot be written is said out loud rather than swallowed —
+// A record that cannot be written is said out loud rather than swallowed,
 // and the simulation is still held, because that is what the user asked for.
 func TestHoldSaysSoWhenItCannotRecordTheSimulation(t *testing.T) {
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
@@ -1061,7 +1061,7 @@ func TestHoldSaysSoWhenItCannotRecordTheSimulation(t *testing.T) {
 		t.Errorf("output = %q, want the simulation held anyway", w.out.String())
 	}
 	// Whether the sweep of an unwritable state directory then reports a
-	// failure of its own is the OS's call, so it is not asserted here — but
+	// failure of its own is the OS's call, so it is not asserted here, but
 	// the workspace is this process's to remove either way.
 	if _, err := os.Stat(work); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the workspace outlived the hold: %v", err)

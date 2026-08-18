@@ -175,8 +175,8 @@ const internetObservationTimeout = 2 * time.Second
 
 // observeFamilyReachability dials the controlled Internet endpoints from inside
 // each node netdoc was run in, and records what it found. It runs after the
-// tests, so it is a point-in-time observation of the state the run finished in
-// — the same instant the route and neighbor evidence above describes.
+// tests, so it is a point-in-time observation of the state the run finished in,
+// the same instant the route and neighbor evidence above describes.
 //
 // Nothing here reads a diagnosis, a verdict or a scenario expectation. That is
 // the point: this evidence has to be able to contradict netdoc. The topology is
@@ -213,7 +213,7 @@ func (e *netnsEnv) observeFamilyReachability(ctx context.Context, out *Evidence)
 }
 
 // observeControlledTargetReachability dials, from inside each test node, the
-// address and port that node's test names — but only when the scenario owns
+// address and port that node's test names, but only when the scenario owns
 // that address, which is what keeps this an observation of the simulated
 // network rather than a claim about the internet. A hostname is resolved from
 // the scenario's own zone rather than through the node's resolver, so a broken
@@ -253,8 +253,8 @@ func (e *netnsEnv) observeControlledTargetReachability(ctx context.Context, out 
 
 // observeRouteTables reads back the routing table each test node's kernel
 // actually holds, for every family that node has an address in. It is the one
-// observation that can establish an absence — no default route at all, or a
-// specific route that is no longer installed — which a per-destination lookup
+// observation that can establish an absence, whether no default route at all or a
+// specific route that is no longer installed, which a per-destination lookup
 // cannot: a lookup that fails says the kernel found nothing, not what the table
 // contained.
 func (e *netnsEnv) observeRouteTables(ctx context.Context, out *Evidence) error {
@@ -301,7 +301,7 @@ func selectedDestinationPath(routes []RouteEvidence, node, destination string) [
 }
 
 // observeFamily reaches a family when any one controlled endpoint answers,
-// which is the same bar netdoc's happy-eyeballs dial clears — reached
+// which is the same bar netdoc's happy-eyeballs dial clears, reached
 // independently, by connecting, not by reading what netdoc concluded.
 func (e *netnsEnv) observeFamily(ctx context.Context, np *nodeProc, endpoints []string) (bool, error) {
 	for _, endpoint := range endpoints {
@@ -321,8 +321,8 @@ func (e *netnsEnv) observeFamily(ctx context.Context, np *nodeProc, endpoints []
 const maxRouteTableOutput = 64 << 10
 
 // parseRouteTable reads one `ip route show` listing into the simulator's
-// logical vocabulary. Lines it cannot name a destination for — multicast,
-// unreachable and the other type-prefixed forms — are skipped rather than
+// logical vocabulary. Lines it cannot name a destination for, meaning multicast,
+// unreachable and the other type-prefixed forms, are skipped rather than
 // guessed at: this evidence is used to establish that a route is absent, so
 // inventing a row from a line nobody understood is the one mistake it must not
 // make.

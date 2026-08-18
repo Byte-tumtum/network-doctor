@@ -1182,7 +1182,7 @@ func TestHuntAnalysisStopsAfterRuntimeFailure(t *testing.T) {
 
 // A hunt that could not run says so in one sentence, and the sentence names
 // the reason. The per-case report is where the runner records it, and a caller
-// that prints only the summary — the nightly triage — used to get "runtime" and
+// that prints only the summary, the nightly triage, used to get "runtime" and
 // nothing else, which is a failure nobody can act on from a CI log.
 func TestRunHuntReportsWhyACaseFailed(t *testing.T) {
 	base := loadHuntBase(t, "healthy-routed-network")

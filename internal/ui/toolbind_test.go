@@ -193,7 +193,7 @@ func TestAddressBindingFollowsDestinationFamily(t *testing.T) {
 }
 
 // A missing family must leave the command alone rather than borrow the other
-// family's address — an IPv4 source in an IPv6 command binds nothing, it just
+// family's address: an IPv4 source in an IPv6 command binds nothing, it just
 // fails differently.
 func TestNoSourceForFamilyLeavesCommandUnbound(t *testing.T) {
 	v6Target := mustTarget(t, "2001:db8::1")
@@ -309,7 +309,7 @@ func TestBoundToolArgvIndependentPerCall(t *testing.T) {
 
 // End to end: the selection --iface resolved has to survive into the model's
 // own tool table and outlive a restart, which rebuilds it. Asserted without
-// naming a flag, since the table is built for the running GOOS — every
+// naming a flag, since the table is built for the running GOOS, and every
 // platform binds curl to one or the other spelling of the selection.
 func TestModelToolsCarryTheIfaceSelection(t *testing.T) {
 	tgt := mustTarget(t, "github.com")

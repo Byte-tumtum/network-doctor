@@ -66,8 +66,8 @@ type lanNameMsg struct {
 }
 
 // pendingAction is a state change deferred until the active job's terminal event
-// arrives, so Update never blocks waiting on it (that would deadlock — Update is
-// the goroutine that consumes the event).
+// arrives, so Update never blocks waiting on it (that would deadlock, since
+// Update is the goroutine that consumes the event).
 type pendingKind int
 
 const (
@@ -215,7 +215,7 @@ type model struct {
 }
 
 // The palette sticks to the 16 ANSI colors so it follows the user's terminal
-// theme, and every status is also carried by a glyph or word — color is never
+// theme, and every status is also carried by a glyph or word, so color is never
 // the only signal (NO_COLOR and monochrome terminals stay usable).
 var (
 	accentColor = lipgloss.Color("6")
@@ -367,7 +367,7 @@ func (m model) reportReady() bool {
 
 // sshDetected reports whether this run found an SSH server to log in to: the
 // banner probe passed, i.e. the port answered with an SSH- identification
-// string. A warn is deliberately not enough — that one means the port answered
+// string. A warn is deliberately not enough: that one means the port answered
 // with silence, and ssh always speaks first.
 //
 // Presence first: a target with no SSH rung has no entry here at all, and the
@@ -385,7 +385,7 @@ func (m model) spinnerActive() bool {
 
 // setNotice shows one-line feedback and schedules its expiry. The expiry tick
 // carries the deadline it was armed with, so a leftover tick from an earlier
-// notice can't blank a newer one — equality is the identity check.
+// notice can't blank a newer one, since equality is the identity check.
 func (m *model) setNotice(msg string, ok bool) tea.Cmd {
 	window := noticeWindow
 	if msg == ctrlCNotice {
@@ -402,7 +402,7 @@ func (m *model) setNotice(msg string, ok bool) tea.Cmd {
 
 // Update is the only goroutine that touches model state; probes and jobs talk
 // to it strictly through messages. Async messages carry the generation they
-// were born in, so a restart doesn't have to chase them down — it just bumps
+// were born in, so a restart doesn't have to chase them down; it just bumps
 // the counter and lets the stale ones bounce off.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -483,7 +483,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.cur.status = JobFailed
 			m.appendJobLine(textsafe.Clean(msg.err.Error()))
-			notice = "ssh failed — press enter for the output"
+			notice = "ssh failed: press enter for the output"
 		}
 		if m.viewing {
 			m.refreshViewport()
@@ -537,7 +537,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// without its map state leaves the user staring at the checks list.
 		// networkCIDR is copied, not recomputed: it labels the sweep that
 		// actually ran, and this pass's source address may differ.
-		// namesPending is deliberately not carried over — it tracks lookups
+		// namesPending is deliberately not carried over, since it tracks lookups
 		// issued under the old generation, whose replies this restart drops,
 		// so those rows fall back to nmap's own name instead of spinning
 		// forever.

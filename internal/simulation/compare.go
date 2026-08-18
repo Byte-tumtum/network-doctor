@@ -38,8 +38,8 @@ type DiagnosisAttempt struct {
 }
 
 // DiagnosisFamilies carries netdoc's per-family egress verdicts. A family is
-// present only when netdoc actually dialed it, so a key netdoc omitted — a
-// family the selected source has no address for — must stay omitted when the
+// present only when netdoc actually dialed it, so a key netdoc omitted for a
+// family the selected source has no address for must stay omitted when the
 // simulator re-encodes this into its own report. Serializing the empty string
 // would invent a verdict for a family nobody tested.
 type DiagnosisFamilies struct {
@@ -105,7 +105,7 @@ type TestOutcome struct {
 	ActualVerdict   string            `json:"actual_verdict,omitempty"`
 	Checks          []CheckComparison `json:"checks"`
 	// TimedOut names probes whose failure was the probe deadline expiring
-	// rather than an answer — a diagnosis that cost the full budget.
+	// rather than an answer, a diagnosis that cost the full budget.
 	TimedOut []string `json:"timed_out,omitempty"`
 	// RepeatVerdicts holds the verdict of every repeat run, present only when
 	// --repeat asked for more than one.
@@ -210,14 +210,14 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 		case !flagged(c.Expected) && flagged(c.Actual):
 			// The scenario said this part works and netdoc flagged it anyway.
 			// Naming the row in expect.checks must not make the false positive
-			// count for less than an unmentioned one — the healthy scenario names
+			// count for less than an unmentioned one: the healthy scenario names
 			// every row it cares about, and that is where this shows up.
 			o.FalsePositives++
 		}
 	}
 
 	// A failing probe that spent the whole budget answered "I ran out of time",
-	// which is a different — and worse — finding than a fast, definite failure.
+	// which is a different and worse finding than a fast, definite failure.
 	for _, c := range o.Diagnosis.Checks {
 		if c.Status == "FAIL" && probeTimeout > 0 && time.Duration(c.Ms)*time.Millisecond >= probeTimeout {
 			o.TimedOut = append(o.TimedOut, c.ID)
@@ -257,7 +257,7 @@ func sameVerdicts(v []string) bool {
 }
 
 // suggest derives improvement suggestions from what the comparison found. Every
-// rule is a plain function of the report — no heuristics that need a model, and
+// rule is a plain function of the report, with no heuristics that need a model, and
 // no rule that can fire without evidence to point at.
 func (o *TestOutcome) suggest() []Suggestion {
 	var out []Suggestion
@@ -276,22 +276,22 @@ func (o *TestOutcome) suggest() []Suggestion {
 		switch {
 		case c.Outcome == OutcomeMissing:
 			addCheck(SuggestMissedFinding, c, fmt.Sprintf(
-				"No %s row in the report, but the scenario expected one at %s. The probe never ran — check the DAG dependency that skipped it.",
+				"No %s row in the report, but the scenario expected one at %s. The probe never ran, so check the DAG dependency that skipped it.",
 				c.ID, c.Expected), "")
 		case c.Outcome == OutcomeWrongStatus && flagged(c.Expected) && !flagged(c.Actual):
 			addCheck(SuggestMissedFinding, c, fmt.Sprintf(
-				"%s reported %s where the scenario broke it and expected %s — the probe does not detect this fault.",
+				"%s reported %s where the scenario broke it and expected %s: the probe does not detect this fault.",
 				c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeWrongStatus && !flagged(c.Expected) && flagged(c.Actual):
 			addCheck(SuggestFalsePositive, c, fmt.Sprintf(
-				"%s reported %s where the scenario expected %s — netdoc flagged a part of the network the scenario left working.",
+				"%s reported %s where the scenario expected %s: netdoc flagged a part of the network the scenario left working.",
 				c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeWrongStatus:
 			addCheck(SuggestWrongSeverity, c, fmt.Sprintf(
-				"%s reported %s, expected %s — same finding, wrong severity.", c.ID, c.Actual, c.Expected), c.Detail)
+				"%s reported %s, expected %s: same finding, wrong severity.", c.ID, c.Actual, c.Expected), c.Detail)
 		case c.Outcome == OutcomeWrongCause:
 			addCheck(SuggestWrongCause, c, fmt.Sprintf(
-				"%s reported cause %q, expected %q — the failure was detected but classified at the wrong stage.",
+				"%s reported cause %q, expected %q: the failure was detected but classified at the wrong stage.",
 				c.ID, c.Cause, c.ExpectedCause), c.Detail)
 		case c.Outcome == OutcomeWrongFamily:
 			addCheck(SuggestWrongCause, c, fmt.Sprintf(
@@ -299,20 +299,20 @@ func (o *TestOutcome) suggest() []Suggestion {
 				c.ID, c.ActualIPv4, c.ActualIPv6, c.ExpectedIPv4, c.ExpectedIPv6), c.Detail)
 		case c.Outcome == OutcomeUnexpected:
 			addCheck(SuggestFalsePositive, c, fmt.Sprintf(
-				"%s reported %s in a network where the scenario expects it to be fine — likely false positive.", c.ID, c.Actual), c.Detail)
+				"%s reported %s in a network where the scenario expects it to be fine: likely false positive.", c.ID, c.Actual), c.Detail)
 		case c.Outcome == OutcomeMatched && flagged(c.Actual) && c.Fix == "":
 			addCheck(SuggestNoFixHint, c, fmt.Sprintf(
-				"%s reported %s with no fix hint — the user is told what broke but not what to do.", c.ID, c.Actual), c.Detail)
+				"%s reported %s with no fix hint: the user is told what broke but not what to do.", c.ID, c.Actual), c.Detail)
 		}
 	}
 	if !o.verdictMatches() {
 		add(SuggestWrongVerdict, "", fmt.Sprintf(
-			"Verdict was %q, expected %q — the headline classification does not match the injected root cause.",
+			"Verdict was %q, expected %q: the headline classification does not match the injected root cause.",
 			o.ActualVerdict, o.ExpectedVerdict), o.Diagnosis.Summary)
 	}
 	for _, id := range o.TimedOut {
 		add(SuggestProbeTimedOut, id, fmt.Sprintf(
-			"%s failed by exhausting the probe timeout rather than returning an answer — consider a cheaper negative signal so the diagnosis is not paced by the deadline.", id), "")
+			"%s failed by exhausting the probe timeout rather than returning an answer; consider a cheaper negative signal so the diagnosis is not paced by the deadline.", id), "")
 	}
 	if len(o.RepeatVerdicts) > 1 && !sameVerdicts(o.RepeatVerdicts) {
 		add(SuggestNondeterministic, "", fmt.Sprintf(

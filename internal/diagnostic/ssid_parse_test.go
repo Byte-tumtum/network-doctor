@@ -1,5 +1,5 @@
 // Parsers for the networksetup (macOS) and netsh (Windows) SSID output
-// formats — runnable from any OS.
+// formats, runnable from any OS.
 
 package diagnostic
 
@@ -36,7 +36,7 @@ const netshTwoAdapters = "There are 2 interfaces on the system:\r\n" +
 	"    BSSID                  : 66:55:44:33:22:11\r\n"
 
 // Non-English capture (German labels): the localized "Name" label is never
-// consulted — the block still matches by value, and "SSID" is untranslated.
+// consulted: the block still matches by value, and "SSID" is untranslated.
 const netshGerman = "Es gibt 1 Schnittstelle auf dem System:\r\n" +
 	"\r\n" +
 	"    Name                   : WLAN\r\n" +

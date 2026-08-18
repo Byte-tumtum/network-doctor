@@ -19,8 +19,8 @@ type Backend interface {
 	// Capabilities reports whether this host can run a simulation, and which
 	// privileged operations a run performs. Cheap and side-effect free.
 	Capabilities(ctx context.Context) Capabilities
-	// Prepare builds the topology. It returns a usable Env, or an error and —
-	// when setup got far enough to create anything — a non-nil Env that must
+	// Prepare builds the topology. It returns a usable Env, or an error plus,
+	// when setup got far enough to create anything, a non-nil Env that must
 	// still be cleaned up. Callers must handle both being non-nil.
 	Prepare(ctx context.Context, s *Scenario, id string) (Env, error)
 }
@@ -33,7 +33,7 @@ type Env interface {
 	ApplyFaults(ctx context.Context, faults []Fault) ([]FaultInfo, error)
 	// ApplyTimedEvent applies one already-validated scheduled change while the
 	// tests are running, and returns what the kernel says the new state is.
-	// Only the fault scheduler calls it, and only before Cleanup begins — the
+	// Only the fault scheduler calls it, and only before Cleanup begins, since the
 	// runner joins the scheduler first.
 	ApplyTimedEvent(ctx context.Context, event TimedEvent) (string, error)
 	// Exec runs argv inside a node's namespaces. argv is passed to the kernel
@@ -77,14 +77,14 @@ type Capabilities struct {
 
 // runIDBytes is how much randomness a simulation id carries. An id names a
 // directory and a record in shared temporary storage, where colliding with
-// another run — or with something a stranger pre-created under a guessed name
-// — is the whole hazard, so it is wide enough that neither is a case anyone
+// another run, or with something a stranger pre-created under a guessed name,
+// is the whole hazard, so it is wide enough that neither is a case anyone
 // has to reason about. Hex keeps the result inside isSafeName.
 const runIDBytes = 12
 
 // NewID returns a unique id for one simulation. Every namespace, interface and
-// state file derives from it, so two concurrent runs — or a run started while
-// an abandoned one is still around — cannot collide.
+// state file derives from it, so two concurrent runs, or a run started while
+// an abandoned one is still around, cannot collide.
 func NewID() string {
 	var b [runIDBytes]byte
 	// crypto/rand.Read fills b or the process dies trying: it has not returned

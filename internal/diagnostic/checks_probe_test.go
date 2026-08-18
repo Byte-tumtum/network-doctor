@@ -405,7 +405,7 @@ func TestInternetProbeBlackHoledIPv6(t *testing.T) {
 		return []net.Addr{&net.IPNet{IP: net.ParseIP("fe80::1")}}, nil
 	}
 	if r := linkLocalOnly.internetProbe(context.Background(), nil); r.Status != StatusPass {
-		t.Errorf("v4-only network = %+v, want PASS — no global IPv6 means nothing is broken", r)
+		t.Errorf("v4-only network = %+v, want PASS: no global IPv6 means nothing is broken", r)
 	}
 
 	ulaOnly := *blackholed
@@ -413,7 +413,7 @@ func TestInternetProbeBlackHoledIPv6(t *testing.T) {
 		return []net.Addr{&net.IPNet{IP: net.ParseIP("fd00::1")}}, nil
 	}
 	if r := ulaOnly.internetProbe(context.Background(), nil); r.Status != StatusPass {
-		t.Errorf("ULA-only network = %+v, want PASS — fc00::/7 was never meant to reach the internet", r)
+		t.Errorf("ULA-only network = %+v, want PASS: fc00::/7 was never meant to reach the internet", r)
 	}
 }
 
@@ -503,7 +503,7 @@ func TestInternetProbeSkipsFamiliesTheSelectedSourceCannotDial(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r, dialed := dialedNetworks(t, &netops{sources: tc.sources}, nil)
 			if dialed != tc.wantDial {
-				t.Errorf("dialed %s, want %s — an incompatible family must not be attempted", dialed, tc.wantDial)
+				t.Errorf("dialed %s, want %s: an incompatible family must not be attempted", dialed, tc.wantDial)
 			}
 			if r.Status != StatusPass {
 				t.Errorf("status = %s, want PASS: %s", r.Status, r.Detail)
@@ -539,7 +539,7 @@ func TestInternetProbeStillFailsFamiliesTheSelectedSourceCanDial(t *testing.T) {
 		t.Errorf("families = %+v, want IPv4 unreachable and IPv6 untested", r.Families)
 	}
 	if dialed != "[tcp4]" || strings.Contains(r.Detail, "2606:4700:4700::1111") {
-		t.Errorf("dialed %s, detail = %q — the failure must name only endpoints it tried", dialed, r.Detail)
+		t.Errorf("dialed %s, detail = %q: the failure must name only endpoints it tried", dialed, r.Detail)
 	}
 
 	// A dual-stack selection has both families available, so one of them going
@@ -551,7 +551,7 @@ func TestInternetProbeStillFailsFamiliesTheSelectedSourceCanDial(t *testing.T) {
 		t.Errorf("dual-stack with dead IPv6 = %+v, families %+v, want the unchanged black-hole WARN", r, r.Families)
 	}
 	if dialed != "[tcp4 tcp6]" || !strings.Contains(r.Detail, "no IPv6 egress") {
-		t.Errorf("dialed %s, detail = %q — an available family that fails is still unreachable", dialed, r.Detail)
+		t.Errorf("dialed %s, detail = %q: an available family that fails is still unreachable", dialed, r.Detail)
 	}
 }
 
@@ -629,7 +629,7 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 		t.Errorf("portal blocking 443 = %+v, want portal evidence, not a bare no-egress verdict", r)
 	}
 
-	// An unreachable check is not evidence of a portal — the dial result stands.
+	// An unreachable check is not evidence of a portal, so the dial result stands.
 	broken := &netops{
 		dialContext: dialOK, interfaces: ifaces,
 		portalCheck: func(context.Context) (int, string, error) {
@@ -642,7 +642,7 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 }
 
 // A TLS handshake error is a FAIL with the cleaned error in the detail and a
-// fix hint — not a panic and not a skip.
+// fix hint, not a panic and not a skip.
 func TestTLSProbeHandshakeFailure(t *testing.T) {
 	ops := &netops{dialTLS: func(context.Context, string, string, *tls.Config) (net.Conn, error) {
 		return nil, errors.New("x509: certificate has expired")
@@ -738,7 +738,7 @@ const pmtuTestBudget = pmtuHeadroom + time.Second
 // segments either drains the (deliberately small) send buffer or stalls in it.
 // A stall is the black-hole evidence and never more than a WARN; a peer that
 // drains the payload clears the path; a peer that hangs up says nothing either
-// way. net.Pipe stands in for the socket — its writes block until the far end
+// way. net.Pipe stands in for the socket, since its writes block until the far end
 // reads, which is exactly the behavior being classified.
 func TestPMTUProbeClassifiesWrite(t *testing.T) {
 	tests := []struct {
@@ -768,7 +768,7 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			// setup that precedes it.
 			serve:  func(c net.Conn) { _, _ = c.Read(make([]byte, 1)); _ = c.Close() },
 			status: StatusNA,
-			detail: "inconclusive — the peer dropped the connection after 0 KiB",
+			detail: "inconclusive; the peer dropped the connection after 0 KiB",
 		},
 	}
 	for _, tc := range tests {
@@ -801,7 +801,7 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 	}
 }
 
-// The evidence has to name the interface MTU it contradicts — that number is
+// The evidence has to name the interface MTU it contradicts, since that number is
 // what turns "something is dropping packets" into a value to lower.
 func TestPMTUProbeWarnNamesInterfaceMTU(t *testing.T) {
 	client, server := net.Pipe()
@@ -957,7 +957,7 @@ func TestPMTUProbeClassifiesByAcknowledgement(t *testing.T) {
 	}
 }
 
-// A healthy path acknowledges nothing at the instant Write returns — the bytes
+// A healthy path acknowledges nothing at the instant Write returns, because the bytes
 // are still in flight. The probe has to wait out that latency instead of
 // reading the queue once and calling a working link a black hole.
 func TestPMTUProbeWaitsForAcknowledgement(t *testing.T) {
@@ -1004,7 +1004,7 @@ func TestPMTUProbeReportsResetOverDrainedQueue(t *testing.T) {
 	}
 }
 
-// Windows has no send-queue query, so it keeps the send-buffer inference — and
+// Windows has no send-queue query, so it keeps the send-buffer inference, and
 // says so, because that inference cannot see a black hole on a kernel that
 // buffers past the size it reports.
 func TestPMTUProbeFallsBackWithoutQueueAccounting(t *testing.T) {
@@ -1131,7 +1131,7 @@ func TestBannerProbeValidatesProtocol(t *testing.T) {
 }
 
 // Dependent probes fed an empty/zero dependency map degrade to their explicit
-// fail/skip states — no nil-deref, no accidental pass.
+// fail/skip states, with no nil-deref and no accidental pass.
 func TestProbesMalformedDeps(t *testing.T) {
 	ops := &netops{}
 	empty := map[ProbeID]ProbeResult{}
@@ -1204,7 +1204,7 @@ func TestHTTPProbeFailureNamesAddresses(t *testing.T) {
 // guarded snapshot rather than re-read what that goroutine is still writing.
 // Only -race fails on the difference.
 func TestHTTPProbeDialOutlivesRequest(t *testing.T) {
-	// The dial outlasts the request deadline on its own clock — nothing hands it
+	// The dial outlasts the request deadline on its own clock, and nothing hands it
 	// the baton, or the handoff would order the very access under test.
 	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) {
 		time.Sleep(60 * time.Millisecond)
@@ -1222,8 +1222,8 @@ func TestHTTPProbeDialOutlivesRequest(t *testing.T) {
 	}
 }
 
-// A real HTTP/2 round trip — ALPN, TLS, and the h2 framing all genuinely
-// negotiated — over in-memory pipes, so nothing binds a port. The server hangs
+// A real HTTP/2 round trip, with ALPN, TLS, and the h2 framing all genuinely
+// negotiated, over in-memory pipes, so nothing binds a port. The server hangs
 // up on anything that arrives as HTTP/1.1, which is what makes the PASS
 // evidence that the probe's transport actually reached agreement on h2.
 func TestHTTPSProbeSupportsHTTP2OnlyServer(t *testing.T) {
@@ -1316,7 +1316,7 @@ func TestPortalCheck(t *testing.T) {
 	p.mu.Lock()
 	for _, addr := range p.dialed {
 		if addr != "portal.example:80" {
-			t.Errorf("dialed %q, want portal.example:80 — the proxy env leaked into the transport", addr)
+			t.Errorf("dialed %q, want portal.example:80: the proxy env leaked into the transport", addr)
 		}
 	}
 	p.mu.Unlock()
@@ -1329,8 +1329,8 @@ func TestPortalCheck(t *testing.T) {
 }
 
 // pipeNet is a net.Listener whose connections come from net.Pipe: dial hands
-// the caller the client end and queues the server end for Accept. Real HTTP —
-// TLS, ALPN and h2 framing included — runs over it without binding a port, so
+// the caller the client end and queues the server end for Accept. Real HTTP,
+// TLS, ALPN and h2 framing included, runs over it without binding a port, so
 // the round trips stay deterministic and independent of host network state.
 // A closed pipeNet refuses dials, which is this fake's "connection refused".
 type pipeNet struct {
@@ -1363,7 +1363,7 @@ func (p *pipeNet) Close() error { p.once.Do(func() { close(p.closed) }); return 
 func (p *pipeNet) Addr() net.Addr { return &net.UnixAddr{Name: "pipe", Net: "pipe"} }
 
 // dial is the netops.dialContext stand-in. It records the address it was asked
-// for — the only way to tell a proxied request from a direct one when the
+// for, the only way to tell a proxied request from a direct one when the
 // transport's destination no longer decides where the bytes go.
 func (p *pipeNet) dial(ctx context.Context, _, addr string) (net.Conn, error) {
 	p.mu.Lock()

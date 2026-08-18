@@ -321,7 +321,7 @@ func compileCampaignIteration(base *Scenario, seed int64) (*Scenario, []FaultEve
 }
 
 // compileFlappingTimeline resolves the whole flapping shape up front. Three
-// draws, in a fixed order, and every offset derived from them arithmetically —
+// draws, in a fixed order, and every offset derived from them arithmetically,
 // so iteration N is reproducible from its seed alone and nothing is decided
 // once the scheduler starts.
 func compileFlappingTimeline(rng *mathrand.Rand, c *CampaignTimeline, schedule *[]FaultEvent) []Fault {

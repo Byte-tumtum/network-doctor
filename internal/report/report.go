@@ -14,7 +14,7 @@ type Report struct {
 	Summary string  `json:"summary"`
 	Verdict string  `json:"verdict"`
 	// FailedStage is the id of the first check that failed, omitted when none
-	// did — the one field a CI job needs to route a bug report.
+	// did, the one field a CI job needs to route a bug report.
 	FailedStage string `json:"failed_stage,omitempty"`
 	OK          bool   `json:"ok"`
 }

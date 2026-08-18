@@ -1,5 +1,5 @@
 // Rendering: the View tree and its helpers. Nothing here mutates the
-// model — every function takes a value receiver and returns a string.
+// model; every function takes a value receiver and returns a string.
 
 package ui
 
@@ -17,7 +17,7 @@ import (
 
 // wrap reflows a full-width block that no panel is wrapping for us. Without
 // it the terminal hard-wraps mid-word, and the extra display rows aren't in
-// View's newline budget — so the renderer eats the top of the screen.
+// View's newline budget, so the renderer eats the top of the screen.
 func (m model) wrap(s string) string {
 	if m.width <= 0 {
 		return s
@@ -107,7 +107,7 @@ func (m model) View() string {
 	if m.entering && m.confirmTool == nil && m.height > 0 {
 		// The forms cheatsheet yields first: drop it when the view would
 		// overflow, or when it would starve a live job pane below jobView's
-		// 5-row minimum. m.height == 0 means size unknown — keep the forms.
+		// 5-row minimum. m.height == 0 means size unknown, so keep the forms.
 		if avail < 0 || (m.hasJob() && avail < 5) {
 			tail = m.promptView(false) + "\n"
 			budget()
@@ -118,7 +118,7 @@ func (m model) View() string {
 		minAvail = 5
 	}
 	// Still overflowing: shed chrome before content. The toolbox chips go
-	// first — they wrap to a row per couple of tools on a narrow terminal —
+	// first (they wrap to a row per couple of tools on a narrow terminal),
 	// then the header line, then the panels are clipped to what is left. The
 	// banner is the plain-English verdict, so it never yields.
 	if m.height > 0 && avail < minAvail {
@@ -141,7 +141,7 @@ func (m model) View() string {
 	if m.height > 0 {
 		// Last resort: the panels bottom out at one row and the help bar has no
 		// floor at all, so on a very short terminal the view can still overflow.
-		// Clip from the bottom — losing the help bar beats the renderer eating
+		// Clip from the bottom: losing the help bar beats the renderer eating
 		// the top of the screen, which is where the banner lives.
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
 	}
@@ -198,12 +198,12 @@ func (m model) bodyView(deferred bool) string {
 	var right strings.Builder
 	if deferred {
 		right.WriteString(panelTitleStyle.Render("Details") + "\n")
-		right.WriteString(faintStyle.Render("Nothing to show yet — the checks haven't run.") + "\n")
+		right.WriteString(faintStyle.Render("Nothing to show yet: the checks haven't run.") + "\n")
 	} else {
 		probe := m.probes[m.selected]
-		right.WriteString(panelTitleStyle.Render("Details — "+probe.Name) + "\n")
+		right.WriteString(panelTitleStyle.Render("Details: "+probe.Name) + "\n")
 		if r, ok := m.results[probe.ID]; ok {
-			right.WriteString(statusStyles[r.Status].Render(r.Status.String()) + " — " + r.Detail + "\n")
+			right.WriteString(statusStyles[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
 			if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 				right.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
 			}
@@ -231,7 +231,7 @@ func (m model) bodyView(deferred bool) string {
 	leftStr := strings.TrimRight(left.String(), "\n")
 	rightStr := strings.TrimRight(right.String(), "\n")
 
-	if m.width < 80 { // too narrow for two columns — stack
+	if m.width < 80 { // too narrow for two columns, so stack
 		w := max(m.width-2, 24)
 		return lipgloss.JoinVertical(lipgloss.Left,
 			panelStyle.Width(w).Render(leftStr),
@@ -362,7 +362,7 @@ func (m model) networkMapView() string {
 	}
 
 	panelWidth := max(m.width-2, 24)
-	title := panelTitleStyle.Render("Network map — " + lanDiscoveryName + " — " + m.networkCIDR)
+	title := panelTitleStyle.Render("Network map: " + lanDiscoveryName + " · " + m.networkCIDR)
 	if commonDomain != "" {
 		domain := faintStyle.Render("Domain: " + commonDomain)
 		contentWidth := panelWidth - panelStyle.GetHorizontalPadding()
@@ -466,7 +466,7 @@ func helpKeys(width int, kv ...string) string {
 func (m model) confirmView() string {
 	_, _, display := m.confirmTool.Build(m.target, m.selectedIP())
 	body := panelTitleStyle.Render("Run "+m.confirmTool.Name+"?") + "\n" +
-		faintStyle.Render("Actively probes the shown scope — may trip intrusion detection.") + "\n" +
+		faintStyle.Render("Actively probes the shown scope, and may trip intrusion detection.") + "\n" +
 		"$ " + display
 	w := max(min(m.width-2, 76), 24)
 	return focusPanelStyle.Width(w).Render(body) + "\n" + helpKeys(m.width, "y", "run", "esc", "cancel")
@@ -525,7 +525,7 @@ func (m model) sshFormView() string {
 		"  " + m.ssh.user.View() + "\n" +
 		key + "\n" +
 		"  " + m.ssh.pass.View() +
-		"\n\n" + faintStyle.Render("Leave a field blank and ssh asks you itself — as it does for a\nkey passphrase, a host-key check, or a 2FA code.")
+		"\n\n" + faintStyle.Render("Leave a field blank and ssh asks you itself, as it does for a\nkey passphrase, a host-key check, or a 2FA code.")
 	if m.ssh.err != "" {
 		body += "\n" + failStyle.Render("✗ "+m.ssh.err)
 	}
@@ -539,7 +539,7 @@ func (m model) sshFormView() string {
 
 func (m model) helpView(deferred bool) string {
 	// Only the map branch cares how many devices there are, and networkHosts
-	// walks the whole job line buffer — don't pay for it on every checks frame.
+	// walks the whole job line buffer, so don't pay for it on every checks frame.
 	hosts := 0
 	if m.networkMap {
 		hosts = len(m.networkHosts())
@@ -583,7 +583,7 @@ func (m model) helpView(deferred bool) string {
 		addAction(ctxList, actNetworkMap)
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
-	// hint tracks exactly when the key does something — on the map with devices
+	// hint tracks exactly when the key does something. On the map with devices
 	// listed, it sets the target instead.
 	if m.hasJob() && (!m.networkMap || hosts == 0) {
 		add(m.keys.label(ctxList, actOpen), "full output")
@@ -691,7 +691,7 @@ func (m model) noticeView() string {
 }
 
 // banner is the full-width guidance block under the header: what is happening,
-// what it means in plain English, and — on a failure — what to do about it and
+// what it means in plain English, and, on a failure, what to do about it and
 // which tool to reach for next.
 func (m model) banner() string {
 	if m.toolbox && !m.chainRan() {
@@ -750,7 +750,7 @@ var probeNextTool = map[diagnostic.ProbeID]string{
 }
 
 // nextStep suggests the toolbox key worth pressing after a failure, e.g.
-// "Next: press d — DNS lookup (dig)". Empty when no tool applies or the
+// "Next: press d for DNS lookup (dig)". Empty when no tool applies or the
 // binary is missing.
 func (m model) nextStep(id diagnostic.ProbeID) string {
 	key, ok := probeNextTool[id]
@@ -759,17 +759,17 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 	}
 	for _, t := range m.tools {
 		if t.Key == key && t.Available {
-			return "Next: press " + selStyle.Render(key) + " — " + t.Name + " (" + t.Bin + ")"
+			return "Next: press " + selStyle.Render(key) + " for " + t.Name + " (" + t.Bin + ")"
 		}
 	}
 	return ""
 }
 
-// jobStatusLine is the "name — status" line shared by the job pane and the
+// jobStatusLine is the "name: status" line shared by the job pane and the
 // output viewer: a live spinner + timer while running, the total duration
 // once the job has finished.
 func (m model) jobStatusLine() string {
-	s := faintStyle.Render(m.cur.name+" — ") + statusStyles[m.cur.status].Render(m.cur.status.String())
+	s := faintStyle.Render(m.cur.name+": ") + statusStyles[m.cur.status].Render(m.cur.status.String())
 	if len(m.otherJobs) > 0 {
 		s += faintStyle.Render(fmt.Sprintf(" · %d jobs · tab to switch", len(m.otherJobs)+1))
 	}
@@ -796,7 +796,7 @@ func (m model) outputView() string {
 	b.WriteString(m.viewerHeader() + "\n")
 	b.WriteString(m.vp.View() + "\n")
 	// The context line is budgeted at exactly one row, so trim it rather than
-	// wrap it — a long filter is the usual way it outgrows the terminal.
+	// wrap it, since a long filter is the usual way it outgrows the terminal.
 	ctx := m.vpContext()
 	if m.width > 0 {
 		ctx = ansi.Truncate(ctx, m.width, "")
@@ -876,7 +876,7 @@ func (m model) vpContext() string {
 		if m.follow {
 			s += " · following"
 		} else {
-			s += " · follow paused — scroll to bottom to resume"
+			s += " · follow paused, scroll to bottom to resume"
 		}
 	}
 	return s
@@ -893,10 +893,10 @@ func progressBar(done, total, w int) string {
 
 // toolboxView renders the "Dig deeper" chip row. compact keeps only the keys:
 // on a short terminal the names are the first thing View sheds, and the letters
-// alone still say which keys are bound — ? lists what they do.
+// alone still say which keys are bound, and ? lists what they do.
 func (m model) toolboxView(compact bool) string {
 	if len(m.tools) == 0 {
-		return faintStyle.Render("Tools need a host — press ") + keyStyle.Render("r") + faintStyle.Render(" to set one") + "\n"
+		return faintStyle.Render("Tools need a host, press ") + keyStyle.Render("r") + faintStyle.Render(" to set one") + "\n"
 	}
 	chip := func(available bool, key, rest string) string {
 		if compact {
@@ -911,7 +911,7 @@ func (m model) toolboxView(compact bool) string {
 	for i, t := range m.tools {
 		rest := " " + t.Name
 		if !t.Available {
-			rest = " " + t.Name + " — " + t.Bin + " missing"
+			rest = " " + t.Name + " (" + t.Bin + " missing)"
 		}
 		parts[i] = chip(t.Available, t.Key, rest)
 	}
@@ -919,7 +919,7 @@ func (m model) toolboxView(compact bool) string {
 	// output into a job pane, so it rides along as a plain chip. It logs in to
 	// the target, which the target-independent tools don't need.
 	if m.target == nil {
-		parts = append(parts, chip(false, "S", " SSH login — needs a target"))
+		parts = append(parts, chip(false, "S", " SSH login (needs a target)"))
 	} else {
 		parts = append(parts, chip(true, "S", " SSH login"))
 	}
@@ -940,13 +940,13 @@ func (m model) jobView(avail int) string {
 		return ""
 	}
 	if m.height > 0 && avail < 5 {
-		return "" // not even rule+title+status+note fit — drop the pane
+		return "" // not even rule+title+status+note fit, so drop the pane
 	}
 	title := m.wrap(titleStyle.Render("$ " + m.cur.display))
 	status := m.wrap(m.jobStatusLine())
 	tailN := jobTailLines
 	if m.height > 0 {
-		// rule, context note, trailing blank — plus however many rows the
+		// rule, context note, trailing blank, plus however many rows the
 		// title and status took after wrapping.
 		tailN = avail - 3 - lipgloss.Height(title) - lipgloss.Height(status)
 		if tailN < 0 {
@@ -975,7 +975,7 @@ func (m model) jobView(avail int) string {
 	if older > 0 || m.cur.dropped > 0 {
 		var notes []string
 		if older > 0 {
-			notes = append(notes, fmt.Sprintf("… %d earlier lines — enter to scroll", older))
+			notes = append(notes, fmt.Sprintf("… %d earlier lines, enter to scroll", older))
 		}
 		if m.cur.dropped > 0 {
 			notes = append(notes, fmt.Sprintf("%d dropped (channel overflow)", m.cur.dropped))

@@ -21,7 +21,7 @@ import (
 // It is not split into start/shell/diagnose/reveal commands because a simulated
 // network only exists while the process holding its namespaces does. Separate
 // commands would need a daemon and a state file to point at it; one session
-// needs neither, and gets the two properties that matter for free — the player
+// needs neither, and gets the two properties that matter for free: the player
 // and netdoc cannot be handed different networks, and the network is gone when
 // the command returns.
 
@@ -91,7 +91,7 @@ func (f *challengeFlags) parse(args []string) error {
 	}
 	// A daily is the same challenge for everybody who asks for that date. Every
 	// other way of choosing one contradicts that outright, so each combination is
-	// refused by name rather than resolved by some invented precedence — silently
+	// refused by name rather than resolved by some invented precedence, since silently
 	// honouring one of the two would hand somebody a result they would post as
 	// the day's challenge when it was not.
 	if f.daily.set {
@@ -211,7 +211,7 @@ func launchChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 var nowUTC = func() time.Time { return time.Now().UTC() }
 
 // dailyFlag is `-daily` with an optional value: bare for today, `-daily=DATE`
-// for another day. IsBoolFlag is what makes the bare form legal — without it,
+// for another day. IsBoolFlag is what makes the bare form legal; without it,
 // `-daily` would swallow the next argument, and `netdoc-sim challenge -daily`
 // with nothing after it would be a usage error rather than the shortest way to
 // play. It also means `-daily V4-8F42C1` leaves the id as a positional argument,
@@ -349,7 +349,7 @@ func directChallenge(ctx context.Context, args []string, stdin io.Reader, stdout
 
 // reportChallenge is everything that happens once the matchup is decided: the
 // result, the clipboard, and the exit status. Keeping the three in one function
-// is what makes the order structural rather than remembered — there is no point
+// is what makes the order structural rather than remembered: there is no point
 // in it where a share block could be copied before the result it summarises
 // exists, and no path where the clipboard is consulted about an exit status.
 //
@@ -365,7 +365,7 @@ func reportChallenge(result *simulation.ChallengeResult, asJSON bool, stdout, co
 	}
 	// The daily is the one worth posting: everybody who played that day played
 	// this puzzle, so a reader can compare. Copying it is best effort and
-	// deliberately incapable of changing anything below it — a terminal without
+	// deliberately incapable of changing anything below it. A terminal without
 	// OSC 52 is not a failed challenge, it is a challenge somebody copies by
 	// hand from the block that was printed anyway. A run that could not be
 	// scored is not offered at all: there is nothing to compare.
@@ -388,7 +388,7 @@ func reportChallenge(result *simulation.ChallengeResult, asJSON bool, stdout, co
 
 // challengePlay is the interaction: it briefs the player, lends them a shell in
 // the challenge node, and takes their answer. It is handed the live network and
-// deliberately reads nothing out of it — everything it prints comes from the
+// deliberately reads nothing out of it: everything it prints comes from the
 // challenge briefing, which is the same information netdoc's run receives.
 type challengePlay struct {
 	challenge *simulation.Challenge
@@ -423,8 +423,8 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 		info, _ := simulation.ChallengeAnswerByName(p.answer)
 		return simulation.ChallengeSubmission{Answer: info.ID}, nil
 	}
-	// The timer starts here and not a line earlier. Everything before this — the
-	// namespaces, the services, the faults — happened without the player, and
+	// The timer starts here and not a line earlier. Everything before this, the
+	// namespaces, the services and the faults, happened without the player, and
 	// charging them for it would make the number depend on how fast the host
 	// builds a network rather than on how fast they read one.
 	started := p.clock()
@@ -447,7 +447,7 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 			continue
 		}
 		// Stopped where the answer is accepted, so rereading the briefing, going
-		// back into the shell and thinking at the menu are all part of the solve —
+		// back into the shell and thinking at the menu are all part of the solve,
 		// which they are. What is excluded is the netdoc run that follows.
 		submission.Elapsed = p.clock().Sub(started)
 		fmt.Fprintln(p.out, "\nAnswer locked in. Network Doctor is taking its turn on the same network…")
@@ -474,7 +474,7 @@ func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
 			return simulation.ChallengeSubmission{}, true, nil
 		case "b", "brief", "briefing":
 			// The same renderer the session opened with, so what is recalled is what
-			// was originally said — and it is still only what netdoc's run is given.
+			// was originally said, and it is still only what netdoc's run is given.
 			p.challenge.WriteBriefing(p.out)
 			continue
 		case "q", "quit", "":
@@ -494,8 +494,8 @@ func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
 }
 
 // pickAnswer resolves what the player typed at the menu: the number next to an
-// entry, or the diagnosis by name. Both are exact — the number has to be in
-// range and the name has to match an id, an alias or a label whole — so a
+// entry, or the diagnosis by name. Both are exact, since the number has to be in
+// range and the name has to match an id, an alias or a label whole, so a
 // mistyped answer is asked again rather than resolved to whatever it resembled.
 func pickAnswer(choice string) (simulation.ChallengeAnswerInfo, bool) {
 	if number, err := strconv.Atoi(choice); err == nil {

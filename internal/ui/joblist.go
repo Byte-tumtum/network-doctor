@@ -1,5 +1,5 @@
 // The set of tool runs: iteration, lookup by job id, and which one is selected.
-// The selected run lives in model.cur and the parked ones in model.otherJobs —
+// The selected run lives in model.cur and the parked ones in model.otherJobs;
 // that split is this file's business, and nothing outside it should walk both
 // fields by hand.
 
@@ -24,8 +24,8 @@ func (m *model) jobs(yield func(*jobState) bool) {
 	}
 }
 
-// jobByID finds the run a tool message belongs to. nil means the job is gone —
-// a restart cleared it — and the message should be dropped.
+// jobByID finds the run a tool message belongs to. nil means the job is gone,
+// cleared by a restart, and the message should be dropped.
 func (m *model) jobByID(id string) *jobState {
 	for j := range m.jobs {
 		if j.active != nil && j.active.id == id {
@@ -67,7 +67,7 @@ func (m *model) cancelJobs() {
 }
 
 // stashJob parks the selected run at the end of the ring, leaving the slot free
-// for a new one. An empty slot is dropped rather than parked — a zero jobState
+// for a new one. An empty slot is dropped rather than parked: a zero jobState
 // must never become a tab stop.
 func (m *model) stashJob() {
 	if m.hasJob() {
@@ -80,7 +80,7 @@ func (m *model) stashJob() {
 // trimJobs drops the oldest finished runs until the ring is back under
 // maxParkedJobs. A live run is never dropped: its output still needs a jobState
 // to route to, and the user didn't ask for it to be killed. That means the ring
-// can sit over the cap while jobs are in flight — maxActiveJobs bounds how far.
+// can sit over the cap while jobs are in flight, and maxActiveJobs bounds how far.
 func (m *model) trimJobs() {
 	for i := 0; i < len(m.otherJobs) && len(m.otherJobs) > maxParkedJobs; {
 		if m.otherJobs[i].active != nil {

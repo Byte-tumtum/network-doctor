@@ -217,7 +217,7 @@ func (r *HuntResult) finish() {
 
 // firstCaseFailure names what actually went wrong in a run that failed. Without
 // it a runtime failure reports its kind and nothing else, leaving the one useful
-// sentence — the command the simulator could not run — buried in a per-case
+// sentence, the command the simulator could not run, buried in a per-case
 // report that callers reporting only the summary never print. Bounded, because
 // the text can carry a subprocess's whole complaint.
 func firstCaseFailure(cases []HuntCaseResult) string {

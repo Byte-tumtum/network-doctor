@@ -131,7 +131,7 @@ func TestCompareMissingRow(t *testing.T) {
 }
 
 func TestCompareWrongSeverity(t *testing.T) {
-	// WARN where FAIL was expected is still a finding — the severity is what is
+	// WARN where FAIL was expected is still a finding: the severity is what is
 	// wrong, and the suggestion has to say so rather than cry "missed".
 	o := TestOutcome{Name: "t", Diagnosis: diag("degraded", check("internet_tcp", "WARN"))}
 	o.compare(Expect{Checks: []ExpectedCheck{{ID: "internet_tcp", Status: "FAIL"}}}, 4*time.Second)
@@ -405,7 +405,7 @@ func TestUntestedAddressFamilyStaysAbsentThroughTheSimulatorReport(t *testing.T)
 
 // The other half: absence must not become a free pass. A scenario that names a
 // family is asserting netdoc produced that verdict, so a missing one is a
-// mismatch — the simulator only stays quiet about families it never claimed.
+// mismatch, and the simulator only stays quiet about families it never claimed.
 func TestCompareTreatsAddressFamiliesAsPresentOnlyWhenClaimed(t *testing.T) {
 	families := func(v4, v6 string) DiagnosisCheck {
 		c := check("internet_tcp", "PASS")

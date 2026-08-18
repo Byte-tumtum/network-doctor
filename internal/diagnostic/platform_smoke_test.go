@@ -15,7 +15,7 @@ import (
 )
 
 // Availability smoke tests: the per-OS wrappers really run on the CI matrix.
-// No WLAN assumptions — assert only that each returns without panic within
+// No WLAN assumptions: assert only that each returns without panic within
 // its deadline and the output shape is sane. Cancellation/kill correctness is
 // covered deterministically by the ui package's re-exec tests.
 

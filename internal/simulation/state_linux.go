@@ -78,7 +78,7 @@ func checkStateFile(path string, fi os.FileInfo) error {
 }
 
 // stopProcess asks a director to stop, or insists. A process that is already
-// gone is not an error — Release has to be idempotent.
+// gone is not an error, since Release has to be idempotent.
 func stopProcess(pid int, force bool) error {
 	sig := syscall.SIGTERM
 	if force {

@@ -13,8 +13,8 @@ import (
 // two are separate renderers on purpose: a share block that grew out of the
 // reveal would inherit the reveal's licence to say everything.
 //
-// It is pasted rather than printed — Slack, Discord, a GitHub comment, a post —
-// so it is plain UTF-8 with no ANSI, no column alignment a proportional font
+// It is pasted rather than printed, into Slack, Discord, a GitHub comment or a
+// post, so it is plain UTF-8 with no ANSI, no column alignment a proportional font
 // would break, and no table. Five lines that mean something on their own.
 
 // Share is the copyable block. The same completed result renders the same

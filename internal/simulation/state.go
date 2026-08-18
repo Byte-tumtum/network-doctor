@@ -60,8 +60,8 @@ func workspaceFor(id string) string {
 // was this call that made it. That is the whole point of the plain Mkdir: the
 // workspace sits in storage every user on the host can write to, so a
 // directory, file or symlink already occupying the path means someone else got
-// there first, and adopting it would hand this run — and later the recursive
-// removal in Cleanup — an object it never created. The collision is reported
+// there first, and adopting it would hand this run, and later the recursive
+// removal in Cleanup, an object it never created. The collision is reported
 // and nothing is deleted; only the shared parent is created if it is missing.
 func createWorkspace(id string) (string, error) {
 	if !isSafeName(id) {
@@ -80,7 +80,7 @@ func createWorkspace(id string) (string, error) {
 // Save writes the record for a kept simulation. The record is this process's
 // claim on the id, so it is created exclusively: an id that already has a
 // record is a collision to report, never a file to truncate, and O_EXCL also
-// refuses the symlink somebody may have left where the record belongs — the
+// refuses the symlink somebody may have left where the record belongs, since the
 // kernel does not follow the final component when it is set.
 func (s *State) Save() error {
 	if !isSafeName(s.ID) {
@@ -161,7 +161,7 @@ func readStateFile(path string) ([]byte, error) {
 }
 
 // ListStates returns every recorded simulation, newest first. Records whose
-// process is gone are returned too — Alive tells them apart, and Release is how
+// process is gone are returned too; Alive tells them apart, and Release is how
 // their leftovers get swept up.
 func ListStates() ([]*State, error) {
 	entries, err := os.ReadDir(StateDir())
@@ -233,7 +233,7 @@ func (s *State) validate() (string, error) {
 
 // Release ends a kept simulation: the director is asked to stop, which takes
 // its namespaces and every holder with it, then the leftovers on disk go.
-// Idempotent — releasing an already-dead simulation just sweeps its files.
+// Idempotent, so releasing an already-dead simulation just sweeps its files.
 //
 // A record that does not survive validation is not swept at all. Nothing is
 // signalled unless the pid is provably still this simulation's director; a pid

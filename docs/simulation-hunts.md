@@ -72,9 +72,9 @@ condition whose diagnostic meaning Network Doctor failed to recognize. It does
 not mean a mutation expected probe X to fail and probe X did not fail.
 
 The oracle in `internal/simulation/hunt_oracle.go` is that contract in code. It
-runs on a vocabulary of `NetworkCondition` values — domain facts such as IPv4
+runs on a vocabulary of `NetworkCondition` values, domain facts such as IPv4
 internet reachability lost, a target serving an expired TLS certificate, a proxy
-refusing its CONNECT destination, QUIC datagrams dropped on UDP/443 — and keeps
+refusing its CONNECT destination, QUIC datagrams dropped on UDP/443, and it keeps
 two halves apart:
 
 - **observed**: reads simulator evidence and derived simulator truth only, never
@@ -98,7 +98,7 @@ somewhere else. A cause on a passing row is context, not recognition.
 Reconciliation runs on the final client diagnosis and only on stable paths.
 Unknown or unavailable families, persistent netem, and actual timed path
 impairments are not treated as a final-state diagnosis oracle. The opposite
-direction — the simulator reached a family the diagnosis calls unreachable — is
+direction, where the simulator reached a family the diagnosis calls unreachable, is
 reported as `family_reachability_mismatch` with category
 `diagnostic_contradiction` rather than as a false negative.
 
@@ -123,7 +123,7 @@ permutation of the applicable operators, so a longer or reordered list repoints
 cases that published artifacts already name. `HuntGeneratorVersion` is the
 current one and `huntGeneratorVersions` lists every version this build can
 still materialize. Each operator carries the version it first appeared in, and
-an older generator is simply the registry truncated there — which is why new
+an older generator is simply the registry truncated there, which is why new
 operators are appended and never interleaved. Case seeds are not versioned:
 `v3` and `v4` draw the same numbers and differ exactly where the operator list
 does. `TestHuntGeneratorVersion3Reproduction` pins the older generator against
@@ -137,7 +137,7 @@ destination go"; `RouteTableEvidence` is the different reading of "what routes
 exist at all", taken with `ip route show` from inside the node at the end of
 the run and recorded for every family the node has an address in. An empty
 `routes` list is therefore the positive statement that the table was read and
-held nothing, which is what `routing.no_default_route` needs — and a record
+held nothing, which is what `routing.no_default_route` needs, and a record
 being absent means nobody looked, which never establishes anything.
 
 `routing.wrong_default_route` needs one thing more, because a default that goes

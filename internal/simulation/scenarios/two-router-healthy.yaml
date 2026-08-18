@@ -3,7 +3,7 @@ description: >-
   The client LAN has two routers with different jobs: one carries the default
   route out to the simulated internet, the other carries a specific route to
   the subnet the target lives on. Everything works. It is the control for the
-  routing faults that need a wrong turn to be possible — a second on-link next
+  routing faults that need a wrong turn to be possible: a second on-link next
   hop that answers but goes somewhere else, and a specific route whose absence
   is not the same fault as having no default at all.
 

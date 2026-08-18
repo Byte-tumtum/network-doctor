@@ -131,7 +131,7 @@ func signatureControlledTargetUnreachable(obs challengeObservation) (string, boo
 
 // signaturePacketDrops is the qdisc's own drop counter, not a shaper having
 // been installed. A shaper that matched no traffic impaired nobody, and this is
-// the only reading that separates the two — the same reading the netem.loss
+// the only reading that separates the two, the same reading the netem.loss
 // condition is established by, so health and impairment cannot be decided from
 // two measurements that disagree.
 func signaturePacketDrops(obs challengeObservation) (string, bool) {
@@ -169,7 +169,7 @@ func signatureNoDefaultRoute(obs challengeObservation) (string, bool) {
 
 // healthyObserved requires positive evidence that the network worked, not the
 // absence of evidence that it did not. An empty mutation list establishes
-// nothing, and neither does netdoc's verdict — this function never reads
+// nothing, and neither does netdoc's verdict; this function never reads
 // either. A run whose measurements never happened must not be scored as a
 // healthy network.
 //

@@ -18,7 +18,7 @@ import (
 // plus whether the export succeeded.
 func exportReport(rep string, save bool) (notice string, ok bool) {
 	if save {
-		// cwd first (where the user is looking), $HOME as fallback — the cwd
+		// cwd first (where the user is looking), $HOME as fallback, since the cwd
 		// may be read-only when launched from an installed location.
 		// Milliseconds in the name: two saves in the same second would otherwise
 		// collide on O_EXCL and land in $HOME, which is not where the user looked.
@@ -45,7 +45,7 @@ func exportReport(rep string, save bool) (notice string, ok bool) {
 	if err := copyReport(rep); err != nil {
 		return "copy failed: " + err.Error(), false
 	}
-	return "report sent to clipboard (OSC 52) — w saves a file", true
+	return "report sent to clipboard (OSC 52); w saves a file", true
 }
 
 var (
@@ -99,18 +99,18 @@ func osc52Sequence(rep string) string {
 // comes from a subprocess this package launched.
 func (m model) report() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "network-doctor report — %s\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "network-doctor report: %s\n", time.Now().UTC().Format(time.RFC3339))
 	fmt.Fprintf(&b, "version: %s\nos: %s/%s\n", m.version, runtime.GOOS, runtime.GOARCH)
 	b.WriteString("review before sharing: tool output may contain sensitive data\n")
 	if m.target != nil {
 		fmt.Fprintf(&b, "target: %s (%s)\n", m.targetHP(), m.target.Proto)
 	} else {
-		b.WriteString("target: none — general connection check\n")
+		b.WriteString("target: none (general connection check)\n")
 	}
 	b.WriteString("verdict: " + m.verdictLine() + "\n\nchecks:\n")
 	for _, p := range m.probes {
 		r := m.results[p.ID]
-		fmt.Fprintf(&b, "  [%s] %s — %s\n", r.Status, p.Name, r.Detail)
+		fmt.Fprintf(&b, "  [%s] %s: %s\n", r.Status, p.Name, r.Detail)
 		if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 			b.WriteString("        fix: " + r.Fix + "\n")
 		}
@@ -158,9 +158,9 @@ func (m model) verdictLine() string {
 	summary, _ := m.diagnose(order)
 	switch {
 	case firstFail != nil:
-		return "FAIL — " + summary
+		return "FAIL: " + summary
 	case anyWarn:
-		return "WARN — " + summary
+		return "WARN: " + summary
 	}
-	return "PASS — " + summary
+	return "PASS: " + summary
 }

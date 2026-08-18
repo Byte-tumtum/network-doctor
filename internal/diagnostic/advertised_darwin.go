@@ -20,7 +20,7 @@ import (
 const dnssdPath = "/usr/bin/dns-sd"
 
 // dnssdTypes are the service types worth asking about. dns-sd browses one type
-// per process — there is no --all — so this is a fixed list rather than a
+// per process, since there is no --all, so this is a fixed list rather than a
 // `_services._dns-sd._udp` enumeration: these are the types that carry a label
 // a person would recognize, and the rest cost a process to learn nothing.
 var dnssdTypes = []string{
@@ -38,7 +38,7 @@ var dnssdTypes = []string{
 
 // AdvertisedNames returns the device names advertised through the platform's
 // DNS-SD browser, keyed by IP. They win over reverse DNS because they are
-// usually the user-facing label configured on the device — so callers should
+// usually the user-facing label configured on the device, so callers should
 // ask here first and only fall back to ReverseName for what's left, keeping a
 // row's first name its final one.
 //
@@ -90,8 +90,8 @@ func AdvertisedNames(ctx context.Context, ips []string) map[string]string {
 }
 
 // resolveTargets maps each distinct SRV target to its addresses. The target
-// count comes from the LAN, not from us — an office or a hotel advertises
-// hundreds of instances — so lookups queue behind a fixed number of in-flight
+// count comes from the LAN, not from us, and an office or a hotel advertises
+// hundreds of instances, so lookups queue behind a fixed number of in-flight
 // queries rather than arriving at mDNSResponder all at once. The outer context
 // still bounds the queue: targets that never get a turn resolve to nothing,
 // which is what an unresolvable target would have yielded anyway.

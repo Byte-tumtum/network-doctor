@@ -77,7 +77,7 @@ const AskpassHostEnv = "NETDOC_ASKPASS_HOST" // #nosec G101 -- this is an enviro
 
 // AskpassProxyEnv marks a connection that goes through a jump host or a proxy
 // command. Those run an ssh of their own that inherits the helper, so a prompt
-// naming no host — an old client's keyboard-interactive PAM question — could
+// naming no host, such as an old client's keyboard-interactive PAM question, could
 // be either end's. With a proxy in play the helper refuses those instead of
 // guessing; without one there is only one machine it could be.
 const AskpassProxyEnv = "NETDOC_ASKPASS_PROXY" // #nosec G101 -- this is an environment key, not a credential.
@@ -96,7 +96,7 @@ type sshForm struct {
 }
 
 // newSSHForm seeds the form from the run target, the local login name, and the
-// keys sitting in ~/.ssh — the three answers netdoc can give on the user's
+// keys sitting in ~/.ssh: the three answers netdoc can give on the user's
 // behalf.
 func newSSHForm(t *diagnostic.Target) sshForm {
 	f := sshForm{host: sshHostValue(t), keys: append([]string{""}, listSSHKeys()...)}
@@ -123,7 +123,7 @@ func newSSHForm(t *diagnostic.Target) sshForm {
 
 // sshHostValue renders the target for ssh: bare host, plus the port when the
 // target named a non-default one. JoinHostPort, because concatenating a port
-// onto a bare IPv6 literal yields another valid address — sshCommand would
+// onto a bare IPv6 literal yields another valid address, and sshCommand would
 // parse it back as a host nobody asked for and connect there on port 22.
 func sshHostValue(t *diagnostic.Target) string {
 	if t == nil {
@@ -136,7 +136,7 @@ func sshHostValue(t *diagnostic.Target) string {
 }
 
 // listSSHKeys returns the private keys in ~/.ssh, recognized by their public
-// half sitting next to them — which costs no parsing and never opens the
+// half sitting next to them, which costs no parsing and never opens the
 // secret. Only that directory is scanned; a key kept anywhere else is what an
 // IdentityFile line in ssh_config is for, and ssh will find it there without
 // this list having to guess at the path.
@@ -169,9 +169,9 @@ func listSSHKeys() []string {
 func (f sshForm) keyLabel() string {
 	if f.keyIdx == 0 {
 		if len(f.keys) == 1 {
-			return "none found in ~/.ssh — the agent or a password it is"
+			return "none found in ~/.ssh, so the agent or a password it is"
 		}
-		return "none — use the agent or a password"
+		return "none: use the agent or a password"
 	}
 	return filepath.Base(f.keys[f.keyIdx])
 }
@@ -266,7 +266,7 @@ func (m model) handleSSHKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // both `ssh -G` and the interactive session use.
 func sshCommand(host, login, key string) (args []string, err error) {
 	if host == "" {
-		return nil, errors.New("no target host — press r to set one")
+		return nil, errors.New("no target host: press r to set one")
 	}
 	t, err := diagnostic.ParseTarget(host)
 	if err != nil {
@@ -277,7 +277,7 @@ func sshCommand(host, login, key string) (args []string, err error) {
 	}
 	if key != "" {
 		// IdentitiesOnly keeps ssh from offering the agent's keys ahead of the
-		// one that was picked here — otherwise a full agent can exhaust the
+		// one that was picked here; otherwise a full agent can exhaust the
 		// server's auth attempts before this key is ever tried.
 		args = append(args, "-i", key, "-o", "IdentitiesOnly=yes")
 	}
@@ -298,7 +298,7 @@ func resolveSSH(id uint64, args []string, goos string) tea.Cmd {
 		if goos == "windows" {
 			version, err := sshVersion()
 			if err != nil {
-				return sshResolvedMsg{id: id, err: fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%w) — retry with the password field blank and let ssh ask", err)}
+				return sshResolvedMsg{id: id, err: fmt.Errorf("cannot verify Windows OpenSSH forced-askpass support (%w); retry with the password field blank and let ssh ask", err)}
 			}
 			if err := windowsForcedAskpass(version); err != nil {
 				return sshResolvedMsg{id: id, err: err}
@@ -307,7 +307,7 @@ func resolveSSH(id uint64, args []string, goos string) tea.Cmd {
 		host := args[len(args)-1]
 		effective, proxied, err := sshEffective(args)
 		if err != nil {
-			return sshResolvedMsg{id: id, err: fmt.Errorf("cannot read ssh config for %s (%w) — retry with the password field blank and let ssh ask", host, err)}
+			return sshResolvedMsg{id: id, err: fmt.Errorf("cannot read ssh config for %s (%w); retry with the password field blank and let ssh ask", host, err)}
 		}
 		if effective == "" {
 			effective = host // ssh had nothing to say
@@ -355,21 +355,21 @@ func windowsForcedAskpass(version string) error {
 	const prefix = "OpenSSH_for_Windows_"
 	rest, ok := strings.CutPrefix(version, prefix)
 	if !ok {
-		return errors.New("cannot verify Windows OpenSSH forced-askpass support — retry with the password field blank and let ssh ask")
+		return errors.New("cannot verify Windows OpenSSH forced-askpass support; retry with the password field blank and let ssh ask")
 	}
 	var major, minor, patch int
 	if _, err := fmt.Sscanf(rest, "%d.%dp%d", &major, &minor, &patch); err != nil {
-		return errors.New("cannot verify Windows OpenSSH forced-askpass support — retry with the password field blank and let ssh ask")
+		return errors.New("cannot verify Windows OpenSSH forced-askpass support; retry with the password field blank and let ssh ask")
 	}
 	if major < 8 || major == 8 && minor < 6 {
-		return fmt.Errorf("installed Windows OpenSSH %d.%d cannot use the password field safely; version 8.6 or newer is required — retry with the password field blank and let ssh ask", major, minor)
+		return fmt.Errorf("installed Windows OpenSSH %d.%d cannot use the password field safely; version 8.6 or newer is required; retry with the password field blank and let ssh ask", major, minor)
 	}
 	return nil
 }
 
 // sshEffective asks ssh what the target really resolves to once ssh_config has
 // had its say: the HostName a password prompt will name, and whether anything
-// stands between here and there. The error is not cosmetic — without an answer
+// stands between here and there. The error is not cosmetic: without an answer
 // the helper cannot tell whose prompt it is answering, so callers carrying a
 // password must refuse rather than pick a default. A var so tests don't shell
 // out.
@@ -417,7 +417,7 @@ func parseSSHConfig(out string) (host string, proxied bool) {
 // runSSH hands the terminal to ssh and takes it back when the session ends.
 // tea.ExecProcess (not startTool) because ssh needs the real tty: that is what
 // makes the session interactive, and what lets ssh ask for anything the form
-// left blank — a key passphrase, a host-key confirmation, a 2FA code.
+// left blank: a key passphrase, a host-key confirmation, a 2FA code.
 //
 // stderr is teed rather than captured: it still scrolls past live during the
 // session, and the copy comes back with the terminal so "Permission denied"

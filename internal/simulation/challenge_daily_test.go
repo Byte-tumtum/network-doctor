@@ -6,7 +6,7 @@ import (
 )
 
 // The daily's one promise: same date, same challenge, on every machine. No clock
-// is read here — the date is the input — so this is a property of the function
+// is read here, since the date is the input, so this is a property of the function
 // rather than of the day the test runs on.
 func TestDailyChallengeIsDeterministicPerDate(t *testing.T) {
 	for _, date := range []string{"2026-01-01", "2026-02-28", "2026-08-12", "2027-12-31"} {
@@ -33,7 +33,7 @@ func TestDailyChallengeIsDeterministicPerDate(t *testing.T) {
 }
 
 // A daily is played on the day and read about later, so the id it produced has
-// to reproduce it — with no -daily, no date, and no memory of when it was.
+// to reproduce it, with no -daily, no date, and no memory of when it was.
 func TestDailyChallengeReplaysByItsID(t *testing.T) {
 	daily, err := DailyChallenge("2026-08-12")
 	if err != nil {

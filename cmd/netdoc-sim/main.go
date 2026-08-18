@@ -257,7 +257,7 @@ nothing on the host. Run 'netdoc-sim capabilities' for the details.
 }
 
 // parseRef parses the flags around a single positional argument, so flags may
-// come before or after it — the same grammar netdoc itself accepts. It returns
+// come before or after it, the same grammar netdoc itself accepts. It returns
 // "" when no positional argument was given; each caller decides whether that is
 // a default or an error.
 func parseRef(fs *flag.FlagSet, args []string) (string, error) {
@@ -727,7 +727,7 @@ func writeHuntResult(result *simulation.HuntResult, jsonOutput bool, stdout, std
 // directorArgv builds the director's command line out of what the launcher
 // parsed, rather than forwarding the user's argv with an extra flag bolted on
 // the front. Forwarding raw would leave two -netdoc flags on the line whenever
-// the user passed one, and the flag package takes the last — quietly throwing
+// the user passed one, and the flag package takes the last, quietly throwing
 // away the path the launcher resolved and validated while $PATH and the working
 // directory still meant what the user meant by them.
 //
@@ -817,7 +817,7 @@ func hold(ctx context.Context, report *simulation.Report, w io.Writer) {
 	<-ctx.Done()
 	// The namespaces go when this process does; the record must not outlive
 	// them or `list` would advertise a simulation nobody can enter. A sweep
-	// that failed gets said out loud — `cleanup` can still finish the job.
+	// that failed gets said out loud, and `cleanup` can still finish the job.
 	if published {
 		// #nosec G703 -- state.Save validated this ID and exclusively created the exact record removed here.
 		if err := os.Remove(filepath.Join(simulation.StateDir(), report.ID+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -840,7 +840,7 @@ func validate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc-sim:", textsafe.Clean(err.Error()))
 		return exitUsage
 	}
-	fmt.Fprintf(stdout, "ok: %s — %d node(s), %d fault(s), %d test(s), %d expected check(s)\n",
+	fmt.Fprintf(stdout, "ok: %s (%d node(s), %d fault(s), %d test(s), %d expected check(s))\n",
 		textsafe.Clean(s.Name), len(s.Topology.Nodes), len(s.Faults), len(s.Tests), len(s.Expect.Checks))
 	return exitOK
 }
@@ -888,7 +888,7 @@ func list(stdout, stderr io.Writer) int {
 }
 
 // starters is the discovery half of the starter packs: which ones exist, and
-// with a pack named, the challenge ids in it. It prints the ids on purpose —
+// with a pack named, the challenge ids in it. It prints the ids on purpose:
 // they are ordinary challenge ids, so a beginner can work through a pack in
 // order with -id instead of drawing from it and hoping.
 func starters(args []string, stdout, stderr io.Writer) int {
@@ -897,7 +897,7 @@ func starters(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "Starter packs — curated challenges to learn on. Play one with:")
+		fmt.Fprintln(stdout, "Starter packs: curated challenges to learn on. Play one with:")
 		fmt.Fprintln(stdout, "  netdoc-sim challenge -starter <pack>")
 		fmt.Fprintln(stdout, "\nA pack names the layer you are practising, which is a hint you asked for.")
 		fmt.Fprintln(stdout, "Which fault it is remains yours to find, and one entry per pack may be")
@@ -916,7 +916,7 @@ func starters(args []string, stdout, stderr io.Writer) int {
 			textsafe.Clean(args[0]), strings.Join(simulation.StarterPackNames(), ", "))
 		return exitUsage
 	}
-	fmt.Fprintf(stdout, "%s — %s\n%s\n\n", pack.ID, pack.Name, pack.Description)
+	fmt.Fprintf(stdout, "%s: %s\n%s\n\n", pack.ID, pack.Name, pack.Description)
 	fmt.Fprintln(stdout, "In order, easiest first:")
 	for _, id := range pack.Challenges {
 		fmt.Fprintf(stdout, "  netdoc-sim challenge -id %s\n", id)
@@ -1019,8 +1019,8 @@ func findNetdoc(want, self string) (string, error) {
 		return filepath.Abs(path)
 	}
 	// LookPath rather than Stat: the sibling has to be something this OS will
-	// actually execute — the executable bit on Unix, a PATHEXT suffix on
-	// Windows — or a file that merely has the right name shadows a working
+	// actually execute, meaning the executable bit on Unix or a PATHEXT suffix on
+	// Windows, or a file that merely has the right name shadows a working
 	// netdoc on $PATH and the run dies later, at exec time, for no visible
 	// reason. LookPath also reports which name it settled on, which is the path
 	// worth recording.
@@ -1050,7 +1050,7 @@ type netdocIdentity struct {
 
 // resolveNetdoc does the lookup once and then interrogates exactly what the
 // lookup returned. Keeping the two together is the point: a version read from
-// anywhere else — the checkout, a filename, a second lookup — can describe a
+// anywhere else (the checkout, a filename, a second lookup) can describe a
 // different binary than the one the run executes.
 func resolveNetdoc(ctx context.Context, want, self string) (netdocIdentity, error) {
 	path, err := findNetdoc(want, self)
@@ -1084,7 +1084,7 @@ func netdocVersion(ctx context.Context, path string) (string, error) {
 
 // authored is the discovery half of the authored challenges: which ones exist,
 // what each is for, and the ordinary challenge id that plays it. Like a starter
-// pack, it prints the ids rather than hiding them — an authored challenge is a
+// pack, it prints the ids rather than hiding them: an authored challenge is a
 // normal shareable id, and printing it is what lets somebody replay or post one
 // without going back through this command.
 func authored(args []string, stdout, stderr io.Writer) int {
@@ -1092,7 +1092,7 @@ func authored(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc-sim: authored takes no arguments")
 		return exitUsage
 	}
-	fmt.Fprintln(stdout, "Authored challenges — hand-written cases, each setting a chosen fault. Play one with:")
+	fmt.Fprintln(stdout, "Authored challenges: hand-written cases, each setting a chosen fault. Play one with:")
 	fmt.Fprintln(stdout, "  netdoc-sim challenge -authored <slug>")
 	fmt.Fprintln(stdout, "\nEach is an ordinary challenge id, so it can also be replayed or shared with -id.")
 	fmt.Fprintln(stdout, "The line under each name says what telling it apart requires, never what it is.")

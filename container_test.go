@@ -13,7 +13,7 @@
 //
 // Without NETDOC_CONTAINER_IMAGE, or with no container engine on the machine,
 // every test here skips. NETDOC_REQUIRE_CONTAINER=1 turns those skips into
-// failures, which is what CI sets — the same contract NETDOC_SIM_REQUIRE_NETNS
+// failures, which is what CI sets, the same contract NETDOC_SIM_REQUIRE_NETNS
 // has for the namespace suite, and for the same reason: a job that silently
 // tested nothing would go green.
 
@@ -176,7 +176,7 @@ func imageLabel(t *testing.T, name string) string {
 // paths the image promises, reporting the version the image tag claims.
 //
 // The paths matter as much as the versions. netdoc-sim finds netdoc as its own
-// sibling, so /usr/bin/netdoc is what a challenge in this image will run — and
+// sibling, so /usr/bin/netdoc is what a challenge in this image will run, and
 // a test that only asked "is netdoc somewhere" would pass on an image where the
 // two came from different builds.
 func TestImageShipsBothBinariesAtOneVersion(t *testing.T) {
@@ -195,7 +195,7 @@ func TestImageShipsBothBinariesAtOneVersion(t *testing.T) {
 	} {
 		got := strings.TrimSpace(runImageWith(t, append(slices.Clone(documentedOptions), tt.opts...), tt.args).stdout)
 		if got != tt.printed {
-			t.Errorf("%s reports %q, but the image is labelled version %q — the image tag and the "+
+			t.Errorf("%s reports %q, but the image is labelled version %q: the image tag and the "+
 				"binaries in it have to be one release", tt.binary, got, want)
 		}
 	}
@@ -223,11 +223,11 @@ func TestImageRunsTheRealNamespaceBackend(t *testing.T) {
 		t.Fatalf("run -json did not produce a report: %v\n%s", err, res.stdout)
 	}
 	if report.Backend != "linux-netns" {
-		t.Errorf("backend = %q, want linux-netns — the container must not introduce a second backend",
+		t.Errorf("backend = %q, want linux-netns: the container must not introduce a second backend",
 			report.Backend)
 	}
 	if report.Result != "PASS" {
-		t.Errorf("result = %q, want PASS — the scenario's own expectations have to hold in here too",
+		t.Errorf("result = %q, want PASS: the scenario's own expectations have to hold in here too",
 			report.Result)
 	}
 	if !report.Cleanup.Done || report.Cleanup.Kept || len(report.Cleanup.Err) > 0 {
@@ -286,7 +286,7 @@ func TestImageChallengeIsDeterministicAndRunsTheEmbeddedNetdoc(t *testing.T) {
 		t.Error("Network Doctor was not scored, so the container ran no diagnosis")
 	}
 	if first.Netdoc.Path != "/usr/bin/netdoc" {
-		t.Errorf("the challenge ran %q, want the /usr/bin/netdoc this image ships — a challenge that "+
+		t.Errorf("the challenge ran %q, want the /usr/bin/netdoc this image ships; a challenge that "+
 			"found some other binary is a result nobody can attribute", first.Netdoc.Path)
 	}
 	if want := "netdoc " + imageLabel(t, "org.opencontainers.image.version"); first.Netdoc.Version != want {
@@ -337,8 +337,8 @@ func TestImageNeedsNoCapabilities(t *testing.T) {
 
 // The negative half of the same measurement: the one permission that is
 // genuinely required is the ability to create a user namespace, which is why
-// Docker's default seccomp profile — which denies clone(CLONE_NEWUSER) unless
-// the container was given CAP_SYS_ADMIN — is the thing the documented
+// Docker's default seccomp profile, which denies clone(CLONE_NEWUSER) unless
+// the container was given CAP_SYS_ADMIN, is the thing the documented
 // --cap-add SYS_ADMIN is for.
 //
 // The profile below reproduces exactly that denial and nothing else, so a
@@ -380,8 +380,8 @@ func TestImageWithoutUserNamespacesFailsCleanly(t *testing.T) {
 	}
 }
 
-// A container that is reused — an interactive session where somebody plays
-// several challenges, or a shell someone kept open — must not accumulate the
+// A container that is reused, whether an interactive session where somebody
+// plays several challenges or a shell someone kept open, must not accumulate the
 // wreckage of the runs that went wrong. The simulator's guarantee is that a
 // killed run leaks nothing, because the kernel reclaims namespaces with the
 // processes holding them; this checks that the guarantee survives being inside

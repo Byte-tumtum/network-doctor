@@ -35,7 +35,7 @@ func TestAppendJobLine(t *testing.T) {
 		t.Errorf("jobEvicted = %d, want 50", m.cur.evicted)
 	}
 	if m.cur.dropped != 0 {
-		t.Errorf("jobDropped = %d, want 0 — evictions must not touch it", m.cur.dropped)
+		t.Errorf("jobDropped = %d, want 0: evictions must not touch it", m.cur.dropped)
 	}
 	m.appendJobLine("newest")
 	if last := m.cur.lines[len(m.cur.lines)-1]; last != "newest" {
@@ -759,7 +759,7 @@ func TestViewportEvictionIgnoresFilteredOutLine(t *testing.T) {
 	u, _ := m.Update(ToolOutputMsg{JobID: "j", Generation: 1, Line: "line new"})
 	nm := asModel(t, u)
 	if nm.vp.YOffset != 10 {
-		t.Fatalf("offset = %d, want 10 — filtered view lost nothing at the top", nm.vp.YOffset)
+		t.Fatalf("offset = %d, want 10: filtered view lost nothing at the top", nm.vp.YOffset)
 	}
 }
 
@@ -932,7 +932,7 @@ func TestNetworkMapSpinsPerRowUntilNamesArrive(t *testing.T) {
 		t.Fatalf("the unnamed row must keep spinning:\n%s", view)
 	}
 
-	// An empty reverse-DNS result still stops the spin — there is nothing better
+	// An empty reverse-DNS result still stops the spin, since there is nothing better
 	// coming, so nmap's own name is finally the best on offer.
 	u, _ = m.Update(lanNameMsg{gen: 0, ip: ips[1], name: ""})
 	m = asModel(t, u)

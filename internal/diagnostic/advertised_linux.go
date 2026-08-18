@@ -20,7 +20,7 @@ func (out *cappedAvahiOutput) Write(p []byte) (int, error) {
 
 // AdvertisedNames returns the device names advertised through the platform's
 // DNS-SD browser, keyed by IP. They win over reverse DNS because they are
-// usually the user-facing label configured on the device — so callers should
+// usually the user-facing label configured on the device, so callers should
 // ask here first and only fall back to ReverseName for what's left, keeping a
 // row's first name its final one.
 func AdvertisedNames(ctx context.Context, ips []string) map[string]string {

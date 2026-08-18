@@ -63,7 +63,7 @@ func TestPermanentWordingRespectsAPointInTimeClaim(t *testing.T) {
 		applied(400*time.Millisecond, TimedEvent{Type: FaultScheduledLink, Node: "target", Segment: "lan", State: LinkStateUp}),
 	}
 	blunt := TestOutcome{Name: "t", EndOffset: time.Second,
-		Diagnosis: &Diagnosis{Summary: "the target is unreachable — remote port closed or firewalled",
+		Diagnosis: &Diagnosis{Summary: "the target is unreachable: remote port closed or firewalled",
 			Checks: []DiagnosisCheck{{ID: "target_tcp", Status: "FAIL", Detail: "port 80 unreachable"}}}}
 	if !codes(timedReport(timeline, blunt).timelineSuggestions())[SuggestTransientReportedPermanent] {
 		t.Error("a healed failure described as a lasting state was not reported")
@@ -87,7 +87,7 @@ func TestPermanentWordingPairsTheRecoveryWithTheFailureItExplains(t *testing.T) 
 		applied(500*time.Millisecond, dnsEvent(DNSOutcomeAnswer)),
 	}
 	unrelated := TestOutcome{Name: "t", EndOffset: time.Second,
-		Diagnosis: diag("no HTTP response from the target — application-layer or proxy block",
+		Diagnosis: diag("no HTTP response from the target: application-layer or proxy block",
 			DiagnosisCheck{ID: "dns", Status: "PASS"},
 			DiagnosisCheck{ID: "http", Status: "FAIL", Detail: "connection reset"})}
 	if codes(timedReport(timeline, unrelated).timelineSuggestions())[SuggestTransientReportedPermanent] {

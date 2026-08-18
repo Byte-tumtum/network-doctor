@@ -15,7 +15,7 @@ import (
 var sshAliasRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // SSHHostAliases maps IP literals from ~/.ssh/config HostName lines to their
-// Host alias — the name the user actually calls the machine, which often
+// Host alias, the name the user actually calls the machine, which often
 // exists in no DNS at all.
 // Only the top-level file is read; an Include'd alias simply doesn't appear.
 // The alias is decoration on a LAN map that already has the IP, so chasing

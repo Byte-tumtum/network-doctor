@@ -3,7 +3,7 @@ description: The resolver changes state while one of its answers is still in fli
 
 # A probe-lifecycle regression scenario, not a user-facing diagnosis. The
 # resolver holds the first run's answers for 500 ms; the drop transition is
-# scheduled for +120 ms, which is provably inside that window — the query's own
+# scheduled for +120 ms, which is provably inside that window: the query's own
 # evidence records when it arrived and how long its answer was held, so the
 # overlap is read from the service, not assumed from a sleep.
 #

@@ -14,8 +14,8 @@ import (
 )
 
 // fakeBackend and fakeEnv stand in for a real backend so the lifecycle
-// guarantees — cleanup after a partial setup, a cancellation, a timeout, a
-// panic, and cleanup called twice — can be tested without a namespace.
+// guarantees (cleanup after a partial setup, a cancellation, a timeout, a
+// panic, and cleanup called twice) can be tested without a namespace.
 type fakeBackend struct {
 	caps       Capabilities
 	env        *fakeEnv
@@ -217,7 +217,7 @@ func TestRunCleansUpAfterPartialSetupFailure(t *testing.T) {
 }
 
 // A fault is several commands, so it can fail with some of them already
-// applied — a narrowed interface and no firewall rule, say. The environment
+// applied: a narrowed interface and no firewall rule, say. The environment
 // still has to come down: nothing that half-applied is worth keeping.
 func TestRunCleansUpAfterFaultInjectionFailure(t *testing.T) {
 	env := &fakeEnv{faultErr: errors.New("nft not built into this kernel")}
@@ -330,7 +330,7 @@ func TestRunRefusesUnsupportedHostWithoutFallback(t *testing.T) {
 		t.Errorf("result = %s, error = %q", rep.Result, rep.Error)
 	}
 	if env.execs != 0 {
-		t.Error("nothing may run on a host that cannot simulate — no fallback to the host network")
+		t.Error("nothing may run on a host that cannot simulate: no fallback to the host network")
 	}
 }
 
@@ -472,7 +472,7 @@ func observedEvidence() Evidence {
 // single assertion: netdoc's report is the subject being evaluated, never a
 // source of evidence, so the finished report's evidence must be the
 // environment's own observations and nothing else. Every family verdict netdoc
-// can produce is tried — including the exact opposite of the observations, a
+// can produce is tried, including the exact opposite of the observations, a
 // check with no families, a target verdict of every status, and no parsable
 // report at all. None of them may add, drop, or edit a record. Comparing the
 // whole Evidence rather than one field is deliberate: a future field fed from a
@@ -515,7 +515,7 @@ func TestRunKeepsEvidenceWithoutATarget(t *testing.T) {
 
 // TestInternetFamilyProbesFollowNodeAddresses covers eligibility: which
 // families the simulator will dial at all. A family the node has no address
-// for is reported unavailable rather than dialed — which is what keeps a
+// for is reported unavailable rather than dialed, which is what keeps a
 // single-stack topology from reading as an outage in the family it never had.
 // Both families are always listed, so an absent one is stated, not inferred
 // from a missing record.

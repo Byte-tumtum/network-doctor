@@ -15,7 +15,7 @@ _netdoc_ifaces() {
 
 # No -s: it would let single-letter options stack, and the single-dash long
 # spellings below (-json) would be read as stacked letters.
-# Targets are hostnames, URLs, and IP literals — none of them enumerable, so
+# Targets are hostnames, URLs, and IP literals, none of them enumerable, so
 # the positional completes to nothing rather than to local filenames.
 _arguments \
   '(--toolbox -toolbox --json -json)'{--toolbox,-toolbox}'[start in toolbox mode]' \

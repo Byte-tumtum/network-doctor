@@ -29,7 +29,7 @@ type Options struct {
 	// Keep leaves the environment running after the report is written.
 	Keep bool
 	// Hold, when set, is called once the topology is built, every fault is
-	// applied and the timeline's opening state has landed — and before the first
+	// applied and the timeline's opening state has landed, and before the first
 	// netdoc process starts. Challenge Mode uses it to hand the finished network
 	// to a person, so both they and netdoc face the same state. A non-nil error
 	// abandons the run before any test, and cleanup still happens.
@@ -64,7 +64,7 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// Run executes one scenario end to end and always returns a report — setup
+// Run executes one scenario end to end and always returns a report: setup
 // failures, cancellation and panics are reported, not returned as bare errors,
 // because a simulation that fell over is itself a result worth printing.
 //
@@ -132,7 +132,7 @@ func Run(ctx context.Context, s *Scenario, b Backend, opts Options) (rep *Report
 		return rep
 	}
 
-	// T0. Every scheduled offset is measured from this instant — the moment
+	// T0. Every scheduled offset is measured from this instant, the moment
 	// just before the first netdoc process starts. The timeline was resolved
 	// during validation and does not change from here on.
 	timeline := timelineFrom(s.Faults)
@@ -293,7 +293,7 @@ type familyProbe struct {
 // attached. A family the node carries no address for is reported unavailable
 // rather than dialed: there is nothing to test, and a topology that never had
 // IPv6 is not a topology whose IPv6 went down. Whether an available family
-// works is never read from here — it is settled by dialing it.
+// works is never read from here; it is settled by dialing it.
 func internetFamilyProbes(n *Node) []familyProbe {
 	out := []familyProbe{
 		{family: "ipv4", target: "IPv4 internet endpoints", endpoints: internetEndpointsForFamily("ipv4")},
@@ -396,7 +396,7 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 
 // probeTrustEnv is the trust configuration a process in this environment needs
 // to see the simulator's own certificates. It is shared so that anything else
-// the simulator puts inside a node — a challenge shell, for instance — verifies
+// the simulator puts inside a node, a challenge shell for instance, verifies
 // the same fixtures the netdoc run does rather than a different set.
 //
 // The fixed-endpoint fixtures (QUIC, encrypted DNS) share one CA directory so
@@ -423,7 +423,7 @@ func probeTrustEnv(env Env, t Test) ([]string, error) {
 
 // decodeDiagnosis reads netdoc's JSON report. netdoc exits 1 when a check
 // failed, which is the normal case in a scenario that broke something on
-// purpose — so the exit code is recorded, never treated as an error on its own.
+// purpose, so the exit code is recorded, never treated as an error on its own.
 func decodeDiagnosis(res ExecResult) (*Diagnosis, error) {
 	if res.Err != nil {
 		return nil, fmt.Errorf("running netdoc: %w", res.Err)

@@ -7,7 +7,7 @@ import (
 
 // A scenario file is data, not a script. Nothing in it may become a command, an
 // executable path, a raw nftables expression, an interface name, or a mount
-// path. These tests pin that down at the validation boundary — the only place
+// path. These tests pin that down at the validation boundary, the only place
 // scenario strings are allowed to turn into values this package will use.
 //
 // The structural half of the guarantee lives in the backend: every command is
@@ -130,7 +130,7 @@ func TestScopedAddressesRejected(t *testing.T) {
 		t.Error("a scoped address must be rejected")
 	}
 	if _, _, err := parseAddr("fe80::1%eth0"); err == nil {
-		t.Error("even a plausible zone must be rejected — nothing here supports one")
+		t.Error("even a plausible zone must be rejected: nothing here supports one")
 	}
 }
 

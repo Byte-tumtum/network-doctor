@@ -20,7 +20,7 @@ func DepsState(deps []ProbeID, res map[ProbeID]ProbeResult) (ready, blocked bool
 
 // SkipPrereq is the result recorded for a probe DepsState reports as blocked.
 func SkipPrereq(id ProbeID) ProbeResult {
-	return ProbeResult{ID: id, Status: StatusSkip, Detail: "skipped — a prerequisite failed"}
+	return ProbeResult{ID: id, Status: StatusSkip, Detail: "skipped: a prerequisite failed"}
 }
 
 // RunAll executes the probe DAG headlessly with the same semantics as the TUI
@@ -34,7 +34,7 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 	running := 0
 
 	// schedule launches every probe whose deps all have results. Runs to a
-	// fixpoint because starting one probe can make another ready — skips
+	// fixpoint because starting one probe can make another ready, and skips
 	// cascade synchronously (a skip is a result too), so a chain of doomed
 	// probes resolves in a single call without ever spawning a goroutine.
 	schedule := func() {
@@ -74,7 +74,7 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 	}
 
 	// Seed the roots, then drain: each finished probe may unlock more, so
-	// reschedule after every receive. running is our only bookkeeping — when
+	// reschedule after every receive. running is our only bookkeeping: when
 	// it hits zero there's nothing in flight and nothing left to start, since
 	// schedule already ran after the final result. Probes that time out still
 	// send a result, so this can't hang; ctx cancellation just makes everyone

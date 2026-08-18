@@ -21,8 +21,8 @@ var newChallengeFamilies = []string{"service.connection_refused", "service.tcp_p
 
 // TestEveryChallengeConditionIsReachableFromRealIDs is the reachability proof,
 // and it goes through the real id path rather than through the registry: an
-// answer that only exists in a table is not playable. It is deterministic —
-// these ids are fixed, not sampled — so a family that becomes unreachable fails
+// answer that only exists in a table is not playable. It is deterministic,
+// since these ids are fixed rather than sampled, so a family that becomes unreachable fails
 // here every time rather than one run in ten.
 func TestEveryChallengeConditionIsReachableFromRealIDs(t *testing.T) {
 	first := map[string]string{}
@@ -65,7 +65,7 @@ func nameOrHealthy(mutation string) string {
 // answer a player can pick has to be one a challenge can actually set, unless
 // it is one of the three the contract excludes on purpose and says why.
 func TestAdvertisedChallengeAnswersAreProducible(t *testing.T) {
-	// Excluded by the challenge contract, each for a test it fails — see the
+	// Excluded by the challenge contract, each for a test it fails; see the
 	// comment on challengeConditions. They stay on the menu so that a menu of
 	// only the possible faults is not most of the answer.
 	deliberatelyUnproducible := []ChallengeAnswer{AnswerHTTPService, AnswerProxy, AnswerQUICBlocked}

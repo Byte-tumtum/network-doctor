@@ -33,7 +33,7 @@ const (
 // encryptedDNSServer answers netdoc's encrypted-DNS probe over both transports
 // from the same static zone the plaintext DNS fixture uses: RFC 8484 over HTTPS
 // on the service port, RFC 7858 length-framed DNS over TLS on 853. Like every
-// other simulator service it is a probe fixture, not a resolver — it answers
+// other simulator service it is a probe fixture, not a resolver: it answers
 // one static zone and nothing else.
 type encryptedDNSServer struct {
 	doh       *http.Server

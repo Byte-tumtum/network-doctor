@@ -11,8 +11,8 @@ import (
 
 // Cleanup stops everything the final model still owns, and waits for the kills
 // to land. Quitting through the UI already does this, but Bubble Tea also
-// returns on paths Update never sees — a signal, stdin closing on a non-tty, a
-// renderer failure, a recovered panic — and on those the generation context is
+// returns on paths Update never sees (a signal, stdin closing on a non-tty, a
+// renderer failure, a recovered panic) and on those the generation context is
 // still live, which leaves tool subprocesses and their descendants running
 // after netdoc is gone. Safe to call twice; cancelling a dead context is a
 // no-op and a finished job has already sent its terminal event.
@@ -25,7 +25,7 @@ func Cleanup(final tea.Model) {
 	m.clearCancel()
 	// One deadline for all of them: a job that somehow won't die must not be
 	// able to hold the exit open job by job. It has to be a closed channel, not
-	// a timer channel — the latter fires exactly once, so the first stuck job
+	// a timer channel, since the latter fires exactly once, so the first stuck job
 	// would eat it and the rest would wait forever.
 	ctx, cancel := context.WithTimeout(context.Background(), exitGrace)
 	defer cancel()

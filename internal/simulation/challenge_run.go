@@ -24,8 +24,8 @@ type ChallengeOptions struct {
 }
 
 // ChallengeSession is the live network, while the player has it. It exposes the
-// two things an investigation needs — where to stand and how to get a shell
-// there — and nothing that would answer the question for them.
+// two things an investigation needs, where to stand and how to get a shell
+// there, and nothing that would answer the question for them.
 type ChallengeSession struct {
 	Challenge *Challenge
 	env       Env
@@ -48,7 +48,7 @@ func (s *ChallengeSession) ShellAvailable() bool {
 // Shell runs an interactive shell inside the challenge node's network and mount
 // namespaces, with the caller's terminal attached. It is the same nsenter the
 // simulator already uses to run netdoc there, so the player sees exactly the
-// network the diagnosis will be made against — the node's own routes, its own
+// network the diagnosis will be made against: the node's own routes, its own
 // /etc/resolv.conf, and the simulator's trust anchors where the netdoc run gets
 // them too.
 //
@@ -63,7 +63,7 @@ func (s *ChallengeSession) Shell(ctx context.Context, stdin io.Reader, stdout, s
 	// The target is exported so the player does not have to retype the hostname
 	// at every command: `curl $NETDOC_CHALLENGE_TARGET`, `dig $NETDOC_CHALLENGE_HOST`.
 	// Both are the briefing's own values, so this discloses nothing the briefing
-	// did not — and a challenge with no specific target exports neither, rather
+	// did not, and a challenge with no specific target exports neither, rather
 	// than exporting an empty string that would read as one.
 	env := []string{"NETDOC_CHALLENGE=" + s.Challenge.ID}
 	if s.Challenge.Target != "" {
@@ -76,7 +76,7 @@ func (s *ChallengeSession) Shell(ctx context.Context, stdin io.Reader, stdout, s
 
 // loginShell picks the player's shell, falling back to the one every POSIX host
 // has. An absolute path is required because this is passed to execve, not to a
-// shell — there is no PATH lookup and no interpretation.
+// shell, so there is no PATH lookup and no interpretation.
 func loginShell() string {
 	if shell := os.Getenv("SHELL"); filepath.IsAbs(shell) {
 		return shell

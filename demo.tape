@@ -1,5 +1,5 @@
-# VHS tape for the README's full-tour GIF (https://github.com/charmbracelet/vhs) —
-# every feature, for a reader who is already interested. The README's hero clip
+# VHS tape for the README's full-tour GIF (https://github.com/charmbracelet/vhs).
+# It covers every feature, for a reader who is already interested. The README's hero clip
 # is one diagnosis instead, and comes from hero.tape.
 #
 # Regenerate with:
@@ -7,7 +7,7 @@
 #   go build -o netdoc . && HOME=$(mktemp -d) vhs demo.tape
 #
 # Needs a working network connection; probes run live against github.com:443.
-# The network-map segment sweeps the local /24 and shows real device names —
+# The network-map segment sweeps the local /24 and shows real device names, so
 # record on a network you're happy to publish.
 #
 # Record under a throwaway HOME so nothing personal reaches the GIF and the
@@ -16,7 +16,7 @@
 #   $HOME/.ssh/id_ed25519{,.pub}      the SSH form lists key names
 #   $HOME/.config/netdoc/history      the restart prompt's ↑ history
 #
-# Seed both before recording (an empty file passes for a key — the form only
+# Seed both before recording (an empty file passes for a key, because the form only
 # stats the private half next to a .pub):
 #
 #   H=$(mktemp -d); mkdir -p $H/.ssh $H/.config/netdoc
@@ -32,7 +32,7 @@ Set FontSize 15
 # 1300px is the narrowest width that fits the longest verdict sentence (the
 # split-DNS one) without the summary line being cut off. Height must clear the
 # check list, the toolbox chips and the help bar before the job pane gets any
-# rows at all — at 600px the streaming tool output is silently shed and never
+# rows at all: at 600px the streaming tool output is silently shed and never
 # appears on the main screen. 820px leaves it about eight lines.
 Set Width 1300
 Set Height 820
@@ -62,7 +62,7 @@ Sleep 500ms
 Type "t"
 Sleep 2.5s
 
-# Start mtr while the traceroute is still running — two concurrent jobs.
+# Start mtr while the traceroute is still running, so two jobs run at once.
 Type "m"
 Sleep 2s
 
@@ -104,7 +104,7 @@ Tab
 Sleep 4s
 
 # SSH login form: username, key picker, password. The form opens on the
-# username, so tab first; nothing is submitted here — esc backs out.
+# username, so tab first; nothing is submitted here, and esc backs out.
 Type "S"
 Sleep 2s
 Tab
@@ -120,7 +120,7 @@ Sleep 500ms
 
 # Restart prompt: editable arguments with target history on the up arrow.
 # The prompt opens on the current target, which is also the newest history
-# entry — so the first Up is a no-op and the second one is the visible step.
+# entry, so the first Up is a no-op and the second one is the visible step.
 Type "r"
 Sleep 1.5s
 Up@700ms 2
@@ -134,7 +134,7 @@ Sleep 3s
 Type "q"
 Sleep 1s
 
-# Toolbox mode: no chain, just the tools — local state is one keypress away.
+# Toolbox mode: no chain, just the tools, with local state one keypress away.
 Type "./netdoc --toolbox"
 Sleep 500ms
 Enter

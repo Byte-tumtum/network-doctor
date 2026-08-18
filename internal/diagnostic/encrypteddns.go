@@ -24,7 +24,7 @@ import (
 // vouched for, and there is no safe way to guess a hostname from an address.
 // Cloudflare publishes these addresses for both transports. Its DoT listener
 // also presents a certificate valid for the cloudflare-dns.com DoH identity,
-// so the probe can dial by IP and still verify one fixed name — no bootstrap
+// so the probe can dial by IP and still verify one fixed name, with no bootstrap
 // lookup through the very resolver path this row exists to test.
 const (
 	// EncryptedDNSHost is the TLS identity and HTTP authority of the fixed
@@ -53,7 +53,7 @@ const (
 // is untrusted.
 const maxDNSMessage = 4096
 
-// DNS wire constants — only what verifying one A response needs.
+// DNS wire constants: only what verifying one A response needs.
 const (
 	dnsHeaderLen     = 12
 	dnsTypeA         = 1
@@ -259,7 +259,7 @@ func encryptedDNSFailureCause(ctx context.Context, dohErr, dotErr error) string 
 
 // encryptedDNSProbe asks whether this machine can complete a DNS exchange over
 // an encrypted transport at all. DoH and DoT are tried concurrently against the
-// same fixed resolver, and either one succeeding answers the question — they
+// same fixed resolver, and either one succeeding answers the question, since they
 // are alternative ways to reach encrypted DNS, not two
 // separate capabilities a user needs both of.
 //
@@ -332,16 +332,16 @@ func (o *netops) encryptedDNSProbe(ep encryptedDNSEndpoint, name string) func(co
 			}
 		case resolverAnswered(doh) || resolverAnswered(dot):
 			r.Status = StatusWarn
-			r.Detail = fmt.Sprintf("encrypted DNS reached %s, but the resolver returned an error — DoH: %v; DoT: %v", ep.host, doh.err, dot.err)
-			r.Fix = "the encrypted resolver answered but did not complete the DNS query — retry later or check resolver policy; this is not evidence that DoH/DoT is blocked"
+			r.Detail = fmt.Sprintf("encrypted DNS reached %s, but the resolver returned an error (DoH: %v; DoT: %v)", ep.host, doh.err, dot.err)
+			r.Fix = "the encrypted resolver answered but did not complete the DNS query: retry later or check resolver policy; this is not evidence that DoH/DoT is blocked"
 		case errors.Is(ctx.Err(), context.Canceled):
 			r.Status = StatusNA
 			r.Detail = "encrypted DNS check canceled before either transport answered"
 		default:
 			r.Status = StatusFail
 			r.Cause = encryptedDNSFailureCause(ctx, doh.err, dot.err)
-			r.Detail = fmt.Sprintf("no encrypted DNS via %s — DoH: %v; DoT: %v", ep.host, doh.err, dot.err)
-			r.Fix = "neither DoH (443) nor DoT (853) completed a verified DNS exchange — the resolver may be unavailable, or the network may block or intercept encrypted DNS"
+			r.Detail = fmt.Sprintf("no encrypted DNS via %s (DoH: %v; DoT: %v)", ep.host, doh.err, dot.err)
+			r.Fix = "neither DoH (443) nor DoT (853) completed a verified DNS exchange; the resolver may be unavailable, or the network may block or intercept encrypted DNS"
 		}
 		return r
 	}
@@ -459,7 +459,7 @@ func (o *netops) dotExchange(ctx context.Context, ep encryptedDNSEndpoint, query
 		return finish(fmt.Errorf("cannot reach %s on port %d", ep.host, ep.dotPort))
 	}
 	defer conn.Close()
-	// A net.Conn read doesn't watch ctx, so the deadline is its leash — and a
+	// A net.Conn read doesn't watch ctx, so the deadline is its leash, and a
 	// deadline alone would leave an explicit cancellation waiting for it, hence
 	// the close on ctx.Done. stop runs before the deferred Close, so the hook is
 	// gone before the connection is.

@@ -212,9 +212,9 @@ func TestReleaseAlreadyExited(t *testing.T) {
 	mustSurvive(t, keep)
 }
 
-// A record naming a process that is not a director — with a stamp copied
+// A record naming a process that is not a director, with a stamp copied
 // straight out of /proc, which is all a tamperer needs to defeat the stamp on
-// its own — must not get that process signalled.
+// its own, must not get that process signalled.
 func TestReleaseWillNotSignalUnrelatedProcess(t *testing.T) {
 	stateSandbox(t)
 	const id = "c3d4e5"
@@ -245,7 +245,7 @@ func TestReleaseWillNotSignalUnrelatedProcess(t *testing.T) {
 }
 
 // A pid no process can ever have is a corrupt record, and a corrupt record is
-// not acted on at all — not even the sweep.
+// not acted on at all, not even by the sweep.
 func TestReleaseRejectsImpossiblePID(t *testing.T) {
 	const id = "d4e5f6"
 	for _, pid := range []int{0, -1, -12345} {
@@ -427,7 +427,7 @@ func TestLoadStateRejectsUnsafeID(t *testing.T) {
 
 // The workspace root is storage every user on the host can write into, so
 // anything already sitting at a run's workspace path was put there by somebody
-// else. Creation has to fail on all three shapes, and — the part that matters —
+// else. Creation has to fail on all three shapes, and, the part that matters,
 // it has to leave what it found exactly as it was: the caller is about to own
 // a directory it will later remove recursively.
 func TestCreateWorkspaceRefusesAPreExistingPath(t *testing.T) {

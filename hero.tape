@@ -7,7 +7,7 @@
 #   go build -o netdoc . && HOME=$(mktemp -d) vhs hero.tape
 #
 # Needs a working network connection: the interface, egress, QUIC and public-DNS
-# rows are live probes. The failing row is the reproducible part —
+# rows are live probes. The failing row is the reproducible part:
 # api.acme.invalid sits under the reserved `.invalid` TLD (RFC 6761), so
 # every resolver everywhere answers NXDOMAIN and the recording lands the same
 # way on any contributor's machine.
@@ -46,5 +46,5 @@ Enter
 # fails, and everything downstream of DNS is skipped rather than guessed at.
 # The banner names the failure in a sentence and the fix under it; the cursor
 # lands on the failed row on its own, so the details pane already holds the
-# evidence. Hold there — that is the whole story.
+# evidence. Hold there, because that is the whole story.
 Sleep 10s

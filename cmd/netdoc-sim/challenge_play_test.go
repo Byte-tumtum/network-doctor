@@ -31,7 +31,7 @@ func (c *fakeClock) now() time.Time {
 
 // playChallenge runs the interaction against a scripted terminal and no live
 // network. The session reports no shell, which is the branch that lets the menu
-// be driven from a test at all — everything else about the prompts, the timer and
+// be driven from a test at all, and everything else about the prompts, the timer and
 // the briefing is the same code a real session runs.
 func playChallenge(t *testing.T, id string, clock *fakeClock, typed ...string) (simulation.ChallengeSubmission, string) {
 	t.Helper()
@@ -77,7 +77,7 @@ func TestBriefingCanBeRecalledMidSession(t *testing.T) {
 
 // Recall must not become a second, more generous briefing. It is the same
 // renderer, so this is really a test that nobody has added a hidden-truth
-// shortcut to the recall path — which is the tempting place to add one.
+// shortcut to the recall path, which is the tempting place to add one.
 func TestBriefingRecallRevealsNoHiddenTruth(t *testing.T) {
 	for _, id := range []string{"V3-8F42C1", "V3-011667", "V3-058EF2", "V3-022CCE", "V3-000000"} {
 		_, transcript := playChallenge(t, id, nil, "b", "q")
@@ -86,7 +86,7 @@ func TestBriefingRecallRevealsNoHiddenTruth(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Everything a result would print after the reveal, none of which may be in
-		// a briefing — before it or after it.
+		// a briefing, before it or after it.
 		result := simulation.ScoreChallenge(challenge, nil, simulation.ChallengeSubmission{GaveUp: true})
 		forbidden := []string{challenge.Base, result.CaseFingerprint, result.Truth.Explanation}
 		for _, mutation := range challenge.Manifest.Mutations {
@@ -112,7 +112,7 @@ func TestBriefingRecallRevealsNoHiddenTruth(t *testing.T) {
 }
 
 // The solve time is the player's, and only the player's. It starts when the
-// briefing lands — everything before that happened without them — and stops when
+// briefing lands, since everything before that happened without them, and stops when
 // the answer is accepted, before netdoc's own run.
 func TestElapsedTimeCoversTheWholeInteractionAndNothingElse(t *testing.T) {
 	// Readings: the start, then the stop. Ten minutes pass between them.

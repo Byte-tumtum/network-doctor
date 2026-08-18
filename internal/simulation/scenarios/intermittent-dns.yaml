@@ -17,7 +17,7 @@ topology:
           zone:
             flaky-target.test: 10.77.0.20
             connectivitycheck.gstatic.com: 10.77.0.1
-          # Six per family, and every name walks the schedule on its own — what
+          # Six per family, and every name walks the schedule on its own, so what
           # netdoc asks this resolver about the captive-portal host cannot move
           # the target's failure or its recovery.
           #

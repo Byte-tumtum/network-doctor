@@ -524,7 +524,7 @@ func TestDirectorHuntRejectsImpossibleHuntsWithoutRunning(t *testing.T) {
 
 // The report is the only place a hunt's reason lives, so a report triage
 // cannot read, or one that disagrees with the exit code it arrived with, is an
-// error — never a hunt result triage goes on to file issues from.
+// error, never a hunt result triage goes on to file issues from.
 func TestDirectorHuntRefusesAReportItCannotTrust(t *testing.T) {
 	clean := cleanHunt(t, 1)
 	broken, err := json.Marshal(&simulation.HuntResult{Result: simulation.HuntResultError,

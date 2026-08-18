@@ -38,7 +38,7 @@ tests:
 expect:
   verdict: network
   checks:
-    # The link is genuinely up — reporting it as down would be the wrong story.
+    # The link is genuinely up, so reporting it as down would be the wrong story.
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: FAIL, cause: no_default_route}
     - {id: dns, status: FAIL}

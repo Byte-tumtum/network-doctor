@@ -583,8 +583,8 @@ func dnsVerifierOracle(q dnsQuery, msg []byte) (rcode uint16, correlated bool) {
 	return rcode, true
 }
 
-// dnsNameFoldEqual is DNS's own case rule — RFC 4343, ASCII letters and nothing
-// else — spelled out so the oracle does not borrow the comparison it checks.
+// dnsNameFoldEqual is DNS's own case rule, RFC 4343, ASCII letters and nothing
+// else, spelled out so the oracle does not borrow the comparison it checks.
 func dnsNameFoldEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -606,8 +606,8 @@ func dnsNameFoldEqual(a, b []byte) bool {
 
 // FuzzEncryptedDNSResponseVerifier drives arbitrary hostile bytes through the
 // boundary that separates "something answered on port 443" from "encrypted DNS
-// works". Everything upstream of verify — TLS, HTTP status, media type, DoT
-// framing — proves only that a peer spoke; verify is the sole reason the row
+// works". Everything upstream of verify (TLS, HTTP status, media type, DoT
+// framing) proves only that a peer spoke; verify is the sole reason the row
 // cannot be passed by a captive portal, an interceptor, or a stale packet.
 //
 // The query side is fixed and valid, the response side is whatever the fuzzer
@@ -1262,7 +1262,7 @@ func TestEncryptedDNSReusesSelectedInterfaceResult(t *testing.T) {
 // ---- diagnosis ----
 
 func TestDiagnoseEncryptedDNSBlockedWhilePlainDNSWorks(t *testing.T) {
-	wantSummary := "Plain DNS works, but encrypted DNS could not complete a verified exchange — the resolver may be unavailable, or the network may be blocking or interfering with DoH/DoT."
+	wantSummary := "Plain DNS works, but encrypted DNS could not complete a verified exchange. The resolver may be unavailable, or the network may be blocking or interfering with DoH/DoT."
 	if encryptedDNSSummary != wantSummary {
 		t.Fatalf("encrypted DNS summary = %q, want %q", encryptedDNSSummary, wantSummary)
 	}

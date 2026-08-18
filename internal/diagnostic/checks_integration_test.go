@@ -116,7 +116,7 @@ func TestPathIdentityLoopback(t *testing.T) {
 
 // The PMTU probe over a real socket, against the case most likely to produce a
 // false alarm: a listener that accepts the connection and then never reads a
-// byte. Its receive buffer has to absorb the whole payload — if it doesn't, the
+// byte. Its receive buffer has to absorb the whole payload; if it doesn't, the
 // probe's own write stalls and every healthy peer that pauses gets accused of
 // black-holing packets. Nothing here is a black hole, so nothing may warn.
 func TestPMTUProbeLoopbackSilentPeerDoesNotWarn(t *testing.T) {
@@ -368,7 +368,7 @@ func containsIP(ips []net.IP, want net.IP) bool {
 }
 
 // dnsStub is a loopback UDP resolver that answers A queries with one fixed
-// address and everything else with an empty NOERROR — enough to satisfy the Go
+// address and everything else with an empty NOERROR, enough to satisfy the Go
 // resolver's parallel A/AAAA pair without a DNS library. It records the source
 // address every query arrived from, which is the whole point of it.
 type dnsStub struct {
@@ -424,8 +424,8 @@ func (s *dnsStub) wantSources(t *testing.T, want net.IP) {
 }
 
 // dnsReply turns a query into a response: the same header and question back,
-// plus a single A record when A is what was asked for. Anything else — AAAA, a
-// packet too short to parse — gets an answerless NOERROR, which the resolver
+// plus a single A record when A is what was asked for. Anything else, whether
+// AAAA or a packet too short to parse, gets an answerless NOERROR, which the resolver
 // accepts without retrying.
 func dnsReply(q []byte, answer net.IP) []byte {
 	if len(q) < 12 {

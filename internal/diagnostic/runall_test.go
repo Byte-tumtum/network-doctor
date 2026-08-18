@@ -52,7 +52,7 @@ func blockUntilDone(id ProbeID, deps []ProbeID) Probe {
 }
 
 // The bounded-time guarantee, headless half: every probe runs under its own
-// ProbeTimeout, dependents included — they get a fresh deadline, not what's
+// ProbeTimeout, dependents included: they get a fresh deadline, not what's
 // left of their parent's.
 func TestRunAllBoundsEveryProbe(t *testing.T) {
 	orig := ProbeTimeout

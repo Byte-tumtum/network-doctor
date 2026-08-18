@@ -22,9 +22,9 @@ import (
 
 // `netdoc-sim triage` hunts the known-good baselines at fixed seeds, proves
 // each candidate finding by re-running its exact generated case, and files the
-// survivors as GitHub issues through `gh`. Anything it cannot do — a hunt that
-// could not run, output it cannot parse, a case it cannot re-run, a `gh` call
-// that fails — is an error, never a quietly filed guess.
+// survivors as GitHub issues through `gh`. Anything it cannot do, whether a hunt
+// that could not run, output it cannot parse, a case it cannot re-run, or a `gh`
+// call that fails, is an error, never a quietly filed guess.
 
 // huntFunc runs one hunt and returns its parsed report. caseNumber is negative
 // for a full hunt, or the exact case to regenerate and re-run.
@@ -259,7 +259,7 @@ func verify(ctx context.Context, hunt huntFunc, candidate simulation.HuntFinding
 
 // file searches open issues for the fingerprint before creating one. The
 // fingerprint is a bare hex word in the title, so the search cannot half-match
-// something else — and the returned titles are checked again anyway.
+// something else, and the returned titles are checked again anyway.
 func file(ctx context.Context, gh ghFunc, finding *simulation.TriageFinding, revision, runContext string) error {
 	raw, err := gh(ctx, "issue", "list", "--state", "open", "--limit", "50",
 		"--search", finding.Fingerprint+" in:title", "--json", "number,title,url")
@@ -312,8 +312,8 @@ func realGH(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// directorHunt runs a real hunt exactly as `netdoc-sim hunt -json` does — same
-// flag parsing, same director argv, same namespaces — and captures the report.
+// directorHunt runs a real hunt exactly as `netdoc-sim hunt -json` does, with the
+// same flag parsing, director argv and namespaces, and captures the report.
 func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, verbose bool, stderr io.Writer) huntFunc {
 	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int) (*simulation.HuntResult, error) {
 		f := newHuntFlags(io.Discard)
@@ -329,7 +329,7 @@ func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, ver
 			return nil, err
 		}
 		// A failed hunt still writes its report, and that report is the only
-		// place the reason lives — the director puts it on stdout, not stderr.
+		// place the reason lives: the director puts it on stdout, not stderr.
 		// Reporting the exit code alone would throw away the sentence CI needs.
 		var result simulation.HuntResult
 		if err := json.Unmarshal(out.Bytes(), &result); err != nil {

@@ -216,7 +216,7 @@ func TestDialIPsRefused(t *testing.T) {
 
 // Siblings that fail before the win stay in the attempt list. Every stub dial
 // returns instantly, so failures pile up faster than the race loop drains them
-// and the winning hand-off becomes ready with several still queued — the exact
+// and the winning hand-off becomes ready with several still queued, the exact
 // shape that used to lose them. Repeated because the interleaving is a race.
 func TestDialIPsKeepsFailuresThatLostToTheWinner(t *testing.T) {
 	ops := &netops{dialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
@@ -294,7 +294,7 @@ func TestIfaceForIPUnknown(t *testing.T) {
 }
 
 // Probes run against stubbed netops: no real network, DNS, or OS interface
-// access — the point of the function-field seam.
+// access, which is the point of the function-field seam.
 func TestNetopsInjection(t *testing.T) {
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) {
@@ -634,8 +634,8 @@ func TestProxyProbeMalformedURLFailsWithoutDial(t *testing.T) {
 }
 
 // TestProxyProbeParseErrorIsRedacted guards against a regression where the
-// raw net/url parser error — which can repeat the malformed HTTPS_PROXY/
-// HTTP_PROXY value verbatim, including any embedded credentials — leaks into
+// raw net/url parser error, which can repeat the malformed HTTPS_PROXY/
+// HTTP_PROXY value verbatim, including any embedded credentials, leaks into
 // the report. The probe must fail with a fixed, generic detail instead.
 func TestProxyProbeParseErrorIsRedacted(t *testing.T) {
 	const sentinel = "SENSITIVE_PROXY_VALUE"
@@ -747,7 +747,7 @@ func TestProxyProbeAuthRequired(t *testing.T) {
 	}
 }
 
-// noProxyBypasses matches suffixes and "*" only — no IP literals, no CIDR — and
+// noProxyBypasses matches suffixes and "*" only, with no IP literals and no CIDR, and
 // is safe solely because ConnectivityProbeHost is the one host it is ever asked about. Pin
 // that: whatever target the user names, the proxy probe still asks about
 // ConnectivityProbeHost. If this fails, noProxyBypasses must become httpproxy.
@@ -858,7 +858,7 @@ func TestTargetTCPProbeIgnoresTheAbsentFamily(t *testing.T) {
 	}{
 		{"v6 unreachable, v4 won", []net.IP{v4, v6}, v4, StatusPass, 2},
 		// dialIPs leads with IPv6 (RFC 8305), so a v6 win returns before the
-		// staggered v4 attempt ever starts — one attempt, and nothing to warn about.
+		// staggered v4 attempt ever starts: one attempt, and nothing to warn about.
 		{"v4 unreachable, v6 won", []net.IP{v4, v6}, v6, StatusPass, 1},
 		{"same-family sibling failed", []net.IP{v4b, v4}, v4, StatusWarn, 2},
 	}
@@ -967,7 +967,7 @@ func TestTargetTCPProbe(t *testing.T) {
 }
 
 // Probes hand their results to buildProbes' wrapper, which is the only place
-// external text gets sanitized — so a probe that emits raw escapes must come
+// external text gets sanitized, so a probe that emits raw escapes must come
 // out clean anyway.
 func TestCleanResultScrubsEveryTextField(t *testing.T) {
 	hostile := "boom\x1b[31m\x07"
@@ -999,7 +999,7 @@ func TestCleanResultScrubsEveryTextField(t *testing.T) {
 
 // A measured attempt must never render as the 0ms that means "never ran". Only
 // fails where the clock is coarse enough to return 0 for back-to-back calls,
-// which is Windows — the platform that regressed TestTargetTCPProbe.
+// which is Windows, the platform that regressed TestTargetTCPProbe.
 func TestSinceNeverZero(t *testing.T) {
 	if d := since(time.Now()); Ms(d) < 1 {
 		t.Errorf("since(now) = %v, Ms = %d, want at least 1ms", d, Ms(d))
@@ -1010,7 +1010,7 @@ func TestSinceNeverZero(t *testing.T) {
 // one: FlagUp (administratively up) gates it, FlagRunning (carrier/operational)
 // deliberately does not. A cable pulled from a configured NIC leaves the
 // address assigned, and that is exactly the black-holed case the caller warns
-// about — requiring FlagRunning here would silence it.
+// about, and requiring FlagRunning here would silence it.
 func TestHasGlobalUnicastIgnoresRunningState(t *testing.T) {
 	addr := func(s string) []net.Addr {
 		ip, n, err := net.ParseCIDR(s)

@@ -23,10 +23,11 @@ builds:
     goarch:
       - amd64
       - arm64
-  # Linux only, on purpose. netdoc-sim compiles everywhere — internal/simulation
-  # has a !linux backend that returns ErrUnsupported so the CLI links — but the
-  # only backend that can build a network is Linux namespaces, so a macOS or
-  # Windows artifact would be a binary whose every real command refuses. Same
+  # Linux only, on purpose. netdoc-sim compiles everywhere, because
+  # internal/simulation has a !linux backend that returns ErrUnsupported so the
+  # CLI links. But the only backend that can build a network is Linux
+  # namespaces, so a macOS or Windows artifact would be a binary whose every
+  # real command refuses. Same
   # tag, same version, same release as netdoc; it is a companion, not a product.
   - id: netdoc-sim
     binary: netdoc-sim
@@ -62,7 +63,7 @@ source:
 checksum:
   name_template: "checksums.txt"
   # The vendor tarball is what COPR actually compiles, so it has to be a
-  # checksums.txt subject like everything else — that is what the release
+  # checksums.txt subject like everything else, since that is what the release
   # attestation covers, and what the copr job verifies before building.
   extra_files:
     - glob: ./network-doctor-*-vendor.tar.gz

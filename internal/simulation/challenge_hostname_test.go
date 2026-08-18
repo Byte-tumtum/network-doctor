@@ -67,7 +67,7 @@ func TestChallengeHostnameIsRealInTheSimulation(t *testing.T) {
 // assertCertificatesCoverOrIgnore checks that no service still advertises the
 // base scenario's old name for the renamed host. The mismatch family reissues
 // its certificate for a name on purpose, so a certificate covering neither the
-// new host nor anything else is what this is looking for — a stale name from the
+// new host nor anything else is what this is looking for: a stale name from the
 // base YAML surviving the rename.
 func assertCertificatesCoverOrIgnore(t *testing.T, id string, s *Scenario, host string) {
 	t.Helper()
@@ -134,8 +134,8 @@ func TestChallengeHostnameCannotResolvePublicly(t *testing.T) {
 }
 
 // The name is derived from the id and nothing else. The base scenario is the
-// answer's neighbourhood — seeing the same host on every tls-valid challenge
-// would tell a returning player which two conditions it can be — so the name may
+// answer's neighbourhood, and seeing the same host on every tls-valid challenge
+// would tell a returning player which two conditions it can be, so the name may
 // not be a fingerprint of the base, the case, or the fault.
 func TestChallengeHostnameLeaksNothingAboutTheCase(t *testing.T) {
 	hostsPerBase := map[string]map[string]bool{}
@@ -223,8 +223,8 @@ func TestChallengeRenameSkipsWhatHasNoName(t *testing.T) {
 }
 
 // renameScenarioHost has to move every spelling together. The unit-level proof,
-// because the case that would break it — a zone renamed while a certificate is
-// not — is exactly the one a whole-challenge test would report as a TLS
+// because the case that would break it, a zone renamed while a certificate is
+// not, is exactly the one a whole-challenge test would report as a TLS
 // mismatch rather than as a rename bug.
 func TestRenameScenarioHostMovesEverySpelling(t *testing.T) {
 	scenario, err := LibraryScenario("tls-valid")

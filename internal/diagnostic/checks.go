@@ -28,11 +28,11 @@ import (
 
 // Status is a probe's five-state outcome. Warn = degraded but functional
 // (high latency, some addresses failing, ambiguous source interface, missing
-// service banner, or direct egress blocked while another path works) — never
+// service banner, or direct egress blocked while another path works), never
 // counted as a failure. Skip = a prerequisite failed (an
 // independent probe is never Skipped for an unrelated sibling's failure).
 // NotApplicable = the probe doesn't apply at all (DNS on an IP literal, a
-// protocol row absent for this port) — not counted as a failure.
+// protocol row absent for this port), not counted as a failure.
 type Status int
 
 const (
@@ -89,7 +89,7 @@ type Attempt struct {
 
 // Ms renders a duration that actually elapsed as at least 1ms. Milliseconds()
 // truncates, so a fast local check (an interface lookup, a cached resolve) or a
-// LAN connect would report the same 0 as work that never happened at all — and
+// LAN connect would report the same 0 as work that never happened at all, and
 // 0 is the only signal a reader has for the latter.
 func Ms(d time.Duration) int64 {
 	if d > 0 && d < time.Millisecond {
@@ -241,8 +241,8 @@ const (
 )
 
 // tlsRecordHeader frames a handshake record declaring a full 16 KiB body, and
-// prefixes the PMTU payload on TLS targets. An OpenSSL-based server buffers —
-// and so acknowledges — the whole declared record before rejecting the garbage
+// prefixes the PMTU payload on TLS targets. An OpenSSL-based server buffers,
+// and so acknowledges, the whole declared record before rejecting the garbage
 // inside it, where an unprefixed write gets reset after a few bytes and leaves
 // the path question unanswered.
 var tlsRecordHeader = []byte{0x16, 0x03, 0x01, 0x40, 0x00}
@@ -266,12 +266,12 @@ const DefaultPublicDNS = "8.8.8.8"
 func publicDNSServer(ip string) string { return net.JoinHostPort(ip, "53") }
 
 // portalProbeURL answers 204 with an empty body on an unintercepted path.
-// Plain HTTP on purpose — that's the request a captive portal grabs.
+// Plain HTTP on purpose, since that's the request a captive portal grabs.
 // A var only so tests can point it at a local server; nothing reassigns it.
 var portalProbeURL = "http://" + ConnectivityProbeHost + "/generate_204"
 
 // internetEndpoints4/6 are the ordered direct-egress endpoints per address
-// family; first connect wins within a family. Honestly "direct TCP egress" —
+// family; first connect wins within a family. Honestly "direct TCP egress":
 // proxy-only networks can fail this.
 const (
 	internetEndpointCloudflareIPv4 = "1.1.1.1"
@@ -568,7 +568,7 @@ func (s SourceAddresses) forDial(network, addr string) (net.IP, int) {
 
 // lookupIPWithDial resolves host and reports which resolver was on the other
 // end of the wire. The server identity comes free from the Go resolver's Dial
-// hook — it already parses resolv.conf, so we don't have to. Release builds are
+// hook, which already parses resolv.conf, so we don't have to. Release builds are
 // CGO_ENABLED=0 and so already resolve this way; PreferGo only pins that
 // behavior for local cgo builds.
 //
@@ -584,7 +584,7 @@ func lookupIPWithDial(ctx context.Context, host string, dial func(context.Contex
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			mu.Lock()
-			// Last dial wins rather than the provably-answering one — right for
+			// Last dial wins rather than the provably-answering one, which is right for
 			// a single server, and right on failover, since the resolver
 			// exhausts one server before trying the next.
 			server = addr
@@ -611,7 +611,7 @@ func lookupIPPublicWithDial(ctx context.Context, host string, dial func(context.
 }
 
 // dnsServerLabel shortens a resolver dial address for a probe row: the bare host
-// on port 53, host:port otherwise — a stub resolver on 5353 is worth seeing.
+// on port 53, host:port otherwise, since a stub resolver on 5353 is worth seeing.
 func dnsServerLabel(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -660,7 +660,7 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 
 // BuildProbesFromSources constructs the DAG with separate selected-interface
 // addresses for IPv4 and IPv6. publicDNS is a bare IP, or "" to leave that
-// probe out of the DAG altogether — a skipped row would still have had to dial
+// probe out of the DAG altogether, since a skipped row would still have had to dial
 // to be skipped.
 func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS string) []Probe {
 	o := defaultOps
@@ -809,7 +809,7 @@ func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeR
 		}
 		return r
 	}
-	// First up-and-running non-loopback interface wins — that's kernel
+	// First up-and-running non-loopback interface wins, which is kernel
 	// enumeration order, not the routing table's opinion. With Wi-Fi and
 	// Ethernet both up this may name the one traffic doesn't use; that's fine,
 	// this probe only proves "a link is alive". The egress probes report the
@@ -881,7 +881,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	wg.Wait()
 	r.Families = &FamilyConnectivity{IPv4: familyState(v4.ips, v4.conn), IPv6: familyState(v6.ips, v6.conn)}
 
-	// IPv4 headlines the result unless it lost and IPv6 won — not a value
+	// IPv4 headlines the result unless it lost and IPv6 won. Not a value
 	// judgment, just a stable order for the Detail string and warnings.
 	prim, sec, primName, secName := v4, v6, "IPv4", "IPv6"
 	if v4.conn == nil && v6.conn != nil {
@@ -895,15 +895,15 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		r.Status, r.Source, r.Iface = StatusFail, src, iface
 		// Portals commonly drop 443 outright while still intercepting plain
 		// HTTP. The 204 endpoint answering anything else is proof of a portal
-		// even with no handshake to show for it — report that, not "check
+		// even with no handshake to show for it, so report that, not "check
 		// upstream".
 		if portalCode != 0 && portalCode != http.StatusNoContent {
 			r.Portal = &Portal{RedirectURL: portalURL}
 			r.Detail += fmt.Sprintf(", and HTTP is intercepted: %s answered %d, want 204", portalProbeURL, portalCode)
-			r.Fix = "captive portal or transparent filter — open a browser and sign in to the network"
+			r.Fix = "captive portal or transparent filter: open a browser and sign in to the network"
 			return r
 		}
-		r.Fix = "no internet egress — proxy-only/filtered network? check upstream"
+		r.Fix = "no internet egress: proxy-only/filtered network? check upstream"
 		if o.routeCause != nil {
 			r.Cause = o.routeCause(all[0])
 		}
@@ -923,7 +923,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		r.Attempts = append(prim.attempts, sec.attempts...)
 		r.Portal = &Portal{RedirectURL: portalURL}
 		r.Detail = fmt.Sprintf("TCP reaches %s but HTTP is intercepted: %s answered %d, want 204", prim.sel, portalProbeURL, portalCode)
-		r.Fix = "captive portal or transparent filter — open a browser and sign in to the network"
+		r.Fix = "captive portal or transparent filter: open a browser and sign in to the network"
 		return r
 	}
 	r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, prim.sel, src, iface
@@ -960,7 +960,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 }
 
 // proxyFromEnvironment is http.ProxyFromEnvironment plus ALL_PROXY, which Go
-// ignores but curl, ssh and the SOCKS ecosystem honor — a box whose only proxy
+// ignores but curl, ssh and the SOCKS ecosystem honor. A box whose only proxy
 // setting is ALL_PROXY=socks5h://... is proxied, and the report has to say so.
 func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 	u, err := http.ProxyFromEnvironment(req)
@@ -968,7 +968,7 @@ func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 		return u, err
 	}
 	// net/http already applied NO_PROXY to HTTP(S)_PROXY, so a nil here can
-	// equally mean "exempted" — falling back to ALL_PROXY on that would report
+	// equally mean "exempted", and falling back to ALL_PROXY on that would report
 	// a proxy nothing would use for this host.
 	if noProxyBypasses(req.URL.Hostname()) {
 		return nil, nil
@@ -987,11 +987,11 @@ func proxyFromEnvironment(req *http.Request) (*url.URL, error) {
 	return url.Parse("http://" + all)
 }
 
-// noProxyBypasses reports whether NO_PROXY exempts host from proxying — the
+// noProxyBypasses reports whether NO_PROXY exempts host from proxying, the
 // check net/http applies to HTTP(S)_PROXY and this file has to apply itself to
 // the ALL_PROXY fallback.
 // ponytail: suffix and "*" matching only, no IP or CIDR entries; the only host
-// asked about is ConnectivityProbeHost, a fixed public name that is never a literal IP —
+// asked about is ConnectivityProbeHost, a fixed public name that is never a literal IP.
 // proxyProbe is the sole caller and hardcodes it even when the user names a
 // target, an invariant TestProxyProbeOnlyAsksAboutProbeHost pins. The day a
 // caller passes a host the user chose, that test fails: drop this for
@@ -1083,7 +1083,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	start := time.Now()
 	var conn net.Conn
 	// A ctx without a deadline yields the zero time, which *clears* the conn
-	// deadlines rather than setting them — the CONNECT read would then block
+	// deadlines rather than setting them, so the CONNECT read would then block
 	// forever. Fall back to the probe budget.
 	dl, ok := ctx.Deadline()
 	if !ok {
@@ -1104,7 +1104,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 			r.Status = StatusFail
 			r.Cause = ProxyCauseUnreachable
 			r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
-			r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
+			r.Fix = "proxy configured but unreachable: check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
 			return r
 		}
 		req := "CONNECT " + ConnectivityProbeHost + ":443 HTTP/1.1\r\nHost: " + ConnectivityProbeHost + ":443\r\n"
@@ -1141,7 +1141,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 			r.Status = StatusFail
 			r.Cause = ProxyCauseProtocol
 			r.Detail = "no CONNECT response from proxy " + addr + ": " + err.Error()
-			r.Fix = "proxy reachable but not speaking HTTP — wrong port or scheme?"
+			r.Fix = "proxy reachable but not speaking HTTP: wrong port or scheme?"
 			return r
 		}
 		_ = resp.Body.Close()
@@ -1165,9 +1165,9 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 		r.Cause = ProxyCauseProtocol
 		r.Detail = "proxy " + addr + " refused CONNECT: " + resp.Status
 		if resp.StatusCode == http.StatusProxyAuthRequired {
-			r.Fix = "proxy requires credentials — set user:pass@host in the proxy URL"
+			r.Fix = "proxy requires credentials: set user:pass@host in the proxy URL"
 		} else {
-			r.Fix = "proxy reachable but refusing tunnels — check proxy policy"
+			r.Fix = "proxy reachable but refusing tunnels: check proxy policy"
 		}
 		return r
 	}
@@ -1214,7 +1214,7 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, remoteDNS bool, d
 		r.Status = StatusFail
 		r.Cause = ProxyCauseUnreachable
 		r.Detail = "cannot reach proxy " + addr + ": " + err.Error()
-		r.Fix = "proxy configured but unreachable — check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
+		r.Fix = "proxy configured but unreachable: check HTTPS_PROXY/HTTP_PROXY/ALL_PROXY and the proxy host"
 		return r
 	}
 	defer conn.Close()
@@ -1280,7 +1280,7 @@ func socks5Greeting(conn net.Conn) error {
 		return fmt.Errorf("no SOCKS5 greeting reply: %w", err)
 	}
 	if hello[0] != 5 {
-		return fmt.Errorf("not a SOCKS5 proxy (reply version %d) — wrong port or scheme?", hello[0])
+		return fmt.Errorf("not a SOCKS5 proxy (reply version %d): wrong port or scheme?", hello[0])
 	}
 	if hello[1] != 0 {
 		return errors.New("requires authentication; SOCKS5 credentials travel in cleartext, so this probe does not send them")
@@ -1388,7 +1388,7 @@ type dnsAnswer struct {
 
 // retryableDNS reports whether a failure is worth a second query. A timeout or
 // a temporary server failure says something about the resolver's health at that
-// instant; NXDOMAIN — and an answer — say something about the name, and asking
+// instant; NXDOMAIN, like an answer, says something about the name, and asking
 // twice cannot change either.
 func retryableDNS(err error) bool {
 	switch dnsFailureCause(err) {
@@ -1400,14 +1400,14 @@ func retryableDNS(err error) bool {
 
 // lookupIPRetrying resolves host and samples the resolver a second time when
 // the first query neither answers nor fails conclusively. The second query goes
-// out as soon as the first fails — SERVFAIL, or a stub that gives up early —
+// out as soon as the first fails (SERVFAIL, or a stub that gives up early),
 // and otherwise halfway through the probe budget, alongside a first query that
 // is still waiting.
 //
 // Alongside, not instead of: cutting the first query short to make room would
 // halve the patience of every DNS probe, and a resolver that answers late but
 // within the budget would be reported as a timeout it never had. Two queries in
-// flight cost one extra packet and settle both cases — the resolver that
+// flight cost one extra packet and settle both cases: the resolver that
 // recovers mid-probe is heard, and the slow one keeps its own answer.
 func (o *netops) lookupIPRetrying(ctx context.Context, host string) ([]net.IP, string, error) {
 	// Buffered for both queries: the loser of the race writes after the winner
@@ -1453,7 +1453,7 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		var r ProbeResult
 		if litIP != nil {
 			r.Status, r.Addrs, r.SelectedIP = StatusNA, []net.IP{litIP}, litIP
-			r.Detail = "literal IP " + litIP.String() + " — no DNS needed"
+			r.Detail = "literal IP " + litIP.String() + ", no DNS needed"
 			return r
 		}
 		ips, server, err := o.lookupIPRetrying(ctx, host)
@@ -1475,7 +1475,7 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		if len(ips) == 0 {
 			r.Status = StatusFail
 			r.DNSNotFound = true
-			r.Detail, r.Fix = "no A/AAAA records for "+host+via, "no address returned — check the hostname / DNS"
+			r.Detail, r.Fix = "no A/AAAA records for "+host+via, "no address returned: check the hostname / DNS"
 			return r
 		}
 		r.Status, r.Addrs = StatusPass, ips
@@ -1487,7 +1487,7 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 func (o *netops) publicDNSProbe(host string, litIP net.IP, publicDNSIP string) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 		if litIP != nil {
-			return ProbeResult{Status: StatusNA, Detail: "literal IP " + litIP.String() + " — no DNS needed"}
+			return ProbeResult{Status: StatusNA, Detail: "literal IP " + litIP.String() + ", no DNS needed"}
 		}
 		ips, err := o.lookupPublicIP(ctx, host, publicDNSServer(publicDNSIP))
 		if dnsNotFound(err) || err == nil && len(ips) == 0 {
@@ -1551,7 +1551,7 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			tried[i] = a.IP
 		}
 		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(attempts), joinIPs(tried))
-		r.Fix = fmt.Sprintf("port %d blocked/refused — firewall, wrong network, or VPN routing?", port)
+		r.Fix = fmt.Sprintf("port %d blocked/refused: firewall, wrong network, or VPN routing?", port)
 		return r
 	}
 }
@@ -1631,7 +1631,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		// Fresh, non-reusing transport restricted to the resolved/pinned IPs;
 		// redirects and proxy off; bounded response headers (attacker-controlled).
 		// The transport dials on its own goroutine, which can outlive client.Do
-		// on ctx timeout — so the closure must not write to r directly.
+		// on ctx timeout, so the closure must not write to r directly.
 		var dialMu sync.Mutex
 		var dialIP net.IP
 		var dialAttempts []Attempt
@@ -1679,7 +1679,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 				tried = r.SelectedIP.String()
 			}
 			r.Detail = "no " + protocol + " response from " + tried + ": " + err.Error()
-			r.Fix = protocol + " blocked — proxy or firewall?"
+			r.Fix = protocol + " blocked: proxy or firewall?"
 			return r
 		}
 		_ = resp.Body.Close()
@@ -1702,7 +1702,7 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 //
 // A completed Write proves nothing. Linux treats SO_SNDBUF as an accounting
 // hint, not a ceiling, and will absorb a 24 KiB write into a socket reporting
-// an 8 KiB send buffer without a byte reaching the wire — which is exactly what
+// an 8 KiB send buffer without a byte reaching the wire, which is exactly what
 // a path-MTU black hole looks like from userspace. Only socketQueued separates
 // the two, so the send buffer survives here as detail and as the fallback for
 // platforms that cannot account for their send queue.
@@ -1712,8 +1712,8 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 // evidence of anything.
 //
 // Never a Fail, by design. A peer that accepts the connection and then stops
-// reading stalls us the same way, so the Warn states its evidence — bytes
-// written, send buffer size, and that the handshake got through — and leaves the
+// reading stalls us the same way, so the Warn states its evidence (bytes
+// written, send buffer size, and that the handshake got through) and leaves the
 // reader room to judge. Only an independent protocol timeout promotes this
 // evidence into a network-path verdict.
 func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
@@ -1725,7 +1725,7 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 			return r
 		}
 		// The stall is the measurement, so it needs a deadline of its own inside
-		// the probe budget — a ctx cancellation would report no bytes at all.
+		// the probe budget, since a ctx cancellation would report no bytes at all.
 		wait := pmtuWriteWait
 		if dl, ok := ctx.Deadline(); ok {
 			if left := time.Until(dl) - pmtuHeadroom; left < wait {
@@ -1803,7 +1803,7 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 
 		mtu := o.mtuFor(dep.Iface)
 		blackHole := "; the TCP handshake succeeded" + mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU") +
-			" — consistent with a path-MTU black hole"
+			", consistent with a path-MTU black hole"
 		delivered, queueErr := awaitAcknowledged(measureQueued, conn, n, deadline)
 		switch {
 		case queueErr != nil:
@@ -1822,18 +1822,18 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 				r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s before the write stopped (%v)", kib(n), kib(sendBuffer), mssNote(mss), err) + blind
 			case timeoutError(err):
 				r.Status = StatusWarn
-				r.Detail = fmt.Sprintf("stalled after %s of %s without draining the measured %s TCP send buffer%s; the TCP handshake succeeded%s — consistent with a path-MTU black hole",
+				r.Detail = fmt.Sprintf("stalled after %s of %s without draining the measured %s TCP send buffer%s; the TCP handshake succeeded%s, consistent with a path-MTU black hole",
 					kib(n), kib(pmtuPayloadSize), kib(sendBuffer), mssNote(mss), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))
 				r.Fix = pmtuFix(runtime.GOOS)
 			default:
 				r.Status = StatusNA
-				r.Detail = fmt.Sprintf("inconclusive — the peer dropped the connection after %s: %v", kib(n), err)
+				r.Detail = fmt.Sprintf("inconclusive; the peer dropped the connection after %s: %v", kib(n), err)
 			}
 		case err != nil && !timeoutError(err):
 			// Ahead of the acknowledgement check on purpose: a reset purges the
 			// send queue, so a dropped connection reads as a fully drained one.
 			r.Status = StatusNA
-			r.Detail = fmt.Sprintf("inconclusive — the peer dropped the connection after %s: %v", kib(n), err)
+			r.Detail = fmt.Sprintf("inconclusive; the peer dropped the connection after %s: %v", kib(n), err)
 		case delivered > 0:
 			// Acknowledgement is cumulative and TCP fills segments from the front
 			// of the payload, so the peer cannot have acknowledged any of a
@@ -1864,7 +1864,7 @@ const pmtuQueueSample = 50 * time.Millisecond
 // immediately afterwards nothing is acknowledged yet even on a healthy link.
 // Once Write has returned nothing more enters the queue, so every later sample
 // is monotone and the first sign of progress settles it. A black hole never
-// produces one — its segments are all too big to cross, so nothing is ever
+// produces one: its segments are all too big to cross, so nothing is ever
 // acknowledged and the loop runs out the deadline it was already going to
 // spend.
 func awaitAcknowledged(measure func(net.Conn) (int, error), conn net.Conn, written int, deadline time.Time) (int, error) {
@@ -1902,14 +1902,14 @@ func pmtuPayload(proto Proto) []byte {
 	return out
 }
 
-// kib renders a byte count the way the numbers in this probe are chosen — in
+// kib renders a byte count the way the numbers in this probe are chosen: in
 // whole KiB, rounded down, since a partial KiB never changes the reading.
 func kib(n int) string {
 	return strconv.Itoa(n>>10) + " KiB"
 }
 
 // mtuNote fills format with iface and mtu, or returns nothing when the MTU
-// couldn't be read — the verdict doesn't depend on knowing the number.
+// couldn't be read, since the verdict doesn't depend on knowing the number.
 func mtuNote(iface string, mtu int, format string) string {
 	if mtu <= 0 {
 		return ""
@@ -1993,7 +1993,7 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 	}
 	// dialIPs records completed attempts plus the winner (last), so every
 	// earlier attempt genuinely failed before the win. Callers hand over only
-	// the winning family's attempts — see targetTCPProbe.
+	// the winning family's attempts (see targetTCPProbe).
 	if n := len(r.Attempts) - 1; n > 0 {
 		notes = append(notes, fmt.Sprintf("%d of %d address(es) failed", n, len(r.Attempts)))
 	}
@@ -2002,7 +2002,7 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 	}
 	if len(notes) > 0 {
 		r.Status = StatusWarn
-		r.Detail += " — warning: " + strings.Join(notes, ", ")
+		r.Detail += "; warning: " + strings.Join(notes, ", ")
 	}
 }
 
@@ -2041,7 +2041,7 @@ func familyState(ips []net.IP, conn net.Conn) string {
 
 // splitAttemptFamilies partitions attempts into the winner's address family
 // and everything else, so a dial result can be judged on the family that
-// actually carried it. A nil winner leaves everything in same — there is no
+// actually carried it. A nil winner leaves everything in same, since there is no
 // family to judge against, and the caller is on its failure path anyway.
 func splitAttemptFamilies(attempts []Attempt, sel net.IP) (same, other []Attempt) {
 	if sel == nil {
@@ -2152,7 +2152,7 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 	}()
 
 	// Every address either wins, fails, or never starts; pending bounds the
-	// loop either way. On a win we return at once — the deferred cancel tells
+	// loop either way. On a win we return at once, and the deferred cancel tells
 	// stragglers still dialing to give up and close whatever they got.
 	var attempts []Attempt
 	for pending := len(ips); pending > 0; pending-- {
@@ -2160,7 +2160,7 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 		case w := <-winner:
 			// Both channels can be ready at once and select picks blind, so
 			// siblings that already failed may still be queued. Collect them
-			// before leaving — dropping one turns a documented WARN into a PASS
+			// before leaving, since dropping one turns a documented WARN into a PASS
 			// and loses the evidence. Nothing else reads fails, so no receive
 			// here can block.
 			for len(fails) > 0 {
@@ -2179,7 +2179,7 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 
 // pathIdentity returns the source IP + interface for a destination. On a
 // successful connect it reads the winning LocalAddr (ground truth); otherwise it
-// falls back to a UDP "connect" (sends no packets) for path identity only — not
+// falls back to a UDP "connect" (sends no packets) for path identity only, not
 // a reachability claim.
 func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, port int) (net.IP, string) {
 	var src net.IP
@@ -2202,7 +2202,7 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 }
 
 // hasGlobalUnicast reports whether any live non-loopback interface holds a
-// global unicast address of the given family — the machine was configured for
+// global unicast address of the given family. The machine was configured for
 // it (statically, by DHCP, or by a router advertisement), so the network
 // claimed to carry that family.
 //

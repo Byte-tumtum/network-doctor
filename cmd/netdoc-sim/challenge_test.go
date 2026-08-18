@@ -121,7 +121,7 @@ func TestChallengeDiscoveredNetdocIsInterrogatedAndForwarded(t *testing.T) {
 }
 
 // A binary that cannot say what it is cannot be recorded, so the challenge does
-// not start — and it does not go looking for a second opinion either.
+// not start, and it does not go looking for a second opinion either.
 func TestChallengeRefusesANetdocWithNoVersion(t *testing.T) {
 	working := writeFakeNetdoc(t, t.TempDir(), "netdoc v1.0.0-working")
 	silent := writeFakeNetdoc(t, t.TempDir(), "")

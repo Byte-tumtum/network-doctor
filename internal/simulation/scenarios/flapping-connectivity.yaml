@@ -9,7 +9,7 @@ description: A seeded campaign that varies when the network degrades, how badly,
 #   +0                            healthy
 #   +degrade_at                   degraded
 #   +degrade_at+400ms             healthy
-#   +degrade_at+800ms             outage — 100% loss, resolver silent
+#   +degrade_at+800ms             outage: 100% loss, resolver silent
 #   +degrade_at+800ms+outage_for  healthy again
 #
 # Reproduce one iteration exactly:

@@ -145,7 +145,7 @@ type TLSCertificate struct {
 const (
 	ServiceDNS  = "dns"
 	ServiceHTTP = "http"
-	// ServiceTCP accepts a connection and closes it — enough for the direct
+	// ServiceTCP accepts a connection and closes it, enough for the direct
 	// egress probe, which only proves a handshake completes.
 	ServiceTCP = "tcp"
 	// ServiceSOCKS5 is a simulator-owned, no-auth CONNECT proxy. It supports
@@ -241,9 +241,9 @@ type Fault struct {
 	Port     int    `yaml:"port"`
 	// Direction chooses where FaultDrop bites, and the two are not
 	// interchangeable. Outbound drops the packet on the way out of this node,
-	// which the kernel reports to the sender as a refusal — a local firewall.
+	// which the kernel reports to the sender as a refusal, the way a local firewall behaves.
 	// Inbound drops it as it arrives at this node, so the sender hears nothing
-	// and waits out its timeout — a black hole in the path. Default outbound.
+	// and waits out its timeout, the way a black hole in the path behaves. Default outbound.
 	Direction string `yaml:"direction"`
 	// Delay, Jitter and Loss configure FaultNetem. Delay and Jitter are Go
 	// durations; Loss is a percentage such as "10%".
@@ -294,8 +294,8 @@ type CampaignSpec struct {
 }
 
 // CampaignTimeline generates one flapping timeline per iteration. The shape is
-// fixed and only three dimensions vary — when degradation starts, how bad it
-// is, and how long the total outage lasts — so a failing iteration is still
+// fixed and only three dimensions vary (when degradation starts, how bad it
+// is, and how long the total outage lasts) so a failing iteration is still
 // something a person can read.
 //
 //	+0                          healthy
@@ -393,8 +393,8 @@ type TestTrust struct {
 const TestNetdoc = "netdoc"
 
 // Expect is the diagnosis the scenario claims netdoc should reach. Matching is
-// on netdoc's stable machine-readable contract — probe ids, the PASS/WARN/FAIL/
-// SKIP/N/A vocabulary, and the verdict word — never on the English prose.
+// on netdoc's stable machine-readable contract, meaning probe ids, the
+// PASS/WARN/FAIL/SKIP/N/A vocabulary, and the verdict word, never the English prose.
 type Expect struct {
 	Verdict string          `yaml:"verdict"`
 	Checks  []ExpectedCheck `yaml:"checks"`
@@ -451,7 +451,7 @@ var knownCauses = []string{
 	diagnostic.ConnectionCauseReset,
 }
 
-// verdicts is netdoc's verdict vocabulary. Incomplete is omitted on purpose —
+// verdicts is netdoc's verdict vocabulary. Incomplete is omitted on purpose:
 // a finished run never reports it, so expecting it is always a scenario bug.
 var verdicts = []string{
 	diagnostic.VerdictOK, diagnostic.VerdictDegraded, diagnostic.VerdictDNS,
@@ -586,7 +586,7 @@ func (t Topology) subnetOrDefault() string {
 //
 // The zone is the part worth refusing: netip.ParseAddr accepts an essentially
 // arbitrary string after "%", and while a zone could only ever reach a command
-// as one argv element — nothing here builds a shell string — an unbounded value
+// as one argv element, since nothing here builds a shell string, an unbounded value
 // has no business in an interface name or a nameserver line.
 func parseAddr(raw string) (netip.Addr, string, error) {
 	addr, err := netip.ParseAddr(raw)
@@ -1318,8 +1318,8 @@ func isASCIIAlnum(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
-// normalizePercent accepts the percentage spelling tc accepts — decimal digits
-// with an optional fraction — and returns the canonical rendering of it.
+// normalizePercent accepts the percentage spelling tc accepts, decimal digits
+// with an optional fraction, and returns the canonical rendering of it.
 //
 // strconv.ParseFloat on its own is too generous here. "1e2%", "+5%" and
 // "0x1p6%" are all valid Go floats inside the range, and all three are rejected

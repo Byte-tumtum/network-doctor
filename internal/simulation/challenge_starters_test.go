@@ -7,8 +7,8 @@ import (
 )
 
 // Curation is a claim about what an entry teaches, and a claim nobody checks is
-// a wish. Every entry has to still resolve to the condition it was picked for —
-// a generator change that moved one would otherwise leave a beginner practising
+// a wish. Every entry has to still resolve to the condition it was picked for,
+// since a generator change that moved one would otherwise leave a beginner practising
 // something else under a pack that promised routing.
 func TestStarterPacksStayPlayable(t *testing.T) {
 	seen := map[string]string{}
@@ -162,7 +162,7 @@ func TestStarterCurationNeverReachesThePlayer(t *testing.T) {
 			}
 		}
 	}
-	// And the published view carries ids only — no conditions, no answers.
+	// And the published view carries ids only, with no conditions and no answers.
 	for _, pack := range StarterPacks() {
 		blob := pack.ID + pack.Name + pack.Description + strings.Join(pack.Challenges, " ")
 		for _, condition := range challengeConditions {

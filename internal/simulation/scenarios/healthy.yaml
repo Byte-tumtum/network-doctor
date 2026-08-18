@@ -2,7 +2,7 @@ name: healthy-network
 description: >-
   Everything works: the resolver answers, direct egress reaches the simulated
   internet, and the service on the far end replies. The control for every other
-  scenario — anything netdoc flags here is a false positive.
+  scenario, so anything netdoc flags here is a false positive.
 
 topology:
   subnet: 10.77.0.0/24
@@ -22,7 +22,7 @@ topology:
     # internal/diagnostic/checks.go, and the zone below mirrors probeHost. This
     # scenario is the canary for that coupling: change those constants without
     # updating every scenario here and `netdoc-sim run healthy` turns FAIL,
-    # naming the probe that drifted. That failure is deliberate — see the
+    # naming the probe that drifted. That failure is deliberate; see the
     # endpoint-drift section of docs/simulation.md.
     - name: internet
       address: 10.77.0.1

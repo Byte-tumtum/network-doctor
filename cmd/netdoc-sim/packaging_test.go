@@ -20,7 +20,7 @@ import (
 // The man page, three completion files, and rendered usage expose copies of
 // netdoc-sim's command and flag surface. Nothing here keeps a list of that
 // surface: the commands come out of the dispatch switch and the flags out of
-// the real flag sets, and every shipped surface has to declare exactly that —
+// the real flag sets, and every shipped surface has to declare exactly that,
 // in its own declaration syntax, so a name that only appears in prose, a
 // comment or an example does not count.
 //
@@ -193,7 +193,7 @@ func taggedParagraphs(body string) []string {
 		if strings.TrimSpace(line) != ".TP" || i+1 >= len(lines) {
 			continue
 		}
-		// .B run, .BI cleanup " [id]", .BI \-max\-faults " n" — the macro, then
+		// .B run, .BI cleanup " [id]", .BI \-max\-faults " n": the macro, then
 		// the name. \- is roff for a literal hyphen.
 		fields := strings.Fields(lines[i+1])
 		if len(fields) < 2 {

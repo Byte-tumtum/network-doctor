@@ -11,7 +11,7 @@ import (
 // The daily challenge.
 //
 // One property matters more than every other one here: two people who ask for
-// the same day must get the same puzzle. That rules out anything local — no
+// the same day must get the same puzzle. That rules out anything local: no
 // timezone, no locale, no clock beyond the calendar date, no filesystem, no
 // process randomness, and no server to ask. What is left is a pure function from
 // a UTC date to a challenge id, which is exactly what this file is.
@@ -43,7 +43,7 @@ type dailyEpoch struct {
 // dailyEpochs freezes what a date means, the same way challengeGenerators
 // freezes what an id means. A daily is derived from the date and an id version,
 // so a build that started minting a newer version would otherwise silently
-// redefine every historical daily — somebody's posted result for last month
+// redefine every historical daily, and somebody's posted result for last month
 // would stop naming the challenge they played.
 //
 // Adding a version therefore appends a row here with the first UTC date it

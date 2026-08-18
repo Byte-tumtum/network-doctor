@@ -18,7 +18,7 @@ import (
 )
 
 // captureStderr swaps os.Stderr for a pipe and returns a func that restores
-// it and yields everything written — how the tests see OSC 52 output.
+// it and yields everything written, which is how the tests see OSC 52 output.
 func captureStderr(t *testing.T) func() string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -46,7 +46,7 @@ func TestCopyReportWritesOSC52(t *testing.T) {
 	if got, want := done(), "\x1b]52;c;aGVsbG8=\a"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
-	if !ok || notice != "report sent to clipboard (OSC 52) — w saves a file" {
+	if !ok || notice != "report sent to clipboard (OSC 52); w saves a file" {
 		t.Fatalf("exportReport() = %q, %v", notice, ok)
 	}
 }

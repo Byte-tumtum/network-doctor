@@ -10,8 +10,8 @@ import (
 
 // The name the player is asked about.
 //
-// A challenge base names its target in its own YAML — example.test,
-// secure-target.test, subnet-target.test — which made the hostname a fingerprint
+// A challenge base names its target in its own YAML (example.test,
+// secure-target.test, subnet-target.test) which made the hostname a fingerprint
 // of the base rather than a property of the challenge. Seeing secure-target.test
 // told a returning player they were on tls-valid, which is most of the way to
 // the answer for two of the conditions, and the base is precisely what the
@@ -20,9 +20,9 @@ import (
 // So the target gets a name of its own, derived from the id and nothing else:
 // deterministic, unique to the challenge, identical on replay, and carrying no
 // information about the base, the case or the fault. It is a real part of the
-// simulated network — the rename goes through the DNS zone the node's resolver
+// simulated network: the rename goes through the DNS zone the node's resolver
 // serves, through the certificates that have to cover it, and through the target
-// the graded netdoc run is handed — so nothing about it can disagree with the
+// the graded netdoc run is handed, so nothing about it can disagree with the
 // evidence.
 
 // challengeHostSuffix is the reserved TLD RFC 6761 set aside for exactly this:
@@ -77,7 +77,7 @@ var challengeFixtureHosts = []string{proxyCONNECTTarget, diagnostic.EncryptedDNS
 
 // nameChallengeTarget renames the primary test's host to this challenge's own
 // name, everywhere the simulated network spells it. It reports the new host, or
-// "" when the primary test has no hostname to rename — a test pointed at an IP
+// "" when the primary test has no hostname to rename, such as a test pointed at an IP
 // literal, or one with no target at all, which is the client's own connectivity
 // and names nothing.
 //
@@ -103,7 +103,7 @@ func nameChallengeTarget(s *Scenario, id string) string {
 }
 
 // challengeTargetHost is the bare name out of a briefed target, for the tools
-// that want a host rather than a URL — dig, ping, host. It falls back to the
+// that want a host rather than a URL: dig, ping, host. It falls back to the
 // whole target rather than to nothing, because a target this cannot parse is
 // still the string the player was shown.
 func challengeTargetHost(target string) string {

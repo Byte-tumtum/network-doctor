@@ -58,26 +58,26 @@ type actionHelp struct {
 // actionDefs is the shared dispatch context, help text, and cheatsheet order.
 var actionDefs = []actionDef{
 	{actUp, "up", map[keyContext]actionHelp{
-		ctxList:   {"select", "previous check — or device on the network map"},
+		ctxList:   {"select", "previous check, or device on the network map"},
 		ctxViewer: {"scroll", "scroll up"},
 	}},
 	{actDown, "down", map[keyContext]actionHelp{
-		ctxList:   {"select", "next check — or device on the network map"},
+		ctxList:   {"select", "next check, or device on the network map"},
 		ctxViewer: {"scroll", "scroll down"},
 	}},
 	{actTop, "top", map[keyContext]actionHelp{
-		ctxList:   {"first/last", "first check — or device on the network map"},
+		ctxList:   {"first/last", "first check, or device on the network map"},
 		ctxViewer: {"top/bottom", "jump to top"},
 	}},
 	{actBottom, "bottom", map[keyContext]actionHelp{
-		ctxList:   {"first/last", "last check — or device on the network map"},
+		ctxList:   {"first/last", "last check, or device on the network map"},
 		ctxViewer: {"top/bottom", "jump to bottom (re-enables follow)"},
 	}},
 	{actPageUp, "page-up", map[keyContext]actionHelp{ctxViewer: {"page", "page up"}}},
 	{actPageDown, "page-down", map[keyContext]actionHelp{ctxViewer: {"page", "page down"}}},
 	{actHalfPageUp, "half-page-up", map[keyContext]actionHelp{ctxViewer: {"half page", "half page up"}}},
 	{actHalfPageDown, "half-page-down", map[keyContext]actionHelp{ctxViewer: {"half page", "half page down"}}},
-	{actOpen, "open", map[keyContext]actionHelp{ctxList: {"open", "full output — or set target on the network map"}}},
+	{actOpen, "open", map[keyContext]actionHelp{ctxList: {"open", "full output, or set target on the network map"}}},
 	{actFilter, "filter", map[keyContext]actionHelp{ctxViewer: {"filter", "filter lines"}}},
 	{actCopy, "copy", map[keyContext]actionHelp{
 		ctxList:   {"copy", "copy selected portal URL, otherwise report"},
@@ -94,7 +94,7 @@ var actionDefs = []actionDef{
 	{actCancelJob, "cancel-job", map[keyContext]actionHelp{ctxList: {"cancel job", "cancel the focused job"}}},
 	{actNetworkMap, "network-map", map[keyContext]actionHelp{ctxList: {"network map", "toggle network map"}}},
 	{actRestart, "restart", map[keyContext]actionHelp{ctxList: {"restart", "restart with a new target"}}},
-	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "ssh to a host — hands the terminal to ssh"}}},
+	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "ssh to a host; hands the terminal to ssh"}}},
 	{actClearFilter, "clear-filter", map[keyContext]actionHelp{ctxViewer: {"clear filter", "clear the filter, or back when none is set"}}},
 	{actBack, "back", map[keyContext]actionHelp{ctxViewer: {"back", "back"}}},
 	{actHelp, "help", map[keyContext]actionHelp{ctxList: {"help", "full-screen key cheatsheet"}}},

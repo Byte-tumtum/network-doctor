@@ -25,7 +25,7 @@ answers are graded against the same independently observed truth.
 One command runs the whole session: it builds the network, opens a shell in the
 client node, takes a structured answer, runs the real netdoc in the same live
 network, and prints the reveal. It is one foreground process because a
-simulated network only exists while the process holding its namespaces does —
+simulated network only exists while the process holding its namespaces does, and
 `start`/`shell`/`diagnose` subcommands would need a daemon and a state file
 pointing at it, and would make it possible for the player and netdoc to be
 handed different networks.
@@ -33,7 +33,7 @@ handed different networks.
 ### Playing one
 
 The briefing names the machine you are standing on and the host you were asked
-about — the challenge's own, e.g. `invoices-8f42c1.test`, derived from the id
+about, which is the challenge's own, e.g. `invoices-8f42c1.test`, derived from the id
 and nothing else, so replaying an id presents the same host and the name says
 nothing about which fault was set. It is a real part of the simulated network:
 the node's resolver answers it, whatever serves it presents a certificate for
@@ -41,7 +41,7 @@ it, and it is the target the graded netdoc run is handed. `.test` is reserved
 by [RFC 6761](https://www.rfc-editor.org/rfc/rfc6761), so nothing about it can
 reach public DNS or the internet. In the shell it is also in the environment,
 as `$NETDOC_CHALLENGE_TARGET` and `$NETDOC_CHALLENGE_HOST`. The target carries
-no `challenge` label — it is passed to netdoc as an ordinary argument, and the
+no `challenge` label: it is passed to netdoc as an ordinary argument, and the
 simulator hands that process no token saying a challenge is happening.
 
 Type `exit` in the shell to reach the menu: `b` reprints the briefing, `s`
@@ -49,7 +49,7 @@ returns to the shell, `q` gives up.
 
 Answers are picked by number or typed by name from the menu, so nothing has to
 be memorized: `netdoc-sim challenge -answer "TCP port blocked"`,
-`-answer tcp_port_blocked`, and `-answer blocked` are one answer — matching
+`-answer tcp_port_blocked`, and `-answer blocked` are one answer, since matching
 folds case, spaces, hyphens, and underscores together, with no fuzzy matching.
 A machine-readable result keeps the stable identifier and the display name side
 by side, so a script keys on `answer` and a human reads `label`.
@@ -65,7 +65,7 @@ being printed to your answer being accepted. Building the namespaces, injecting
 the fault, netdoc's own run, and teardown are outside that window; rereading
 the briefing and retyping a mistaken answer are inside it. It lives in `timing`
 under `-json`, plays no part in the matchup, and a submission handed in with
-`-answer` records zero — the honest answer for a session no human played.
+`-answer` records zero, the honest answer for a session no human played.
 
 ### The daily challenge
 
@@ -79,8 +79,8 @@ the same one:
 
 The date is the **UTC** calendar date, not the local one, so two people whose
 clocks disagree about what day it is still get the same challenge. The mapping
-is a pure function of that date — no server, no account, no network, no
-filesystem — so it is derivable offline on any machine. It resolves to an
+is a pure function of that date, with no server, no account, no network and no
+filesystem, so it is derivable offline on any machine. It resolves to an
 ordinary challenge id, which is the artifact: it replays forever with no
 `-daily` and no dependence on today still being that day. A result played as
 the daily carries `daily` in its JSON and a `Daily <date>` line in the share
@@ -92,7 +92,7 @@ alongside the id versions themselves, so a future generator version cannot
 redefine a day somebody has already played and posted.
 
 `-daily` refuses to be combined with anything that would pick a different
-challenge — an explicit id, `-difficulty`, `-starter` — by name rather than by
+challenge (an explicit id, `-difficulty`, `-starter`) by name rather than by
 inventing a precedence.
 
 Because a daily is the result people post, playing one also puts its
@@ -111,14 +111,14 @@ printed. The block is printed either way, so copying it by hand always works.
 ./netdoc-sim challenge -starter routing      # draw one from it
 ```
 
-A pack is a curated list of ordinary challenge ids and nothing else — every
+A pack is a curated list of ordinary challenge ids and nothing else: every
 entry resolves through the same `BuildChallenge`, plays on the same namespaces,
 is graded by the same oracle, and is replayable by its own id. `starters <pack>`
 prints a pack's ids in order; `-starter` draws one at random, since the command
 keeps no record of what you have played.
 
 Every pack holds at least two possible answers, and one entry per pack is a
-network with nothing wrong with it — a single-answer pack would be an answer
+network with nothing wrong with it, because a single-answer pack would be an answer
 key rather than a hint. That is why there is no DNS pack: the answer vocabulary
 has exactly one DNS entry, so "DNS" would be the whole answer. DNS is practised
 inside `fundamentals` instead, as one of four possibilities.
@@ -137,14 +137,14 @@ which was the only form the first release printed.
 
 The version is part of the id because what an id means depends on this file's
 selection rules, the hunt generator behind them, and the base scenario YAML
-they draw from — a change to any of the three adds an entry to
+they draw from, so a change to any of the three adds an entry to
 `challengeGenerators` instead of repointing ids already shared.
 `TestChallengeIDsResolveToTheSameCaseForever` pins ids of both versions and
 fails if the chain moves under them.
 
 `V2` admitted `netem.loss`, a condition V1 had excluded. `V3` added six more
-conditions to the hunt registry — a refused port, a filtered one, a certificate
-name mismatch, and the three single-default route faults — plus the
+conditions to the hunt registry (a refused port, a filtered one, a certificate
+name mismatch, and the three single-default route faults) plus the
 `two-router-healthy` control two of them need. `V4` changes *how* those
 versions choose, not what they may choose (below). Each earlier version keeps
 its own frozen condition list and generator version, so an id shared before a
@@ -161,11 +161,11 @@ quietly lets three implementation details decide what the game is about: how
 many mutation variants a family has (`dns.servfail` and `dns.drop` are one
 diagnosis to a player but two draws), how many base scenarios its operator
 applies to, and which case the scan reaches first. Measured across 4000 V3 ids,
-that put DNS at 23.4% and a missing subnet route at 1.6% — a sixteenfold spread
+that put DNS at 23.4% and a missing subnet route at 1.6%, a sixteenfold spread
 nobody chose, in a game whose value is practising the rare ones.
 
 V4 picks the answer first, uniformly over the playable vocabulary, and only
-then searches for a base and case number that express it — rejection changes
+then searches for a base and case number that express it, so rejection changes
 how long an id takes to resolve, never which diagnosis it resolves to. The same
 4000-id measurement puts every family between 5.9% and 7.1%, with healthy at
 one draw in six as before. `TestV4DistributionIsUniformOverAnswers` guards it
@@ -194,15 +194,15 @@ the judge compares the diagnosis with the truth
 A hunt mutation becomes challengeable when it passes four tests, listed in
 full next to `challengeConditions` in `internal/simulation/challenge.go`:
 
-1. **independently observable** — the executed run left evidence, read off the
+1. **independently observable**: the executed run left evidence, read off the
    wire or off the kernel, that the fault met live traffic. `mutationObserved`
    is that check; a condition may narrow it further with its own `requires`, and
    may never widen it.
-2. **deterministic and replayable** — the same id sets the same puzzle, and the
+2. **deterministic and replayable**: the same id sets the same puzzle, and the
    condition holds for the whole run or not at all.
-3. **the same network for both contestants** — a person in the shell and the
+3. **the same network for both contestants**: a person in the shell and the
    netdoc process must be able to see the same thing.
-4. **inside the diagnostic scope** — the condition is a fault of the network
+4. **inside the diagnostic scope**: the condition is a fault of the network
    itself rather than of an application the network delivered correctly.
 
 "Network Doctor already recognizes it" is deliberately not on that list, and
@@ -213,12 +213,12 @@ example: the simulator can prove the shaper discarded packets, while netdoc's
 cause vocabulary carries no impairment verdict at all.
 
 Excluded mutations, and which of the four tests each one fails: every timed
-family and `netem.latency`/`netem.jitter` (1 or 2 — a scheduled fault would be
+family and `netem.latency`/`netem.jitter` (1 or 2: a scheduled fault would be
 over while the person investigated, and delay leaves no counter of its own);
-`http.status_503` and `encrypted_dns.doh_invalid` (4 — the network carried the
+`http.status_503` and `encrypted_dns.doh_invalid` (4: the network carried the
 request and carried the answer back, and the `http-error` control pins down that
 netdoc reports that as working on purpose); `proxy.connect_refused` and
-`quic.udp_443_block` (3 — only the netdoc process is handed the proxy, and a
+`quic.udp_443_block` (3: only the netdoc process is handed the proxy, and a
 filtered UDP port is indistinguishable from a silent one in the shell).
 
 ### What is shared with the hunt, and what is not
@@ -227,7 +227,7 @@ Challenge Mode adds no fault model. A challenge id resolves, deterministically
 and with no state on disk, to a hunt base scenario and a hunt case number, and
 the case is materialized by `GenerateHuntCase` with a maximum of one mutation.
 Truth comes from `collectObservedTruth`, so a mutation counts only when the
-executed run left independent evidence for it — the same `observed_faults` rule
+executed run left independent evidence for it, the same `observed_faults` rule
 the hunt uses. Recognition of a condition the hunt oracle already grades reuses
 that oracle's `recognized` half rather than restating it, and the shared wire
 predicates in `hunt_oracle.go` are the one place either side reads evidence.
@@ -240,10 +240,10 @@ simulator can prove, `challengeRecognition` is what netdoc's report has to say.
 The evidence predicates each condition is proved by live next to the first, in
 `challenge_truth.go`; the healthy oracle and the playable answer set are both
 derived from them rather than listed separately.
-A version's whole meaning — controls, hunt generator, admitted conditions —
-lives in one `challengeSelection`, so nothing a version resolves through can
+A version's whole meaning, from controls to hunt generator to admitted
+conditions, lives in one `challengeSelection`, so nothing a version resolves through can
 drift out from under an id that was already shared.
-Protocol meaning stays where it belongs — TCP reset is recognized by netdoc's
+Protocol meaning stays where it belongs: TCP reset is recognized by netdoc's
 own `connection_reset` cause and nothing looser, because a generic "the run
 failed somehow" comparison would score netdoc correct for naming a different
 fault with a different fix.
@@ -252,7 +252,7 @@ fault with a different fix.
 
 Nothing Network Doctor produces. Truth is established from the scenario state,
 the applied mutation, and observations the simulator collected for itself from
-inside the node namespaces — service records, kernel counters, routing tables
+inside the node namespaces: service records, kernel counters, routing tables
 read back with `ip route show`, and the simulator's own TCP dials. The whole
 truth path is `challengeTruth`, which reads `report.Evidence` and the mutation
 manifest and never touches `report.Tests`, so a diagnosis cannot reach it even
@@ -290,7 +290,7 @@ condition added without one fails in `TestEveryChallengeConditionCarriesASignatu
 rather than quietly widening what counts as a healthy network.
 
 A signature may be shared by several conditions, and several are. It names a
-class of trace rather than fingerprinting one mutation — telling neighbouring
+class of trace rather than fingerprinting one mutation, since telling neighbouring
 families apart is the scoped predicate's job, and asking the unscoped one to do
 it too would be asking it to name a fault from evidence that does not identify
 one. `TestEvidenceSignaturesDiscriminate` is the table that holds each signature
@@ -307,7 +307,7 @@ Both kinds are the same challenge. They differ only in how the case is chosen.
 
 A **generated** challenge is a draw: an id seeds a search over base scenarios
 and case numbers. To get one that sets a particular fault you scan ids until one
-falls out — which is how the starter packs were built, and is a poor way to
+falls out, which is how the starter packs were built, and is a poor way to
 write a lesson, because the case you end up teaching is whichever one the search
 reached first.
 
@@ -319,8 +319,8 @@ a port or an address that could drift out of step with the topology; truth is
 established by the same scoped predicate; and scoring is the same
 `ScoreChallenge`. There is no second correctness path.
 
-Authored cases are deterministic — the fault's parameters come from a seed
-derived from the slug — and validated by
+Authored cases are deterministic, since the fault's parameters come from a seed
+derived from the slug, and they are validated by
 `TestAuthoredChallengesAreValid`, which builds each one, proves the mutation
 applies to the declared base, proves the declared diagnosis is the one the
 condition table says that mutation establishes, and proves the fault lands on
@@ -342,7 +342,7 @@ There is one workflow, and no hidden allowlists to remember.
 1. **Confirm simulator truth.** The fault needs a hunt mutation operator in
    `huntMutationRegistry` that a control scenario can express, and the run has to
    leave independent evidence it met live traffic. If `mutationObserved` has no
-   case for it, add one — that is the scoped predicate.
+   case for it, add one: that is the scoped predicate.
 2. **Add the condition.** One row in `challengeConditions`: the mutation id, the
    answer, a difficulty, the reveal explanation, and the evidence `signature`.
    Add `requires` if the shared per-mutation check would settle for less than
@@ -399,12 +399,12 @@ A challenge is scoreable only when the run completed and cleaned up, netdoc
 produced a diagnosis for the primary test, and the answer is established
 independently. For an injected fault that means the mutation is in
 `observed_faults` and the condition's own `requires` is satisfied where it
-demands more — `netem.loss` wants the qdisc's kernel drop counter, since a
+demands more. `netem.loss` wants the qdisc's kernel drop counter, since a
 shaper installed with the requested parameters still impaired nobody if it
 matched no traffic. For a challenge that injected nothing, `healthyObserved`
 walks `challengeConditions` and asks each condition whether its own evidence
-signature appears in this run — "healthy" means every fault the game can set
-was looked for with that fault's own predicate and not found — on top of a
+signature appears in this run, so "healthy" means every fault the game can set
+was looked for with that fault's own predicate and not found, on top of a
 floor of measurements that have to have been taken at all (a reachable family
 at the client node, every selected gateway answering, no downed link). An empty
 mutation list proves nothing on its own, and neither does netdoc's verdict; the
@@ -412,7 +412,7 @@ healthy oracle reads neither. Anything else is `no_result` for both
 contestants: a mutation that failed to take effect cannot beat Network Doctor,
 because there is no independent evidence to grade against.
 
-The fault also has to sit where the player was pointed — a base with more than
+The fault also has to sit where the player was pointed: a base with more than
 one client test can place a service fault on a target the briefing never
 names, which is not challenge-capable.
 
@@ -425,7 +425,7 @@ determined by the id and the network.
 ### Which Network Doctor a result was scored against
 
 The id makes the puzzle reproducible. The `netdoc` object makes the other half
-reproducible — which build answered it:
+reproducible, by recording which build answered it:
 
 ```json
 "netdoc": {
@@ -452,7 +452,7 @@ spoiler-free postable summary.
 
 The briefing prints the id, the difficulty, the node and the host. The base
 scenario, seed, case number and mutation are the answer, so they appear only in
-the reveal — a test asserts the briefing contains none of them, and `b`
+the reveal. A test asserts the briefing contains none of them, and `b`
 re-reading it goes through the same renderer, so there is no second, more
 generous version to drift.
 
@@ -461,7 +461,7 @@ name, which used to leak the answer for two conditions), and a test checks that
 no name fingerprints the base, case, or fault.
 
 The [share block](#the-share-block) carries two marks, the id, and the date if
-it was a daily — never the fault, and never a starter pack's name, since a pack
+it was a daily, never the fault, and never a starter pack's name, since a pack
 names a layer that would narrow the answer for the next player.
 
 `-v`, a JSON report, or reading the source obviously defeats all of this. It is
@@ -487,8 +487,8 @@ eventually do it in the wrong place. The block is plain UTF-8 with no ANSI, no
 column alignment a proportional font would break, and no table, because it is
 pasted into a chat client rather than printed to a terminal.
 
-What it carries is the identity — the id, the difficulty, the date if it was a
-daily, and the command that replays it — plus the two verdicts. Both losses
+What it carries is the identity (the id, the difficulty, the date if it was a
+daily, and the command that replays it) plus the two verdicts. Both losses
 render the same mark: "not recognized" would tell a reader that the fault is one
 netdoc has no words for, which narrows the answer for whoever plays the id next.
 A submission with no session behind it (`-answer`) posts no time rather than
@@ -501,8 +501,8 @@ string this prints, not a variant of it.
 
 ### Requirements and cleanup
 
-Challenge Mode needs exactly what any other run needs — the Linux namespace
-backend, no root — plus a terminal, since a person is being asked a question.
+Challenge Mode needs exactly what any other run needs, the Linux namespace
+backend and no root, plus a terminal, since a person is being asked a question.
 On macOS or Windows the Linux part comes from a container runtime; see
 [Running it in a container](simulation.md#running-it-in-a-container). The shell
 enters the node through the same `nsenter` argument slice the netdoc run uses,
@@ -513,5 +513,5 @@ does for netdoc.
 Nothing survives the command: namespaces go when the director exits, the
 workspace is removed on every exit path including an abandoned session, and no
 state record is written. Editing the network from inside the challenge shell is
-its own punishment — truth is collected after netdoc runs, so a repaired fault
+its own punishment: truth is collected after netdoc runs, so a repaired fault
 stops being observed and the challenge scores `no_result`.

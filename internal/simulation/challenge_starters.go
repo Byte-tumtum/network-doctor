@@ -10,7 +10,7 @@ import (
 // Starter packs: a way in that is not "here is a random hard one".
 //
 // A pack is a curated list of ordinary challenge ids and nothing else. It adds
-// no second simulator, no second generator and no second scoring path — every
+// no second simulator, no second generator and no second scoring path: every
 // entry resolves through BuildChallenge exactly as a shared id does, plays on the
 // same namespaces, is graded by the same oracle, and is replayable by its own id
 // forever. What a pack contributes is the choice of which ids, and the sentence
@@ -41,7 +41,7 @@ type starterPack struct {
 
 // StarterPack is a pack as it is published: a stable machine id, a name and a
 // sentence for a person, and the challenge ids in the order they are meant to be
-// worked through. The ids are the whole content — anybody can play one directly
+// worked through. The ids are the whole content, and anybody can play one directly
 // without going through a pack at all.
 type StarterPack struct {
 	ID          string   `json:"id"`
@@ -55,7 +55,7 @@ type StarterPack struct {
 //
 // Every pack holds at least two different answers, and that is a rule rather
 // than a coincidence. A pack names the layer it is about, which is a hint the
-// player asked for — but a pack with only one possible answer would not be a
+// player asked for, but a pack with only one possible answer would not be a
 // hint, it would be the answer key. That is why there is no DNS pack: the answer
 // vocabulary has exactly one DNS entry, deliberately (see challengeRecognition),
 // so a pack called "DNS" would be a challenge already solved. DNS is practised
@@ -89,7 +89,7 @@ var starterPacks = []starterPack{
 	{
 		id:          "tls",
 		name:        "Certificates",
-		description: "What the handshake objected to — including once when it did not object at all.",
+		description: "What the handshake objected to, including once when it did not object at all.",
 		entries: []starterEntry{
 			{"V3-01EEF0", ""},
 			{"V3-058EF2", "service.tls_expired"},

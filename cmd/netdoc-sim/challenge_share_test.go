@@ -86,7 +86,7 @@ func TestDailyCopiesTheShareBlockItPrinted(t *testing.T) {
 	}
 	// The reveal, and the block inside it, were already on screen: nothing is
 	// copied before the result it summarises exists.
-	if !strings.Contains(copied.printed, "RESULT — CHALLENGE V4-8F42C1") ||
+	if !strings.Contains(copied.printed, "RESULT: CHALLENGE V4-8F42C1") ||
 		!strings.Contains(copied.printed, "🏆 I beat Network Doctor") {
 		t.Errorf("the copy happened before the result was printed:\n%s", copied.printed)
 	}
@@ -166,8 +166,8 @@ func TestUnscoreableDailyCopiesNothing(t *testing.T) {
 
 // A terminal with no OSC 52, a container, a pipe: the clipboard is the one part
 // of a challenge that is allowed to be unavailable. It may not turn a played
-// challenge into an error, change its exit status, or print anything alarming —
-// the block is on screen either way, which is all manual copying needs.
+// challenge into an error, change its exit status, or print anything alarming.
+// The block is on screen either way, which is all manual copying needs.
 func TestClipboardFailureChangesNothingAboutTheChallenge(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

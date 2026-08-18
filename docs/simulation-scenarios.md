@@ -51,8 +51,8 @@ lower-metric preferred router, while a controlled literal target independently
 proves the higher-metric alternate path.
 [`two-router-healthy.yaml`](../internal/simulation/scenarios/two-router-healthy.yaml)
 is the control for the single-default route faults. Its client LAN carries two
-routers with different jobs — one holds the default out to the internet, the
-other a specific route to the target's subnet — which is what makes "the
+routers with different jobs: one holds the default out to the internet, the
+other a specific route to the target's subnet. That is what makes "the
 default points at the wrong on-link router" and "the specific route is missing"
 expressible at all, and distinguishable from each other. Its second client test
 is a controlled literal behind the internet router, reached over its own
@@ -107,8 +107,8 @@ Some semantics are easy to get wrong even after reading a scenario:
   at the isolated fixed-endpoint trust directory the QUIC and encrypted-DNS
   fixtures share, without modifying a host trust store.
 - The `encrypted_dns` fixture answers netdoc's encrypted-DNS row over both
-  transports from one static zone — RFC 8484 DoH on its port and RFC 7858 DoT
-  on 853 — and accepts the plain TCP connect the direct-egress row makes, which
+  transports from one static zone (RFC 8484 DoH on its port and RFC 7858 DoT
+  on 853) and accepts the plain TCP connect the direct-egress row makes, which
   is why the simulated internet serves it on 443 instead of a `tcp` sink. A node
   that claims `1.1.1.1` without it makes every scenario report a blocked
   encrypted resolver; a library test enforces that pairing.
@@ -142,7 +142,7 @@ exercised in one file.
 Naming `ipv4` or `ipv6` on an expected check asserts that netdoc published that
 family's verdict, so a run that omitted the family fails the expectation rather
 than passing it by default. Leave the field out for families the scenario makes
-no claim about — netdoc omits a family it never dialed, and the report keeps it
+no claim about: netdoc omits a family it never dialed, and the report keeps it
 omitted rather than reporting an empty verdict.
 
 Unknown YAML keys, probe ids, statuses, causes, node references, addresses, and
@@ -173,7 +173,7 @@ generated kernel device names.
    comparison, or evidence logic. Add a focused `netns_integration` test when
    the behavior must be proved through real namespaces.
 5. If diagnostic endpoints changed, update every affected alias/zone and run
-   the `healthy` canary — see [Probe endpoint drift](simulation.md#probe-endpoint-drift).
+   the `healthy` canary; see [Probe endpoint drift](simulation.md#probe-endpoint-drift).
 
 Keep ordinary tests deterministic, rootless, and offline. Real-socket tests
 retain the `integration` tag and loopback-only scope; real namespace tests

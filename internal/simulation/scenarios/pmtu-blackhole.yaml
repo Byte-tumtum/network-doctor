@@ -84,7 +84,7 @@ tests:
         - {id: http, status: PASS}
         - {id: quic_udp_443, status: FAIL}
         - {id: dns_encrypted, status: FAIL}
-        # The bulk write is black-holed here too — the probe measures the path,
+        # The bulk write is black-holed here too, since the probe measures the path,
         # not the target's port. What differs is the verdict: with HTTP
         # answering, no second probe corroborates the stall, so the run stays
         # degraded instead of naming the path.
@@ -106,7 +106,7 @@ expect:
     - {id: https, status: SKIP}
     # The bulk write is black-holed exactly like the TLS flight: all 24 KiB is
     # accepted by the local kernel and none of it is ever acknowledged. Reading
-    # the socket's send queue is what separates the two — a completed Write says
+    # the socket's send queue is what separates the two: a completed Write says
     # only that Linux took the bytes. Together with the TLS timeout above, this
     # row is what turns the verdict from service to network.
     - {id: path_mtu, status: WARN}

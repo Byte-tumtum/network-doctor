@@ -45,7 +45,7 @@ func TestDoHInvalidResponseModeReturnsGarbage(t *testing.T) {
 }
 
 // A reply is only evidence once it has been sent, so the record has to come
-// from serving one — the configured mode alone must leave the log empty.
+// from serving one; the configured mode alone must leave the log empty.
 func TestDoHRecordsTheResponseItActuallySent(t *testing.T) {
 	for _, tc := range []struct{ mode, want string }{
 		{DoHResponseInvalid, DoHResponseInvalid},

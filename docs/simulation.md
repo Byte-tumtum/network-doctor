@@ -6,8 +6,8 @@ diagnosis matched the injected fault.
 
 It is permanent development and regression-testing infrastructure. It ships as
 its own executable in the Linux packages, so [Challenge
-Mode](#challenge-mode) — the one part meant to be played with rather than
-scripted — is there without a Go toolchain. That is a second binary, not a
+Mode](#challenge-mode), the one part meant to be played with rather than
+scripted, is there without a Go toolchain. That is a second binary, not a
 second product: `internal/simulation` is imported by `cmd/netdoc-sim` alone,
 none of it links into `netdoc`, and the maintenance scope below is unchanged by
 being installable.
@@ -16,11 +16,11 @@ This file covers setup, requirements, and how a run is built. The rest of the
 authoritative reference is split by topic, all version-controlled beside the
 code it documents:
 
-- **[Scenario authoring](simulation-scenarios.md)** — the YAML schema, service
+- **[Scenario authoring](simulation-scenarios.md)**: the YAML schema, service
   and fault semantics, adding or changing a scenario.
-- **[Hunts and triage](simulation-hunts.md)** — deterministic campaigns,
+- **[Hunts and triage](simulation-hunts.md)**: deterministic campaigns,
   generated bug hunts, and nightly triage automation.
-- **[Challenge Mode](simulation-challenge.md)** — commands, the daily
+- **[Challenge Mode](simulation-challenge.md)**: commands, the daily
   challenge, starter packs, the challenge contract, and scoring.
 
 For narrative walkthroughs and orientation instead of the reference, see the
@@ -33,7 +33,7 @@ guides.
 ## Getting it
 
 Every Linux package ships `netdoc-sim` beside `netdoc`, from the same release
-and at the same version — see [Install](../README.md#linux). Nothing else to
+and at the same version; see [Install](../README.md#linux). Nothing else to
 fetch:
 
 ```sh
@@ -47,11 +47,11 @@ netdoc-sim run broken-dns
 Linux only. The binary is not in the macOS or Windows downloads, because the
 backend is Linux namespaces and there is no other one; see
 [Limitations](#limitations). On macOS and Windows, run the published image
-through a Linux container runtime instead — see [Running it in a
+through a Linux container runtime instead; see [Running it in a
 container](#running-it-in-a-container).
 
 Contributors building from a clone still want the pair, so a run grades the
-netdoc that was just changed rather than the installed one — that is what step 2
+netdoc that was just changed rather than the installed one, which is what step 2
 of [Which netdoc gets run](#which-netdoc-gets-run) picks up:
 
 ```sh
@@ -94,15 +94,15 @@ forwards the resolved absolute path into the namespaces. The order is:
 1. `-netdoc` when given. A path (`./netdoc`, `/opt/builds/netdoc`) names that
    file; a bare name (`netdoc`) is looked up on `$PATH`, exactly as a shell
    would, resolved against the working directory. An explicit binary that does
-   not exist or cannot be executed is an error — nothing falls back to a
+   not exist or cannot be executed is an error, and nothing falls back to a
    different netdoc.
-2. A `netdoc` sitting next to the `netdoc-sim` binary — what makes
+2. A `netdoc` sitting next to the `netdoc-sim` binary, which is what makes
    `./netdoc-sim run healthy` use the `./netdoc` built beside it. A file with
    the right name this OS will not execute is skipped rather than preferred.
 3. A `netdoc` on `$PATH`.
 
 Two traps: `go run ./cmd/netdoc-sim` puts the binary in a build cache, so step
-2 finds nothing there — build `netdoc-sim` or pass `-netdoc`. And build netdoc
+2 finds nothing there, so build `netdoc-sim` or pass `-netdoc`. And build netdoc
 with `CGO_ENABLED=0`, or a cgo build may resolve through the host's system
 resolver rather than the node's private `/etc/resolv.conf`, testing the host
 instead of the simulation.
@@ -147,7 +147,7 @@ this is it running on the Linux kernel your container runtime already provides.
 
 The portability boundary is therefore the runtime, not the simulator. Docker
 Desktop, Podman Desktop, Rancher Desktop or `podman machine` on macOS and
-Windows, Docker or Podman on Linux — anything that runs a Linux container will
+Windows, Docker or Podman on Linux. Anything that runs a Linux container will
 do, and nothing else is needed. No clone, no Go toolchain, no knowledge of
 namespaces.
 
@@ -186,19 +186,19 @@ docker run --rm $IMAGE scenarios
 
 `-it` is for the parts where a person is asked something: the challenge shell,
 and the answer menu. Drop it for automation and pass `-answer` or `-give-up`,
-which is what `-json` requires anyway — a piped stdin is consumed by the shell,
+which is what `-json` requires anyway, since a piped stdin is consumed by the shell,
 so a challenge run without a terminal and without a submission scores a give-up.
 Exit codes and stdout are the ones documented for each command; `-json` on
 stdout stays parseable because the session prints to stderr.
 
-Tags are immutable per release — `ghcr.io/heymaikol/netdoc-sim:v1.11.3` — with
+Tags are immutable per release, as in `ghcr.io/heymaikol/netdoc-sim:v1.11.3`, with
 `latest` following the newest release the way the Homebrew formula and the Scoop
 bucket do. Pin the version tag in anything automated.
 
 The image is published for `linux/amd64` and `linux/arm64`, and those two claims
 are not equally strong. Both are built from the same source by the release
 workflow, but CI runs the container tests on `amd64` only, because that is the
-architecture its runners execute. `arm64` is built and not runtime-verified —
+architecture its runners execute. `arm64` is built and not runtime-verified,
 which includes Apple Silicon, where Docker Desktop runs the `arm64` image
 natively. Nothing about the backend is architecture-specific, and reports of it
 failing there are worth filing.
@@ -213,7 +213,7 @@ capability away and running a full simulation.
 
 `--cap-add SYS_ADMIN` is there for Docker's *seccomp* profile, not for the
 simulation. That profile refuses `clone(CLONE_NEWUSER)`, `unshare`, `mount` and
-`setns` unless the container was configured with `CAP_SYS_ADMIN` — so the flag
+`setns` unless the container was configured with `CAP_SYS_ADMIN`, so the flag
 is what permits the syscalls, and the image runs as an unprivileged user
 (`netdoc`, uid 1000) so that the capability is not what the work is done with.
 Podman's default profile permits those syscalls already, which is why it needs
@@ -267,7 +267,7 @@ parties need: `ip`, `nsenter`, `tc` and `nft` for the backend, and `ping`,
 `dig`, `curl`, `ss`, `traceroute` and `nc` for the person in the challenge
 shell. `netdoc` and `netdoc-sim` sit together in `/usr/bin`, which is what makes
 [step 2 of Which netdoc gets run](#which-netdoc-gets-run) select the image's own
-netdoc — every challenge result records that absolute path and the version that
+netdoc, and every challenge result records that absolute path and the version that
 binary printed, so a result names the build that produced it:
 
 ```json
@@ -299,7 +299,7 @@ NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
 The tests run the built image: both binaries at the tag's version, a real
 namespace-backed scenario, a real challenge that stays deterministic across
 runs, exit-code propagation, cleanup after an interrupted run in a reused
-container, and both privilege claims above — including the negative one, which
+container, and both privilege claims above, including the negative one, which
 denies `clone(CLONE_NEWUSER)` through a seccomp profile and requires the
 controlled failure rather than a silent fallback. They skip without an image or
 an engine unless `NETDOC_REQUIRE_CONTAINER=1` is set, which is what CI sets.
@@ -333,13 +333,13 @@ family-specific routes and reachability remain separate evidence.
 Per-family internet reachability is observed the same way: after the probes,
 the node holder tries controlled endpoints from inside its own namespace until
 one answers. It reads no diagnosis, verdict, or scenario expectation, so this
-evidence can contradict netdoc — which is the point of having it. It is a
+evidence can contradict netdoc, which is the point of having it. It is a
 point-in-time observation of the state the run finished in, so under a timed
 fault it describes that instant, not the whole run.
 
 It lands in `family_reachability`, separately from the controlled-target
 records below, and carries one of three states per family: `reachable`, `unreachable`,
-or `unavailable`. A family the client carries no address for is `unavailable` —
+or `unavailable`. A family the client carries no address for is `unavailable`:
 nothing was dialed, so no target or path is named, and untested is not the same
 as unreachable. Both families always get a record, so a family with no record
 means the measurement never ran; readers treat that as unknown rather than as

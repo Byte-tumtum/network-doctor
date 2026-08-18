@@ -214,7 +214,7 @@ func (f *TriageFinding) IssueBody(revision, runContext string) string {
 		fmt.Fprintf(&b, "None recorded.\n")
 	}
 	for _, mutation := range f.Mutations {
-		fmt.Fprintf(&b, "- `%s` — %s%s\n", textsafe.Clean(mutation.ID),
+		fmt.Fprintf(&b, "- `%s`: %s%s\n", textsafe.Clean(mutation.ID),
 			textsafe.Clean(mutation.Description), mutationTarget(mutation))
 	}
 
@@ -226,7 +226,7 @@ func (f *TriageFinding) IssueBody(revision, runContext string) string {
 	if runContext != "" {
 		fmt.Fprintf(&b, "\n## Context\n\n%s\n", textsafe.Clean(runContext))
 	}
-	fmt.Fprintf(&b, "\n<!-- netdoc-sim triage fingerprint: %s — keep it in the title; duplicates are suppressed by it. -->\n",
+	fmt.Fprintf(&b, "\n<!-- netdoc-sim triage fingerprint: %s, keep it in the title; duplicates are suppressed by it. -->\n",
 		f.Fingerprint)
 	return b.String()
 }
@@ -313,7 +313,7 @@ func (r *TriageReport) WriteText(w io.Writer) {
 	fmt.Fprintf(w, "\nCandidate findings:    %d\nReproducible findings: %d\nExisting issues:       %d\nNew issues created:    %d\n",
 		len(r.Findings), reproducible, existing, created)
 	for _, finding := range r.Findings {
-		verdict := "not reproducible — not filed"
+		verdict := "not reproducible, not filed"
 		if finding.Reproducible {
 			verdict = finding.Issue.Status
 			if finding.Issue.URL != "" {

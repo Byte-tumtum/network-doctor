@@ -94,7 +94,7 @@ type RouteEvidence struct {
 // the run ended, read back with `ip route show` from inside that node's own
 // namespace. RouteEvidence answers "where does this destination go"; this
 // answers the different question of "what routes exist at all", which is the
-// only thing that can establish an absence — a route that was deleted, or one
+// only thing that can establish an absence: a route that was deleted, or one
 // that was never installed, leaves no trace in a per-destination lookup beyond
 // the lookup failing, and a failed lookup is not the same claim as a missing
 // route.
@@ -169,7 +169,7 @@ const (
 // it in is to dial. The single producer is the node holder, which never sees
 // netdoc's report; anything derived from a diagnosis, a scenario expectation or
 // a fault record belongs somewhere else. Absence of a record for a family is
-// not "unavailable" — it means no observation was taken at all.
+// not "unavailable"; it means no observation was taken at all.
 type FamilyReachabilityEvidence struct {
 	Node   string   `json:"node"`
 	Family string   `json:"family"`

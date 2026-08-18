@@ -48,7 +48,7 @@ func TestToolAvailabilityCachedUntilRestart(t *testing.T) {
 }
 
 // TestToolsForDefinitions pins the complete, ordered tool list returned by
-// toolsFor — Key, Name, Bin, argv, env, and display — for both the no-target and
+// toolsFor (Key, Name, Bin, argv, env, and display) for both the no-target and
 // with-host sets, plus per-call slice independence. These are user-visible (hotkeys,
 // labels, toolbox order, exact command shapes) and frozen, so any swap, rename, or
 // argv drift from the staticTool refactor must fail here.

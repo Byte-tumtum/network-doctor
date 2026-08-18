@@ -71,11 +71,11 @@ A release reaches the Scoop bucket right away; winget lands whenever Microsoft m
 brew install network-doctor
 ```
 
-The Homebrew Core formula, bottled for both platforms, so `brew upgrade` picks up releases like any other formula. It installs `netdoc` alone — for `netdoc-sim` too, take a [Linux package](#linux).
+The Homebrew Core formula, bottled for both platforms, so `brew upgrade` picks up releases like any other formula. It installs `netdoc` alone; for `netdoc-sim` too, take a [Linux package](#linux).
 
 ### Linux
 
-Fedora — [COPR repo](https://copr.fedorainfracloud.org/coprs/heymaikol/network-doctor/) builds from source, upgrades through `dnf` like any other repo:
+Fedora: the [COPR repo](https://copr.fedorainfracloud.org/coprs/heymaikol/network-doctor/) builds from source, upgrades through `dnf` like any other repo:
 
 ```sh
 sudo dnf copr enable heymaikol/network-doctor
@@ -84,7 +84,7 @@ sudo dnf install network-doctor
 
 Covers Fedora 43, 44, and rawhide on `x86_64` and `aarch64`. COPR signs with its own per-project key (a separate trust root from the GitHub attestation below), which `dnf copr enable` installs for you.
 
-Everything else — `.deb`, `.rpm`, and `.apk` packages are on the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), for `amd64` and `arm64`. Download one and install it locally:
+Everything else: `.deb`, `.rpm`, and `.apk` packages are on the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), for `amd64` and `arm64`. Download one and install it locally:
 
 ```sh
 sudo apt install ./network-doctor_X.Y.Z_linux_amd64.deb    # Debian, Ubuntu, Mint
@@ -92,9 +92,9 @@ sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # Fedora, RHEL, Rocky
 sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpine
 ```
 
-These don't auto-update the way COPR does — `dnf`/`apt` won't pull the next version for you.
+These don't auto-update the way COPR does, so `dnf`/`apt` won't pull the next version for you.
 
-Every Linux package — COPR, `.deb`, `.rpm`, `.apk` — installs two commands at the same version: `netdoc`, and `netdoc-sim`, the simulator behind [Challenge Mode](#think-you-can-beat-network-doctor). Confirm both:
+Every Linux package (COPR, `.deb`, `.rpm`, `.apk`) installs two commands at the same version: `netdoc`, and `netdoc-sim`, the simulator behind [Challenge Mode](#think-you-can-beat-network-doctor). Confirm both:
 
 ```sh
 netdoc --version
@@ -132,7 +132,7 @@ gh attestation verify "./netdoc_${VERSION}_linux_amd64" \
   --signer-workflow heymaikol/network-doctor/.github/workflows/release.yml
 ```
 
-This proves the bytes were built from the tagged commit by the release workflow. The source tarball, the `.deb`/`.rpm`/`.apk` packages, and the Windows `.zip` are attested too — pass whichever filename you downloaded. The vendored-dependency tarball (`*-vendor.tar.gz`, which lets COPR build offline) is attested as well; COPR packages themselves are rebuilt on Fedora's own builders and carry COPR's signature instead.
+This proves the bytes were built from the tagged commit by the release workflow. The source tarball, the `.deb`/`.rpm`/`.apk` packages, and the Windows `.zip` are attested too, so pass whichever filename you downloaded. The vendored-dependency tarball (`*-vendor.tar.gz`, which lets COPR build offline) is attested as well; COPR packages themselves are rebuilt on Fedora's own builders and carry COPR's signature instead.
 
 ## How it diagnoses
 
@@ -146,17 +146,17 @@ Probes form a **dependency graph with independent branches**, so an unrelated fa
 - **Public-DNS and encrypted-DNS paths** (independent of system DNS and of each other): a network can carry ordinary DNS while blocking DoH and DoT, or vice versa.
 - **Wi-Fi metadata path**: SSID discovery runs beside network checks, so slow OS lookup never delays them.
 - **Selected target path**: `Interface → DNS → TCP → TLS → HTTPS`, or the applicable protocol row for other ports.
-- **Path-MTU branch** (hangs off connect, not off any protocol): black hole breaks SSH and SMTP exactly as thoroughly as TLS — and it's found without root or raw sockets.
+- **Path-MTU branch** (hangs off connect, not off any protocol): black hole breaks SSH and SMTP exactly as thoroughly as TLS, and it's found without root or raw sockets.
 
 Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but degraded), **✗ Fail**, **⊘ Skip** (a prerequisite failed), or **– N/A** (doesn't apply). Warn never counts as a failure.
 
-The full probe table — exact pass conditions, JSON causes, and how the unprivileged Path MTU check works — is in **[docs/reference.md](docs/reference.md#how-it-diagnoses)**. See the wiki's [How Network Doctor Works](https://github.com/heymaikol/network-doctor/wiki/How-Network-Doctor-Works) for why the branches are independent, and [Understanding Your Diagnosis](https://github.com/heymaikol/network-doctor/wiki/Understanding-Your-Diagnosis) for turning a row into a next action.
+The full probe table, with exact pass conditions, JSON causes, and how the unprivileged Path MTU check works, is in **[docs/reference.md](docs/reference.md#how-it-diagnoses)**. See the wiki's [How Network Doctor Works](https://github.com/heymaikol/network-doctor/wiki/How-Network-Doctor-Works) for why the branches are independent, and [Understanding Your Diagnosis](https://github.com/heymaikol/network-doctor/wiki/Understanding-Your-Diagnosis) for turning a row into a next action.
 
 ## Think you can beat Network Doctor?
 
 Challenge Mode drops you into a deliberately broken network without telling you
 what's wrong. Investigate it, commit to a diagnosis, then let Network Doctor take
-a shot at the exact same problem — both graded against the simulator's
+a shot at the exact same problem, with both graded against the simulator's
 independently observed ground truth.
 
 There's a daily challenge, and everybody who plays that day gets the same
@@ -181,7 +181,7 @@ printed anyway):
 🔁 Your turn: netdoc-sim challenge -id V4-8F42C1
 ```
 
-On **macOS, Windows or Linux**, one container image is the whole install — the
+On **macOS, Windows or Linux**, one container image is the whole install: the
 real Linux namespace simulator inside a Linux container, not an imitation of it:
 
 ```sh
@@ -191,7 +191,7 @@ docker run --rm -it --cap-add SYS_ADMIN ghcr.io/heymaikol/netdoc-sim:latest chal
 `podman run --rm -it` works too, without needing the added capability. On Linux,
 any [package](#linux) installs `netdoc-sim` natively.
 
-Everything is local and reproducible: no account, no server, no leaderboard —
+Everything is local and reproducible: no account, no server, no leaderboard, and
 a challenge id is the whole puzzle, so the same id is the same broken network
 on anyone's machine. See the wiki's
 [Challenge Mode](https://github.com/heymaikol/network-doctor/wiki/Challenge-Mode)
@@ -229,7 +229,7 @@ netdoc --no-history host          # don't read or save the target history file
 | `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart with a new target |
-| `S` | SSH login — a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
+| `S` | SSH login: a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
 | `tab` | switch between running tool jobs |
 | `esc` | cancel the focused job only (`tab` picks which); `q` is the stop-everything path |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
@@ -246,7 +246,7 @@ Adds `gg`/`G` for first/last, `ctrl+b`/`ctrl+f` for page up/down, and `ctrl+u`/`
 
 ## Drill-down tools
 
-Each diagnosis row is *evidence*; when you want proof, run the real tools as cancellable streaming jobs — several run at once, `tab` switches between the live ones, and output is sanitized before it hits your terminal. Review your local copy before sharing — tool evidence may contain sensitive data.
+Each diagnosis row is *evidence*; when you want proof, run the real tools as cancellable streaming jobs: several run at once, `tab` switches between the live ones, and output is sanitized before it hits your terminal. Review your local copy before sharing, since tool evidence may contain sensitive data.
 
 | Key | Linux | macOS | Windows |
 |-----|-------|-------|---------|
@@ -263,7 +263,7 @@ Each diagnosis row is *evidence*; when you want proof, run the real tools as can
 
 ### SSH login
 
-`S` logs in to the current target — the machine the checks are about. `tab` moves between fields, `←`/`→` picks the key, `enter` connects, `esc` backs out; anything left blank (passphrase, host-key check, 2FA) is asked by `ssh` itself on the real terminal.
+`S` logs in to the current target, the machine the checks are about. `tab` moves between fields, `←`/`→` picks the key, `enter` connects, `esc` backs out; anything left blank (passphrase, host-key check, 2FA) is asked by `ssh` itself on the real terminal.
 
 ```
 ╭────────────────────────────────────────────────────╮
@@ -274,7 +274,7 @@ Each diagnosis row is *evidence*; when you want proof, run the real tools as can
 ╰────────────────────────────────────────────────────╯
 ```
 
-The typed password never reaches argv or shell history — it's handed to `ssh` through `SSH_ASKPASS`. Full field mapping and the askpass/`ProxyJump` prompt-routing details are in **[docs/reference.md](docs/reference.md#ssh-login)**.
+The typed password never reaches argv or shell history; it's handed to `ssh` through `SSH_ASKPASS`. Full field mapping and the askpass/`ProxyJump` prompt-routing details are in **[docs/reference.md](docs/reference.md#ssh-login)**.
 
 ### JSON output
 
@@ -287,7 +287,7 @@ The typed password never reaches argv or shell history — it's handed to `ssh` 
   "checks": [
     {"id": "dns", "name": "DNS github.com", "status": "PASS", "ms": 12, "detail": "github.com → 140.82.113.3", "addrs": ["140.82.113.3"]}
   ],
-  "summary": "All checks passed — github.com:443 looks healthy.",
+  "summary": "All checks passed. github.com:443 looks healthy.",
   "verdict": "ok",
   "ok": true
 }
@@ -304,7 +304,7 @@ The typed password never reaches argv or shell history — it's handed to `ssh` 
 | `service` | **The path works, the far end does not** |
 | `incomplete` | A check has no result (the chain did not finish) |
 
-Field names and the status vocabulary are stable — safe to script against. The full field reference (`cause` values, `address_families`, `failed_stage`, `--json --watch` NDJSON) is in **[docs/reference.md](docs/reference.md#json-output)**.
+Field names and the status vocabulary are stable, so they are safe to script against. The full field reference (`cause` values, `address_families`, `failed_stage`, `--json --watch` NDJSON) is in **[docs/reference.md](docs/reference.md#json-output)**.
 
 ### Exit codes
 
@@ -339,11 +339,11 @@ and `--watch`.
 Everything explanatory is published at
 **[heymaikol.github.io/network-doctor](https://heymaikol.github.io/network-doctor/)**:
 
-- [Getting Started](https://heymaikol.github.io/network-doctor/wiki/Getting-Started/) — install, first run, and what the screen is showing you.
-- [Understanding Your Diagnosis](https://heymaikol.github.io/network-doctor/wiki/Understanding-Your-Diagnosis/) — turning a verdict into a next action, including telling "my network" and "their service" apart.
-- [How Network Doctor Works](https://heymaikol.github.io/network-doctor/wiki/How-Network-Doctor-Works/) — why the probe branches are independent, and how path MTU is measured without root.
-- [Troubleshooting and FAQ](https://heymaikol.github.io/network-doctor/wiki/Troubleshooting-and-FAQ/) — the rows that behave surprisingly, and the questions that come up most.
-- [Reference](https://heymaikol.github.io/network-doctor/docs/reference/) and the [simulator guide](https://heymaikol.github.io/network-doctor/docs/simulation/) — the same `docs/` files that live beside the code.
+- [Getting Started](https://heymaikol.github.io/network-doctor/wiki/Getting-Started/): install, first run, and what the screen is showing you.
+- [Understanding Your Diagnosis](https://heymaikol.github.io/network-doctor/wiki/Understanding-Your-Diagnosis/): turning a verdict into a next action, including telling "my network" and "their service" apart.
+- [How Network Doctor Works](https://heymaikol.github.io/network-doctor/wiki/How-Network-Doctor-Works/): why the probe branches are independent, and how path MTU is measured without root.
+- [Troubleshooting and FAQ](https://heymaikol.github.io/network-doctor/wiki/Troubleshooting-and-FAQ/): the rows that behave surprisingly, and the questions that come up most.
+- [Reference](https://heymaikol.github.io/network-doctor/docs/reference/) and the [simulator guide](https://heymaikol.github.io/network-doctor/docs/simulation/): the same `docs/` files that live beside the code.
 
 The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/network-doctor/wiki), so each page is still edited exactly where it lives; nothing is duplicated to publish it.
 
@@ -434,7 +434,7 @@ result would not have exercised any namespace at all.
 
 `netdoc-sim` builds a throwaway virtual network from a YAML scenario, breaks it
 on purpose, runs the real netdoc binary inside it, and grades the diagnosis
-against the injected fault — an unprivileged, Linux-only development tool for
+against the injected fault. It is an unprivileged, Linux-only development tool for
 deterministic regression testing that never touches the host network.
 
 ```sh

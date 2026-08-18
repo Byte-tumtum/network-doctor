@@ -14,7 +14,7 @@ import (
 // the one documented call that comes close, but it only counts what TCP has
 // already put on the wire: BytesInFlight is sent-but-unacknowledged, and no
 // field reports the unsent queue behind it. Acknowledgement progress could only
-// be derived — BytesOut less BytesRetrans less BytesInFlight — which rests on
+// be derived as BytesOut less BytesRetrans less BytesInFlight, which rests on
 // undocumented behavior of BytesOut across retransmissions and on a struct
 // layout hand-declared here that nothing in this repository can execute. A
 // wrong offset would misclassify silently, which is worse than a limitation

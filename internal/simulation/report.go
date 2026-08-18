@@ -35,7 +35,7 @@ type Report struct {
 
 	Topology []NodeInfo  `json:"topology"`
 	Faults   []FaultInfo `json:"faults"`
-	// Timeline is what the fault scheduler did, relative to T0 — the instant
+	// Timeline is what the fault scheduler did, relative to T0, the instant
 	// just before the first netdoc process started. TimelineID identifies the
 	// requested timeline and ignores how long the OS took to apply it.
 	Timeline    []FaultEventEvidence `json:"fault_timeline"`
@@ -229,7 +229,7 @@ func (r *Report) routeSuggestions() []Suggestion {
 	// first one did not: another interface, or a target that a specific route
 	// covers. A scenario author writes that control deliberately; the hunt
 	// generator repeats the first test verbatim to watch a timeline, and the same
-	// probe over the same path reaching the target is not an alternate route — it
+	// probe over the same path reaching the target is not an alternate route; it
 	// only repeats what the first diagnosis already reported.
 	control := r.Tests[1]
 	if control.SourceSegment == "" && control.Target == r.Tests[0].Target {
@@ -338,7 +338,7 @@ func (r *Report) WriteText(w io.Writer) {
 
 	p("Faults injected")
 	if len(r.Faults) == 0 {
-		p("  (none — healthy network)")
+		p("  (none: healthy network)")
 	}
 	for _, f := range r.Faults {
 		p("  %-18s %-4s %s", f.Type, f.Family, f.Summary)
@@ -353,7 +353,7 @@ func (r *Report) WriteText(w io.Writer) {
 				p("  %-9s %-52s applied at +%-8s %s", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State),
 					e.AppliedOffset.Round(time.Millisecond), textsafe.Clean(e.Observed))
 			case EventSkipped:
-				p("  %-9s %-52s skipped — the run ended first", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State))
+				p("  %-9s %-52s skipped, the run ended first", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State))
 			default:
 				p("  %-9s %-52s FAILED: %s", offsetLabel(e.ScheduledOffset), textsafe.Clean(e.State), textsafe.Clean(e.Error))
 			}
@@ -465,14 +465,14 @@ func (r *Report) WriteText(w io.Writer) {
 
 	switch {
 	case r.Cleanup.Kept:
-		p("Cleanup:  kept — %s", textsafe.Clean(r.Cleanup.Detail))
+		p("Cleanup:  kept (%s)", textsafe.Clean(r.Cleanup.Detail))
 	case len(r.Cleanup.Errors) > 0:
 		p("Cleanup:  INCOMPLETE")
 		for _, e := range r.Cleanup.Errors {
 			p("  %s", textsafe.Clean(e))
 		}
 	case r.Cleanup.Done:
-		p("Cleanup:  ok — every namespace and process released")
+		p("Cleanup:  ok, every namespace and process released")
 	default:
 		p("Cleanup:  not reached")
 	}
@@ -484,7 +484,7 @@ func (o *TestOutcome) writeText(w io.Writer) {
 	if target == "" {
 		target = "(generic checks)"
 	}
-	p("Test: %s — netdoc %s in %s (%s)", textsafe.Clean(o.Name), textsafe.Clean(target), o.Node, o.Duration.Round(time.Millisecond))
+	p("Test: %s, netdoc %s in %s (%s)", textsafe.Clean(o.Name), textsafe.Clean(target), o.Node, o.Duration.Round(time.Millisecond))
 	if o.Error != "" {
 		p("  ERROR: %s", textsafe.Clean(o.Error))
 		if o.Stderr != "" {

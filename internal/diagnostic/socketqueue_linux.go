@@ -12,7 +12,7 @@ import (
 // application has written that the peer has not acknowledged.
 //
 // SIOCOUTQ counts the unsent queue and the sent-but-unacknowledged window
-// together, which is the quantity the path-MTU probe needs — either state
+// together, which is the quantity the path-MTU probe needs, since either state
 // means the bytes have not arrived. SIOCOUTQNSD would count only the unsent
 // half, and a black hole parks its payload in the unacknowledged half.
 //

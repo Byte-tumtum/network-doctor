@@ -61,7 +61,7 @@ type nodeConfig struct {
 	// Addresses is every address the node answers on. UDP needs them by name:
 	// a wildcard-bound socket replies from whatever source the route table
 	// picks, and a resolver whose answer arrives from a different address than
-	// the query went to is — correctly — ignored by the client.
+	// the query went to is, correctly, ignored by the client.
 	Addresses []string  `json:"addresses,omitempty"`
 	Services  []Service `json:"services,omitempty"`
 }
@@ -421,7 +421,7 @@ func dnsErrorReply(msg []byte, rcode uint16) []byte {
 
 // serveDNS is a static authoritative resolver: it answers A and AAAA from the
 // scenario's zone, NODATA for a name it knows in a family it does not have, and
-// NXDOMAIN for everything else. That is the whole resolver — a scenario proves
+// NXDOMAIN for everything else. That is the whole resolver: a scenario proves
 // things about netdoc, not about DNS, and this is small enough to audit.
 func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, state *dnsState, delays *delayGroup, recorder *evidenceRecorder) {
 	buf := make([]byte, dnsMaxMsg)
@@ -523,7 +523,7 @@ func (g *delayGroup) Close() error {
 // dnsState is one DNS service's response behaviour. It carries both forms of
 // schedule: the precomputed per-query outcome list a scenario or campaign
 // compiles up front, and the live outcome the fault scheduler sets while netdoc
-// runs. A live outcome, once set, wins — the timeline is the newer instruction.
+// runs. A live outcome, once set, wins, since the timeline is the newer instruction.
 //
 // Nothing here draws a random value. Trusted simulator code decides; the
 // service only reads.
@@ -533,8 +533,8 @@ type dnsState struct {
 	aaaa []string
 	// asked counts queries per normalized name and family, so the schedule a
 	// scenario writes for one name is walked by that name alone. A netdoc run
-	// asks this resolver for whatever it likes — the captive-portal host, a
-	// public-DNS comparison — and how many of those it sends varies with the
+	// asks this resolver for whatever it likes (the captive-portal host, a
+	// public-DNS comparison) and how many of those it sends varies with the
 	// host it runs on. A counter shared across names would let that variation
 	// slide the target's failure and recovery around.
 	//
@@ -675,8 +675,8 @@ func dnsReply(msg []byte, zone map[string][]netip.Addr) []byte {
 	if !known {
 		return append(dnsHeader(id, out, dnsRcodeNXDomain, 1, 0), question...)
 	}
-	// The name exists. A family it does not have is NODATA — NOERROR with no
-	// records — which is what makes an A-only name resolve cleanly for a client
+	// The name exists. A family it does not have is NODATA, NOERROR with no
+	// records, which is what makes an A-only name resolve cleanly for a client
 	// that asks for both.
 	var matches []netip.Addr
 	for _, addr := range addrs {
@@ -815,7 +815,7 @@ func holderCommandReply(line string, dns map[string]*dnsState) string {
 // holderProbeReply answers "probe <address> <port> <timeout-ms>" by opening one
 // TCP connection from inside this node's namespace. This is the simulator's own
 // observation of the path: it is made by simulator code, to a simulator-owned
-// endpoint, and it reads nothing netdoc reported — so it is free to contradict
+// endpoint, and it reads nothing netdoc reported, so it is free to contradict
 // the diagnosis. Only a literal address is accepted, so an observation can
 // never depend on the node's resolver.
 func holderProbeReply(fields []string) string {
@@ -838,8 +838,8 @@ func holderProbeReply(fields []string) string {
 	conn, err := dialer.Dial("tcp", netip.AddrPortFrom(addr, uint16(port)).String())
 	if err != nil {
 		// Only an actual reset from the far end is a refusal. Anything the local
-		// kernel decided on its own — no route, an administrative reject on the
-		// way out — is the path failing, not the target answering, so it stays
+		// kernel decided on its own, such as no route or an administrative reject
+		// on the way out, is the path failing, not the target answering, so it stays
 		// unreachable rather than being promoted to a statement about a service.
 		if isConnectionRefused(err) {
 			return holderProbeResult + " " + holderProbeRefused

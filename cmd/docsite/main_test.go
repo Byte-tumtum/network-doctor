@@ -86,8 +86,8 @@ func TestStagesBothSourcesWithoutCopyingThemIntoTheRepository(t *testing.T) {
 }
 
 // The links this step touches are the ones that name a file rather than a URL,
-// or that name a file the site does not publish. Everything already usable —
-// an absolute URL, a same-page anchor — is left exactly as written.
+// or that name a file the site does not publish. Everything already usable,
+// whether an absolute URL or a same-page anchor, is left exactly as written.
 func TestRewritesOnlyTheLinksJekyllCannotResolve(t *testing.T) {
 	out := stageFixture(t)
 

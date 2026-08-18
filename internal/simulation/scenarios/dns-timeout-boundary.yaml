@@ -3,7 +3,7 @@ description: A seeded campaign that walks one resolver delay across netdoc's pro
 
 # One variable dimension and nothing else: the delay the resolver holds every
 # answer for. Run it with a probe timeout inside the swept range and the
-# iterations straddle the deadline —
+# iterations straddle the deadline:
 #
 #   netdoc-sim campaign dns-timeout-boundary --seed 12345 --runs 6 -timeout 1s
 #

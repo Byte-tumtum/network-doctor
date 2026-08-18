@@ -15,9 +15,9 @@ import (
 func ifaceFix(goos string) string {
 	switch goos {
 	case "darwin":
-		return "bring up an interface — turn on Wi-Fi or plug in a cable (`networksetup -listallhardwareports`)"
+		return "bring up an interface: turn on Wi-Fi or plug in a cable (`networksetup -listallhardwareports`)"
 	case "windows":
-		return "bring up an interface — enable Wi-Fi/Ethernet in Settings → Network & internet"
+		return "bring up an interface: enable Wi-Fi/Ethernet in Settings → Network & internet"
 	default:
 		return "bring up an interface (cable/Wi-Fi) or `ip link set <iface> up`"
 	}
@@ -26,11 +26,11 @@ func ifaceFix(goos string) string {
 func dnsFix(goos string) string {
 	switch goos {
 	case "darwin":
-		return "name resolution failing — check DNS in System Settings → Network (`networksetup -getdnsservers Wi-Fi`)"
+		return "name resolution failing: check DNS in System Settings → Network (`networksetup -getdnsservers Wi-Fi`)"
 	case "windows":
-		return "name resolution failing — check DNS in `ipconfig /all` or Settings → Network & internet"
+		return "name resolution failing: check DNS in `ipconfig /all` or Settings → Network & internet"
 	default:
-		return "name resolution failing — check /etc/resolv.conf / DNS"
+		return "name resolution failing: check /etc/resolv.conf / DNS"
 	}
 }
 
@@ -47,17 +47,17 @@ func tlsFix(err error) string {
 	)
 	switch {
 	case errors.As(err, &hostErr):
-		return "cert is for " + certNames(hostErr.Certificate) + ", not " + hostErr.Host + " — wrong SNI/vhost, or the address belongs to someone else"
+		return "cert is for " + certNames(hostErr.Certificate) + ", not " + hostErr.Host + ": wrong SNI/vhost, or the address belongs to someone else"
 	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
-		return certWindow(invalid.Cert) + " — renew the cert, or check this machine's clock"
+		return certWindow(invalid.Cert) + ": renew the cert, or check this machine's clock"
 	case errors.As(err, &unknown):
-		return "cert signed by an unknown CA — MITM proxy, self-signed cert, or a missing root store"
+		return "cert signed by an unknown CA: MITM proxy, self-signed cert, or a missing root store"
 	case errors.As(err, &record):
-		return "the port answered but not with TLS — plaintext service or wrong port?"
+		return "the port answered but not with TLS: plaintext service or wrong port?"
 	case timeoutError(err):
-		return "TLS timed out after TCP connected — read the Path MTU row: it says whether full-size packets are reaching the far end (VPN, PPPoE, or tunnel)"
+		return "TLS timed out after TCP connected; read the Path MTU row: it says whether full-size packets are reaching the far end (VPN, PPPoE, or tunnel)"
 	}
-	return "TLS broken — clock skew, bad/expired cert, or MITM proxy?"
+	return "TLS broken: clock skew, bad/expired cert, or MITM proxy?"
 }
 
 // pmtuFix suggests the usual confirmation/remedy for a bulk stall that is

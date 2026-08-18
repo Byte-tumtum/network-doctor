@@ -59,7 +59,7 @@ const (
 	// nmap) bring their own via Tool.Timeout.
 	toolTimeout = 12 * time.Second
 	// chanBuf absorbs output bursts between Update reads. A tool that
-	// out-talks the UI anyway gets its excess dropped and counted (Dropped) —
+	// out-talks the UI anyway gets its excess dropped and counted (Dropped);
 	// the UI never blocks to spare a chatty subprocess's feelings.
 	chanBuf      = 256
 	maxLineBytes = 4096
@@ -117,7 +117,7 @@ func startTool(parent context.Context, gen int, id, name string, args, env []str
 		wg.Wait() // drain both pipes to EOF before Wait (no drain/wait race)
 		werr := cmd.Wait()
 		cleanup()
-		// Guaranteed (blocking) terminal send, last — never dropped.
+		// Guaranteed (blocking) terminal send, last, and never dropped.
 		j.ch <- ToolDoneMsg{
 			JobID:      id,
 			Generation: gen,
@@ -137,7 +137,7 @@ func waitForMsg(ch <-chan tea.Msg) tea.Cmd {
 
 // drain keeps reading an abandoned job's channel in the background. Once a run
 // is dropped nothing re-issues waitForMsg for it, and the producer still owes
-// one blocking terminal send — on a full buffer that parks the goroutine for
+// one blocking terminal send, and on a full buffer that parks the goroutine for
 // good. Exactly one ToolDoneMsg arrives, last, so this loop always ends.
 func (j *job) drain() {
 	if j == nil || j.ch == nil {
@@ -154,7 +154,7 @@ func (j *job) drain() {
 }
 
 // waitDone blocks until the job's terminal event lands or deadline fires. Only
-// shutdown uses it — while the app is up, Update owns this channel. Cancelling
+// shutdown uses it; while the app is up, Update owns this channel. Cancelling
 // a job is not the same as having killed it: exec runs cmd.Cancel on its own
 // goroutine, so without this wait the process could exit before termination
 // goes out.

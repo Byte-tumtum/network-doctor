@@ -3,7 +3,7 @@
 # Hand-maintained: netdoc uses the stdlib flag package, which has no completion
 # generator. Keep this in sync with the flags in main.go.
 
-# Targets are hostnames, URLs, and IP literals — none of them enumerable, so
+# Targets are hostnames, URLs, and IP literals, none of them enumerable, so
 # suppress the file completion fish would otherwise offer.
 complete -c netdoc -f
 

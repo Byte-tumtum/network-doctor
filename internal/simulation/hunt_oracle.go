@@ -10,7 +10,7 @@ import (
 // A hunt false negative means exactly one thing: the simulator independently
 // established a network condition whose diagnostic meaning Network Doctor
 // failed to recognize. It deliberately does not mean "a mutation expected probe
-// X to fail and probe X did not fail" — a mutation is intent rather than truth,
+// X to fail and probe X did not fail": a mutation is intent rather than truth,
 // and a probe id is an implementation detail of how the diagnosis is assembled
 // rather than the thing a user is told.
 //
@@ -38,7 +38,7 @@ type conditionRule struct {
 	// family scopes a condition to one address family so per-family findings
 	// stay distinguishable. Empty for conditions that have no family.
 	family string
-	// summary is the domain sentence a finding is built from — a network fact,
+	// summary is the domain sentence a finding is built from: a network fact,
 	// not a probe row.
 	summary string
 	// evidence names the independent observation that established the
@@ -144,7 +144,7 @@ var conditionOracle = []conditionRule{
 			return anyUDPPortDropped(evidence, 443)
 		},
 		// Scoped to the QUIC row because "timeout" is not unique in netdoc's
-		// cause vocabulary — TLS and encrypted DNS spend it too, and an
+		// cause vocabulary, since TLS and encrypted DNS spend it too, and an
 		// unrelated TLS timeout must not read as QUIC being recognized. This is
 		// the only entry that needs a row scope, and it names the probe through
 		// the diagnostic constant so a renamed id stays in step.

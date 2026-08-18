@@ -3,7 +3,7 @@
 # netdoc-sim the Linux packages do, and that binary builds its networks out of
 # the same unprivileged user, network and mount namespaces it uses natively.
 # There is no container simulation backend, no reduced-fidelity mode, and no
-# second implementation to keep in step — macOS and Windows get a Linux kernel
+# second implementation to keep in step: macOS and Windows get a Linux kernel
 # from Docker Desktop or Podman Machine, and the real simulator runs on it.
 #
 # Both binaries are built here from one source tree with one version string, so
@@ -61,7 +61,7 @@ COPY --from=build /out/netdoc /usr/bin/netdoc
 COPY --from=build /out/netdoc-sim /usr/bin/netdoc-sim
 
 # Unprivileged by default, and it costs nothing: a simulation needs no
-# capability at all — it creates a user namespace, and the kernel gives it root
+# capability at all. It creates a user namespace, and the kernel gives it root
 # over the namespaces it just made and nothing else. Running as a normal user
 # means the --cap-add SYS_ADMIN that Docker's default seccomp profile requires
 # to permit clone(CLONE_NEWUSER) unlocks the syscall filter without arming the

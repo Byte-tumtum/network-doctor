@@ -115,7 +115,7 @@ func TestNetworkMapToggle(t *testing.T) {
 
 	u, _ = nm.Update(keyMsg("v"))
 	nm = asModel(t, u)
-	if nm.networkMap || !strings.Contains(nm.View(), "Details —") {
+	if nm.networkMap || !strings.Contains(nm.View(), "Details:") {
 		t.Fatal("second v must return to the checks view")
 	}
 }
@@ -424,7 +424,7 @@ func TestRestartPrompt(t *testing.T) {
 		"ssh://example.com:8022 URL (scheme sets protocol and default port; path ignored)",
 		"192.0.2.1, 2001:db8::1 IP literal",
 		"[2001:db8::1]:443      IP literal with port (IPv6 needs the brackets)",
-		"(nothing)              no target — runs the generic checks",
+		"(nothing)              no target, runs the generic checks",
 	}
 	for _, line := range formLines {
 		if !strings.Contains(nm.View(), line) {
@@ -524,7 +524,7 @@ func TestViewerCopiesFullOutput(t *testing.T) {
 	if got, want := done(), osc52Sequence("first\nsecond"); got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
-	if cmd == nil || nm.notice != "output sent to clipboard (OSC 52) — w saves a file" {
+	if cmd == nil || nm.notice != "output sent to clipboard (OSC 52); w saves a file" {
 		t.Fatalf("notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 }
@@ -736,7 +736,7 @@ func TestReportNoticeExpires(t *testing.T) {
 	doneResults(&m, "")
 	u, cmd := m.Update(keyMsg("y"))
 	nm := asModel(t, u)
-	if cmd == nil || nm.notice != "report sent to clipboard (OSC 52) — w saves a file" {
+	if cmd == nil || nm.notice != "report sent to clipboard (OSC 52); w saves a file" {
 		t.Fatalf("copy notice = %q, cmd nil = %v", nm.notice, cmd == nil)
 	}
 
@@ -933,7 +933,7 @@ func TestViewFitsTerminal(t *testing.T) {
 }
 
 // A short or narrow terminal sheds the toolbox names, then the header, then the
-// panels — and clips the help bar last. The banner never yields: it carries the
+// panels, and clips the help bar last. The banner never yields: it carries the
 // plain-English verdict, and it is the first thing the renderer would eat.
 func TestShortTerminalKeepsBanner(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:443"), false)
@@ -1035,7 +1035,7 @@ func TestViewWrapsToNarrowTerminal(t *testing.T) {
 }
 
 // The job pane budgets its tail in logical lines, so an output line wider than
-// the terminal would cost display rows nobody counted — ss and traceroute
+// the terminal would cost display rows nobody counted, and ss and traceroute
 // produce those routinely. Truncating keeps the frame inside the terminal.
 func TestJobPaneFitsHeight(t *testing.T) {
 	for _, h := range []int{24, 40, 50} {

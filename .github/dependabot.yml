@@ -20,7 +20,7 @@ updates:
           - "*"
 
   # The image's base images are pinned by digest, which is what makes a build
-  # reproducible and what stops it drifting silently — so something has to bump
+  # reproducible and what stops it drifting silently, so something has to bump
   # them, or "pinned" becomes "stale".
   - package-ecosystem: docker
     directory: /

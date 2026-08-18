@@ -33,7 +33,7 @@ func TestChallengeAnswerCatalogIsUnambiguous(t *testing.T) {
 			if key == "" {
 				t.Fatalf("answer %s has an empty spelling", item.ID)
 			}
-			// An answer's own spellings are allowed to coincide — "No default route"
+			// An answer's own spellings are allowed to coincide: "No default route"
 			// normalizes to exactly its id, which is one answer reachable two ways
 			// rather than two answers fighting over one word. Across answers it is a
 			// collision, and the input would silently pick whichever came first.

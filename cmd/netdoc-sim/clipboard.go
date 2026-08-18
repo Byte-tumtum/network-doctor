@@ -9,7 +9,7 @@ import (
 // Copying from here has one hard constraint: a challenge runs inside namespaces
 // this process created, and on macOS or Windows it runs inside a Linux
 // container. pbcopy, wl-copy and xclip are all on the far side of that
-// boundary — the image ships none of them, and a fresh network namespace cuts
+// boundary: the image ships none of them, and a fresh network namespace cuts
 // the X11 abstract socket out from under the ones a Linux host does have.
 //
 // The terminal is the one thing left that is still the user's own machine, so

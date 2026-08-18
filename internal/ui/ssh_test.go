@@ -241,7 +241,7 @@ func stubSSHEffectiveErr(t *testing.T, err error) {
 }
 
 // ssh substitutes a Host alias's HostName before it asks for a password, so
-// the helper has to be told the name it will actually see — an alias would
+// the helper has to be told the name it will actually see, since an alias would
 // never match its own prompt, and the legitimate password would be refused.
 func TestSSHCommandResolvesTheAlias(t *testing.T) {
 	stubSSHEffective(t, "real.example.com", false)
@@ -283,7 +283,7 @@ func TestSSHCommandRefusesWhenConfigIsUnreadable(t *testing.T) {
 	if !strings.Contains(err.Error(), "password field blank") {
 		t.Errorf("err = %q, want it to name the way out", err)
 	}
-	// Nothing may be handed back on the refusal path — an argv that reached ssh
+	// Nothing may be handed back on the refusal path: an argv that reached ssh
 	// without the askpass env would prompt on a terminal the TUI still owns,
 	// and an env would carry the secret past the check that just failed.
 	if args != nil || env != nil {
@@ -392,7 +392,7 @@ func TestParseSSHConfig(t *testing.T) {
 		t.Errorf("parseSSHConfig(direct) = %q, %v; want real.example.com, false", host, proxied)
 	}
 	// ssh prints the keywords in no fixed order, and an unset one still prints
-	// as "none" — which must not talk a set one back out of it.
+	// as "none", which must not talk a set one back out of it.
 	const jumped = "hostname real.example.com\nproxyjump jump.example.com\nproxycommand none\n"
 	if host, proxied = parseSSHConfig(jumped); host != "real.example.com" || !proxied {
 		t.Errorf("parseSSHConfig(jumped) = %q, %v; want real.example.com, true", host, proxied)
@@ -473,7 +473,7 @@ func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 }
 
 // A target with no SSH rung never gets a ProbeSSH result at all, and a missing
-// map key yields the zero ProbeResult — whose Status is StatusPass, the first
+// map key yields the zero ProbeResult, whose Status is StatusPass, the first
 // iota. Presence has to be checked alongside the status, or every HTTPS target
 // advertises a login nothing has vouched for.
 func TestSSHHintStaysHiddenWithoutAnSSHRung(t *testing.T) {
@@ -486,7 +486,7 @@ func TestSSHHintStaysHiddenWithoutAnSSHRung(t *testing.T) {
 	doneResults(&m, "") // every rung this target has passes; none of them is SSH
 
 	if _, ok := m.results[diagnostic.ProbeSSH]; ok {
-		t.Fatal("an https target grew an SSH rung — pick another target for this test")
+		t.Fatal("an https target grew an SSH rung: pick another target for this test")
 	}
 	if strings.Contains(m.View(), "ssh login") {
 		t.Error("the help bar hints S on a target with no SSH rung")

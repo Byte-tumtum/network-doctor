@@ -31,7 +31,7 @@ const (
 //
 // Only edges that are unconditional belong here. ProbeHTTP, for instance,
 // depends on ProbeTargetTCP for a plain http:// target but on ProbeDNS for an
-// https:// one, so only the DNS edge — which holds transitively either way — is
+// https:// one, so only the DNS edge, which holds transitively either way, is
 // listed.
 var probeDeps = map[diagnostic.ProbeID][]diagnostic.ProbeID{
 	diagnostic.ProbeTargetTCP: {diagnostic.ProbeDNS},
@@ -253,8 +253,8 @@ func (r *Report) missedWindow(test *TestOutcome) []Suggestion {
 }
 
 // dependencyContradictions looks for a probe that succeeded while a probe it
-// depends on failed. With a timed fault schedule that can be honest — the
-// network changed between the two — so a transition inside the run makes it
+// depends on failed. With a timed fault schedule that can be honest, since the
+// network changed between the two, so a transition inside the run makes it
 // temporally explainable and is not reported. Without one it is a contradiction
 // the DAG produced on a network that never changed.
 func (r *Report) dependencyContradictions(test *TestOutcome) []Suggestion {

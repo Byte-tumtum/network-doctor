@@ -123,7 +123,7 @@ func TestLinuxPackagesShipEveryLinuxBuild(t *testing.T) {
 }
 
 // The container image is the third install path, and it owes the user the same
-// pair of executables the packages do — from one build, at one version, in one
+// pair of executables the packages do: from one build, at one version, in one
 // directory, because that is what makes netdoc-sim find the netdoc beside it.
 // container_test.go proves this against a built image; this proves it against
 // the file, in the ordinary gate, where nobody needs a container engine.
@@ -189,7 +189,7 @@ func TestReleaseWorkflowPublishesTheImageAtTheTag(t *testing.T) {
 // flag list in main.go, so a new flag silently ships undocumented and
 // uncompletable, and a deleted one stays advertised. Read the flags back out of
 // the real usage output and require every shipped surface to declare exactly
-// that set — in that surface's own declaration syntax, so a name that only
+// that set, in that surface's own declaration syntax, so a name that only
 // turns up in prose, a comment, or an example does not count as documented.
 
 // flagNames pulls capture group 1 out of every match, which is the flag name in

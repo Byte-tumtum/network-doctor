@@ -19,7 +19,7 @@ import (
 
 // optInTags are the build tags this repository's gate passes with -tags, and
 // so the only tags that keep a file out of `go test ./...`. Every other
-// constraint — a GOOS tag, `unix`, or a negation like `!integration` — still
+// constraint, whether a GOOS tag, `unix`, or a negation like `!integration`, still
 // builds in the ordinary suite and stays in scope here. An unknown tag is
 // treated as in scope, so a new opt-in tag trips this guard rather than
 // silently opening a hole in it.
@@ -48,8 +48,8 @@ var hostCalls = []struct{ pkg, name string }{
 }
 
 // hostTypes reach the host only once one is built, so these are flagged on
-// construction — `net.Dialer{...}`, `new(net.Dialer)`, `var d net.Dialer`, the
-// zero value being usable — and not where the type is merely named, as a
+// construction (`net.Dialer{...}`, `new(net.Dialer)`, `var d net.Dialer`, the
+// zero value being usable) and not where the type is merely named, as a
 // parameter or a return type. A real dialer handed to a netops field is how the
 // old HTTP/2 test dialed a real port while no call in it read as networking.
 var hostTypes = []struct{ pkg, name string }{
@@ -59,7 +59,7 @@ var hostTypes = []struct{ pkg, name string }{
 
 // defaultOps is the one *netops wired to the real net.Dialer, real resolver,
 // and real net.Interfaces, and probes reach the host through its function
-// fields — so a call through it has no other textual sign of host access at
+// fields, so a call through it has no other textual sign of host access at
 // the call site. That is exactly how TestIfaceForIPUnknown came to read the
 // machine's own interface list. Only calls are flagged: naming a field to
 // assert the production wiring is set touches nothing.

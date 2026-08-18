@@ -12,7 +12,7 @@ import (
 
 // oracleReport is a finished run on a stable path: one client node, one netdoc
 // process, and whatever independent evidence the caller attaches. The two
-// halves are supplied separately on purpose — no fixture here derives evidence
+// halves are supplied separately on purpose: no fixture here derives evidence
 // from a diagnosis or a diagnosis from evidence.
 func oracleReport(diagnosis *Diagnosis, evidence Evidence) *Report {
 	return &Report{Cleanup: CleanupInfo{Done: true}, Topology: []NodeInfo{{Name: "client", Role: "client"}},
@@ -305,7 +305,7 @@ func TestHuntOracleRequiresTheFaultToHaveReachedTheWire(t *testing.T) {
 // anything": a mutation would confirm itself from a fault someone else caused,
 // and a record from nowhere would establish a condition nobody observed.
 func TestHuntEvidenceScopeIsRequiredNotWildcarded(t *testing.T) {
-	// Controls first. Same evidence, fully scoped mutations, all observed —
+	// Controls first. Same evidence, fully scoped mutations, all observed;
 	// without these the cases below would pass on a reader that always says no.
 	for _, tc := range []struct {
 		name     string
@@ -423,8 +423,8 @@ func TestHuntOracleKeepsFamilyStatesDistinct(t *testing.T) {
 }
 
 // TestHuntOracleHoldsItsDirection pins the dependency arrows. The observed side
-// cannot reach a diagnosis at all — it takes Evidence, so the compiler holds
-// that half — and this covers the two the compiler cannot: recognition must not
+// cannot reach a diagnosis at all, since it takes Evidence and the compiler holds
+// that half, and this covers the two the compiler cannot: recognition must not
 // move with the evidence, and the reconciler, which does see the whole report,
 // must let the diagnosis change only the accusation.
 func TestHuntOracleHoldsItsDirection(t *testing.T) {
@@ -530,8 +530,8 @@ func TestHuntOracleClaimsNothingAboutUndiagnosedFaults(t *testing.T) {
 			if got := observedConditions(report.Evidence, ObservedTruth{}); len(got) != 0 {
 				t.Fatalf("a fault netdoc does not diagnose became an expectation: %v", got)
 			}
-			// The fault really did reach the wire — this is the observed case,
-			// not the unobserved one — and it still accuses nobody.
+			// The fault really did reach the wire, since this is the observed case
+			// rather than the unobserved one, and it still accuses nobody.
 			manifest := huntManifest(tc.mutation)
 			truth := collectObservedTruth(manifest, report)
 			if !slices.Equal(truth.ObservedFaults, []string{tc.mutation.ID}) {
@@ -662,7 +662,7 @@ func TestMutationScopeIsRequiredForEveryFamily(t *testing.T) {
 }
 
 // unstampEvidence removes the node every holder writes on its own records. Real
-// evidence always carries one, so these reports are only reachable by hand — the
+// evidence always carries one, so these reports are only reachable by hand. The
 // point is that a record from nowhere stays worthless rather than matching
 // whatever asks for it.
 func unstampEvidence(evidence Evidence) Evidence {
@@ -702,7 +702,7 @@ func unstampEvidence(evidence Evidence) Evidence {
 // oracle rests on: the manifest is intact and the simulator's own record that
 // the fault was configured, installed or applied is present, and the one thing
 // missing is evidence that a client was ever made to live with it. Nothing may
-// be claimed about netdoc for a fault that happened to nobody — not an observed
+// be claimed about netdoc for a fault that happened to nobody: not an observed
 // fault, and not a false negative.
 func TestScheduledFaultThatReachedNobodyIsNotObserved(t *testing.T) {
 	for _, tc := range []struct {
@@ -832,7 +832,7 @@ var huntFamilyPath = map[string]string{
 	"service.tls_hostname_mismatch": "generic",
 	"proxy.connect_refused":         "generic",
 	"quic.udp_443_block":            "generic",
-	// Bespoke: the finding depends on meaning a state comparison cannot carry —
+	// Bespoke: the finding depends on meaning a state comparison cannot carry.
 	// DNS needs the last query per service rather than any query, and a reset
 	// is a coverage gap about classification rather than a missed fault.
 	"dns.servfail":        "bespoke",
@@ -863,7 +863,7 @@ var huntFamilyPath = map[string]string{
 	// nowhere are facts about a route table that only the mutation's own scope
 	// can tie to the route that changed. What the hunt notices about them is
 	// the family-reachability condition, which is the family drops' rule and
-	// fires here for the same honest reason — the internet really is gone.
+	// fires here for the same honest reason: the internet really is gone.
 	// Challenge Mode is where the route distinction is graded, against netdoc's
 	// own route causes.
 	"routing.no_default_route":    "no_finding",

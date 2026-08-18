@@ -18,7 +18,7 @@ import (
 // keep truthful, and the one that drifted would be the one nobody reread.
 //
 // Everything here is either the id, the difficulty, or something the netdoc run
-// is also given — the node it stands in and the target it is asked about. The
+// is also given: the node it stands in and the target it is asked about. The
 // base scenario, the seed, the case and the mutation stay out of it.
 func (c *Challenge) WriteBriefing(w io.Writer) {
 	fmt.Fprintf(w, "\nNETWORK DOCTOR CHALLENGE\nChallenge %s   Difficulty: %s\n", c.ID, c.Difficulty)
@@ -30,11 +30,11 @@ func (c *Challenge) WriteBriefing(w io.Writer) {
 	fmt.Fprintln(w, "\nSomething may be wrong with this network. Your job is to say what.")
 	fmt.Fprintf(w, "\nYou are on:   %s\n", textsafe.Clean(c.Node))
 	if c.Target == "" {
-		fmt.Fprintln(w, "Investigate:  this machine's own connectivity — no specific target")
+		fmt.Fprintln(w, "Investigate:  this machine's own connectivity, with no specific target")
 	} else {
 		fmt.Fprintf(w, "Investigate:  %s\n", textsafe.Clean(c.Target))
 	}
-	fmt.Fprintln(w, "\nInvestigate with whatever you would normally reach for — ping, dig, curl,")
+	fmt.Fprintln(w, "\nInvestigate with whatever you would normally reach for: ping, dig, curl,")
 	fmt.Fprintln(w, "ip route, ss, traceroute, nc. Commit to a diagnosis when you are ready.")
 	fmt.Fprintln(w, "Network Doctor then gets the same network, and has not seen the answer either.")
 }
@@ -54,7 +54,7 @@ func (r *ChallengeResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) 
 
 // WriteText is the reveal. It runs only after both answers are in.
 func (r *ChallengeResult) WriteText(w io.Writer) {
-	fmt.Fprintf(w, "\nRESULT — CHALLENGE %s\n", r.ChallengeID)
+	fmt.Fprintf(w, "\nRESULT: CHALLENGE %s\n", r.ChallengeID)
 	if r.Daily != "" {
 		fmt.Fprintf(w, "Daily challenge for %s (UTC)\n", r.Daily)
 	}
@@ -145,9 +145,9 @@ func challengeResultLine(result string) string {
 	case ChallengeNetdocWins:
 		return "NETWORK DOCTOR WINS"
 	case ChallengeDraw:
-		return "DRAW — you both got it"
+		return "DRAW: you both got it"
 	case ChallengeNobodyWins:
-		return "NOBODY WINS — neither of you got it"
+		return "NOBODY WINS: neither of you got it"
 	default:
 		return "NO RESULT"
 	}

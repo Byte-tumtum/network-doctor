@@ -142,7 +142,7 @@ func TestDiagnoseGenericEgressNoDNS(t *testing.T) {
 	}
 }
 
-// A Warn planted by downgradeEgress isn't a degraded route, it's a dead one —
+// A Warn planted by downgradeEgress isn't a degraded route, it's a dead one:
 // with no proxy to carry traffic the prose has to say so, and match the verdict.
 func TestDiagnoseGenericDowngradedNoProxy(t *testing.T) {
 	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS}

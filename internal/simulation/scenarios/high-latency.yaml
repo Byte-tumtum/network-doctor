@@ -1,7 +1,7 @@
 name: high-latency-link
 description: >-
   Everything reaches everything, slowly. Nothing is broken, so netdoc must not
-  report a failure — but a link this slow is not healthy either, and a run that
+  report a failure, but a link this slow is not healthy either, and a run that
   called it "ok" would be hiding the reason the user came looking.
 
 topology:
@@ -27,8 +27,8 @@ topology:
 
 faults:
   # Egress-only delay, so the round trip costs about one delay. Well clear of
-  # netdoc's 500ms high-latency threshold at every point of the jitter range —
-  # a scenario that straddles a threshold tests the coin, not the code.
+  # netdoc's 500ms high-latency threshold at every point of the jitter range,
+  # since a scenario that straddles a threshold tests the coin, not the code.
   - type: netem
     node: client
     delay: 700ms

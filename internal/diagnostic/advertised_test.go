@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Captured shape of `dns-sd -t 3 -Z <type> local.` — the banner, the bare
+// Captured shape of `dns-sd -t 3 -Z <type> local.`: the banner, the bare
 // service-type PTR, then an SRV/TXT pair per instance. Not a capture from a
 // real Mac: nobody here has one, so this fixture is transcribed from Apple's
 // output format and the macOS side is untested against a live responder.
@@ -62,7 +62,7 @@ func TestParseDNSSDZoneOverlongTXT(t *testing.T) {
 		best.put(entry.host, name, score)
 	}
 
-	// The 70K name is dropped for length, taking its host with it — and, the
+	// The 70K name is dropped for length, taking its host with it, and, the
 	// point of the test, the entry behind it still lands.
 	want := map[string]string{"tv.local.": "Living Room TV"}
 	if got := best.plain(); !maps.Equal(got, want) {

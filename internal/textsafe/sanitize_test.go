@@ -1,4 +1,4 @@
-// The Clean contract, plus FuzzSanitize — the fuzz entry CI smokes.
+// The Clean contract, plus FuzzSanitize, the fuzz entry CI smokes.
 
 package textsafe
 

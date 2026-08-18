@@ -105,7 +105,7 @@ func drain(t *testing.T, ch chan tea.Msg) ([]string, ToolDoneMsg) {
 				return out, v
 			}
 		case <-timeout:
-			t.Fatal("drain timed out — terminal event never arrived")
+			t.Fatal("drain timed out: terminal event never arrived")
 			return out, ToolDoneMsg{}
 		}
 	}

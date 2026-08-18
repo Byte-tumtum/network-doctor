@@ -184,8 +184,8 @@ func TestDNSScheduleIsPerFamilyAndBounded(t *testing.T) {
 }
 
 // A scenario writes a schedule for the name it is making a point about. Queries
-// for anything else — netdoc's captive-portal host, a public-DNS comparison,
-// whatever a future probe adds — must not spend that name's budget, because how
+// for anything else, whether netdoc's captive-portal host, a public-DNS
+// comparison or whatever a future probe adds, must not spend that name's budget, because how
 // many of those a run sends is not fixed.
 func TestDNSScheduleIsPerName(t *testing.T) {
 	s := newDNSState(&DNSFault{A: []string{DNSOutcomeSERVFAIL, DNSOutcomeSERVFAIL}})
@@ -198,7 +198,7 @@ func TestDNSScheduleIsPerName(t *testing.T) {
 		}
 	}
 	if seq, outcome, _ := s.next("target.test", dnsTypeA); seq != 2 || outcome != DNSOutcomeSERVFAIL {
-		t.Errorf("second target query = %d/%s, want 2/%s — unrelated names ate the schedule",
+		t.Errorf("second target query = %d/%s, want 2/%s: unrelated names ate the schedule",
 			seq, outcome, DNSOutcomeSERVFAIL)
 	}
 	if seq, outcome, _ := s.next("target.test", dnsTypeA); seq != 3 || outcome != DNSOutcomeAnswer {

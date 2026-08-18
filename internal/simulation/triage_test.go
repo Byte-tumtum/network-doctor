@@ -165,7 +165,7 @@ func TestTriageReportTextSummary(t *testing.T) {
 	report.WriteText(&out)
 	for _, want := range []string{"healthy", "20260101", "cases 20", "candidates 2",
 		"Candidate findings:    2", "Reproducible findings: 1", "New issues created:    1",
-		"https://example.test/1", "not reproducible — not filed"} {
+		"https://example.test/1", "not reproducible, not filed"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("summary is missing %q\n%s", want, out.String())
 		}

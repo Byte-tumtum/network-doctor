@@ -65,8 +65,8 @@ jobs:
       # every other package's test binary.
       - if: runner.os == 'Linux'
         run: go test -race -tags integration ./internal/diagnostic ./internal/simulation
-      # Smoke-fuzz the parsers fed by input we do not control — terminal output,
-      # target arguments, and encrypted-DNS responses — so regressions don't
+      # Smoke-fuzz the parsers fed by input we do not control (terminal output,
+      # target arguments, and encrypted-DNS responses) so regressions don't
       # rely on contributors remembering to fuzz locally.
       - if: runner.os == 'Linux'
         run: go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
@@ -77,7 +77,7 @@ jobs:
   # The container is how macOS and Windows reach Challenge Mode, so the artifact
   # is tested rather than assumed: this job builds the image and runs a real
   # namespace-backed simulation and a real challenge inside it. The runner's
-  # Docker is the point — it has the default seccomp profile Docker Desktop
+  # Docker is the point: it has the default seccomp profile Docker Desktop
   # ships, which is what the documented --cap-add SYS_ADMIN exists for.
   container:
     runs-on: ubuntu-latest
@@ -123,7 +123,7 @@ jobs:
           args: check
       # `check` only parses the config. Build the real artifacts too, because
       # the contract users get is "installing network-doctor installs netdoc and
-      # netdoc-sim" — and that is a property of the package, not of the YAML.
+      # netdoc-sim", and that is a property of the package, not of the YAML.
       # No credentials: a snapshot publishes nothing.
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

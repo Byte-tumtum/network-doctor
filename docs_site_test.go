@@ -70,7 +70,7 @@ func TestSiteIsConfiguredForItsGitHubPagesAddress(t *testing.T) {
 
 // The audit this change answers found the project's advertised homepage
 // pointing at a download page. Every package manager's homepage is a place to
-// learn the tool, so all of them point at the documentation site — and none of
+// learn the tool, so all of them point at the documentation site, and none of
 // them may quietly go back to a releases URL.
 func TestPackagedHomepagesPointAtTheDocumentationSite(t *testing.T) {
 	site, _ := pagesURL(t)

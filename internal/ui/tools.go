@@ -58,7 +58,7 @@ func bindFor(sources *diagnostic.SourceAddresses) toolBind {
 }
 
 // source is the local address to bind for a destination in dst's family, or
-// nil when the selection has none — no source of the right family means the
+// nil when the selection has none: no source of the right family means the
 // caller must leave the option off, never substitute the other family.
 //
 // A nil dst (a hostname with no probe result yet) has no family to follow. A
@@ -108,8 +108,8 @@ func (b toolBind) named(nameFlag, addrFlag string) bindFunc {
 func (b toolBind) either(flag string) bindFunc { return b.named(flag, flag) }
 
 // v6Only gates a binding to IPv6 destinations. Microsoft documents both
-// Windows source-address options that netdoc could use — ping /S and
-// tracert /S — as "available on IPv6 only", so an IPv4 or not-yet-known
+// Windows source-address options that netdoc could use, ping /S and
+// tracert /S, as "available on IPv6 only", so an IPv4 or not-yet-known
 // destination keeps the unbound command instead of carrying an option that
 // command rejects for the family it is about to use.
 func v6Only(bind bindFunc) bindFunc {
@@ -209,7 +209,7 @@ func toolsFor(t *diagnostic.Target, goos string, b toolBind) []Tool {
 		pp.Timeout = 90 * time.Second
 		tools = append(tools, pp)
 	} else {
-		// mtr report mode only — never curses inside our TUI. Report mode
+		// mtr report mode only, never curses inside our TUI. Report mode
 		// prints nothing until the last cycle, so a run cut short by the
 		// default budget yields no output at all; five cycles plus reverse DNS
 		// against a distant host regularly passes 12s, so it gets its own.
@@ -229,7 +229,7 @@ func toolsFor(t *diagnostic.Target, goos string, b toolBind) []Tool {
 
 // nmapTool builds the nmap adapter: an explicitly-confirmed port scan with
 // conservative defaults, because a scan can trip the target's intrusion
-// detection. A plain TCP connect scan (-sT — no raw sockets or root, so the
+// detection. A plain TCP connect scan (-sT, so no raw sockets or root, and the
 // shown command is exactly what runs at any privilege), nmap's default -T3
 // timing (deliberately not bumped to -T4, which risks false negatives on
 // lossy/high-latency paths to arbitrary hosts), host discovery skipped (-Pn,
@@ -239,7 +239,7 @@ func toolsFor(t *diagnostic.Target, goos string, b toolBind) []Tool {
 // target port scans only that port; otherwise nmap's default top-1000 ports
 // (which include 22/80/443). A full -p- sweep is deliberately avoided: it can't
 // cover all 65535 ports inside --host-timeout, so it times out and reports
-// nothing — worse than a top-1000 scan that finishes. Deliberately no
+// nothing, which is worse than a top-1000 scan that finishes. Deliberately no
 // -sV/-O/-A: version and OS detection are louder, slower, and not needed to
 // answer "is the port open?".
 //
@@ -268,7 +268,7 @@ func nmapTool(quote func([]string) string, host string) Tool {
 // targetIP is the address a family-sensitive tool should assume: a literal
 // target pins the family outright, otherwise the address the chain actually
 // reached the host on. nil (no literal, no successful target probe) means
-// "unknown" — callers keep their resolver-default behaviour.
+// "unknown", and callers keep their resolver-default behaviour.
 func targetIP(t *diagnostic.Target, sel net.IP) net.IP {
 	if t != nil && t.IP != nil {
 		return t.IP
@@ -318,7 +318,7 @@ func lanDiscoveryTool(quote func([]string) string, cidr string) Tool {
 // --interface takes an "interface name, IP address or hostname", with one
 // documented exception: "curl does not support using network interface names
 // for this option on Windows". Windows therefore gets the family-matched
-// source address instead — the same link, spelled the way that build honors.
+// source address instead: the same link, spelled the way that build honors.
 func curlTool(host, goos string, b toolBind) Tool {
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
@@ -368,7 +368,7 @@ func curlTool(host, goos string, b toolBind) Tool {
 // prompts so the run never blocks on input, and a throwaway known-hosts file
 // avoids both host-key prompts and writes to the user's known_hosts. Since
 // host keys aren't verified, PreferredAuthentications=none stops after
-// banner/kex — never offering agent keys or a username's worth of trust to
+// banner/kex, never offering agent keys or a username's worth of trust to
 // whatever answered. ConnectTimeout plus the job timeout bound the run.
 func sshTool(quote func([]string) string, host string, port int, goos string) Tool {
 	knownHosts := "/dev/null"
@@ -395,8 +395,8 @@ func smtpTool(quote func([]string) string, host string, port int) Tool {
 }
 
 // staticTool builds a target-independent Tool whose argv is fixed at construction
-// (a host, if any, is already baked into args). Callers never mutate the argv —
-// exec.Command copies it — so Build hands out the captured slice as-is.
+// (a host, if any, is already baked into args). Callers never mutate the argv,
+// and exec.Command copies it, so Build hands out the captured slice as-is.
 func staticTool(quote func([]string) string, key, name, bin string, args ...string) Tool {
 	return Tool{Key: key, Name: name, Bin: bin, Build: func(*diagnostic.Target, net.IP) ([]string, []string, string) {
 		return args, nil, bin + " " + quote(args)
@@ -404,7 +404,7 @@ func staticTool(quote func([]string) string, key, name, bin string, args ...stri
 }
 
 // boundTool builds a host-directed tool as fixed flags, then the binding
-// option for the --iface selection, then the host — every command shaped this
+// option for the --iface selection, then the host, since every command shaped this
 // way takes its destination last. bind returns nothing when there is no
 // --iface, or when this tool has no option that fits the destination's family,
 // so the argv is then exactly the unbound one.

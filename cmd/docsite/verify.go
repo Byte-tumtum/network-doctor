@@ -17,8 +17,8 @@ import (
 // 404 for every visitor of a github.io project site.
 //
 // This is the site's link check. Staging deliberately rewrites only what it
-// must and leaves the rest to the GitHub Pages plugins, so this pass — not the
-// staging code — is what proves the published bytes hang together.
+// must and leaves the rest to the GitHub Pages plugins, so this pass, not the
+// staging code, is what proves the published bytes hang together.
 func verify(dir, baseurl string) error {
 	pages, err := readSite(dir, baseurl)
 	if err != nil {

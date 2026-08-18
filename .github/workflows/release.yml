@@ -112,7 +112,7 @@ jobs:
 
   copr:
     # spectool pulls both tarballs off the published release, so it has to
-    # exist — and attest has to have run, or the verify below has nothing to
+    # exist, and attest has to have run, or the verify below has nothing to
     # check them against.
     needs: [release, attest]
     runs-on: ubuntu-latest
@@ -142,7 +142,7 @@ jobs:
           sed -i "s/^Version:.*/Version:        ${VERSION}/" packaging/network-doctor.spec
           spectool -g -R packaging/network-doctor.spec
           # Both tarballs arrive over plain HTTPS from a mutable release asset,
-          # and -mod=vendor never consults go.sum — so the vendored dependency
+          # and -mod=vendor never consults go.sum, so the vendored dependency
           # source that ends up in the binary is only as trustworthy as this
           # check. Fail the build rather than sign whatever was downloaded.
           for src in "network-doctor-${VERSION}.tar.gz" "network-doctor-${VERSION}-vendor.tar.gz"; do

@@ -125,7 +125,7 @@ func TestChallengeShareBlockIsAPostableResult(t *testing.T) {
 	}
 }
 
-// The block used to be a terminal column — `Me: ✓ / Network Doctor: ✗` — which
+// The block used to be a terminal column, `Me: ✓ / Network Doctor: ✗`, which
 // read as report output wherever it was pasted. The marks and the labels are
 // the format now, and a regression to the old one is what this catches.
 func TestChallengeShareBlockIsNotAReportColumn(t *testing.T) {

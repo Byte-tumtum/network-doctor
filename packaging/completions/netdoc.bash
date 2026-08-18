@@ -30,7 +30,7 @@ _netdoc() {
             ;;
     esac
 
-    # Targets are hostnames, URLs, and IP literals — none of them enumerable, so
+    # Targets are hostnames, URLs, and IP literals, none of them enumerable, so
     # a non-flag word completes to nothing rather than to local filenames.
     if [[ $cur == -* ]]; then
         COMPREPLY=($(compgen -W "

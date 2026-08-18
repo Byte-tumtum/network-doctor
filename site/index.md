@@ -3,8 +3,8 @@ layout: default
 title: Network Doctor documentation
 description: >-
   Documentation for Network Doctor, the cross-platform TUI that pinpoints
-  whether a broken connection is your network, the path, or the service —
-  install, read a diagnosis, and troubleshoot DNS, TCP, TLS, HTTP, proxy, and
+  whether a broken connection is your network, the path, or the service.
+  Install it, read a diagnosis, and troubleshoot DNS, TCP, TLS, HTTP, proxy, and
   path-MTU failures.
 permalink: /
 ---
@@ -67,10 +67,10 @@ service?**
 - [The path works but the far end does not answer]({{ '/wiki/Understanding-Your-Diagnosis/#service--the-path-works-the-far-end-does-not' | relative_url }})
 - [A name did not resolve at all]({{ '/wiki/Understanding-Your-Diagnosis/#dns--the-name-did-not-resolve' | relative_url }})
 - [Telling "my network" and "their service" apart, worked through]({{ '/wiki/Understanding-Your-Diagnosis/#worked-example-telling-the-two-important-cases-apart' | relative_url }})
-- [The Path MTU row warned — what to actually do]({{ '/wiki/Troubleshooting-and-FAQ/#the-path-mtu-row-warned-what-do-i-actually-do' | relative_url }})
+- [The Path MTU row warned: what to actually do]({{ '/wiki/Troubleshooting-and-FAQ/#the-path-mtu-row-warned-what-do-i-actually-do' | relative_url }})
 - [How path MTU is measured without root]({{ '/wiki/How-Network-Doctor-Works/#path-mtu-without-root' | relative_url }})
 - [`ping` works but Network Doctor says the network is broken, or the reverse]({{ '/wiki/Troubleshooting-and-FAQ/#why-does-ping-work-but-netdoc-says-the-network-is-broken-or-vice-versa' | relative_url }})
-- [A row says WARN — is that a failure?]({{ '/wiki/Troubleshooting-and-FAQ/#a-row-says-warn-is-that-a-failure' | relative_url }})
+- [A row says WARN: is that a failure?]({{ '/wiki/Troubleshooting-and-FAQ/#a-row-says-warn-is-that-a-failure' | relative_url }})
 - [A row says N/A instead of failing]({{ '/wiki/Troubleshooting-and-FAQ/#why-is-a-row-na-instead-of-failing' | relative_url }})
 - [The QUIC row fails but everything else works]({{ '/wiki/Troubleshooting-and-FAQ/#the-quic-row-fails-but-everything-else-works' | relative_url }})
 - [Encrypted DNS fails but `dig` works fine]({{ '/wiki/Troubleshooting-and-FAQ/#encrypted-dns-fails-but-dig-works-fine' | relative_url }})
@@ -84,6 +84,6 @@ explanatory half is written in the
 [GitHub wiki](https://github.com/heymaikol/network-doctor/wiki) and the exact
 reference half lives in
 [`docs/`](https://github.com/heymaikol/network-doctor/tree/main/docs) beside the
-code, so each page changes in the same place it always did — see
+code, so each page changes in the same place it always did; see
 [Documentation Map]({{ '/wiki/Documentation-Map/' | relative_url }}) for what is
 authoritative where.

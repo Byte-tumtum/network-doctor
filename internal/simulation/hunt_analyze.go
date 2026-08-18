@@ -38,7 +38,7 @@ var HuntSeverities = []HuntSeverity{
 // not have" belongs to FindingDiagnosticContradiction, where the finding still
 // names which dimension disagreed, and a probe that spent its deadline is
 // either the correct diagnosis of an injected fault, a whole-process hang
-// (FindingNetdocHang), or harness failure (FindingSimulatorFailure) — never a
+// (FindingNetdocHang), or harness failure (FindingSimulatorFailure), never a
 // kind of its own.
 const (
 	FindingFalseNegative           = "comparison_false_negative"
@@ -248,7 +248,7 @@ func collectObservedTruth(manifest GeneratedCaseManifest, report *Report) Observ
 
 // observedFamilyTruth reads the one measured record for this family and repeats
 // its state. It invents nothing: no record means no observation was taken, and
-// an unobserved family is unknown, not unavailable — only the holder-side probe
+// an unobserved family is unknown, not unavailable: only the holder-side probe
 // gets to say a family was absent. Two records leave no single answer.
 func observedFamilyTruth(report *Report, family string) string {
 	client := observedClient(report)
@@ -311,7 +311,7 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 		})
 	// The DNS families want both halves. The timeline says this exact scheduled
 	// fault reached the resolver, and the resolver's per-query record says a
-	// client was actually served the faulty outcome — a resolver moved into
+	// client was actually served the faulty outcome, since a resolver moved into
 	// SERVFAIL that nobody queried refused nobody.
 	case "dns.servfail", "dns.drop":
 		outcome, served := DNSOutcomeSERVFAIL, dnsServedSERVFAIL
@@ -386,9 +386,9 @@ func noDefaultRouteObserved(mutation GeneratedMutation, report *Report) bool {
 
 // wrongDefaultRouteObserved is the one family where "the family is unreachable"
 // is nowhere near enough: a downstream outage looks identical from the client.
-// What makes it a wrong turn rather than a broken path is the control endpoint
-// — reached over its own specific route through the next hop the default used
-// to name — still answering. That proves the original gateway forwards, the
+// What makes it a wrong turn rather than a broken path is the control endpoint,
+// reached over its own specific route through the next hop the default used
+// to name, still answering. That proves the original gateway forwards, the
 // network beyond it works, and the only thing that changed is where the default
 // points.
 func wrongDefaultRouteObserved(mutation GeneratedMutation, report *Report) bool {
