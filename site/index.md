@@ -63,9 +63,9 @@ service?**
 
 ## Common symptoms
 
-- [DNS resolves but nothing loads: the path is unavailable]({{ '/wiki/Understanding-Your-Diagnosis/#network--the-path-is-unavailable' | relative_url }})
-- [The path works but the far end does not answer]({{ '/wiki/Understanding-Your-Diagnosis/#service--the-path-works-the-far-end-does-not' | relative_url }})
-- [A name did not resolve at all]({{ '/wiki/Understanding-Your-Diagnosis/#dns--the-name-did-not-resolve' | relative_url }})
+- [DNS resolves but nothing loads: the path is unavailable]({{ '/wiki/Understanding-Your-Diagnosis/#network-the-path-is-unavailable' | relative_url }})
+- [The path works but the far end does not answer]({{ '/wiki/Understanding-Your-Diagnosis/#service-the-path-works-the-far-end-does-not' | relative_url }})
+- [A name did not resolve at all]({{ '/wiki/Understanding-Your-Diagnosis/#dns-the-name-did-not-resolve' | relative_url }})
 - [Telling "my network" and "their service" apart, worked through]({{ '/wiki/Understanding-Your-Diagnosis/#worked-example-telling-the-two-important-cases-apart' | relative_url }})
 - [The Path MTU row warned: what to actually do]({{ '/wiki/Troubleshooting-and-FAQ/#the-path-mtu-row-warned-what-do-i-actually-do' | relative_url }})
 - [How path MTU is measured without root]({{ '/wiki/How-Network-Doctor-Works/#path-mtu-without-root' | relative_url }})
