@@ -60,6 +60,22 @@ source:
   enabled: true
   prefix_template: "{{ .ProjectName }}-{{ .Version }}/"
 
+# Syft catalogs what each artifact actually contains. Two entries because the
+# classes do not overlap: `binary` covers every executable we publish (the bare
+# netdoc/netdoc-sim downloads and the .exe inside the Windows zip), `package`
+# covers the .deb/.rpm/.apk. Defaults otherwise: spdx-json, and name templates
+# that already carry binary/os/arch or the full artifact name, so nothing
+# overwrites anything.
+#
+# The sbom pipe runs before the checksum pipe, so these land in checksums.txt
+# and the release attestation covers them like every other artifact. No second
+# signing scheme needed.
+sboms:
+  - id: binaries
+    artifacts: binary
+  - id: packages
+    artifacts: package
+
 checksum:
   name_template: "checksums.txt"
   # The vendor tarball is what COPR actually compiles, so it has to be a
