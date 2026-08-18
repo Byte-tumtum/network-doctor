@@ -579,8 +579,8 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 
 	portal := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, error) {
-			return http.StatusFound, "https://portal.example/signin", nil
+		portalCheck: func(context.Context) (int, string, time.Time, error) {
+			return http.StatusFound, "https://portal.example/signin", time.Time{}, nil
 		},
 	}
 	r := portal.internetProbe(context.Background(), nil)
@@ -597,7 +597,9 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 
 	clean := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, error) { return http.StatusNoContent, "", nil },
+		portalCheck: func(context.Context) (int, string, time.Time, error) {
+			return http.StatusNoContent, "", time.Time{}, nil
+		},
 	}
 	if r := clean.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
 		t.Errorf("204 network = %+v, want a plain PASS", r)
@@ -605,7 +607,7 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 
 	noRedirect := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, error) { return http.StatusOK, "", nil },
+		portalCheck: func(context.Context) (int, string, time.Time, error) { return http.StatusOK, "", time.Time{}, nil },
 	}
 	if r := noRedirect.internetProbe(context.Background(), nil); r.Status != StatusFail ||
 		r.Portal == nil || r.Portal.RedirectURL != "" {
@@ -619,8 +621,8 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 			return nil, errors.New("connection refused")
 		},
 		interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, error) {
-			return http.StatusFound, "https://portal.example/signin", nil
+		portalCheck: func(context.Context) (int, string, time.Time, error) {
+			return http.StatusFound, "https://portal.example/signin", time.Time{}, nil
 		},
 	}
 	if r := blocked443.internetProbe(context.Background(), nil); r.Status != StatusFail ||
@@ -632,8 +634,8 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 	// An unreachable check is not evidence of a portal, so the dial result stands.
 	broken := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, error) {
-			return 0, "", errors.New("no route to host")
+		portalCheck: func(context.Context) (int, string, time.Time, error) {
+			return 0, "", time.Time{}, errors.New("no route to host")
 		},
 	}
 	if r := broken.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
@@ -1293,12 +1295,12 @@ func TestPortalCheck(t *testing.T) {
 	t.Setenv("http_proxy", "http://192.0.2.9:1")
 
 	portalProbeURL = base + "/generate_204"
-	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusNoContent || redirect != "" {
+	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusNoContent || redirect != "" {
 		t.Errorf("clean path = (%d, %q, %v), want (204, empty, nil) with the proxy env ignored", code, redirect, err)
 	}
 
 	portalProbeURL = base + "/redirect"
-	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != base+"/signin" {
+	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != base+"/signin" {
 		t.Errorf("intercepted path = (%d, %q, %v), want the 302 and resolved HTTP URL", code, redirect, err)
 	}
 	if chased {
@@ -1306,7 +1308,7 @@ func TestPortalCheck(t *testing.T) {
 	}
 
 	portalProbeURL = base + "/unsafe"
-	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != "" {
+	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != "" {
 		t.Errorf("unsafe redirect = (%d, %q, %v), want the 302 without a non-HTTP URL", code, redirect, err)
 	}
 
@@ -1323,8 +1325,95 @@ func TestPortalCheck(t *testing.T) {
 
 	// A dead endpoint is an error, not a zero-status verdict callers can read.
 	_ = p.Close()
-	if code, redirect, err := portalCheckWithDial(context.Background(), p.dial); err == nil || code != 0 || redirect != "" {
+	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err == nil || code != 0 || redirect != "" {
 		t.Errorf("dead endpoint = (%d, %q, %v), want (0, empty, error)", code, redirect, err)
+	}
+}
+
+// The Date on the 204 is the only remote clock netdoc gets for free, so the
+// round trip has to hand it back verbatim and degrade to the zero time rather
+// than to a wrong time when the header is absent or unparsable.
+func TestPortalCheckDate(t *testing.T) {
+	const stamped = "Sun, 06 Nov 1994 08:49:37 GMT"
+	want := time.Date(1994, time.November, 6, 8, 49, 37, 0, time.UTC)
+
+	p := newPipeNet(t)
+	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dated":
+			w.Header().Set("Date", stamped)
+		case "/nodate":
+			// net/http stamps a Date of its own unless the header is removed.
+			w.Header()["Date"] = nil
+		case "/baddate":
+			w.Header().Set("Date", "the day before yesterday")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})}
+	p.serve(t, srv, func() error { return srv.Serve(p) })
+
+	defer func(orig string) { portalProbeURL = orig }(portalProbeURL)
+	const base = "http://portal.example"
+
+	for _, c := range []struct {
+		path string
+		want time.Time
+	}{
+		{"/dated", want},
+		{"/nodate", time.Time{}},
+		{"/baddate", time.Time{}},
+	} {
+		portalProbeURL = base + c.path
+		code, _, date, err := portalCheckWithDial(context.Background(), p.dial)
+		if err != nil || code != http.StatusNoContent {
+			t.Fatalf("%s = (%d, %v), want a clean 204", c.path, code, err)
+		}
+		if !date.Equal(c.want) {
+			t.Errorf("%s date = %v, want %v", c.path, date, c.want)
+		}
+	}
+}
+
+// Remote time is evidence only when it came from the endpoint we addressed.
+// Anything but the 204 was written by whatever intercepted the request, and an
+// interceptor's clock must never be read as the network's.
+func TestInternetProbeClockOffset(t *testing.T) {
+	dialOK := func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil }
+	ifaces := func() ([]net.Interface, error) { return nil, nil }
+	behind := time.Now().Add(-3 * time.Hour)
+
+	cases := []struct {
+		name     string
+		code     int
+		date     time.Time
+		wantSkew bool
+	}{
+		{"clean 204 with a date", http.StatusNoContent, behind, true},
+		{"clean 204 without a date", http.StatusNoContent, time.Time{}, false},
+		{"portal redirect with a date", http.StatusFound, behind, false},
+		{"interception answering 200 with a date", http.StatusOK, behind, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := &netops{
+				dialContext: dialOK, interfaces: ifaces,
+				portalCheck: func(context.Context) (int, string, time.Time, error) {
+					return c.code, "", c.date, nil
+				},
+			}
+			got := o.internetProbe(context.Background(), nil).clockOffset
+			if !c.wantSkew {
+				if got != 0 {
+					t.Errorf("clockOffset = %v, want no reading", got)
+				}
+				return
+			}
+			// The offset carries one in-process round trip, so it is exact to
+			// far better than the minute of slack allowed here.
+			if diff := (got - 3*time.Hour).Abs(); diff > time.Minute {
+				t.Errorf("clockOffset = %v, want about 3h", got)
+			}
+		})
 	}
 }
 

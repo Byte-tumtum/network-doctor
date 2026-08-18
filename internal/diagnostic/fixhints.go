@@ -34,6 +34,12 @@ func dnsFix(goos string) string {
 	}
 }
 
+// clockHedgeSuffix is the maybe that a measured offset can settle. It hangs off
+// the end of the certificate-date hint so reconcileClockSkew can drop it when
+// the reading points the way that rules the clock out, without having to
+// rebuild a string only tlsFix holds the certificate to build.
+const clockHedgeSuffix = ", or check this machine's clock"
+
 // tlsFix names what actually broke the handshake. Go's verification errors
 // carry the offending certificate, so an expiry or a name mismatch can be
 // answered with dates and names instead of a list of maybes. Unrecognized
@@ -49,7 +55,7 @@ func tlsFix(err error) string {
 	case errors.As(err, &hostErr):
 		return "cert is for " + certNames(hostErr.Certificate) + ", not " + hostErr.Host + ": wrong SNI/vhost, or the address belongs to someone else"
 	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
-		return certWindow(invalid.Cert) + ": renew the cert, or check this machine's clock"
+		return certWindow(invalid.Cert) + ": renew the cert" + clockHedgeSuffix
 	case errors.As(err, &unknown):
 		return "cert signed by an unknown CA: MITM proxy, self-signed cert, or a missing root store"
 	case errors.As(err, &record):

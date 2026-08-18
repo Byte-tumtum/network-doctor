@@ -4,8 +4,10 @@
 package diagnostic
 
 import (
+	"crypto/x509"
 	"strings"
 	"testing"
+	"time"
 )
 
 // targetOrder is the full https probe order used to exercise the target-mode
@@ -160,5 +162,273 @@ func TestDiagnoseGenericDowngradedNoProxy(t *testing.T) {
 	}
 	if verdict != VerdictNetwork {
 		t.Errorf("got verdict %q, want %q", verdict, VerdictNetwork)
+	}
+}
+
+// The threshold is a boundary the prose depends on, so it is tested at the
+// boundary rather than near it: exactly at the threshold counts as material.
+func TestClockSkewThresholdBoundary(t *testing.T) {
+	cases := []struct {
+		name     string
+		offset   time.Duration
+		material bool
+	}{
+		{"correct clock", 0, false},
+		// Written out rather than derived from clockSkewThreshold: the point
+		// is to pin the boundary itself, which a test phrased in terms of the
+		// constant would follow silently if the constant moved.
+		{"just below, fast", 4*time.Minute + 59*time.Second, false},
+		{"just below, slow", -(4*time.Minute + 59*time.Second), false},
+		{"exactly at, fast", 5 * time.Minute, true},
+		{"exactly at, slow", -5 * time.Minute, true},
+		{"just above, fast", 5*time.Minute + time.Second, true},
+		{"just above, slow", -(5*time.Minute + time.Second), true},
+		{"materially slow", -72 * time.Hour, true},
+		{"materially fast", 5 * time.Hour, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := map[ProbeID]ProbeResult{ProbeInternet: {Status: StatusPass, clockOffset: c.offset}}
+			d, ok := clockSkew(res)
+			if ok != c.material {
+				t.Errorf("clockSkew(%v) material = %v, want %v", c.offset, ok, c.material)
+			}
+			if d != c.offset {
+				t.Errorf("clockSkew(%v) offset = %v, want the signed value back", c.offset, d)
+			}
+		})
+	}
+	// A run with no egress result at all has nothing to read, and must not
+	// invent a reading out of the zero ProbeResult.
+	if _, ok := clockSkew(map[ProbeID]ProbeResult{}); ok {
+		t.Error("clockSkew reported material skew with no egress result")
+	}
+}
+
+// Direction and unit are the two halves the user acts on, so both are pinned.
+func TestClockSkewWording(t *testing.T) {
+	cases := []struct {
+		offset time.Duration
+		phrase string
+		effect string
+	}{
+		{-72 * time.Hour, "this machine's clock is about 3 days slow", "certificates that are already valid look not yet valid"},
+		{5 * time.Hour, "this machine's clock is about 5 hours fast", "certificates that are still valid look expired"},
+		{-7 * time.Minute, "this machine's clock is about 7 minutes slow", "certificates that are already valid look not yet valid"},
+		{100 * time.Minute, "this machine's clock is about 2 hours fast", "certificates that are still valid look expired"},
+	}
+	for _, c := range cases {
+		if got := clockSkewPhrase(c.offset); got != c.phrase {
+			t.Errorf("clockSkewPhrase(%v) = %q, want %q", c.offset, got, c.phrase)
+		}
+		if got := clockSkewEffect(c.offset); got != c.effect {
+			t.Errorf("clockSkewEffect(%v) = %q, want %q", c.offset, got, c.effect)
+		}
+	}
+}
+
+// A wrong clock only explains a certificate-date rejection when it points the
+// same way as the rejection. The mismatched pairings are a genuinely bad
+// certificate next to an unrelated bad clock.
+func TestSkewExplainsTLS(t *testing.T) {
+	cases := []struct {
+		cause  string
+		offset time.Duration
+		want   bool
+	}{
+		{TLSCauseCertificateNotYet, -72 * time.Hour, true},
+		{TLSCauseCertificateNotYet, 72 * time.Hour, false},
+		{TLSCauseCertificateExpired, 72 * time.Hour, true},
+		{TLSCauseCertificateExpired, -72 * time.Hour, false},
+		{TLSCauseHostnameMismatch, 72 * time.Hour, false},
+		{TLSCauseUntrustedIssuer, -72 * time.Hour, false},
+		{TLSCauseHandshake, 72 * time.Hour, false},
+		{TLSCauseTimeout, 72 * time.Hour, false},
+	}
+	for _, c := range cases {
+		if got := skewExplainsTLS(c.cause, c.offset); got != c.want {
+			t.Errorf("skewExplainsTLS(%q, %v) = %v, want %v", c.cause, c.offset, got, c.want)
+		}
+	}
+}
+
+// The fix hint stops guessing about the clock once the egress probe has
+// actually measured it, and keeps guessing when it has not.
+func TestReconcileClockSkewFixHints(t *testing.T) {
+	const guess = "TLS broken: clock skew, bad/expired cert, or MITM proxy?"
+	cases := []struct {
+		name    string
+		offset  time.Duration
+		cause   string
+		status  Status
+		fix     string
+		want    string
+		wantNot string
+	}{
+		{
+			name: "expired cert with a fast clock", offset: 5 * time.Hour,
+			cause: TLSCauseCertificateExpired, status: StatusFail, fix: "renew the cert" + clockHedgeSuffix,
+			want: "about 5 hours fast",
+		},
+		{
+			name: "not yet valid cert with a slow clock", offset: -72 * time.Hour,
+			cause: TLSCauseCertificateNotYet, status: StatusFail, fix: "renew the cert" + clockHedgeSuffix,
+			want: "about 3 days slow",
+		},
+		{
+			name: "unclassified handshake failure", offset: 5 * time.Hour,
+			cause: TLSCauseHandshake, status: StatusFail, fix: guess,
+			want: "separately this machine's clock is about 5 hours fast", wantNot: guess,
+		},
+		{
+			name: "hostname mismatch keeps its own answer", offset: 5 * time.Hour,
+			cause: TLSCauseHostnameMismatch, status: StatusFail, fix: "cert is for other.example, not host",
+			want: "cert is for other.example, not host", wantNot: "clock",
+		},
+		{
+			name: "expired cert with a slow clock drops the clock maybe", offset: -5 * time.Hour,
+			cause: TLSCauseCertificateExpired, status: StatusFail, fix: "renew the cert" + clockHedgeSuffix,
+			want: "renew the cert", wantNot: "clock",
+		},
+		{
+			name: "not yet valid cert with a fast clock drops the clock maybe", offset: 5 * time.Hour,
+			cause: TLSCauseCertificateNotYet, status: StatusFail, fix: "renew the cert" + clockHedgeSuffix,
+			want: "renew the cert", wantNot: "clock",
+		},
+		{
+			name: "no measurable skew keeps the fallback", offset: 0,
+			cause: TLSCauseHandshake, status: StatusFail, fix: guess,
+			want: guess,
+		},
+		{
+			name: "skew below the threshold keeps the fallback", offset: clockSkewThreshold - time.Second,
+			cause: TLSCauseHandshake, status: StatusFail, fix: guess,
+			want: guess,
+		},
+		{
+			name: "healthy TLS is left alone", offset: 72 * time.Hour,
+			cause: "", status: StatusPass, fix: "",
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := map[ProbeID]ProbeResult{
+				ProbeInternet: {Status: StatusPass, clockOffset: c.offset},
+				ProbeTLS:      {Status: c.status, Cause: c.cause, Fix: c.fix},
+			}
+			reconcileClockSkew(res)
+			got := res[ProbeTLS].Fix
+			if !strings.Contains(got, c.want) {
+				t.Errorf("fix = %q, want substring %q", got, c.want)
+			}
+			if c.wantNot != "" && strings.Contains(got, c.wantNot) {
+				t.Errorf("fix = %q, want it to drop %q", got, c.wantNot)
+			}
+		})
+	}
+}
+
+// The headline stops hedging only when the measurement explains the failure.
+func TestDiagnoseTLSClockSkew(t *testing.T) {
+	const hedge = "bad/expired cert, clock skew, or MITM proxy"
+	tg := mustTarget(t, "https://host")
+	cases := []struct {
+		name    string
+		offset  time.Duration
+		cause   string
+		want    string
+		wantNot string
+	}{
+		{
+			name: "slow clock explains a not-yet-valid cert", offset: -72 * time.Hour, cause: TLSCauseCertificateNotYet,
+			want: "fails because this machine's clock is about 3 days slow, so certificates that are already valid look not yet valid.", wantNot: hedge,
+		},
+		{
+			name: "fast clock explains an expired cert", offset: 5 * time.Hour, cause: TLSCauseCertificateExpired,
+			want: "fails because this machine's clock is about 5 hours fast, so certificates that are still valid look expired.", wantNot: hedge,
+		},
+		{name: "no reading keeps the hedge", offset: 0, cause: TLSCauseCertificateExpired, want: hedge},
+		{name: "sub-threshold skew keeps the hedge", offset: clockSkewThreshold - time.Second, cause: TLSCauseCertificateExpired, want: hedge},
+		{
+			name: "slow clock cannot have expired the cert", offset: -5 * time.Hour, cause: TLSCauseCertificateExpired,
+			want: "fails: bad/expired cert or MITM proxy.", wantNot: "clock",
+		},
+		{
+			name: "fast clock cannot have made the cert not yet valid", offset: 5 * time.Hour, cause: TLSCauseCertificateNotYet,
+			want: "fails: bad/expired cert or MITM proxy.", wantNot: "clock",
+		},
+		{name: "hostname mismatch keeps the hedge", offset: 5 * time.Hour, cause: TLSCauseHostnameMismatch, want: hedge},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := map[ProbeID]ProbeResult{
+				ProbeIface: {Status: StatusPass}, ProbeInternet: {Status: StatusPass, clockOffset: c.offset},
+				ProbeDNS: {Status: StatusPass}, ProbeTargetTCP: {Status: StatusPass},
+				ProbeTLS: {Status: StatusFail, Cause: c.cause}, ProbeHTTP: {Status: StatusPass}, ProbeHTTPS: {Status: StatusSkip},
+			}
+			v, verdict := Diagnose(tg, targetOrder, res)
+			if !strings.Contains(v, c.want) {
+				t.Errorf("got %q, want substring %q", v, c.want)
+			}
+			if c.wantNot != "" && strings.Contains(v, c.wantNot) {
+				t.Errorf("got %q, want it to drop %q", v, c.wantNot)
+			}
+			if verdict != VerdictService {
+				t.Errorf("verdict = %q, want %q", verdict, VerdictService)
+			}
+		})
+	}
+}
+
+// The clock evidence has to survive contact with the strings tlsFix actually
+// produces, not test-local copies of them: the hint is rewritten by trimming a
+// suffix, so a table that spells the suffix out itself would keep passing after
+// the real hint stopped ending in it. Both directions of both certificate-date
+// rejections are checked end to end, from the x509 error to the finished row.
+func TestClockSkewRewritesRealTLSHint(t *testing.T) {
+	now := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+	expired := x509.CertificateInvalidError{
+		Cert:   &x509.Certificate{NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-24 * time.Hour)},
+		Reason: x509.Expired,
+	}
+	notYet := x509.CertificateInvalidError{
+		Cert:   &x509.Certificate{NotBefore: now.Add(24 * time.Hour), NotAfter: now.Add(48 * time.Hour)},
+		Reason: x509.Expired,
+	}
+	cases := []struct {
+		name   string
+		err    error
+		offset time.Duration
+		want   string
+	}{
+		{
+			"expired cert, fast clock", expired, 5 * time.Hour,
+			"this machine's clock is about 5 hours fast, so certificates that are still valid look expired: set the clock (enable network time) and retry",
+		},
+		{
+			"expired cert, slow clock", expired, -5 * time.Hour,
+			"cert is only valid 2030-05-30 → 2030-05-31: renew the cert",
+		},
+		{
+			"not yet valid cert, slow clock", notYet, -5 * time.Hour,
+			"this machine's clock is about 5 hours slow, so certificates that are already valid look not yet valid: set the clock (enable network time) and retry",
+		},
+		{
+			"not yet valid cert, fast clock", notYet, 5 * time.Hour,
+			"cert is only valid 2030-06-02 → 2030-06-03: renew the cert",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := map[ProbeID]ProbeResult{
+				ProbeInternet: {Status: StatusPass, clockOffset: c.offset},
+				ProbeTLS:      {Status: StatusFail, Cause: tlsFailureCause(c.err, now), Fix: tlsFix(c.err)},
+			}
+			reconcileClockSkew(res)
+			if got := res[ProbeTLS].Fix; got != c.want {
+				t.Errorf("fix = %q, want %q", got, c.want)
+			}
+		})
 	}
 }

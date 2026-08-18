@@ -162,6 +162,11 @@ type ProbeResult struct {
 	Detail      string
 	Fix         string
 	timedOut    bool // protocol failure was a timeout; used to correlate PMTU evidence.
+	// clockOffset is this machine's clock minus the Date of a 204 from
+	// portalProbeURL: positive when the local clock runs fast. Zero means
+	// there was no usable reading, which behaves the same as a correct clock
+	// because both leave nothing to say.
+	clockOffset time.Duration
 	// resolver is the second-opinion DNS server ProbeDNSPublic queried, so the
 	// cross-probe pass can name it in prose without reaching for a constant.
 	resolver string
@@ -324,10 +329,11 @@ type netops struct {
 	tlsRootCAs   *x509.CertPool
 	ssid         func(ctx context.Context, iface string) string
 	proxyFromEnv func(*http.Request) (*url.URL, error)
-	// portalCheck returns the status code portalProbeURL answered with and an
-	// optional validated HTTP(S) redirect URL.
+	// portalCheck returns the status code portalProbeURL answered with, an
+	// optional validated HTTP(S) redirect URL, and the response's Date, which
+	// is the zero time when the header was absent or unparsable.
 	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
-	portalCheck func(ctx context.Context) (int, string, error)
+	portalCheck func(ctx context.Context) (int, string, time.Time, error)
 	// routeCause classifies a failed direct path from OS route/neighbor state.
 	// Nil keeps deterministic probe unit tests independent of the host.
 	routeCause func(net.IP) string
@@ -364,7 +370,7 @@ var defaultOps = &netops{
 	},
 	ssid:         ssid,
 	proxyFromEnv: proxyFromEnvironment,
-	portalCheck: func(ctx context.Context) (int, string, error) {
+	portalCheck: func(ctx context.Context) (int, string, time.Time, error) {
 		return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
 	},
 	routeCause: routeFailureCause,
@@ -479,7 +485,7 @@ func opsFromSources(sources *SourceAddresses) *netops {
 	o.lookupPublicIP = func(ctx context.Context, host, server string) ([]net.IP, error) {
 		return lookupIPPublicWithDial(ctx, host, o.dialContext, server)
 	}
-	o.portalCheck = func(ctx context.Context) (int, string, error) {
+	o.portalCheck = func(ctx context.Context) (int, string, time.Time, error) {
 		return portalCheckWithDial(ctx, o.dialContext)
 	}
 	return &o
@@ -624,14 +630,15 @@ func dnsServerLabel(addr string) string {
 }
 
 // portalCheckWithDial fetches portalProbeURL and reports the status code it got
-// plus a valid HTTP(S) redirect URL, if the response advertised one.
+// plus a valid HTTP(S) redirect URL, if the response advertised one, and the
+// Date the responder stamped on it.
 // Proxy and redirect following are both off: the direct-egress row must not
 // borrow the proxy's path, and an interception usually announces itself as
 // the 302 we'd otherwise chase to a sign-in page.
-func portalCheckWithDial(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) (int, string, error) {
+func portalCheckWithDial(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) (int, string, time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalProbeURL, nil)
 	if err != nil {
-		return 0, "", err
+		return 0, "", time.Time{}, err
 	}
 	c := &http.Client{
 		Transport: &http.Transport{
@@ -644,18 +651,22 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return 0, "", err
+		return 0, "", time.Time{}, err
 	}
 	_ = resp.Body.Close()
+	// http.ParseTime accepts the three date formats RFC 9110 allows. An absent
+	// or unparsable Date leaves the zero time, and every caller reads that as
+	// "no reading" rather than as a time.
+	date, _ := http.ParseTime(resp.Header.Get("Date"))
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if u, err := resp.Location(); err == nil && u.Hostname() != "" {
 			switch strings.ToLower(u.Scheme) {
 			case "http", "https":
-				return resp.StatusCode, u.String(), nil
+				return resp.StatusCode, u.String(), date, nil
 			}
 		}
 	}
-	return resp.StatusCode, "", nil
+	return resp.StatusCode, "", date, nil
 }
 
 // BuildProbesFromSources constructs the DAG with separate selected-interface
@@ -862,6 +873,9 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// a real status code is evidence either way.
 	var portalCode int
 	var portalURL string
+	// portalSkew is this machine's clock minus the responder's Date, sampled
+	// in the goroutine so it carries the HTTP round trip and nothing else.
+	var portalSkew time.Duration
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, v4.ips, 443)
@@ -873,12 +887,24 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		// Runs alongside the dials rather than after them: it costs nothing
 		// when egress is clean, and its answer is only consulted on success.
 		wg.Go(func() {
-			if code, redirect, err := o.portalCheck(ctx); err == nil {
+			if code, redirect, date, err := o.portalCheck(ctx); err == nil {
 				portalCode, portalURL = code, redirect
+				if !date.IsZero() {
+					portalSkew = time.Since(date)
+				}
 			}
 		})
 	}
 	wg.Wait()
+	// Only the 204 leaves usable clock evidence: any other status is an
+	// interception this check can see, and an interceptor's clock speaks for
+	// the interceptor. A 204 is not proof of an unmodified path, since this
+	// is plain HTTP and a transparent proxy could synthesize both the status
+	// and the Date. It is the same heuristic the portal verdict already rests
+	// on, and no stronger.
+	if portalCode == http.StatusNoContent {
+		r.clockOffset = portalSkew
+	}
 	r.Families = &FamilyConnectivity{IPv4: familyState(v4.ips, v4.conn), IPv6: familyState(v6.ips, v6.conn)}
 
 	// IPv4 headlines the result unless it lost and IPv6 won. Not a value

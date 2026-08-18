@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // Diagnose computes the plain-English summary and its machine-readable
@@ -175,6 +177,19 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		// certificate must continue down to their service-specific verdict.
 		return "TCP reaches " + hp + " but the protocol and bulk-transfer checks both stall, which is evidence of a path MTU black hole rather than a broken service (see the Path MTU row).", VerdictNetwork
 	case has(ProbeTLS) && fail(ProbeTLS):
+		// With a measured offset that points the same way as the certificate
+		// error there is nothing left to hedge about, so name it instead.
+		// An offset pointing the other way settles the hedge just as well, in
+		// the opposite direction: it cannot have caused this, so it comes off
+		// the list of maybes instead of onto it.
+		if d, ok := clockSkew(res); ok {
+			switch {
+			case skewExplainsTLS(res[ProbeTLS].Cause, d):
+				return "TCP reaches " + hp + " but the TLS handshake fails because " + clockSkewPhrase(d) + ", so " + clockSkewEffect(d) + ".", VerdictService
+			case skewDisprovesTLS(res[ProbeTLS].Cause, d):
+				return "TCP reaches " + hp + " but the TLS handshake fails: bad/expired cert or MITM proxy.", VerdictService
+			}
+		}
 		return "TCP reaches " + hp + " but the TLS handshake fails: bad/expired cert, clock skew, or MITM proxy.", VerdictService
 	case has(ProbeHTTPS) && fail(ProbeHTTPS):
 		return "TLS is fine but no HTTPS response from " + hp + ": application-layer or proxy block.", VerdictService
@@ -277,6 +292,120 @@ func Finalize(res map[ProbeID]ProbeResult) {
 	// After the downgrade, so "direct egress worked" means what the finished
 	// report says it means rather than what it said mid-pass.
 	reconcileEncryptedDNS(res)
+	reconcileClockSkew(res)
+}
+
+// clockSkewThreshold is how far this machine's clock has to be off the
+// network's before netdoc will name it rather than list it as a maybe. HTTP
+// Date has one-second granularity and the reading carries a round trip of
+// latency and scheduler jitter, so the floor sits far above all three; it is
+// also roughly where a wrong clock stops being cosmetic and starts rejecting
+// certificates that everyone else accepts.
+const clockSkewThreshold = 5 * time.Minute
+
+// clockSkew returns the signed local-minus-remote offset the egress probe
+// measured, and whether it is large enough to act on. The reading only exists
+// when the captive-portal check got a clean 204 from the fixed connectivity
+// endpoint, so a portal that check can see never supplies it. That is a
+// heuristic over plain HTTP, not authentication, which is why this is usable
+// evidence rather than proof: the causal claim is only made when a
+// certificate-date rejection independently points the same way. An offset
+// exactly at the threshold counts.
+func clockSkew(res map[ProbeID]ProbeResult) (time.Duration, bool) {
+	d := res[ProbeInternet].clockOffset
+	return d, d.Abs() >= clockSkewThreshold
+}
+
+// skewExplainsTLS reports whether the offset points the same way as the
+// certificate error. A slow clock is what makes a valid certificate look not
+// yet valid, and a fast one is what makes it look expired. The other two
+// pairings are a genuinely bad certificate standing next to an unrelated bad
+// clock, and saying otherwise would send the user to fix the wrong thing.
+func skewExplainsTLS(cause string, d time.Duration) bool {
+	switch cause {
+	case TLSCauseCertificateNotYet:
+		return d < 0
+	case TLSCauseCertificateExpired:
+		return d > 0
+	}
+	return false
+}
+
+// skewDisprovesTLS reports whether the offset rules the clock out. A
+// certificate-date rejection can only be explained by an offset pointing the
+// same way, so a material offset pointing the other way is evidence against
+// the clock rather than an absence of evidence for it, and the hint should
+// stop offering it.
+func skewDisprovesTLS(cause string, d time.Duration) bool {
+	switch cause {
+	case TLSCauseCertificateNotYet, TLSCauseCertificateExpired:
+		return !skewExplainsTLS(cause, d)
+	}
+	return false
+}
+
+// reconcileClockSkew replaces the TLS row's guess about the clock with the
+// reading the egress probe already took, which settles the guess either way:
+// an offset pointing at the certificate-date rejection becomes the answer, one
+// pointing away from it takes the clock off the list, and the unclassified
+// handshake failure gets the measurement alongside its maybes. Anything else
+// has a specific cause of its own, and a bad clock beside it is a coincidence.
+func reconcileClockSkew(res map[ProbeID]ProbeResult) {
+	d, ok := clockSkew(res)
+	if !ok {
+		return
+	}
+	r, has := res[ProbeTLS]
+	if !has || r.Status != StatusFail {
+		return
+	}
+	switch {
+	case skewExplainsTLS(r.Cause, d):
+		r.Fix = clockSkewPhrase(d) + ", so " + clockSkewEffect(d) + ": set the clock (enable network time) and retry"
+	case skewDisprovesTLS(r.Cause, d):
+		// The certificate remedy stands; only the clock maybe goes, since the
+		// offset runs the wrong way to have produced this rejection.
+		r.Fix = strings.TrimSuffix(r.Fix, clockHedgeSuffix)
+	case r.Cause == TLSCauseHandshake:
+		r.Fix = "TLS broken: bad/expired cert or MITM proxy, and separately " + clockSkewPhrase(d) + ", which can break certificate validation on its own"
+	default:
+		return
+	}
+	res[ProbeTLS] = r
+}
+
+// clockSkewPhrase states the measurement. Direction is the half that decides
+// what the user changes, so it is never dropped.
+func clockSkewPhrase(d time.Duration) string {
+	direction := " fast"
+	if d < 0 {
+		direction = " slow"
+	}
+	return "this machine's clock is about " + humanSkew(d) + direction
+}
+
+// clockSkewEffect names what that offset does to certificate validation.
+func clockSkewEffect(d time.Duration) string {
+	if d < 0 {
+		return "certificates that are already valid look not yet valid"
+	}
+	return "certificates that are still valid look expired"
+}
+
+// humanSkew renders the magnitude of an offset at one sensible unit. Nothing
+// below clockSkewThreshold reaches here, and the cutoffs are placed so the
+// rounded count is never 1, which keeps the plural honest without a special
+// case for it.
+func humanSkew(d time.Duration) string {
+	d = d.Abs()
+	switch {
+	case d >= 48*time.Hour:
+		return strconv.Itoa(int(d.Round(24*time.Hour)/(24*time.Hour))) + " days"
+	case d >= 90*time.Minute:
+		return strconv.Itoa(int(d.Round(time.Hour)/time.Hour)) + " hours"
+	default:
+		return strconv.Itoa(int(d.Round(time.Minute)/time.Minute)) + " minutes"
+	}
 }
 
 // reconcileEncryptedDNS adds the one thing the encrypted row cannot know on its
