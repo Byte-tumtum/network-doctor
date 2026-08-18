@@ -41,6 +41,18 @@ jobs:
       # complete without it.
       - name: Check out the wiki
         run: git clone --depth 1 "${{ github.server_url }}/${{ github.repository }}.wiki.git" wiki
+      # This repository keeps itself em dash free with
+      # TestNoEmDashInTrackedTextFiles. The wiki is a git repository of its own
+      # and GitHub runs no Actions in it, so the same rule is enforced from
+      # here, on the `gollum` trigger that already fires on every wiki edit,
+      # including the browser ones no local hook would ever see. Exit status 1
+      # is grep for "no match", which is the passing case.
+      - name: Check the wiki for em dashes
+        run: |
+          if git -C wiki grep -In --fixed-strings -e $'\u2014'; then
+            echo "::error::em dash on the wiki, reword the sentence rather than swapping the character"
+            exit 1
+          fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
