@@ -8,7 +8,7 @@ Before changing behavior, verify the reported issue against the current HEAD. Do
 
 ## Coding Style & Naming Conventions
 
-Keep OS behavior in build-tagged or platform-suffixed files; pass `GOOS` into testable tables where practical. Preserve probe dependency graph + bounded timeouts. Prefer command argument slices over shell strings. Do not use em dashes anywhere. Rewrite naturally instead.
+Keep OS behavior in build-tagged or platform-suffixed files; pass `GOOS` into testable tables where practical. Preserve probe dependency graph + bounded timeouts. Prefer command argument slices over shell strings. Do not use em dashes anywhere. Rewrite naturally instead; `TestNoEmDashInTrackedTextFiles` fails the build on any that come back.
 
 ## Testing Guidelines
 
