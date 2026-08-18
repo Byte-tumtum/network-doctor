@@ -172,6 +172,41 @@ one draw in six as before. `TestV4DistributionIsUniformOverAnswers` guards it
 with a deliberately wide band: the invariant worth protecting is "every family
 is reachable and none dominates", not a particular percentage.
 
+#### When a new id version is justified
+
+A published id is a permanent promise: whoever types `V1-8F42C1` gets the puzzle
+the person who shared it played, on any machine, forever. Every version in
+`challengeGenerators` stays there for that reason, and
+`TestChallengeIDsResolveToTheSameCaseForever` pins at least one id per version so
+the promise fails the build rather than a player. That test now also refuses a
+version carrying no rows, so a new one cannot ship unpinned.
+
+A version is the cost of keeping that promise. It is not a place to put new
+content, and most new content needs no version at all:
+
+| Change | New id version? |
+| --- | --- |
+| A new playable diagnosis | No. The `challengeConditions` row reaches V4 generation at once, and earlier versions skip it through their frozen lists. |
+| A new hand-picked case | No. Append to `authoredChallenges`. A1 digits derive from the slug, so the table is append-safe and adds no frozen code. |
+| A new base scenario for hunts | No, as long as it is not added to `challengeBasesV3`. |
+| Better answers, reveals, scoring prose, UX, validation | No. None of it is an input to id resolution. |
+| Bumping `HuntGeneratorVersion` | No, and it does not reach Challenge Mode either. V3, V4 and A1 name the hunt version they shipped with as a literal, so a bump leaves every published id where it is. Add the bumped version to `huntGeneratorVersions` rather than replacing the entry there, so old manifests stay resolvable. |
+| Putting a newer hunt generator in front of players | Yes. That is a deliberate choice, not a consequence of the bump, and it repoints nothing until the new version exists. |
+| Changing how selection itself behaves | Yes. This is the only reason V4 exists. |
+
+So the policy is: **V1 to V4 and A1 are permanent compatibility implementations,
+and Challenge Mode does not receive another generator version unless a
+user-facing capability cannot be expressed correctly through the current
+contract.** Wanting the next number is not a reason. There is no V5 pending, and
+its absence is the design working rather than a gap.
+
+The reason this stays cheap is that a version is a selection, not an
+implementation. V1, V2 and V3 are six lines each, parameterizing one shared
+`buildChallengeCase`, and the hunt registry behind them is append-only: an older
+generator is the same list truncated at its own version, so no operator is ever
+copied. V4 is longer only because it changed the algorithm, which is exactly the
+case that earns a version.
+
 ### The challenge contract
 
 Challenge Mode asks one question: can the simulator produce a real, verified

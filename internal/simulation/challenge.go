@@ -612,6 +612,30 @@ func challengeCommand() string {
 // selection, the hunt generator behind it and the base scenarios it draws
 // from) because all three decide what a shared id means.
 // TestChallengeIDsResolveToTheSameCaseForever pins that chain.
+//
+// When a version is justified, and when it is not. A version is the cost of
+// keeping a promise, never a place to put new content, so it is added only when
+// keeping an existing id pointing where it points leaves no alternative:
+//
+//   - a new playable diagnosis does NOT need one. A row in challengeConditions
+//     reaches V4 generation immediately, and earlier versions skip it through
+//     their own frozen lists. See "Adding a new playable diagnosis" in
+//     docs/simulation-challenge.md.
+//   - a new hand-picked case does NOT need one. Append to authoredChallenges:
+//     A1 digits derive from the slug, so the table is append-safe forever and
+//     costs no frozen code at all.
+//   - bumping HuntGeneratorVersion does NOT force one and does not reach
+//     Challenge Mode at all. V3, V4 and A1 name the hunt version they shipped
+//     with as a literal, so a bump leaves every published id where it is.
+//     Putting a newer hunt generator in front of players is therefore a choice
+//     rather than a consequence, and making that choice is what needs a version.
+//   - changing how selection itself behaves DOES force one. V4 exists for that
+//     reason and no other: V1 to V3 let the search decide the distribution of
+//     answers, and fixing that had to repoint ids, so it became a version.
+//
+// A version copied from the one above it to carry content that the current
+// contract already expresses is pure permanent cost. There is no V5 pending,
+// and the absence of one is the design working rather than a gap to fill.
 var challengeGenerators = map[string]func(id, digits string) (*Challenge, error){
 	"V1": buildChallengeV1,
 	"V2": buildChallengeV2,
