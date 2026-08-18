@@ -838,16 +838,20 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 		}
 		return rep
 	}
-	// condition is the semantic fact the generic hunt oracle should establish
-	// from this run's independent evidence, empty where the fault deliberately
-	// implies nothing Network Doctor claims to report.
+	// conditions are the semantic facts the generic hunt oracle should establish
+	// from this run's independent evidence, in registry order, and empty where
+	// the fault deliberately implies nothing Network Doctor claims to report. A
+	// list rather than one value because a fault can establish more than one:
+	// deleting the client's only default route both takes the family away and
+	// leaves the table without a default, and netdoc has a separate thing to
+	// say about each.
 	tests := []struct {
-		id, base  string
-		killed    bool
-		condition NetworkCondition
-		check     func(*testing.T, Report, Report)
+		id, base   string
+		killed     bool
+		conditions []NetworkCondition
+		check      func(*testing.T, Report, Report)
 	}{
-		{"service.tcp_reset", "healthy", true, "", func(t *testing.T, control, rep Report) {
+		{"service.tcp_reset", "healthy", true, nil, func(t *testing.T, control, rep Report) {
 			if http := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); http.Status != "PASS" {
 				t.Errorf("working HTTP control = %+v", http)
 			}
@@ -860,7 +864,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("generated TCP reset evidence = %+v", rep.Evidence.TCPResets)
 			}
 		}},
-		{"service.tls_expired", "tls-valid", true, ConditionTLSCertificateExpired, func(t *testing.T, control, rep Report) {
+		{"service.tls_expired", "tls-valid", true, []NetworkCondition{ConditionTLSCertificateExpired}, func(t *testing.T, control, rep Report) {
 			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" ||
 				!hasTLSEvidence(control, TLSCertificateValid, "secure-target.test", "secure-target.test", true, "passed") {
 				t.Errorf("valid TLS control = %+v, evidence = %+v", tls, control.Evidence.TLS)
@@ -876,7 +880,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("no expired certificate rejection evidence: %+v", rep.Evidence.TLS)
 			}
 		}},
-		{"proxy.connect_refused", "socks5h-remote-dns-succeeds", true, ConditionProxyDestinationRefused, func(t *testing.T, control, rep Report) {
+		{"proxy.connect_refused", "socks5h-remote-dns-succeeds", true, []NetworkCondition{ConditionProxyDestinationRefused}, func(t *testing.T, control, rep Report) {
 			if proxy := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeProxy)); proxy.Status != "PASS" ||
 				!hasSOCKSEvidence(control, "connect", "domain", "connected") {
 				t.Errorf("working proxy control = %+v, evidence = %+v", proxy, control.Evidence.SOCKSRequests)
@@ -899,7 +903,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("proxy did not record destination refusal: %+v", rep.Evidence.SOCKSRequests)
 			}
 		}},
-		{"quic.udp_443_block", "healthy", true, ConditionQUICUDP443Blocked, func(t *testing.T, control, rep Report) {
+		{"quic.udp_443_block", "healthy", true, []NetworkCondition{ConditionQUICUDP443Blocked}, func(t *testing.T, control, rep Report) {
 			if quic := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeQUIC)); quic.Status != "PASS" {
 				t.Errorf("working QUIC control = %+v", quic)
 			}
@@ -912,7 +916,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("UDP-only QUIC failure = %+v", out)
 			}
 		}},
-		{"encrypted_dns.doh_invalid", "healthy", false, "", func(t *testing.T, control, rep Report) {
+		{"encrypted_dns.doh_invalid", "healthy", false, nil, func(t *testing.T, control, rep Report) {
 			baseline := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeDNSEncrypted))
 			if baseline.Status != "PASS" || !strings.Contains(baseline.Detail, "DoH and DoT both completed") {
 				t.Errorf("working encrypted-DNS control = %+v", baseline)
@@ -923,7 +927,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("DoH-invalid/DoT-valid diagnosis = %+v", check)
 			}
 		}},
-		{"http.status_503", "healthy", false, "", func(t *testing.T, control, rep Report) {
+		{"http.status_503", "healthy", false, nil, func(t *testing.T, control, rep Report) {
 			if baseline := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); baseline.Status != "PASS" || baseline.Detail != "HTTP 200 (responded)" {
 				t.Errorf("working HTTP control = %+v", baseline)
 			}
@@ -938,7 +942,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 		// the only place the distinction exists: one host resets the SYN, the
 		// other counts it and says nothing. Each case checks that it produced its
 		// own evidence and that it did not produce the other's.
-		{"service.connection_refused", "healthy", true, "", func(t *testing.T, control, rep Report) {
+		{"service.connection_refused", "healthy", true, nil, func(t *testing.T, control, rep Report) {
 			if tcp := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
 				t.Errorf("working target control = %+v", tcp)
 			}
@@ -956,7 +960,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("a refusal counted discarded packets: %+v", rep.Evidence.PacketDrops)
 			}
 		}},
-		{"service.tcp_port_blocked", "healthy", true, "", func(t *testing.T, control, rep Report) {
+		{"service.tcp_port_blocked", "healthy", true, nil, func(t *testing.T, control, rep Report) {
 			if tcp := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
 				t.Errorf("working target control = %+v", tcp)
 			}
@@ -975,7 +979,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("a filtered port answered: %+v", rep.Evidence.ControlledTargets)
 			}
 		}},
-		{"service.tls_hostname_mismatch", "tls-valid", true, ConditionTLSHostnameMismatch, func(t *testing.T, control, rep Report) {
+		{"service.tls_hostname_mismatch", "tls-valid", true, []NetworkCondition{ConditionTLSHostnameMismatch}, func(t *testing.T, control, rep Report) {
 			if tls := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeTLS)); tls.Status != "PASS" {
 				t.Errorf("valid TLS control = %+v", tls)
 			}
@@ -998,7 +1002,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 		// The three routing families, on the control that can express all of
 		// them. Each one is checked against the kernel's own route table, which
 		// is the only reading that can show a route is absent.
-		{"routing.no_default_route", "two-router-healthy", true, ConditionIPv4InternetUnreachable, func(t *testing.T, control, rep Report) {
+		{"routing.no_default_route", "two-router-healthy", true, []NetworkCondition{ConditionIPv4InternetUnreachable, ConditionNoDefaultRoute}, func(t *testing.T, control, rep Report) {
 			if before, ok := kernelRouteTable(control.Evidence, "client", "ipv4"); !ok || len(defaultRoutesIn(before)) != 1 {
 				t.Errorf("the control did not start with one default route: %+v", before)
 			}
@@ -1013,7 +1017,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("no-default-route diagnosis = %+v", internet)
 			}
 		}},
-		{"routing.wrong_default_route", "two-router-healthy", true, ConditionIPv4InternetUnreachable, func(t *testing.T, control, rep Report) {
+		{"routing.wrong_default_route", "two-router-healthy", true, []NetworkCondition{ConditionIPv4InternetUnreachable}, func(t *testing.T, control, rep Report) {
 			after, ok := kernelRouteTable(rep.Evidence, "client", "ipv4")
 			defaults := defaultRoutesIn(after)
 			if !ok || len(defaults) != 1 || defaults[0].Via != "10.80.1.254" {
@@ -1029,7 +1033,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 				t.Errorf("wrong-default-route diagnosis = %+v", internet)
 			}
 		}},
-		{"routing.missing_subnet_route", "two-router-healthy", true, "", func(t *testing.T, control, rep Report) {
+		{"routing.missing_subnet_route", "two-router-healthy", true, nil, func(t *testing.T, control, rep Report) {
 			if before, ok := kernelRouteTable(control.Evidence, "client", "ipv4"); !ok ||
 				!specificRouteCovering(before, "10.80.3.20") {
 				t.Errorf("the control did not start with the specific route: %+v", before)
@@ -1102,19 +1106,20 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 			// simulator's own evidence establishes exactly the expected semantic
 			// condition, the real diagnosis recognizes it, and a diagnosis with
 			// its semantics withdrawn does not.
-			var want []NetworkCondition
-			if tc.condition != "" {
-				want = []NetworkCondition{tc.condition}
-			}
-			if got := observedConditions(rep.Evidence, truth); !slices.Equal(got, want) {
+			want := tc.conditions
+			if got := observedConditions(observation{Evidence: rep.Evidence, Truth: truth, Client: observedClient(&rep)}); !slices.Equal(got, want) {
 				t.Errorf("%s observed conditions = %v, want %v", tc.id, got, want)
 			}
 			if accused := unrecognizedConditionFindings(&rep, truth); len(accused) != 0 {
 				t.Errorf("%s: netdoc recognized the condition and hunt accused it anyway: %+v", tc.id, accused)
 			}
 			blind := unrecognizedConditionFindings(withoutSemantics(rep), truth)
-			if len(blind) != len(want) || (len(want) == 1 && blind[0].Expected != string(tc.condition)) {
-				t.Errorf("%s: withdrawing the diagnosis semantics did not surface %v: %+v", tc.id, want, blind)
+			var surfaced []NetworkCondition
+			for _, finding := range blind {
+				surfaced = append(surfaced, NetworkCondition(finding.Expected))
+			}
+			if !slices.Equal(surfaced, want) {
+				t.Errorf("%s: withdrawing the diagnosis semantics surfaced %v, want %v", tc.id, surfaced, want)
 			}
 			tc.check(t, controlReport, rep)
 			assertCleanedUp(t, rep)

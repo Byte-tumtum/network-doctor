@@ -698,7 +698,7 @@ func TestIPv6PreferredPathMutationObservationAndHuntGrading(t *testing.T) {
 		!mutationObserved(mutation, &report, truth) {
 		t.Fatalf("IPv6 preferred path was not independently observed: truth=%+v", truth)
 	}
-	if got := observedConditions(report.Evidence, truth); !slices.Contains(got, ConditionIPv6InternetUnreachable) {
+	if got := observedConditions(observation{Evidence: report.Evidence, Truth: truth}); !slices.Contains(got, ConditionIPv6InternetUnreachable) {
 		t.Fatalf("observed conditions = %v, want IPv6 unreachable", got)
 	}
 

@@ -27,7 +27,20 @@ const (
 	ConditionTLSHostnameMismatch     NetworkCondition = "tls_hostname_mismatch"
 	ConditionProxyDestinationRefused NetworkCondition = "proxy_destination_refused"
 	ConditionQUICUDP443Blocked       NetworkCondition = "quic_udp_443_blocked"
+	ConditionNoDefaultRoute          NetworkCondition = "no_default_route"
 )
+
+// observation is everything a condition rule is allowed to look at: the
+// simulator's own independent evidence, the coarse truth derived from it, and
+// which node the client is. Deliberately not the report, so a rule cannot
+// reach netdoc's diagnosis even by accident. The client is here because some
+// conditions are facts about one node's kernel rather than about the network at
+// large, and a rule cannot pick the right node without being told which it is.
+type observation struct {
+	Evidence Evidence
+	Truth    ObservedTruth
+	Client   string
+}
 
 // conditionRule holds the two halves of one oracle entry side by side, because
 // the pair is what has to be reviewable: what simulator truth establishes this
@@ -45,9 +58,9 @@ type conditionRule struct {
 	// condition. It describes the simulator side only; a finding must be
 	// readable without trusting anything netdoc said.
 	evidence string
-	// observed takes evidence and derived simulator truth rather than the whole
+	// observed takes the simulator's own observation rather than the whole
 	// report, so a rule cannot reach netdoc's diagnosis even by accident.
-	observed func(Evidence, ObservedTruth) bool
+	observed func(observation) bool
 	// recognized reads one diagnosis. It must never read simulator evidence.
 	recognized func(*Diagnosis) bool
 }
@@ -65,8 +78,8 @@ var conditionOracle = []conditionRule{
 		family:    "ipv4",
 		summary:   "IPv4 internet reachability lost",
 		evidence:  "the client node's own TCP dial of the controlled IPv4 endpoints did not complete",
-		observed: func(_ Evidence, truth ObservedTruth) bool {
-			return truth.IPv4 == FamilyStateUnreachable
+		observed: func(o observation) bool {
+			return o.Truth.IPv4 == FamilyStateUnreachable
 		},
 		recognized: func(d *Diagnosis) bool {
 			return diagnosedFamily(d, "ipv4") == FamilyStateUnreachable ||
@@ -78,8 +91,8 @@ var conditionOracle = []conditionRule{
 		family:    "ipv6",
 		summary:   "IPv6 internet reachability lost",
 		evidence:  "the client node's own TCP dial of the controlled IPv6 endpoints did not complete",
-		observed: func(_ Evidence, truth ObservedTruth) bool {
-			return truth.IPv6 == FamilyStateUnreachable
+		observed: func(o observation) bool {
+			return o.Truth.IPv6 == FamilyStateUnreachable
 		},
 		recognized: func(d *Diagnosis) bool {
 			return diagnosedFamily(d, "ipv6") == FamilyStateUnreachable ||
@@ -90,8 +103,8 @@ var conditionOracle = []conditionRule{
 		condition: ConditionTLSCertificateExpired,
 		summary:   "a target serving an expired TLS certificate",
 		evidence:  "a controlled TLS service presented an expired certificate and watched a client refuse it",
-		observed: func(evidence Evidence, _ ObservedTruth) bool {
-			return anyExpiredCertificateRejected(evidence)
+		observed: func(o observation) bool {
+			return anyExpiredCertificateRejected(o.Evidence)
 		},
 		// An expired certificate has its own cause in netdoc's vocabulary and
 		// its own fix, so a bare handshake failure is deliberately not
@@ -105,8 +118,8 @@ var conditionOracle = []conditionRule{
 		condition: ConditionTLSHostnameMismatch,
 		summary:   "a target serving a certificate issued for a different name",
 		evidence:  "a controlled TLS service was asked for a name its certificate does not carry and watched the client refuse it",
-		observed: func(evidence Evidence, _ ObservedTruth) bool {
-			return anyMismatchedCertificateRejected(evidence)
+		observed: func(o observation) bool {
+			return anyMismatchedCertificateRejected(o.Evidence)
 		},
 		// Deliberately not interchangeable with the expired rule next door. The
 		// dates on this certificate are fine and the issuer is trusted; what is
@@ -120,8 +133,8 @@ var conditionOracle = []conditionRule{
 		condition: ConditionProxyDestinationRefused,
 		summary:   "a proxy refusing its CONNECT destination",
 		evidence:  "a controlled SOCKS5 proxy answered a CONNECT request with a refusal",
-		observed: func(evidence Evidence, _ ObservedTruth) bool {
-			return anyProxyCONNECTRefused(evidence)
+		observed: func(o observation) bool {
+			return anyProxyCONNECTRefused(o.Evidence)
 		},
 		// Reaching the proxy and being refused by it is a different fault from
 		// not reaching the proxy at all, and netdoc separates the two. Only the
@@ -140,8 +153,8 @@ var conditionOracle = []conditionRule{
 		// remains healthy": packets can only be counted once a client resolved
 		// the endpoint and put datagrams on the wire, which a dead path would
 		// have prevented.
-		observed: func(evidence Evidence, _ ObservedTruth) bool {
-			return anyUDPPortDropped(evidence, 443)
+		observed: func(o observation) bool {
+			return anyUDPPortDropped(o.Evidence, 443)
 		},
 		// Scoped to the QUIC row because "timeout" is not unique in netdoc's
 		// cause vocabulary, since TLS and encrypted DNS spend it too, and an
@@ -153,14 +166,53 @@ var conditionOracle = []conditionRule{
 				diagnostic.QUICCauseHandshake, diagnostic.QUICCauseTimeout)
 		},
 	},
+	{
+		condition: ConditionNoDefaultRoute,
+		summary:   "a client with no default route left for a family it can no longer reach",
+		evidence:  "the client's own routing table was read back from its kernel and held no default route for that family, while the client's own dial of that family's controlled endpoints did not complete",
+		// Not family-scoped, because netdoc's answer is not: one cause on one
+		// row covers whichever family lost its route, so a per-family accusation
+		// would be asking for a distinction the vocabulary cannot make.
+		observed: func(o observation) bool {
+			return noDefaultRouteFor(o, string(familyIPv4)) || noDefaultRouteFor(o, string(familyIPv6))
+		},
+		// "The internet is unreachable" is true and useless here; the route is
+		// gone, and netdoc has its own cause saying so, with its own fix. A
+		// diagnosis that reports only the lost reachability sends the user to
+		// look at the network instead of at one missing line in their own
+		// routing table, which is why an unreachable family is deliberately not
+		// accepted as a second way of recognizing this.
+		recognized: func(d *Diagnosis) bool {
+			return flaggedCause(d, nil, diagnostic.RouteCauseNoDefaultRoute)
+		},
+	},
+}
+
+// noDefaultRouteFor reads the condition entirely off the client's own kernel
+// and the client's own dials. RouteTableEvidence is what makes an absence
+// statable at all: a record exists for every family the node holds an address
+// in, so an empty default set is the positive claim "this table was read and
+// held none" rather than "nobody looked". The unreachable family alongside it
+// is what says the missing route mattered, since a family reaching the internet
+// over a specific route has lost nothing worth reporting.
+func noDefaultRouteFor(o observation, family string) bool {
+	routes, read := kernelRouteTable(o.Evidence, o.Client, family)
+	if !read || len(defaultRoutesIn(routes)) > 0 {
+		return false
+	}
+	state := o.Truth.IPv6
+	if family == string(familyIPv4) {
+		state = o.Truth.IPv4
+	}
+	return state == FamilyStateUnreachable
 }
 
 // observedConditions returns the semantic conditions this run's independent
 // simulator observations establish, in registry order.
-func observedConditions(evidence Evidence, truth ObservedTruth) []NetworkCondition {
+func observedConditions(o observation) []NetworkCondition {
 	var out []NetworkCondition
 	for _, rule := range conditionOracle {
-		if rule.observed(evidence, truth) {
+		if rule.observed(o) {
 			out = append(out, rule.condition)
 		}
 	}
@@ -194,7 +246,7 @@ func unrecognizedConditionFindings(report *Report, truth ObservedTruth) []HuntCa
 	if diagnosis == nil {
 		return nil
 	}
-	observed := observedConditions(report.Evidence, truth)
+	observed := observedConditions(observation{Evidence: report.Evidence, Truth: truth, Client: observedClient(report)})
 	recognized := recognizedConditions(diagnosis)
 	var findings []HuntCaseFinding
 	for _, rule := range conditionOracle {

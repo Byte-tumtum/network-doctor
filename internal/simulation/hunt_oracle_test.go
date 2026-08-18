@@ -49,6 +49,15 @@ func invalidDoHEvidence() Evidence {
 		Type: ServiceEncryptedDNS, Port: 443, Result: DoHResponseInvalid, Count: 1}}}
 }
 
+// noDefaultRouteEvidence is the client's own routing table, read back from its
+// kernel, holding on-link routes and no default. The absence is the whole
+// observation, which is why the record has to exist and be empty of defaults
+// rather than simply be missing.
+func noDefaultRouteEvidence() Evidence {
+	return Evidence{RouteTables: []RouteTableEvidence{{Node: "client", Family: "ipv4",
+		Routes: []KernelRoute{{Destination: "10.77.0.0/24", Segment: "lan"}}}}}
+}
+
 func http503Evidence() Evidence {
 	return Evidence{ServiceReplies: []ServiceReplyEvidence{{Node: "target", Type: ServiceHTTP, Port: 80,
 		Status: http.StatusServiceUnavailable, Result: replyResponded, Count: 1}}}
@@ -125,6 +134,21 @@ func TestHuntOracleAccusesOnlyUnrecognizedObservedConditions(t *testing.T) {
 				Families: &DiagnosisFamilies{IPv4: FamilyStateUnreachable, IPv6: FamilyStateReachable}}),
 		},
 		{
+			// The sharp one: "the internet is unreachable" is true here and
+			// netdoc says it, but the route is simply gone and netdoc has its
+			// own cause with its own fix. A diagnosis that reports only the lost
+			// reachability is stable, structurally valid and materially wrong,
+			// which is exactly the class this rule exists to catch.
+			name: "client left with no default route", evidence: noDefaultRouteEvidence(),
+			truth: ObservedTruth{IPv4: FamilyStateUnreachable}, condition: ConditionNoDefaultRoute,
+			missed: oracleDiagnosis(DiagnosisCheck{ID: "internet_tcp", Status: "WARN",
+				Cause:    diagnostic.RouteCauseGatewayUnreachable,
+				Families: &DiagnosisFamilies{IPv4: FamilyStateUnreachable}}),
+			recognized: oracleDiagnosis(DiagnosisCheck{ID: "internet_tcp", Status: "WARN",
+				Cause:    diagnostic.RouteCauseNoDefaultRoute,
+				Families: &DiagnosisFamilies{IPv4: FamilyStateUnreachable}}),
+		},
+		{
 			name: "IPv6 internet reachability lost", truth: ObservedTruth{IPv4: FamilyStateReachable, IPv6: FamilyStateUnreachable},
 			condition: ConditionIPv6InternetUnreachable,
 			missed: oracleDiagnosis(DiagnosisCheck{ID: "internet_tcp", Status: "PASS",
@@ -157,6 +181,69 @@ func TestUnrecognizedConditionFinding(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unrecognized condition finding = %+v, want %+v", got, want)
+	}
+}
+
+// An absent default route is only a condition when the table was actually read,
+// really held no default, and the family really stopped working. Each negative
+// below breaks exactly one of those, so the rule cannot quietly widen into
+// "netdoc did not mention routing".
+func TestNoDefaultRouteConditionNeedsTheTableAndTheConsequence(t *testing.T) {
+	table := func(node, family string, routes ...KernelRoute) Evidence {
+		return Evidence{RouteTables: []RouteTableEvidence{{Node: node, Family: family, Routes: routes}}}
+	}
+	onLink := KernelRoute{Destination: "10.77.0.0/24", Segment: "lan"}
+	for _, tc := range []struct {
+		name     string
+		evidence Evidence
+		truth    ObservedTruth
+		want     bool
+	}{
+		{
+			name:     "read, empty of defaults, and the family is gone",
+			evidence: table("client", "ipv4", onLink), truth: ObservedTruth{IPv4: FamilyStateUnreachable}, want: true,
+		},
+		{
+			// Nobody looked. A table that was never read cannot be called empty,
+			// which is the difference between an observation and an assumption.
+			name: "no table was read", truth: ObservedTruth{IPv4: FamilyStateUnreachable},
+		},
+		{
+			// Another node's table says nothing about the client's.
+			name:     "the table belongs to a different node",
+			evidence: table("gateway", "ipv4", onLink), truth: ObservedTruth{IPv4: FamilyStateUnreachable},
+		},
+		{
+			name:     "a default route is still there",
+			evidence: table("client", "ipv4", onLink, KernelRoute{Destination: "default", Via: "10.77.0.1", Segment: "lan"}),
+			truth:    ObservedTruth{IPv4: FamilyStateUnreachable},
+		},
+		{
+			// The route is gone and the internet is fine anyway, over something
+			// specific. Nothing was lost, so there is nothing to accuse.
+			name: "the family still reaches the internet", evidence: table("client", "ipv4", onLink),
+			truth: ObservedTruth{IPv4: FamilyStateReachable},
+		},
+		{
+			// A family the client never had an address in is not a family whose
+			// route went missing.
+			name: "the family was never available", evidence: table("client", "ipv4", onLink),
+			truth: ObservedTruth{IPv4: FamilyStateUnavailable},
+		},
+		{
+			// The same reading on the other family, so the rule is not quietly
+			// hard-wired to IPv4.
+			name: "IPv6 loses its default too", evidence: table("client", "ipv6",
+				KernelRoute{Destination: "2001:db8::/64", Segment: "lan"}),
+			truth: ObservedTruth{IPv6: FamilyStateUnreachable}, want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := observedConditions(observation{Evidence: tc.evidence, Truth: tc.truth, Client: "client"})
+			if slices.Contains(got, ConditionNoDefaultRoute) != tc.want {
+				t.Fatalf("observed conditions = %v, want ConditionNoDefaultRoute present = %t", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -289,7 +376,7 @@ func TestHuntOracleRequiresTheFaultToHaveReachedTheWire(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			report := oracleReport(oracleDiagnosis(DiagnosisCheck{ID: "tls", Status: "PASS"}), tc.evidence)
-			if got := observedConditions(report.Evidence, ObservedTruth{}); len(got) != 0 {
+			if got := observedConditions(observation{Evidence: report.Evidence}); len(got) != 0 {
 				t.Fatalf("unobserved effect established %v", got)
 			}
 		})
@@ -346,7 +433,7 @@ func TestHuntEvidenceScopeIsRequiredNotWildcarded(t *testing.T) {
 			}
 			// The oracle's own question is unchanged by any of this: it never
 			// read the manifest, so an incomplete manifest cannot silence it.
-			if got := observedConditions(tc.evidence, ObservedTruth{}); len(got) != 1 {
+			if got := observedConditions(observation{Evidence: tc.evidence}); len(got) != 1 {
 				t.Fatalf("independently observed conditions = %v, want exactly one", got)
 			}
 		})
@@ -382,7 +469,7 @@ func TestHuntEvidenceScopeIsRequiredNotWildcarded(t *testing.T) {
 		{"packet drop from no node", unstampedQUIC},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := observedConditions(tc.evidence, ObservedTruth{}); len(got) != 0 {
+			if got := observedConditions(observation{Evidence: tc.evidence}); len(got) != 0 {
 				t.Fatalf("unattributable evidence established %v", got)
 			}
 		})
@@ -414,7 +501,7 @@ func TestHuntOracleKeepsFamilyStatesDistinct(t *testing.T) {
 		{"unmeasured", "unknown", "unknown", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := observedConditions(Evidence{}, ObservedTruth{IPv4: tc.ipv4, IPv6: tc.ipv6})
+			got := observedConditions(observation{Truth: ObservedTruth{IPv4: tc.ipv4, IPv6: tc.ipv6}})
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("observed conditions = %v, want %v", got, tc.want)
 			}
@@ -443,9 +530,9 @@ func TestHuntOracleHoldsItsDirection(t *testing.T) {
 	// Same evidence, same truth, two diagnoses: what was observed is identical
 	// either way, and only the finding differs.
 	evidence := expiredTLSEvidence()
-	if !slices.Equal(observedConditions(evidence, truth),
+	if !slices.Equal(observedConditions(observation{Evidence: evidence, Truth: truth}),
 		[]NetworkCondition{ConditionIPv4InternetUnreachable, ConditionTLSCertificateExpired}) {
-		t.Fatalf("observed conditions = %v", observedConditions(evidence, truth))
+		t.Fatalf("observed conditions = %v", observedConditions(observation{Evidence: evidence, Truth: truth}))
 	}
 	missed := unrecognizedConditions(unrecognizedConditionFindings(oracleReport(blind, evidence), truth))
 	seen := unrecognizedConditions(unrecognizedConditionFindings(oracleReport(naming, evidence), truth))
@@ -527,7 +614,7 @@ func TestHuntOracleClaimsNothingAboutUndiagnosedFaults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			report := oracleReport(oracleDiagnosis(DiagnosisCheck{ID: "http", Status: "PASS"},
 				DiagnosisCheck{ID: "dns_encrypted", Status: "PASS"}), tc.evidence)
-			if got := observedConditions(report.Evidence, ObservedTruth{}); len(got) != 0 {
+			if got := observedConditions(observation{Evidence: report.Evidence}); len(got) != 0 {
 				t.Fatalf("a fault netdoc does not diagnose became an expectation: %v", got)
 			}
 			// The fault really did reach the wire, since this is the observed case
@@ -826,8 +913,13 @@ func TestScheduledFaultThatReachedNobodyIsNotObserved(t *testing.T) {
 var huntFamilyPath = map[string]string{
 	// Generic: independently observed truth reconciled against one diagnosis by
 	// the condition oracle, with no protocol code in the comparison itself.
-	"family.ipv4_drop":              "generic",
-	"family.ipv6_drop":              "generic",
+	"family.ipv4_drop": "generic",
+	"family.ipv6_drop": "generic",
+	// An absent default route is a fact about one node's own kernel table, and
+	// the table is read back in full, so the absence is statable without ever
+	// consulting the mutation: a family with no default left and no reachability
+	// left is the condition, whatever removed the route.
+	"routing.no_default_route":      "generic",
 	"service.tls_expired":           "generic",
 	"service.tls_hostname_mismatch": "generic",
 	"proxy.connect_refused":         "generic",
@@ -857,16 +949,12 @@ var huntFamilyPath = map[string]string{
 	"service.connection_refused":   "no_finding",
 	"service.tcp_port_blocked":     "no_finding",
 	"routing.missing_subnet_route": "no_finding",
-	// The two default-route families have no finding of their own, and stay out
-	// of the oracle, because neither condition is establishable from unscoped
-	// evidence: a client with no default and a client whose one default goes
-	// nowhere are facts about a route table that only the mutation's own scope
-	// can tie to the route that changed. What the hunt notices about them is
-	// the family-reachability condition, which is the family drops' rule and
-	// fires here for the same honest reason: the internet really is gone.
-	// Challenge Mode is where the route distinction is graded, against netdoc's
-	// own route causes.
-	"routing.no_default_route":    "no_finding",
+	// A repointed default stays out of the oracle: a client whose one default
+	// goes nowhere and a client whose network died downstream look identical
+	// from the client, and only the mutation's own control endpoint can tell
+	// them apart, which is knowledge a rule is not allowed to have. Challenge
+	// Mode is where that distinction is graded, against netdoc's own route
+	// causes.
 	"routing.wrong_default_route": "no_finding",
 }
 
@@ -911,6 +999,7 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 		{"service.tls_hostname_mismatch", ConditionTLSHostnameMismatch},
 		{"proxy.connect_refused", ConditionProxyDestinationRefused},
 		{"quic.udp_443_block", ConditionQUICUDP443Blocked},
+		{"routing.no_default_route", ConditionNoDefaultRoute},
 	} {
 		if !generic[pair.id] {
 			t.Errorf("%q is not declared generic but claims condition %q", pair.id, pair.condition)
@@ -923,7 +1012,7 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 	for condition := range conditions {
 		t.Errorf("oracle condition %q is claimed by no mutation family", condition)
 	}
-	if len(generic) != 6 {
-		t.Errorf("generic families = %v, want the six the oracle defines conditions for", generic)
+	if len(generic) != 7 {
+		t.Errorf("generic families = %v, want the seven the oracle defines conditions for", generic)
 	}
 }

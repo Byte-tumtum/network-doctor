@@ -81,7 +81,8 @@ not mean a mutation expected probe X to fail and probe X did not fail.
 The oracle in `internal/simulation/hunt_oracle.go` is that contract in code. It
 runs on a vocabulary of `NetworkCondition` values, domain facts such as IPv4
 internet reachability lost, a target serving an expired TLS certificate, a proxy
-refusing its CONNECT destination, QUIC datagrams dropped on UDP/443, and it keeps
+refusing its CONNECT destination, QUIC datagrams dropped on UDP/443, a client
+left with no default route for a family it can no longer reach, and it keeps
 two halves apart:
 
 - **observed**: reads simulator evidence and derived simulator truth only, never
@@ -99,8 +100,9 @@ netdoc's cause vocabulary, so the QUIC entry scopes it to the QUIC row.
 
 Recognition is deliberately specific. An expired certificate reported as a
 generic handshake failure, a refused destination reported as an unreachable
-proxy, and any unrelated failing row are all misses, because each sends the user
-somewhere else. A cause on a passing row is context, not recognition.
+proxy, a deleted default route reported only as an unreachable internet, and any
+unrelated failing row are all misses, because each sends the user somewhere
+else. A cause on a passing row is context, not recognition.
 
 Reconciliation runs on the final client diagnosis and only on stable paths.
 Unknown or unavailable families, persistent netem, and actual timed path
