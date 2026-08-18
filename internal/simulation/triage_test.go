@@ -13,7 +13,7 @@ func sampleFinding() HuntFinding {
 		Summary:  "The resolver service observed failed queries while netdoc reported DNS healthy.",
 		Evidence: "System DNS answered", Occurrences: 2, FirstCase: 4, ExampleCases: []int{4, 9},
 		Reproduce: HuntReproduction{BaseScenario: "healthy", Seed: 20260101, Case: 4, CaseSeed: -8811,
-			GeneratorVersion: HuntGeneratorVersion, CaseFingerprint: "0f0f0f0f0f0f0f0f"},
+			MaxFaults: 2, GeneratorVersion: HuntGeneratorVersion, CaseFingerprint: "0f0f0f0f0f0f0f0f"},
 	}
 }
 
@@ -90,7 +90,7 @@ func TestTriageFindingCarriesScenarioSeedAndCase(t *testing.T) {
 		finding.GeneratorVersion != HuntGeneratorVersion || finding.Issue.Status != IssueStatusNotFiled {
 		t.Fatalf("finding = %+v", finding)
 	}
-	if want := "netdoc-sim hunt healthy --seed 20260101 --case 4 --json"; finding.ReproduceCommand() != want {
+	if want := "netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --json"; finding.ReproduceCommand() != want {
 		t.Errorf("reproduce = %q, want %q", finding.ReproduceCommand(), want)
 	}
 	if title := finding.IssueTitle(); !strings.Contains(title, finding.Fingerprint) ||
@@ -123,7 +123,7 @@ func TestTriageIssueBodyHasEverythingNeededToDebug(t *testing.T) {
 		"simulator expected: `FAIL or WARN`",
 		"netdoc reported: `PASS`",
 		"resolver service observed failed queries", // why they disagree
-		"netdoc-sim hunt healthy --seed 20260101 --case 4 --json", // reproduction
+		"netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --json", // reproduction
 		"aabbccdd11223344", // hunt finding fingerprint
 		"abc123",           // revision
 		"workflow run 42",  // debugging context
@@ -172,5 +172,25 @@ func TestTriageReportTextSummary(t *testing.T) {
 	}
 	if err := report.WriteJSON(&bytes.Buffer{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// One case has one reproduction command. The hunt's own report and a filed
+// issue both print it, and a reader who pastes either has to land on the same
+// experiment, so both go through HuntReproduction.Command rather than each
+// formatting their own.
+func TestHuntReportAndIssueAgreeOnTheReproductionCommand(t *testing.T) {
+	finding := sampleFinding()
+	result := &HuntResult{Findings: []HuntFinding{finding}}
+	var text bytes.Buffer
+	result.WriteText(&text)
+
+	issue := NewTriageFinding(finding)
+	want := issue.ReproduceCommand()
+	if !strings.Contains(want, "--max-faults 2") {
+		t.Fatalf("issue command = %q, want the fault ceiling named", want)
+	}
+	if !strings.Contains(text.String(), want) {
+		t.Errorf("hunt report prints a different reproduction command:\nwant %q\nin\n%s", want, text.String())
 	}
 }

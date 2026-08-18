@@ -35,8 +35,7 @@ func (r *HuntResult) WriteText(w io.Writer) {
 			if finding.Evidence != "" {
 				fmt.Fprintf(w, "         evidence: %s\n", textsafe.Clean(finding.Evidence))
 			}
-			fmt.Fprintf(w, "\n         Reproduce:\n           netdoc-sim hunt %s --seed %d --case %d\n",
-				finding.Reproduce.BaseScenario, finding.Reproduce.Seed, finding.Reproduce.Case)
+			fmt.Fprintf(w, "\n         Reproduce:\n           %s\n", finding.Reproduce.Command())
 		}
 	}
 	if len(r.Suggestions) > 0 {

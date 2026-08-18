@@ -94,6 +94,7 @@ type TriageFinding struct {
 	Seed             int64                `json:"seed"`
 	Case             int                  `json:"case"`
 	CaseSeed         int64                `json:"case_seed"`
+	MaxFaults        int                  `json:"max_faults"`
 	CaseFingerprint  string               `json:"case_fingerprint"`
 	GeneratorVersion string               `json:"generator_version"`
 	Finding          HuntFinding          `json:"finding"`
@@ -124,6 +125,7 @@ func NewTriageFinding(finding HuntFinding) TriageFinding {
 		Seed:             repro.Seed,
 		Case:             repro.Case,
 		CaseSeed:         repro.CaseSeed,
+		MaxFaults:        repro.MaxFaults,
 		CaseFingerprint:  repro.CaseFingerprint,
 		GeneratorVersion: repro.GeneratorVersion,
 		Finding:          finding,
@@ -140,12 +142,12 @@ func triageFingerprint(scenario string, seed int64, caseNumber int, findingFinge
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
-// ReproduceCommand is the copy/pasteable single-case reproduction. The
-// scenario is a validated base name by the time a hunt runs, but this string
-// is pasted into a shell, so it is sanitized here rather than trusted.
+// ReproduceCommand is the copy/pasteable single-case reproduction, built from
+// this finding's own flattened coordinates through the one place that decides
+// the command's shape, so the hunt report and a filed issue cannot drift into
+// printing two different commands for one case.
 func (f *TriageFinding) ReproduceCommand() string {
-	return fmt.Sprintf("netdoc-sim hunt %s --seed %d --case %d --json",
-		textsafe.Clean(f.Scenario), f.Seed, f.Case)
+	return HuntReproduction{BaseScenario: f.Scenario, Seed: f.Seed, Case: f.Case, MaxFaults: f.MaxFaults}.Command()
 }
 
 // IssueTitle carries the fingerprint as a bare hex word, which is what the
@@ -170,6 +172,7 @@ func (f *TriageFinding) IssueBody(revision, runContext string) string {
 	fmt.Fprintf(&b, "| hunt seed | `%d` |\n", f.Seed)
 	fmt.Fprintf(&b, "| case | `%d` |\n", f.Case)
 	fmt.Fprintf(&b, "| case seed | `%d` |\n", f.CaseSeed)
+	fmt.Fprintf(&b, "| max faults | `%d` |\n", f.MaxFaults)
 	fmt.Fprintf(&b, "| case fingerprint | `%s` |\n", textsafe.Clean(f.CaseFingerprint))
 	fmt.Fprintf(&b, "| finding | `%s` (%s, %s) |\n", textsafe.Clean(finding.Code),
 		textsafe.Clean(finding.Category), finding.Severity)

@@ -45,15 +45,22 @@ bases and mutation registry live in `internal/simulation/hunt_generate.go`.
 
 ```sh
 ./netdoc-sim hunt healthy --seed 20260101 --cases 20
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --json
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --dry-run --json
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --json
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --dry-run --json
 ```
 
-Every case report includes generator version, root and case seeds, materialized
-mutations, and a case fingerprint. Findings use semantic diagnosis
-fingerprints, excluding prose and incidental timing, paths, process ids, and
-kernel names. Keep the seed, case, generator version, and reproduction command
-with any failure report.
+`--max-faults` belongs in a reproduction command rather than being left to the
+flag default. It is one of the inputs the case is drawn from: the first number
+taken from the case seed is how many mutations to apply, bounded by the ceiling,
+so the same base, seed and case under a different ceiling is a different
+network. The manifest records it, every finding's reproduction carries it, and
+the command a filed issue prints names it.
+
+Every case report includes generator version, root and case seeds, the fault
+ceiling, materialized mutations, and a case fingerprint. Findings use semantic
+diagnosis fingerprints, excluding prose and incidental timing, paths, process
+ids, and kernel names. Keep the seed, case, fault ceiling, generator version,
+and reproduction command with any failure report.
 
 A generated mutation records intent; it is not automatically observed truth.
 `observed_faults` contains a mutation only when service, event, kernel-fault, or

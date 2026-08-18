@@ -364,7 +364,7 @@ func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
 	}
 	want := GeneratedCaseManifest{
 		GeneratorVersion: "v3", BaseScenario: "healthy-routed-network", HuntSeed: 12345, Case: 76,
-		CaseSeed: 1449211129837338081,
+		CaseSeed: 1449211129837338081, MaxFaults: 2,
 		Mutations: []GeneratedMutation{
 			{ID: "netem.jitter", Description: "add 426 ms latency with 249 ms jitter on gateway/upstream",
 				Node: "gateway", Segment: "upstream", LatencyMS: 426, JitterMS: 249, NetemSeed: 2467781340},
@@ -375,6 +375,39 @@ func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
 	}
 	if !reflect.DeepEqual(generated.Manifest, want) {
 		t.Fatalf("v3 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
+	}
+}
+
+// The fault ceiling is one of the inputs a case is drawn from: it bounds the
+// first number taken from the case seed, which is how many mutations to apply.
+// The same scenario, seed and case under a different ceiling is therefore a
+// different network, so the manifest records it and every reproduction carries
+// it. These are the exact coordinates the nightly triage hunts.
+func TestMaxFaultsIsPartOfTheExperimentAndOfItsReproduction(t *testing.T) {
+	base := loadHuntBase(t, "healthy")
+	two, err := GenerateHuntCase("healthy", base, 20260101, 6, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	three, err := GenerateHuntCase("healthy", base, 20260101, 6, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if two.Manifest.CaseFingerprint == three.Manifest.CaseFingerprint {
+		t.Fatalf("ceilings 2 and 3 both produced case fingerprint %s, so this case cannot show the difference",
+			two.Manifest.CaseFingerprint)
+	}
+	if two.Manifest.MaxFaults != 2 || three.Manifest.MaxFaults != 3 {
+		t.Errorf("manifests record ceilings %d and %d, want 2 and 3", two.Manifest.MaxFaults, three.Manifest.MaxFaults)
+	}
+	if got := reproductionFor(two.Manifest).MaxFaults; got != 2 {
+		t.Errorf("reproduction carries ceiling %d, want 2", got)
+	}
+	// The command a reader pastes has to name it too, or it reproduces this
+	// case only for as long as the CLI default happens to agree.
+	finding := NewTriageFinding(HuntFinding{Reproduce: reproductionFor(two.Manifest)})
+	if !strings.Contains(finding.ReproduceCommand(), "--max-faults 2") {
+		t.Errorf("reproduce command = %q, want it to name the ceiling", finding.ReproduceCommand())
 	}
 }
 

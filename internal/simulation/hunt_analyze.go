@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
 type HuntSeverity string
@@ -81,10 +83,14 @@ type ObservedTruth struct {
 }
 
 type HuntReproduction struct {
-	BaseScenario     string `json:"base_scenario"`
-	Seed             int64  `json:"seed"`
-	Case             int    `json:"case"`
-	CaseSeed         int64  `json:"case_seed"`
+	BaseScenario string `json:"base_scenario"`
+	Seed         int64  `json:"seed"`
+	Case         int    `json:"case"`
+	CaseSeed     int64  `json:"case_seed"`
+	// MaxFaults is the ceiling the case was drawn under. Without it the visible
+	// coordinates below name a different experiment under a different ceiling,
+	// so it is part of the reproduction rather than a run preference.
+	MaxFaults        int    `json:"max_faults"`
 	GeneratorVersion string `json:"generator_version"`
 	CaseFingerprint  string `json:"case_fingerprint"`
 }
@@ -648,9 +654,21 @@ func truthFingerprint(truth ObservedTruth) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// Command is the single-case reproduction, and the only place its shape is
+// decided. Every coordinate the generator draws from is named rather than left
+// to a flag default, the fault ceiling included, so pasting this reproduces
+// this experiment and not whichever one the defaults of the day would pick.
+// The scenario is a validated base name by the time a hunt runs, but this
+// string is pasted into a shell, so it is sanitized here rather than trusted.
+func (r HuntReproduction) Command() string {
+	return fmt.Sprintf("netdoc-sim hunt %s --seed %d --case %d --max-faults %d --json",
+		textsafe.Clean(r.BaseScenario), r.Seed, r.Case, r.MaxFaults)
+}
+
 func reproductionFor(manifest GeneratedCaseManifest) HuntReproduction {
 	return HuntReproduction{BaseScenario: manifest.BaseScenario, Seed: manifest.HuntSeed, Case: manifest.Case,
-		CaseSeed: manifest.CaseSeed, GeneratorVersion: manifest.GeneratorVersion, CaseFingerprint: manifest.CaseFingerprint}
+		CaseSeed: manifest.CaseSeed, MaxFaults: manifest.MaxFaults, GeneratorVersion: manifest.GeneratorVersion,
+		CaseFingerprint: manifest.CaseFingerprint}
 }
 
 func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth ObservedTruth) []HuntCaseFinding {

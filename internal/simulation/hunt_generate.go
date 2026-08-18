@@ -108,13 +108,20 @@ type GeneratedMutation struct {
 
 // GeneratedCaseManifest is the stable, display-safe reproduction artifact.
 type GeneratedCaseManifest struct {
-	GeneratorVersion string              `json:"generator_version"`
-	BaseScenario     string              `json:"base_scenario"`
-	HuntSeed         int64               `json:"hunt_seed"`
-	Case             int                 `json:"case"`
-	CaseSeed         int64               `json:"case_seed"`
-	Mutations        []GeneratedMutation `json:"mutations"`
-	CaseFingerprint  string              `json:"case_fingerprint"`
+	GeneratorVersion string `json:"generator_version"`
+	BaseScenario     string `json:"base_scenario"`
+	HuntSeed         int64  `json:"hunt_seed"`
+	Case             int    `json:"case"`
+	CaseSeed         int64  `json:"case_seed"`
+	// MaxFaults is the fault ceiling this case was drawn under. It is part of
+	// the experiment, not a preference: the first number drawn from the case
+	// seed is how many mutations to take, and it is drawn modulo this ceiling,
+	// so the same scenario, seed and case under a different ceiling is a
+	// different network. It is recorded here so a reproduction command can name
+	// it rather than inherit whatever the CLI default happens to be.
+	MaxFaults       int                 `json:"max_faults"`
+	Mutations       []GeneratedMutation `json:"mutations"`
+	CaseFingerprint string              `json:"case_fingerprint"`
 }
 
 // GeneratedCase couples a public manifest to the validated scenario that will
@@ -285,7 +292,7 @@ func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, ca
 		return nil, fmt.Errorf("generated scenario validation: %w", err)
 	}
 	manifest := GeneratedCaseManifest{GeneratorVersion: version, BaseScenario: baseID,
-		HuntSeed: huntSeed, Case: caseNumber, CaseSeed: caseSeed, Mutations: mutations}
+		HuntSeed: huntSeed, Case: caseNumber, CaseSeed: caseSeed, MaxFaults: maxFaults, Mutations: mutations}
 	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
 	return &GeneratedCase{Manifest: manifest, Scenario: generated}, nil
 }
