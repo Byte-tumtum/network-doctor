@@ -205,6 +205,14 @@ case, and requires both its case fingerprint and finding fingerprint to match.
 An unreproduced candidate is reported but never filed. The fixed baselines and
 seeds are authoritative in `internal/simulation/triage.go`.
 
+The baseline set is chosen so that every operator in the registry is applicable
+to at least one of them, which `TestEveryHuntOperatorReachesABaseline` holds it
+to. A single-path base cannot host a route-choice fault, so the multi-path bases
+are what let the routing families run at all; without them those operators exist
+but the nightly hunt can never generate one, and the family is unfalsifiable
+however good its oracle is. Their second test is also the control that the route
+coverage findings are built from.
+
 ```sh
 ./netdoc-sim triage                               # observe; file nothing
 ./netdoc-sim triage --scenarios healthy --cases 5

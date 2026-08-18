@@ -37,12 +37,22 @@ type TriageBaseline struct {
 	Seed     int64  `json:"seed"`
 }
 
+// The set is chosen so that every operator in the hunt registry is reachable
+// from at least one baseline, which TestEveryHuntOperatorReachesABaseline
+// holds it to. A single-path base cannot host a route-choice fault: repointing
+// or deleting the only default there is indistinguishable from the network
+// beyond it dying, so those operators refuse to generate and the nightly hunt
+// never sees them. The multi-path bases are what give them somewhere to land,
+// and their second test is also the control that route findings are built from.
 var triageBaselines = []TriageBaseline{
 	{Scenario: "healthy", Seed: 20260101},
 	{Scenario: "healthy-routed-network", Seed: 20260102},
 	{Scenario: "dual-stack-healthy", Seed: 20260103},
 	{Scenario: "tls-valid", Seed: 20260104},
 	{Scenario: "socks5h-remote-dns-succeeds", Seed: 20260105},
+	{Scenario: "two-path-healthy", Seed: 20260106},
+	{Scenario: "two-path-ipv6-healthy", Seed: 20260107},
+	{Scenario: "two-router-healthy", Seed: 20260108},
 }
 
 // TriageBaselines returns the fixed baseline scenarios and seeds.

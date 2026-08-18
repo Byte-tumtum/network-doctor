@@ -21,7 +21,8 @@ func sampleFinding() HuntFinding {
 // reproduce tonight from the same scenario and seed.
 func TestTriageBaselineSeedsAreFixed(t *testing.T) {
 	want := map[string]int64{"healthy": 20260101, "healthy-routed-network": 20260102, "dual-stack-healthy": 20260103,
-		"tls-valid": 20260104, "socks5h-remote-dns-succeeds": 20260105}
+		"tls-valid": 20260104, "socks5h-remote-dns-succeeds": 20260105, "two-path-healthy": 20260106,
+		"two-path-ipv6-healthy": 20260107, "two-router-healthy": 20260108}
 	baselines := TriageBaselines()
 	if len(baselines) != len(want) {
 		t.Fatalf("baselines = %+v", baselines)
@@ -172,6 +173,58 @@ func TestTriageReportTextSummary(t *testing.T) {
 	}
 	if err := report.WriteJSON(&bytes.Buffer{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An operator no baseline can generate is an operator the nightly hunt never
+// runs, which makes the whole family unfalsifiable in CI however good its
+// oracle is. Applicability is checked directly rather than by sampling seeds,
+// so this answers "can this base ever host it" instead of "did these draws
+// happen to pick it", and it names the offender rather than a count.
+func TestEveryHuntOperatorReachesABaseline(t *testing.T) {
+	bases := make(map[string]*Scenario, len(triageBaselines))
+	for _, baseline := range triageBaselines {
+		base, err := LibraryScenario(baseline.Scenario)
+		if err != nil {
+			t.Fatalf("%s does not load: %v", baseline.Scenario, err)
+		}
+		canonicalScenarioInput(base)
+		if err := base.Validate(); err != nil {
+			t.Fatalf("%s does not validate: %v", baseline.Scenario, err)
+		}
+		bases[baseline.Scenario] = base
+	}
+	for _, operator := range huntMutationRegistry {
+		var hosts []string
+		for name, base := range bases {
+			if operator.applicable(base) {
+				hosts = append(hosts, name)
+			}
+		}
+		if len(hosts) == 0 {
+			t.Errorf("no triage baseline can host %q, so the nightly hunt can never generate it;"+
+				" add a baseline that can rather than leaving the family unfalsifiable", operator.id)
+		}
+	}
+}
+
+// The baselines exist to be hunted, so each one has to be a base the generator
+// will actually produce cases from. A baseline with no applicable operator
+// fails every hunt it is asked for rather than finding nothing.
+func TestEveryTriageBaselineHasApplicableOperators(t *testing.T) {
+	for _, baseline := range triageBaselines {
+		base, err := LibraryScenario(baseline.Scenario)
+		if err != nil {
+			t.Fatalf("%s does not load: %v", baseline.Scenario, err)
+		}
+		generated, err := GenerateHuntCase(baseline.Scenario, base, baseline.Seed, 0, 2)
+		if err != nil {
+			t.Errorf("%s seed %d case 0 does not generate: %v", baseline.Scenario, baseline.Seed, err)
+			continue
+		}
+		if len(generated.Manifest.Mutations) == 0 {
+			t.Errorf("%s seed %d case 0 generated no mutations", baseline.Scenario, baseline.Seed)
+		}
 	}
 }
 
