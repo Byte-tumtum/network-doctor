@@ -441,6 +441,26 @@ func TestSSHHostValueRoundTrip(t *testing.T) {
 	}
 }
 
+// sshHelpText returns the S binding's help bar label and cheatsheet line from
+// the keymap table itself. The tests below assert that those lines appear or
+// stay hidden, which is the behavior; taking the wording from the table rather
+// than repeating it here keeps a reworded help string from failing them.
+func sshHelpText(t *testing.T) (bar, details string) {
+	t.Helper()
+	for _, def := range actionDefs {
+		if def.act != actSSH {
+			continue
+		}
+		help, ok := def.help[ctxList]
+		if !ok {
+			t.Fatal("the S binding has no ctxList help entry")
+		}
+		return help.bar, help.details
+	}
+	t.Fatal("actSSH is missing from actionDefs")
+	return "", ""
+}
+
 // S is hinted in the help bar and the cheatsheet only once the banner probe
 // has found an SSH server, but the binding itself stays live either way.
 func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
@@ -451,11 +471,12 @@ func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:22"), false)
 	m = asModel(t, must(m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})))
 	doneResults(&m, diagnostic.ProbeSSH) // the SSH banner probe is the one that fails
+	bar, details := sshHelpText(t)
 
-	if strings.Contains(m.View(), "ssh login") {
+	if strings.Contains(m.View(), bar) {
 		t.Error("the help bar hints S with no SSH server on the target")
 	}
-	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), "hands the terminal to ssh") {
+	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), details) {
 		t.Error("the cheatsheet lists S with no SSH server on the target")
 	}
 	// Hidden, not disabled: the form still opens.
@@ -464,10 +485,10 @@ func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 	}
 
 	doneResults(&m, "")
-	if !strings.Contains(m.View(), "ssh login") {
+	if !strings.Contains(m.View(), bar) {
 		t.Error("the help bar drops S even though the banner probe passed")
 	}
-	if !strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), "hands the terminal to ssh") {
+	if !strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), details) {
 		t.Error("the cheatsheet drops S even though the banner probe passed")
 	}
 }
@@ -484,14 +505,15 @@ func TestSSHHintStaysHiddenWithoutAnSSHRung(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:443"), false)
 	m = asModel(t, must(m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})))
 	doneResults(&m, "") // every rung this target has passes; none of them is SSH
+	bar, details := sshHelpText(t)
 
 	if _, ok := m.results[diagnostic.ProbeSSH]; ok {
 		t.Fatal("an https target grew an SSH rung: pick another target for this test")
 	}
-	if strings.Contains(m.View(), "ssh login") {
+	if strings.Contains(m.View(), bar) {
 		t.Error("the help bar hints S on a target with no SSH rung")
 	}
-	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), "hands the terminal to ssh") {
+	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), details) {
 		t.Error("the cheatsheet lists S on a target with no SSH rung")
 	}
 }

@@ -94,7 +94,7 @@ var actionDefs = []actionDef{
 	{actCancelJob, "cancel-job", map[keyContext]actionHelp{ctxList: {"cancel job", "cancel the focused job"}}},
 	{actNetworkMap, "network-map", map[keyContext]actionHelp{ctxList: {"network map", "toggle network map"}}},
 	{actRestart, "restart", map[keyContext]actionHelp{ctxList: {"restart", "restart with a new target"}}},
-	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "ssh to a host; hands the terminal to ssh"}}},
+	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "log in to a host, handing the terminal to ssh"}}},
 	{actClearFilter, "clear-filter", map[keyContext]actionHelp{ctxViewer: {"clear filter", "clear the filter, or back when none is set"}}},
 	{actBack, "back", map[keyContext]actionHelp{ctxViewer: {"back", "back"}}},
 	{actHelp, "help", map[keyContext]actionHelp{ctxList: {"help", "full-screen key cheatsheet"}}},
