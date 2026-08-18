@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -980,5 +981,104 @@ func TestReportJSONContract(t *testing.T) {
 				t.Errorf("JSON = %s\nwant   %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// The TUI renders to stdout, so without a terminal there it has nowhere to
+// draw. Bubble Tea would fail on its own with a /dev/tty message and exit 1,
+// which callers cannot tell apart from a failed diagnosis; the guard names the
+// supported non-interactive path and exits 2 instead.
+func TestRunRejectsInteractiveWithoutTerminalStdout(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(context.Context, []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		t.Error("runAll called; the guard must reject before any probe runs")
+		return nil
+	}
+	const want = "netdoc: stdout is not a terminal; use --json for non-interactive output\n"
+	for _, args := range [][]string{nil, {"example.com"}, {"-toolbox"}, {"-watch"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != 2 {
+				t.Errorf("run(%v) = %d, want 2 (environment problem, not a failed diagnosis)", args, code)
+			}
+			if stderr.String() != want {
+				t.Errorf("stderr = %q, want %q", stderr.String(), want)
+			}
+			if strings.Contains(stderr.String(), "/dev/tty") {
+				t.Errorf("stderr = %q, want netdoc's own error instead of Bubble Tea's", stderr.String())
+			}
+			if stdout.Len() > 0 {
+				t.Errorf("stdout = %q, want nothing", stdout.String())
+			}
+		})
+	}
+}
+
+// Only stdout decides, and only through the descriptor: a real terminal is
+// accepted so interactive startup still reaches the TUI, while a pipe, a file,
+// and a writer with no descriptor at all are not terminals.
+func TestStdoutIsTerminal(t *testing.T) {
+	orig := termIsTerminal
+	t.Cleanup(func() { termIsTerminal = orig })
+
+	termIsTerminal = func(uintptr) bool { return true }
+	if !stdoutIsTerminal(os.Stdout) {
+		t.Error("stdoutIsTerminal(terminal) = false, want true: interactive startup must not be rejected")
+	}
+	if stdoutIsTerminal(&bytes.Buffer{}) {
+		t.Error("stdoutIsTerminal(no file descriptor) = true, want false")
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	termIsTerminal = func(uintptr) bool { return false }
+	if stdoutIsTerminal(f) {
+		t.Error("stdoutIsTerminal(redirected file) = true, want false")
+	}
+}
+
+// -json is the supported non-interactive path, so it has to survive the
+// redirect that the TUI guard rejects: a real file as stdout, still exit 0 with
+// a parseable report in it.
+func TestRunJSONAllowedWithRedirectedStdout(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+		}
+		return results
+	}
+	f, err := os.CreateTemp(t.TempDir(), "report")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer f.Close() //nolint:errcheck
+
+	var stderr bytes.Buffer
+	if code := run([]string{"-json", "-check", "iface"}, f, &stderr); code != 0 {
+		t.Fatalf("run(-json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stderr.Len() > 0 {
+		t.Errorf("stderr = %q, want nothing", stderr.String())
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("seek: %v", err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var rep report.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatalf("unmarshal %q: %v", data, err)
+	}
+	if !rep.OK {
+		t.Errorf("ok = false, want true with every check passing")
 	}
 }

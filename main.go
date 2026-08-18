@@ -18,6 +18,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
@@ -278,6 +279,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runJSON(context.Background(), t, sources, *watch, *publicDNS, selection, stdout, stderr)
 	}
 
+	// With no terminal on stdout the TUI has nowhere to draw: bubbletea would
+	// fail on its own with a /dev/tty message that reads like a bug, and it
+	// would spend exit 1, which is already "a check failed". Name the fix and
+	// exit 2 instead: the environment is wrong, not the network.
+	if !stdoutIsTerminal(stdout) {
+		fmt.Fprintln(stderr, "netdoc: stdout is not a terminal; use --json for non-interactive output")
+		return 2
+	}
+
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
@@ -292,6 +302,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return ui.ExitCode(final)
+}
+
+// termIsTerminal is stubbed in tests, which have no terminal of their own.
+var termIsTerminal = term.IsTerminal
+
+// stdoutIsTerminal reports whether the TUI has a terminal to render on. Only
+// stdout is asked about, and deliberately: bubbletea draws there, while for
+// input it opens /dev/tty itself when stdin is redirected, so a piped stdin is
+// still a working interactive run. The check goes through the same term
+// package bubbletea uses, so the answer matches its own on every platform.
+func stdoutIsTerminal(w io.Writer) bool {
+	f, ok := w.(term.File)
+	return ok && termIsTerminal(f.Fd())
 }
 
 // historyFile is where target history persists between sessions. "" is the

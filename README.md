@@ -313,7 +313,7 @@ Field names and the status vocabulary are stable, so they are safe to script aga
 | Chain completed, no failed row (Skips allowed) | `0` |
 | Any failed row | `1` |
 | Quit before the chain finished | `1` |
-| Bad arguments / validation reject | `2` |
+| Bad arguments, validation reject, or no terminal for the TUI | `2` |
 
 ```sh
 netdoc github.com || echo "path to github is broken"
