@@ -84,6 +84,11 @@ func build(baseurl, shell, docsDir, wikiDir, assetsDir, out string) error {
 	if err != nil {
 		return err
 	}
+	// The wiki repeats sentences netdoc prints. This is the only place both
+	// exist at once, so it is where they are held to each other.
+	if err := checkQuotations(wikiDir, programText); err != nil {
+		return err
+	}
 	s := &stager{baseurl: baseurl, docsDir: docsDir, docs: map[string]bool{}, wiki: map[string]bool{}}
 	for _, name := range docs {
 		s.docs[name] = true

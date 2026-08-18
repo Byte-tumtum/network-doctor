@@ -401,10 +401,13 @@ docker build --build-arg VERSION=dev -t netdoc-sim:test .
 NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
 ```
 
-If the change touched `docs/`, `site/`, or `cmd/docsite`, also build the
-documentation site the way [the pages workflow](.github/workflows/pages.yml)
-does. It needs the wiki checkout and the same container image GitHub Pages
-builds with, which is why it is not in the gate above:
+If the change touched `docs/`, `site/`, `cmd/docsite`, or a summary in
+`internal/diagnostic/diagnosis.go`, also build the documentation site the way
+[the pages workflow](.github/workflows/pages.yml) does. It needs the wiki
+checkout and the same container image GitHub Pages builds with, which is why it
+is not in the gate above. The first step is also what holds the wiki's
+quotations of `netdoc` output to the strings the program builds, so a reworded
+summary surfaces here:
 
 ```sh
 git clone --depth 1 https://github.com/heymaikol/network-doctor.wiki.git ../network-doctor.wiki

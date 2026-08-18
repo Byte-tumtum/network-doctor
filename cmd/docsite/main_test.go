@@ -32,7 +32,13 @@ func fixture(t *testing.T) (docs, wiki, shell string) {
 	write("docs/scenarios.md", "# Scenarios\n\n## Authoring\n\nBody.\n")
 	write("wiki/Home.md", "# Wiki\n\nStart at [Getting Started](Getting-Started).\n")
 	write("wiki/Getting-Started.md", "# Getting Started\n\nBack to [Home](Home), on to [Challenge Mode](Challenge-Mode#scoring).\n")
-	write("wiki/Challenge-Mode.md", "# Challenge Mode\n\n## Scoring\n\nBody.\n")
+	// The wiki quotes sentences the program prints, so staging needs the
+	// program's own text to hold those quotations to.
+	write("wiki/Challenge-Mode.md", "# Challenge Mode\n\n## Scoring\n\n"+
+		"<!-- netdoc-output -->\n*\"…is unreachable though DNS and the general internet work.\"*\n")
+	write("internal/diagnostic/diagnosis.go", "package diagnostic\n\n"+
+		"func summary(hp string) string {\n"+
+		"\treturn hp + \" is unreachable though DNS and the general internet work.\"\n}\n")
 	write("wiki/_Sidebar.md", "wiki chrome\n")
 	write("README.md", "# Network Doctor\n")
 	write("assets/hero.gif", "gif")
