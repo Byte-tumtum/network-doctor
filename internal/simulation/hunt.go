@@ -87,6 +87,16 @@ func (o *HuntOptions) withDefaults() error {
 
 // RunHunt generates cases independently, skips semantic duplicates in batch
 // mode, and runs each accepted case sequentially through the normal simulator.
+//
+// Each case runs netdoc exactly once, and the hunt therefore makes no claim
+// about whether a diagnosis is reproducible. It cannot: a second run inside the
+// same live topology inherits the neighbour, route and resolver caches the
+// first one warmed, so the two are not the same experiment and a verdict that
+// changed between them says only that the first probe paid for a cold path.
+// Comparing two different cases is no better, since the coarse observed truth
+// records that a path was impaired without recording by how much. Determinism
+// is campaign mode's question, where `--iteration N --runs K` repeats one
+// schedule through a whole fresh topology each time.
 func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() Backend, opts HuntOptions) *HuntResult {
 	result := &HuntResult{GeneratorVersion: HuntGeneratorVersion, BaseScenario: baseID, HuntSeed: opts.Seed}
 	if err := opts.withDefaults(); err != nil {
@@ -168,9 +178,6 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 		result.Result, result.ErrorKind = HuntResultError, FindingGeneratorDefect
 		result.Error = fmt.Sprintf("generated %d unique cases after %d bounded candidates; requested %d",
 			len(result.Cases), maxCandidates, result.RequestedCases)
-	}
-	if !opts.DryRun {
-		addTruthInstabilityFindings(result.Cases)
 	}
 	result.finish()
 	return result

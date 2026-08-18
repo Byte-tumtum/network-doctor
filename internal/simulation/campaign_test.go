@@ -296,3 +296,47 @@ func TestRunCampaignRepeatsASingleIteration(t *testing.T) {
 		t.Errorf("stability = %d stable / %d divergent", result.StableRuns, result.DivergentRuns)
 	}
 }
+
+// The diagnosis fingerprint is what a hunt compares two runs by, so anything in
+// it that a rerun cannot repeat would make every case look unstable. These are
+// the fields a real run varies without the network varying: elapsed
+// milliseconds, the addresses that happened to be dialed, the prose netdoc
+// wrote about them, and the run's own identity and clock. None may reach the
+// fingerprint; the classification fields must.
+func TestDiagnosisFingerprintIgnoresRuntimeOnlyValues(t *testing.T) {
+	classified := []DiagnosisCheck{
+		{ID: "dns", Name: "DNS", Status: "PASS"},
+		{ID: "internet_tcp", Name: "Internet", Status: "WARN", Cause: "ipv6_unreachable",
+			Families: &DiagnosisFamilies{IPv4: "reachable", IPv6: "unreachable"}},
+	}
+	steady := &Report{ID: "run-a", StartedAt: time.Unix(1, 0), Duration: time.Second,
+		Tests: []TestOutcome{{Name: "one", Duration: 300 * time.Millisecond, ExitCode: 1,
+			StartOffset: 10 * time.Millisecond, EndOffset: 900 * time.Millisecond,
+			Diagnosis: &Diagnosis{Verdict: "degraded", Summary: "example.test is slow", Checks: classified}}}}
+
+	noisy := []DiagnosisCheck{
+		{ID: "dns", Name: "DNS", Status: "PASS", Ms: 412, Detail: "resolved via 10.77.0.53 in 412ms",
+			Attempts: []DiagnosisAttempt{{IP: "10.77.0.53", Ms: 412}}},
+		{ID: "internet_tcp", Name: "Internet", Status: "WARN", Cause: "ipv6_unreachable", Ms: 3001,
+			Detail: "connected to 10.77.0.20:80 from 10.77.0.10:54321", Fix: "check the upstream link",
+			Families: &DiagnosisFamilies{IPv4: "reachable", IPv6: "unreachable"},
+			Attempts: []DiagnosisAttempt{{IP: "2001:db8::20", Ms: 3000, Error: "network is unreachable"}}},
+	}
+	rerun := &Report{ID: "run-b", StartedAt: time.Unix(999999, 0), Duration: 7 * time.Second,
+		Tests: []TestOutcome{{Name: "one", Duration: 4 * time.Second, ExitCode: 3,
+			StartOffset: 77 * time.Millisecond, EndOffset: 6 * time.Second,
+			Diagnosis: &Diagnosis{Verdict: "degraded", Summary: "example.test is very slow", Checks: noisy}}}}
+
+	if a, b := diagnosisFingerprint(steady), diagnosisFingerprint(rerun); a.ID != b.ID {
+		t.Fatalf("runtime-only values changed the fingerprint:\n %+v\n %+v", a, b)
+	}
+	// The converse, so this is not passing because the fingerprint ignores
+	// everything: a status change is a different diagnosis.
+	changed := *rerun.Tests[0].Diagnosis
+	changed.Checks = []DiagnosisCheck{noisy[0], {ID: "internet_tcp", Name: "Internet", Status: "FAIL",
+		Cause: "ipv6_unreachable", Families: noisy[1].Families}}
+	worse := &Report{Tests: []TestOutcome{{Name: "one", Diagnosis: &changed}}}
+	if diagnosisFingerprint(steady).ID == diagnosisFingerprint(worse).ID {
+		t.Fatal("a changed probe status left the fingerprint alone")
+	}
+}

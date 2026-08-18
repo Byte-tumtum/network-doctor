@@ -33,15 +33,20 @@ var HuntSeverities = []HuntSeverity{
 	SeverityInfo,
 }
 
-// Finding categories name what kind of disagreement a case produced. Every
-// value here is emitted by a path in this package; a category the oracle cannot
-// establish from independent evidence is not a category, and there is
-// deliberately no catch-all. "Network Doctor claimed a fault the network did
-// not have" belongs to FindingDiagnosticContradiction, where the finding still
-// names which dimension disagreed, and a probe that spent its deadline is
-// either the correct diagnosis of an injected fault, a whole-process hang
-// (FindingNetdocHang), or harness failure (FindingSimulatorFailure), never a
-// kind of its own.
+// Finding categories name what kind of disagreement a case produced. A category
+// the oracle cannot establish from independent evidence is not a category, and
+// there is deliberately no catch-all. "Network Doctor claimed a fault the
+// network did not have" belongs to FindingDiagnosticContradiction, where the
+// finding still names which dimension disagreed, and a probe that spent its
+// deadline is either the correct diagnosis of an injected fault, a whole-process
+// hang (FindingNetdocHang), or harness failure (FindingSimulatorFailure), never
+// a kind of its own.
+//
+// FindingDiagnosticInstability is the one a hunt never reaches on its own. It
+// classifies a repeat suggestion, and a hunt runs each case once because two
+// runs inside one live topology are not the same experiment. It stays defined
+// so a caller who does ask for repeats, or a campaign report read through this
+// taxonomy, lands somewhere honest.
 const (
 	FindingFalseNegative           = "comparison_false_negative"
 	FindingDiagnosticInstability   = "diagnostic_instability"
@@ -936,43 +941,4 @@ func aggregateHuntFindings(cases []HuntCaseResult) []HuntFinding {
 		return out[i].Fingerprint < out[j].Fingerprint
 	})
 	return out
-}
-
-func addTruthInstabilityFindings(cases []HuntCaseResult) {
-	type group struct {
-		indexes   []int
-		diagnoses map[string]bool
-	}
-	groups := make(map[string]*group)
-	for i := range cases {
-		if cases[i].DiagnosisFingerprint.ID == "" || cases[i].TruthFingerprint == "" {
-			continue
-		}
-		ids := make([]string, len(cases[i].Manifest.Mutations))
-		for j := range cases[i].Manifest.Mutations {
-			ids[j] = cases[i].Manifest.Mutations[j].ID
-		}
-		key := cases[i].TruthFingerprint + "\x00" + strings.Join(ids, ",")
-		g := groups[key]
-		if g == nil {
-			g = &group{diagnoses: make(map[string]bool)}
-			groups[key] = g
-		}
-		g.indexes = append(g.indexes, i)
-		g.diagnoses[cases[i].DiagnosisFingerprint.ID] = true
-	}
-	for _, g := range groups {
-		if len(g.indexes) < 2 || len(g.diagnoses) < 2 {
-			continue
-		}
-		index := g.indexes[0]
-		manifest := cases[index].Manifest
-		finding := HuntCaseFinding{Category: FindingDiagnosticInstability, Severity: SeverityMedium,
-			Code:      "truth_equivalent_diagnosis_divergence",
-			Summary:   "Equivalent observed truth produced multiple structured diagnosis fingerprints.",
-			Evidence:  fmt.Sprintf("%d cases produced %d diagnosis fingerprints", len(g.indexes), len(g.diagnoses)),
-			Reproduce: reproductionFor(manifest)}
-		finding.Fingerprint = huntFindingFingerprint(finding)
-		cases[index].Findings = append(cases[index].Findings, finding)
-	}
 }

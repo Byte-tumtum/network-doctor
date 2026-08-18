@@ -62,6 +62,29 @@ diagnosis fingerprints, excluding prose and incidental timing, paths, process
 ids, and kernel names. Keep the seed, case, fault ceiling, generator version,
 and reproduction command with any failure report.
 
+### A hunt makes no reproducibility claim
+
+Each case runs netdoc exactly once, and the hunt therefore never reports a
+diagnosis as unstable. Neither comparison available to it is between two runs
+of the same experiment:
+
+- Two runs inside one live topology are not independent. The second inherits
+  the neighbour, route and resolver caches the first warmed, so a verdict that
+  changed between them says the first probe paid for a cold path, not that
+  netdoc drifted. `two-path-ipv6-healthy` documents exactly this: its first
+  test exists to warm both forwarding paths, and a repeated run of it reports
+  `ok` where the cold one reported `degraded`.
+- Two different cases are two different networks. The observed-truth vocabulary
+  deliberately records that a path was impaired without recording by how much,
+  so a 79 ms path and a 730 ms one share a truth fingerprint while netdoc
+  correctly describes them differently. An accusation built on that equivalence
+  is a false positive, and because it needs sibling cases to exist at all, no
+  single-case replay could ever reproduce it.
+
+Determinism is campaign mode's question. `--iteration N --runs K` repeats one
+fixed schedule through a whole fresh topology per run, which is the comparison
+this one cannot make, and it already reports divergence as `nondeterministic`.
+
 A generated mutation records intent; it is not automatically observed truth.
 `observed_faults` contains a mutation only when service, event, kernel-fault, or
 independent reachability evidence from the executed simulation supports it.

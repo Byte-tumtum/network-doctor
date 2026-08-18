@@ -1203,176 +1203,36 @@ func TestRunHuntReportsWhyACaseFailed(t *testing.T) {
 	}
 }
 
-// huntCaseResult finalizes one case the way RunHunt does for a completed run:
-// truth and both fingerprints come from production code, so the detector sees
-// exactly the values a real hunt hands it.
-func huntCaseResult(caseNumber int, manifest GeneratedCaseManifest, report *Report) HuntCaseResult {
-	manifest.Case = caseNumber
-	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
-	truth := collectObservedTruth(manifest, report)
-	return HuntCaseResult{Manifest: manifest, Truth: truth, TruthFingerprint: truthFingerprint(truth),
-		DiagnosisFingerprint: diagnosisFingerprint(report), Status: "clean"}
-}
-
-// huntDNSReport is a finished run of a case whose resolver mutation was applied.
-// The query outcome moves observed truth; the check status moves the structured
-// diagnosis. Varying them independently is what separates the two halves of the
-// instability question.
-func huntDNSReport(queryOutcome, checkStatus string) *Report {
-	return &Report{Cleanup: CleanupInfo{Done: true},
-		Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledDNS, Service: "r", Outcome: DNSOutcomeDrop}, Result: EventApplied}},
-		Tests: []TestOutcome{{Name: "netdoc", ProcessOutcome: ProcessExited, EndOffset: time.Second,
-			Diagnosis: &Diagnosis{Verdict: "diagnosed", Checks: []DiagnosisCheck{{ID: "dns", Status: checkStatus}}}}},
-		Evidence: Evidence{DNSQueries: []DNSQueryEvidence{{Service: "r", ActualOutcome: queryOutcome, Offset: 100 * time.Millisecond, OffsetKnown: true}}}}
-}
-
-func divergenceFindings(cases []HuntCaseResult) []HuntCaseFinding {
-	var out []HuntCaseFinding
-	for _, item := range cases {
-		for _, finding := range item.Findings {
-			if finding.Code == "truth_equivalent_diagnosis_divergence" {
-				out = append(out, finding)
+// A hunt runs each case exactly once and makes no reproducibility claim, so a
+// repeat suggestion must never reach a finding through it. The mechanism that
+// used to produce one compared a cold netdoc run against a warm one inside the
+// same live topology, which reported the cost of a first packet as netdoc
+// drifting. This pins the decision rather than the absence: if repeats are ever
+// wired back in, they have to answer the cold-versus-warm question first.
+func TestHuntRunsEachCaseOnceAndMakesNoReproducibilityClaim(t *testing.T) {
+	base := loadHuntBase(t, "healthy")
+	env := &fakeEnv{stdout: okReport}
+	result := RunHunt(context.Background(), "healthy", base, func() Backend {
+		return &fakeBackend{caps: supported(), env: env}
+	}, HuntOptions{Cases: 3, Seed: 20260101, MaxFaults: 2, Run: Options{Netdoc: "netdoc"}})
+	if result.ExecutedCases != 3 {
+		t.Fatalf("executed %d cases, want 3", result.ExecutedCases)
+	}
+	for _, item := range result.Cases {
+		for _, test := range item.Report.Tests {
+			if len(test.RepeatVerdicts) != 0 {
+				t.Errorf("case %d ran netdoc more than once: %v", item.Manifest.Case, test.RepeatVerdicts)
 			}
 		}
 	}
-	return out
-}
-
-func distinctFingerprints(cases []HuntCaseResult, of func(HuntCaseResult) string) int {
-	seen := map[string]bool{}
-	for _, item := range cases {
-		seen[of(item)] = true
-	}
-	return len(seen)
-}
-
-// Diagnosis divergence is only a defect report when the cases being compared
-// were actually comparable: same observed truth, same applied mutations, more
-// than one observation. Each negative case below breaks exactly one of those
-// and must go quiet, so a later change to what "same truth" means cannot widen
-// or narrow grouping without failing here.
-func TestTruthInstabilityRequiresEquivalentTruthAndMutations(t *testing.T) {
-	// The generator emits mutations sorted by ID, so these manifests carry the
-	// canonical order a real case has; identity is the mutation set, not a
-	// hand-picked slice order.
-	dnsDrop := GeneratedMutation{ID: "dns.drop", Service: "r"}
-	unobservedLoss := GeneratedMutation{ID: "netem.loss", Node: "gateway", Segment: "upstream", LossPercent: 20}
-	dropOnly, dropAndLoss := huntManifest(dnsDrop), huntManifest(dnsDrop, unobservedLoss)
-
-	for _, tc := range []struct {
-		name          string
-		cases         []HuntCaseResult
-		truths        int
-		diagnoses     int
-		wantDivergent int
-	}{
-		{
-			name: "same truth and mutations with disagreeing diagnoses",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, huntDNSReport("ANSWER", "PASS")),
-				huntCaseResult(8, dropOnly, huntDNSReport("ANSWER", "FAIL")),
-				huntCaseResult(9, dropOnly, huntDNSReport("ANSWER", "WARN")),
-			},
-			truths: 1, diagnoses: 3, wantDivergent: 1,
-		},
-		{
-			name: "different observed truth is not an equivalence class",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, huntDNSReport("ANSWER", "PASS")),
-				huntCaseResult(8, dropOnly, huntDNSReport("SERVFAIL", "FAIL")),
-			},
-			truths: 2, diagnoses: 2, wantDivergent: 0,
-		},
-		{
-			name: "different applied mutations are not an equivalence class",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, huntDNSReport("ANSWER", "PASS")),
-				huntCaseResult(8, dropAndLoss, huntDNSReport("ANSWER", "FAIL")),
-			},
-			truths: 1, diagnoses: 2, wantDivergent: 0,
-		},
-		{
-			// Family reachability is a real component of observed truth, so two
-			// runs that saw different families working are not two samples of
-			// one network. Grouping them would report a netdoc that correctly
-			// followed the network as unstable.
-			name: "a different observed IPv4 family is not an equivalence class",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateReachable)),
-				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateUnreachable, FamilyStateReachable)),
-			},
-			truths: 2, diagnoses: 2, wantDivergent: 0,
-		},
-		{
-			name: "a different observed IPv6 family is not an equivalence class",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateReachable)),
-				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateReachable, FamilyStateUnreachable)),
-			},
-			truths: 2, diagnoses: 2, wantDivergent: 0,
-		},
-		{
-			// A family the client never had and a family whose path is broken
-			// are different networks, so the grouping key has to keep them apart
-			// even though both are "not working".
-			name: "an unavailable family is not an unreachable one",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateUnavailable)),
-				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateReachable, FamilyStateUnreachable)),
-			},
-			truths: 2, diagnoses: 2, wantDivergent: 0,
-		},
-		{
-			// The converse: populated family truth must not split cases that
-			// observed the same families, or instability would stop being
-			// detectable on any dual-stack run.
-			name: "the same observed families still group",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "PASS"), FamilyStateReachable, FamilyStateUnavailable)),
-				huntCaseResult(8, dropOnly, withObservedFamilies(huntDNSReport("ANSWER", "FAIL"), FamilyStateReachable, FamilyStateUnavailable)),
-			},
-			truths: 1, diagnoses: 2, wantDivergent: 1,
-		},
-		{
-			name:   "a single observation cannot be unstable",
-			cases:  []HuntCaseResult{huntCaseResult(3, dropOnly, huntDNSReport("ANSWER", "PASS"))},
-			truths: 1, diagnoses: 1, wantDivergent: 0,
-		},
-		{
-			name: "equivalent cases that agree are not unstable",
-			cases: []HuntCaseResult{
-				huntCaseResult(3, dropOnly, huntDNSReport("ANSWER", "PASS")),
-				huntCaseResult(8, dropOnly, huntDNSReport("ANSWER", "PASS")),
-			},
-			truths: 1, diagnoses: 1, wantDivergent: 0,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			truths := distinctFingerprints(tc.cases, func(item HuntCaseResult) string { return item.TruthFingerprint })
-			diagnoses := distinctFingerprints(tc.cases, func(item HuntCaseResult) string { return item.DiagnosisFingerprint.ID })
-			if truths != tc.truths || diagnoses != tc.diagnoses {
-				t.Fatalf("inputs carry %d truths and %d diagnoses, want %d and %d", truths, diagnoses, tc.truths, tc.diagnoses)
-			}
-			addTruthInstabilityFindings(tc.cases)
-			findings := divergenceFindings(tc.cases)
-			if len(findings) != tc.wantDivergent {
-				t.Fatalf("divergence findings = %d, want %d: %+v", len(findings), tc.wantDivergent, findings)
-			}
-			if tc.wantDivergent == 0 {
-				return
-			}
-			finding := findings[0]
-			if finding.Category != FindingDiagnosticInstability || finding.Severity != SeverityMedium {
-				t.Errorf("finding = %s/%s, want %s/%s", finding.Category, finding.Severity, FindingDiagnosticInstability, SeverityMedium)
-			}
-			if finding.Reproduce.Case != tc.cases[0].Manifest.Case || finding.Fingerprint == "" {
-				t.Errorf("finding reproduces case %d with fingerprint %q, want case %d",
-					finding.Reproduce.Case, finding.Fingerprint, tc.cases[0].Manifest.Case)
-			}
-			if len(tc.cases[0].Findings) != 1 {
-				t.Errorf("group reported %d findings on its first case, want one grouped finding", len(tc.cases[0].Findings))
-			}
-		})
+	// And the suggestion has no route into a finding even if a report arrives
+	// carrying one, since nothing in a hunt is entitled to raise it.
+	report := &Report{Cleanup: CleanupInfo{Done: true},
+		Topology: []NodeInfo{{Name: "client", Role: "client"}},
+		Tests: []TestOutcome{{Name: "netdoc", Node: "client", ProcessOutcome: ProcessExited,
+			Diagnosis: &Diagnosis{Verdict: "ok", Checks: []DiagnosisCheck{{ID: "dns", Status: "PASS"}}}}}}
+	if len(report.Tests[0].suggest()) != 0 {
+		t.Fatalf("a single run produced repeat suggestions: %+v", report.Tests[0].suggest())
 	}
 }
 
@@ -1438,5 +1298,147 @@ func TestHuntReportsGeneratorDefect(t *testing.T) {
 	result := RunHunt(context.Background(), "no-such-base", nil, nil, HuntOptions{Cases: 1, DryRun: true})
 	if result.Result != HuntResultError || result.ErrorKind != FindingGeneratorDefect {
 		t.Fatalf("result = %s, kind = %s, err = %s", result.Result, result.ErrorKind, result.Error)
+	}
+}
+
+// clientRoleEnv is fakeEnv with the one thing the condition oracle needs that
+// the shared fake does not say: which node is the client. Conditions about a
+// node's own kernel cannot be read without it.
+type clientRoleEnv struct{ *fakeEnv }
+
+func (e clientRoleEnv) Nodes() []NodeInfo {
+	return []NodeInfo{{Name: "client", Role: "client", Address: "10.77.0.10"}}
+}
+
+type clientRoleBackend struct{ env *fakeEnv }
+
+func (b *clientRoleBackend) Capabilities(context.Context) Capabilities { return supported() }
+
+func (b *clientRoleBackend) Prepare(context.Context, *Scenario, string) (Env, error) {
+	return clientRoleEnv{b.env}, nil
+}
+
+// deadRouteEvidence is what a node holder writes down for a client whose only
+// default route was deleted: the table read back holding one on-link route and
+// no default, and the client's own dial of the controlled IPv4 endpoints not
+// completing. Nothing here is derived from a diagnosis.
+func deadRouteEvidence() Evidence {
+	return Evidence{
+		RouteTables: []RouteTableEvidence{{Node: "client", Family: "ipv4",
+			Routes: []KernelRoute{{Destination: "10.77.0.0/24", Segment: "lan"}}}},
+		FamilyReachability: []FamilyReachabilityEvidence{{Node: "client", Family: "ipv4",
+			State: FamilyStateUnreachable}},
+		ControlledTargets: []ControlledTargetEvidence{},
+	}
+}
+
+// A netdoc that blames the gateway for a route the user deleted: stable across
+// runs, structurally valid, and materially wrong, since it sends the reader to
+// look at hardware instead of at one missing line in their own routing table.
+const blamesTheGatewayReport = `{"checks":[{"id":"internet_tcp","status":"WARN","cause":"gateway_unreachable",` +
+	`"detail":"d","address_families":{"IPv4":"unreachable","IPv6":"unavailable"}}],"verdict":"network","summary":"s"}`
+
+// The same run with the one thing that makes it right: netdoc's own cause for
+// the route being gone.
+const namesTheMissingRouteReport = `{"checks":[{"id":"internet_tcp","status":"WARN","cause":"no_default_route",` +
+	`"detail":"d","address_families":{"IPv4":"unreachable","IPv6":"unavailable"}}],"verdict":"network","summary":"s"}`
+
+// This is the whole point of the hunt, exercised through the pipeline a nightly
+// run actually uses rather than against the oracle alone: a wrong diagnosis of
+// a condition the simulator established on its own becomes a finding, the same
+// run with the right diagnosis becomes nothing, and the finding is reproducible
+// from the coordinates it publishes. The last part is the one that matters
+// most in practice, because a finding a single-case replay cannot produce can
+// never be filed however real the defect behind it is.
+func TestWrongDiagnosisOfAnObservedConditionBecomesAReproducibleFinding(t *testing.T) {
+	base := loadHuntBase(t, "healthy")
+	// A case that deletes the client's only default route and leaves the
+	// network otherwise still, so the final state is comparable.
+	const caseNumber = 18
+	generated, err := GenerateHuntCase("healthy", base, 20260101, caseNumber, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "routing.no_default_route" {
+		t.Fatalf("case %d is %+v, want the sole no_default_route case this test is written against",
+			caseNumber, generated.Manifest.Mutations)
+	}
+
+	hunt := func(report string, cases int, only *int) *HuntResult {
+		return RunHunt(context.Background(), "healthy", base, func() Backend {
+			return &clientRoleBackend{env: &fakeEnv{stdout: report, evidence: deadRouteEvidence()}}
+		}, HuntOptions{Cases: cases, Seed: 20260101, Case: only, MaxFaults: 2, Run: Options{Netdoc: "netdoc"}})
+	}
+	missed := func(result *HuntResult) *HuntFinding {
+		for i, finding := range result.Findings {
+			if finding.Code == "unrecognized_network_condition" && finding.Expected == string(ConditionNoDefaultRoute) {
+				return &result.Findings[i]
+			}
+		}
+		return nil
+	}
+
+	only := caseNumber
+	wrong := hunt(blamesTheGatewayReport, 1, &only)
+	finding := missed(wrong)
+	if finding == nil {
+		t.Fatalf("a wrong diagnosis of an observed condition produced no finding: %+v", wrong.Findings)
+	}
+	if finding.Severity != SeverityHigh || finding.Category != FindingFalseNegative {
+		t.Errorf("finding = %s/%s, want %s/%s", finding.Category, finding.Severity,
+			FindingFalseNegative, SeverityHigh)
+	}
+	// The coordinates a filed issue would print have to name this experiment
+	// completely, ceiling included.
+	repro := finding.Reproduce
+	if repro.BaseScenario != "healthy" || repro.Seed != 20260101 || repro.Case != caseNumber ||
+		repro.MaxFaults != 2 || repro.CaseFingerprint != generated.Manifest.CaseFingerprint {
+		t.Errorf("reproduction = %+v, want the coordinates of case %d", repro, caseNumber)
+	}
+
+	// The right diagnosis of the same network, from the same evidence.
+	if right := hunt(namesTheMissingRouteReport, 1, &only); missed(right) != nil {
+		t.Errorf("the correct diagnosis was accused anyway: %+v", right.Findings)
+	}
+
+	// Replay: the finding has to survive being regenerated from its own
+	// published coordinates as a single case, which is what triage requires
+	// before it files anything. A finding that only exists when siblings are
+	// present is unfilable by construction.
+	replay := hunt(blamesTheGatewayReport, 1, &repro.Case)
+	again := missed(replay)
+	if again == nil || again.Fingerprint != finding.Fingerprint {
+		t.Fatalf("replay of case %d did not reproduce fingerprint %s: %+v",
+			repro.Case, finding.Fingerprint, replay.Findings)
+	}
+	if replay.Cases[0].Manifest.CaseFingerprint != generated.Manifest.CaseFingerprint {
+		t.Errorf("replay regenerated case fingerprint %s, want %s",
+			replay.Cases[0].Manifest.CaseFingerprint, generated.Manifest.CaseFingerprint)
+	}
+}
+
+// Every finding a batch hunt can raise has to be raisable by a single case,
+// because a single case is all the reproduction step ever re-runs. A finding
+// that needs its siblings is reported and then permanently unfilable, which is
+// worse than not raising it: it consumes a whole simulated run per night to
+// conclude nothing.
+func TestEveryBatchFindingIsReachableFromItsOwnCase(t *testing.T) {
+	base := loadHuntBase(t, "healthy")
+	env := func() Backend {
+		return &clientRoleBackend{env: &fakeEnv{stdout: blamesTheGatewayReport, evidence: deadRouteEvidence()}}
+	}
+	batch := RunHunt(context.Background(), "healthy", base, env,
+		HuntOptions{Cases: 8, Seed: 20260101, MaxFaults: 2, Run: Options{Netdoc: "netdoc"}})
+	if len(batch.Findings) == 0 {
+		t.Fatal("the batch hunt raised nothing, so this test proves nothing")
+	}
+	for _, finding := range batch.Findings {
+		caseNumber := finding.Reproduce.Case
+		single := RunHunt(context.Background(), "healthy", base, env,
+			HuntOptions{Cases: 1, Seed: 20260101, Case: &caseNumber, MaxFaults: 2, Run: Options{Netdoc: "netdoc"}})
+		if !slices.ContainsFunc(single.Findings, func(f HuntFinding) bool { return f.Fingerprint == finding.Fingerprint }) {
+			t.Errorf("%s (%s) was raised by the batch on case %d but not by that case on its own;"+
+				" it can never be filed", finding.Code, finding.Fingerprint, caseNumber)
+		}
 	}
 }
