@@ -6,14 +6,27 @@ package diagnostic
 import "testing"
 
 func TestParseAirportSSID(t *testing.T) {
-	if got := parseAirportSSID("Current Wi-Fi Network: HomeNet 5G\n"); got != "HomeNet 5G" {
-		t.Errorf("got %q, want HomeNet 5G", got)
-	}
-	if got := parseAirportSSID("You are not associated with an AirPort network.\n"); got != "" {
-		t.Errorf("not associated: got %q, want empty", got)
-	}
-	if got := parseAirportSSID("networksetup: en5 is not a Wi-Fi interface.\n"); got != "" {
-		t.Errorf("non-wifi iface: got %q, want empty", got)
+	for _, tc := range []struct {
+		name, out, want string
+	}{
+		{"success", "Current Wi-Fi Network: HomeNet 5G\n", "HomeNet 5G"},
+		// The name is taken whole, not up to some delimiter inside it.
+		{"colon in ssid", "Current Wi-Fi Network: Cafe: Ristretto\n", "Cafe: Ristretto"},
+		{"unicode ssid", "Current Wi-Fi Network: Caf\u00e9 \u65e5\u672c\n", "Caf\u00e9 \u65e5\u672c"},
+		{"padded separator", "  Current Wi-Fi Network:    HomeNet   \n", "HomeNet"},
+		// A renamed or translated label degrades to "" by design; it must not
+		// fall back to splitting on the colon.
+		{"localized label", "R\u00e9seau Wi-Fi actuel : HomeNet\n", ""},
+		{"legacy label", "Current AirPort Network: HomeNet\n", ""},
+		{"not associated", "You are not associated with an AirPort network.\n", ""},
+		// Colon-shaped status line: proof that a diagnostic never becomes an SSID.
+		{"non-wifi iface", "networksetup: en5 is not a Wi-Fi interface.\n", ""},
+		{"label without value", "Current Wi-Fi Network: \n", ""},
+		{"empty output", "", ""},
+	} {
+		if got := parseAirportSSID(tc.out); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

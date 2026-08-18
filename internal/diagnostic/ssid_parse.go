@@ -2,9 +2,26 @@ package diagnostic
 
 import "strings"
 
-// parseAirportSSID parses `networksetup -getairportnetwork <iface>`:
-// "Current Wi-Fi Network: <name>". Anything else (errors, "not associated",
-// future tooling churn) yields "".
+// parseAirportSSID parses stdout from `networksetup -getairportnetwork
+// <iface>`, whose success form is one line: "Current Wi-Fi Network: <name>".
+//
+// The English label is load-bearing and cannot be swapped for a generic "value
+// after the first colon" rule, because networksetup's status lines have the
+// same shape: "networksetup: en5 is not a Wi-Fi interface." would then parse as
+// the SSID "en5 is not a Wi-Fi interface.". The label is the only token
+// separating a network name from a diagnostic, so the label is what we match.
+//
+// This is why the tool differs from netsh (see parseNetshSSID), which keeps an
+// untranslated "SSID" key and a second field to match a value against;
+// networksetup exposes neither. Apple documents no output format here, and the
+// label is not guaranteed: it already changed once, from "Current AirPort
+// Network:" on older releases. Whether it can also be localized could not be
+// established. Either way the failure is the safe one: an unrecognized label
+// yields "", the display-only Wi-Fi line is dropped, and a status message is
+// never reported as a network name.
+//
+// The name is returned verbatim after trimming, so SSIDs containing spaces,
+// colons, or non-ASCII text survive intact.
 func parseAirportSSID(out string) string {
 	for _, ln := range strings.Split(out, "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(ln), "Current Wi-Fi Network:"); ok {
