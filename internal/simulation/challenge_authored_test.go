@@ -104,6 +104,7 @@ func TestAuthoredChallengesReplayDeterministically(t *testing.T) {
 // ids are. This pins the id each slug mints, so a change to the derivation
 // fails here instead of quietly repointing a case somebody linked to.
 func TestAuthoredChallengeIDsAreFrozen(t *testing.T) {
+	pinned := map[string]struct{}{}
 	for _, tt := range []struct{ slug, id string }{
 		{"refused-vs-blocked-refused", "A1-F78DCB"},
 		{"refused-vs-blocked-blocked", "A1-0DD077"},
@@ -114,6 +115,7 @@ func TestAuthoredChallengeIDsAreFrozen(t *testing.T) {
 		{"wrong-default-route", "A1-0CA25C"},
 		{"missing-subnet-route", "A1-48CFF9"},
 	} {
+		pinned[tt.slug] = struct{}{}
 		found, ok := AuthoredChallengeBySlug(tt.slug)
 		if !ok {
 			t.Errorf("authored challenge %q has been removed; it was published as %s", tt.slug, tt.id)
@@ -122,6 +124,16 @@ func TestAuthoredChallengeIDsAreFrozen(t *testing.T) {
 		if found.ID != tt.id {
 			t.Errorf("%q was published as %s and now mints %s; that repoints an id somebody may have shared",
 				tt.slug, tt.id, found.ID)
+		}
+	}
+	// Pinning is the last step of adding an authored case, and the one nothing
+	// else forces. An unpinned entry still resolves, so the omission is invisible
+	// until a slug edit moves an id somebody has already played.
+	for _, entry := range authoredChallenges {
+		if _, ok := pinned[entry.slug]; !ok {
+			t.Errorf("authored challenge %q mints %s but no row above pins it;"+
+				" add one so a later slug change fails here instead of repointing the id",
+				entry.slug, entry.id())
 		}
 	}
 }

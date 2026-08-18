@@ -56,6 +56,7 @@ func challengeWithMutation(t *testing.T, mutation string) *Challenge {
 // already be in circulation, and the fix is to leave V1 alone and add a V2
 // entry to challengeGenerators, never to update these rows.
 func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
+	pinned := map[string]int{}
 	for _, tt := range []struct {
 		id, base    string
 		caseNumber  int
@@ -117,6 +118,8 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 		{"V4-00F778", "two-path-ipv6-healthy", 751460, "routing.preferred_path_failure", "hard", "cea184054ba16e4d"},
 		{"V4-011667", "dual-stack-healthy", 584555, "family.ipv4_drop", "medium", "231095f63e19ed50"},
 	} {
+		version, _, _ := strings.Cut(tt.id, "-")
+		pinned[version]++
 		t.Run(tt.id, func(t *testing.T) {
 			challenge, err := BuildChallenge(tt.id)
 			if err != nil {
@@ -143,6 +146,25 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 	for _, version := range []string{"V1", "V2", "V3", "V4"} {
 		if _, ok := challengeGenerators[version]; !ok {
 			t.Fatalf("%s ids have been published; this build can no longer resolve them", version)
+		}
+	}
+	// The other half: a version cannot be added without rows either. A version's
+	// meaning is the whole chain it resolves through, so it can be repointed by a
+	// change that never mentions it, and bumping HuntGeneratorVersion moves every
+	// V3 and V4 id exactly that way. The rows above are what catches that, so a
+	// version carrying none is unprotected from the release it ships in, which is
+	// the window in which nobody is yet looking.
+	for version := range challengeGenerators {
+		// Authored ids name a case rather than search for one, so they are pinned
+		// by slug in TestAuthoredChallengeIDsAreFrozen instead.
+		if version == AuthoredIDVersion {
+			continue
+		}
+		if pinned[version] == 0 {
+			t.Errorf("challenge version %s resolves ids but no row above pins one."+
+				" Add golden rows for it before it ships: without them a change to the hunt"+
+				" generator, the control scenarios or the condition table repoints every %s id"+
+				" silently.", version, version)
 		}
 	}
 	// V1 is frozen at the conditions it was published with. Its list may only
