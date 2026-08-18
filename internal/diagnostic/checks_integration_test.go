@@ -135,7 +135,7 @@ func TestPMTUProbeLoopbackSilentPeerDoesNotWarn(t *testing.T) {
 		accepted <- conn // held open, never read from
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultProbeTimeout)
 	defer cancel()
 	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("127.0.0.1")}}
 	r := defaultOps.pmtuProbe(port, ProtoNone)(ctx, deps)

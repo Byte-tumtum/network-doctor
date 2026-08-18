@@ -267,7 +267,7 @@ func TestRunRejectsUnknownKeyPreset(t *testing.T) {
 func TestRunAcceptsVimKeyPreset(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, probe := range probes {
 			results[probe.ID] = diagnostic.ProbeResult{ID: probe.ID, Status: diagnostic.StatusPass}
@@ -295,7 +295,7 @@ func TestRunJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+			runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 				results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 				for _, p := range probes {
 					results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: tt.status}
@@ -326,7 +326,7 @@ func TestRunJSON(t *testing.T) {
 func TestRunProbeSelectionFlags(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
@@ -375,7 +375,7 @@ func TestRunProbeSelectionFlags(t *testing.T) {
 func TestRunProbeSelectionPreservesDiagnosis(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			status := diagnostic.StatusPass
@@ -408,7 +408,7 @@ func TestRunProbeSelectionPreservesDiagnosis(t *testing.T) {
 func TestRunKnownButInapplicableProbeSelection(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
@@ -494,7 +494,7 @@ func TestRunRejectsInvalidProbeSelectionBeforeDiagnostics(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
 	runs := 0
-	runAll = func(context.Context, []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(context.Context, []diagnostic.Probe, time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		runs++
 		return nil
 	}
@@ -552,7 +552,7 @@ func TestRunRejectsInvalidProbeSelectionBeforeDiagnostics(t *testing.T) {
 func TestRunPublicDNSFlag(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
@@ -611,12 +611,12 @@ func TestRunPublicDNSFlag(t *testing.T) {
 // value proves nothing about a good one: a positive duration has to reach the
 // probes before the run starts.
 func TestRunAppliesTimeout(t *testing.T) {
-	origRun, origTimeout := runAll, diagnostic.ProbeTimeout
-	t.Cleanup(func() { runAll, diagnostic.ProbeTimeout = origRun, origTimeout })
+	origRun := runAll
+	t.Cleanup(func() { runAll = origRun })
 
 	var applied time.Duration
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
-		applied = diagnostic.ProbeTimeout
+	runAll = func(_ context.Context, probes []diagnostic.Probe, timeout time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		applied = timeout
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
@@ -628,7 +628,7 @@ func TestRunAppliesTimeout(t *testing.T) {
 		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 	}
 	if applied != 250*time.Millisecond {
-		t.Errorf("ProbeTimeout during the run = %v, want 250ms", applied)
+		t.Errorf("timeout passed to the runner = %v, want 250ms", applied)
 	}
 }
 
@@ -655,7 +655,7 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	origRun, origEvery := runAll, ui.WatchEvery
 	t.Cleanup(func() { runAll, ui.WatchEvery = origRun, origEvery })
 	ui.WatchEvery = time.Millisecond
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusFail}
@@ -667,7 +667,7 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	defer cancel()
 	var buf, stderr bytes.Buffer
 	out := &cancelAfter{buf: &buf, n: 3, cancel: cancel}
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, out, &stderr); got != 1 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, diagnostic.DefaultProbeTimeout, out, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 
@@ -693,7 +693,7 @@ func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
 	origRun, origEvery := runAll, ui.WatchEvery
 	t.Cleanup(func() { runAll, ui.WatchEvery = origRun, origEvery })
 	ui.WatchEvery = time.Millisecond
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		if len(probes) != 0 {
 			t.Fatalf("empty selection ran probes: %v", probes)
 		}
@@ -705,7 +705,7 @@ func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
 	var buf, stderr bytes.Buffer
 	out := &cancelAfter{buf: &buf, n: 2, cancel: cancel}
 	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, selection, out, &stderr); got != 0 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, selection, diagnostic.DefaultProbeTimeout, out, &stderr); got != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 	}
 	for i, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -727,7 +727,7 @@ func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	runAll = func(ctx context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(ctx context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		if ctx.Err() == nil {
 			t.Error("runAll called with a live context, want it already cancelled")
 		}
@@ -735,7 +735,7 @@ func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, &stdout, &stderr); got != 1 {
+	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, diagnostic.DefaultProbeTimeout, &stdout, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 	if stdout.Len() != 0 {
@@ -991,7 +991,7 @@ func TestReportJSONContract(t *testing.T) {
 func TestRunRejectsInteractiveWithoutTerminalStdout(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(context.Context, []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(context.Context, []diagnostic.Probe, time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		t.Error("runAll called; the guard must reject before any probe runs")
 		return nil
 	}
@@ -1047,7 +1047,7 @@ func TestStdoutIsTerminal(t *testing.T) {
 func TestRunJSONAllowedWithRedirectedStdout(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
-	runAll = func(_ context.Context, probes []diagnostic.Probe) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
 		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
 		for _, p := range probes {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}

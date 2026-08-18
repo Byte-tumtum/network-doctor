@@ -199,7 +199,7 @@ func TestExecutorsAgree(t *testing.T) {
 				lifo bool
 			}{{"oldest-first", false}, {"newest-first", true}} {
 				t.Run(tc.name+"/"+order.name+"/"+drain.name, func(t *testing.T) {
-					headless := canonicalResults(diagnostic.RunAll(context.Background(), order.probes))
+					headless := canonicalResults(diagnostic.RunAll(context.Background(), order.probes, diagnostic.DefaultProbeTimeout))
 					tui := canonicalResults(runTUIScheduler(t, order.probes, drain.lifo))
 					if headless != tui {
 						t.Errorf("executors disagree on %q (%s probe order, %s completion)\nRunAll:\n%s\nTUI:\n%s",

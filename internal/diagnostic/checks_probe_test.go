@@ -211,7 +211,7 @@ func TestDNSProbeRetriesTransientFailure(t *testing.T) {
 				}
 				return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
 			}}
-			ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), DefaultProbeTimeout)
 			defer cancel()
 			r := ops.dnsProbe("example.com", nil)(ctx, nil)
 			if r.Status != tc.want || attempts != tc.attempts {

@@ -45,7 +45,7 @@ type Options struct {
 
 func (o Options) withDefaults() Options {
 	if o.ProbeTimeout <= 0 {
-		o.ProbeTimeout = diagnostic.ProbeTimeout
+		o.ProbeTimeout = diagnostic.DefaultProbeTimeout
 	}
 	if o.Repeat < 1 {
 		o.Repeat = 1

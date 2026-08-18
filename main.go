@@ -189,7 +189,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
 	keys := fs.String("keys", "", "keybinding `preset` for the TUI: "+strings.Join(ui.KeyPresets(), " or "))
 	showVersion := fs.Bool("version", false, "print version and exit")
-	timeout := fs.Duration("timeout", diagnostic.ProbeTimeout, "per-check probe timeout")
+	timeout := fs.Duration("timeout", diagnostic.DefaultProbeTimeout, "per-check probe timeout")
 
 	// The stdlib flag package stops parsing at the first non-flag argument;
 	// peel positionals off and re-parse the remainder so flags are accepted
@@ -227,7 +227,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -timeout must be positive")
 		return 2
 	}
-	diagnostic.ProbeTimeout = *timeout
 	if *jsonOut && *toolbox {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
@@ -276,7 +275,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *jsonOut {
-		return runJSON(context.Background(), t, sources, *watch, *publicDNS, selection, stdout, stderr)
+		return runJSON(context.Background(), t, sources, *watch, *publicDNS, selection, *timeout, stdout, stderr)
 	}
 
 	// With no terminal on stdout the TUI has nowhere to draw: bubbletea would
@@ -292,7 +291,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
 	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection,
-		ui.WithKeymap(keymap)), tea.WithAltScreen())
+		ui.WithKeymap(keymap), ui.WithProbeTimeout(*timeout)), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -353,7 +352,7 @@ var runAll = diagnostic.RunAll
 // With watch it never stops on its own: one compact report per line, forever,
 // until the terminal interrupts it. That's NDJSON, but not a new schema: the
 // line is the same report struct, plus the ts that makes a stream readable.
-func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, selection diagnostic.ProbeSelection, stdout, stderr io.Writer) int {
+func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, selection diagnostic.ProbeSelection, timeout time.Duration, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	if !watch {
 		enc.SetIndent("", "  ")
@@ -370,7 +369,7 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 	code := 1
 	for {
 		probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS))
-		results := runAll(ctx, probes)
+		results := runAll(ctx, probes, timeout)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,
 			// so reporting that pass would be a lie.

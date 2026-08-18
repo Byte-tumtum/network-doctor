@@ -125,6 +125,9 @@ type model struct {
 	// "" when it is disabled; every probe rebuild reuses it.
 	publicDNS string
 	version   string
+	// probeTimeout bounds one probe. It belongs to this model, so a second
+	// diagnosis elsewhere in the process cannot change what this run uses.
+	probeTimeout time.Duration
 
 	// results + started are owned exclusively by Update; probe goroutines get an
 	// immutable snapshot, never the live map.
@@ -247,6 +250,16 @@ func WithKeymap(km Keymap) Option {
 	return func(m *model) { m.keys = km }
 }
 
+// WithProbeTimeout overrides the per-probe budget for this model only.
+// Non-positive values are ignored, leaving DefaultProbeTimeout in place.
+func WithProbeTimeout(d time.Duration) Option {
+	return func(m *model) {
+		if d > 0 {
+			m.probeTimeout = d
+		}
+	}
+}
+
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
 func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
@@ -255,21 +268,22 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
-		target:     t,
-		probes:     probes,
-		sources:    sources,
-		selection:  selection,
-		publicDNS:  publicDNS,
-		results:    map[diagnostic.ProbeID]diagnostic.ProbeResult{},
-		started:    map[diagnostic.ProbeID]bool{},
-		tools:      toolsFor(t, runtime.GOOS, bindFor(sources)),
-		spinner:    sp,
-		toolbox:    toolbox,
-		watch:      watch,
-		runHistory: map[diagnostic.ProbeID][]diagnostic.Status{},
-		histPath:   histFile,
-		version:    version,
-		width:      100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+		target:       t,
+		probes:       probes,
+		sources:      sources,
+		selection:    selection,
+		publicDNS:    publicDNS,
+		results:      map[diagnostic.ProbeID]diagnostic.ProbeResult{},
+		started:      map[diagnostic.ProbeID]bool{},
+		tools:        toolsFor(t, runtime.GOOS, bindFor(sources)),
+		spinner:      sp,
+		toolbox:      toolbox,
+		watch:        watch,
+		runHistory:   map[diagnostic.ProbeID][]diagnostic.Status{},
+		histPath:     histFile,
+		version:      version,
+		probeTimeout: diagnostic.DefaultProbeTimeout,
+		width:        100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
 	for _, opt := range opts {
 		opt(&m)

@@ -465,7 +465,7 @@ func (o *netops) dotExchange(ctx context.Context, ep encryptedDNSEndpoint, query
 	// gone before the connection is.
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	deadline := time.Now().Add(ProbeTimeout)
+	deadline := time.Now().Add(DefaultProbeTimeout)
 	if d, ok := ctx.Deadline(); ok {
 		deadline = d
 	}

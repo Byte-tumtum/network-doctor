@@ -311,7 +311,7 @@ func TestProbeSelectionDoesNotInvokeExcludedEgressOrPortalProbes(t *testing.T) {
 		probe(ProbeHTTPS, ProbeTLS),
 	}
 	selected := ProbeSelection{Check: probeSet(ProbeDNS, ProbeTargetTCP, ProbeTLS)}.Apply(probes)
-	RunAll(context.Background(), selected)
+	RunAll(context.Background(), selected, DefaultProbeTimeout)
 
 	if got, want := selectedIDs(selected), []ProbeID{ProbeIface, ProbeDNS, ProbeTargetTCP, ProbeTLS}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected IDs = %v, want %v", got, want)
@@ -329,7 +329,7 @@ func TestProbeSelectionDoesNotInvokeExcludedEgressOrPortalProbes(t *testing.T) {
 
 	runs = map[ProbeID]int{}
 	selected = ProbeSelection{Check: probeSet(ProbeTLS, ProbeQUIC), Skip: probeSet(ProbeDNS)}.Apply(probes)
-	RunAll(context.Background(), selected)
+	RunAll(context.Background(), selected, DefaultProbeTimeout)
 	if got, want := selectedIDs(selected), []ProbeID{ProbeIface, ProbeQUIC}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("selection with skipped prerequisite = %v, want %v", got, want)
 	}

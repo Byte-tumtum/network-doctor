@@ -38,12 +38,13 @@ func (m *model) scheduleStep() []tea.Cmd {
 }
 
 // runProbe builds the tea.Cmd for a probe, capturing the generation, the parent
-// context, and an immutable snapshot of just its dependency outputs.
+// context, this model's probe timeout, and an immutable snapshot of just its
+// dependency outputs.
 func (m *model) runProbe(p diagnostic.Probe) tea.Cmd {
-	gen, parent, run, id := m.generation, m.ctx, p.Run, p.ID
+	gen, parent, run, id, timeout := m.generation, m.ctx, p.Run, p.ID, m.probeTimeout
 	snap := snapshot(m.results, p.Deps)
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(parent, diagnostic.ProbeTimeout)
+		ctx, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
 		return probeDoneMsg{id: id, gen: gen, res: run(ctx, snap)}
 	}

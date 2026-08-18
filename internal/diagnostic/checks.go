@@ -187,9 +187,12 @@ type Probe struct {
 	Run  func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult
 }
 
-// ProbeTimeout bounds a single probe (the model wraps each in a child ctx).
-// A var so the -timeout flag can override the default before probes run.
-var ProbeTimeout = 4 * time.Second
+// DefaultProbeTimeout bounds a single probe when the caller names no other
+// value. The runners take the effective timeout as an argument (RunAll) or a
+// field (the TUI model), so two diagnoses in one process keep separate budgets;
+// this is only the default the -timeout flag starts from, and the fallback for
+// the rare probe handed a context with no deadline at all.
+const DefaultProbeTimeout = 4 * time.Second
 
 const (
 	// attemptDelay is the Happy Eyeballs (RFC 8305) connection-attempt stagger:
@@ -1113,7 +1116,7 @@ func (o *netops) proxyProbe(ctx context.Context, _ map[ProbeID]ProbeResult) Prob
 	// forever. Fall back to the probe budget.
 	dl, ok := ctx.Deadline()
 	if !ok {
-		dl = time.Now().Add(ProbeTimeout)
+		dl = time.Now().Add(DefaultProbeTimeout)
 	}
 	if socks {
 		return o.socks5Probe(ctx, addr, proxyURL.Scheme == "socks5h", dl, start)
@@ -1444,7 +1447,7 @@ func (o *netops) lookupIPRetrying(ctx context.Context, host string) ([]net.IP, s
 		answers <- dnsAnswer{ips, server, err}
 	}
 	go ask()
-	budget := ProbeTimeout
+	budget := DefaultProbeTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		budget = time.Until(deadline)
 	}

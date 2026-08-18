@@ -1,6 +1,9 @@
 package diagnostic
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // DepsState reports whether all deps completed (ready) and whether any completed
 // dep blocks this probe. A dep blocks on Fail or Skip (no output); a Pass, a
@@ -24,10 +27,17 @@ func SkipPrereq(id ProbeID) ProbeResult {
 }
 
 // RunAll executes the probe DAG headlessly with the same semantics as the TUI
-// scheduler: every ready probe runs in parallel under its own ProbeTimeout, a
+// scheduler: every ready probe runs in parallel under its own timeout, a
 // failed or skipped prerequisite skips its dependents, and the egress
 // downgrade is applied once every probe has a result.
-func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
+//
+// timeout bounds one probe and belongs to this call alone, so a concurrent
+// RunAll with a different budget cannot shorten or stretch this one. Anything
+// non-positive means DefaultProbeTimeout.
+func RunAll(ctx context.Context, probes []Probe, timeout time.Duration) map[ProbeID]ProbeResult {
+	if timeout <= 0 {
+		timeout = DefaultProbeTimeout
+	}
 	results := make(map[ProbeID]ProbeResult, len(probes))
 	started := make(map[ProbeID]bool, len(probes))
 	done := make(chan ProbeResult)
@@ -63,7 +73,7 @@ func RunAll(ctx context.Context, probes []Probe) map[ProbeID]ProbeResult {
 				}
 				running++
 				go func(p Probe, deps map[ProbeID]ProbeResult) {
-					pctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
+					pctx, cancel := context.WithTimeout(ctx, timeout)
 					defer cancel()
 					res := p.Run(pctx, deps)
 					res.ID = p.ID

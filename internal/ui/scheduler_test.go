@@ -323,14 +323,11 @@ func blockUntilDone(id diagnostic.ProbeID) diagnostic.Probe {
 }
 
 // The bounded-time guarantee, TUI half: runProbe wraps each probe in its own
-// ProbeTimeout child of the model context, so a stuck probe still lands as a
+// probeTimeout child of the model context, so a stuck probe still lands as a
 // probeDoneMsg instead of freezing the run.
 func TestRunProbeBoundsProbe(t *testing.T) {
-	orig := diagnostic.ProbeTimeout
-	diagnostic.ProbeTimeout = 20 * time.Millisecond
-	t.Cleanup(func() { diagnostic.ProbeTimeout = orig })
-
 	m := newModel(nil, false)
+	m.probeTimeout = 20 * time.Millisecond
 	m.ctx = context.Background()
 	msg := m.runProbe(blockUntilDone("slow"))()
 	done, ok := msg.(probeDoneMsg)
@@ -370,5 +367,40 @@ func TestNADoesNotBlock(t *testing.T) {
 	}
 	if !m.started[diagnostic.ProbeTargetTCP] {
 		t.Fatal("target_tcp should be dispatched after an NA dependency")
+	}
+}
+
+// The TUI's probe budget belongs to the model, not to the package. The second
+// model is constructed after the first one's command is built but before it
+// runs, which is the exact window a package-level timeout would leak through:
+// under a global, m1's probe would come back carrying m2's value.
+func TestRunProbeTimeoutIsPerModel(t *testing.T) {
+	const short, long = 2 * time.Second, time.Hour
+
+	budget := make(chan time.Duration, 2)
+	reportBudget := diagnostic.Probe{ID: "p", Name: "p", Run: func(ctx context.Context, _ map[diagnostic.ProbeID]diagnostic.ProbeResult) diagnostic.ProbeResult {
+		dl, ok := ctx.Deadline()
+		if !ok {
+			budget <- 0 // no deadline at all fails both bounds below
+			return diagnostic.ProbeResult{Status: diagnostic.StatusFail}
+		}
+		budget <- time.Until(dl)
+		return diagnostic.ProbeResult{Status: diagnostic.StatusPass}
+	}}
+
+	m1 := NewWithSelection(nil, nil, false, false, "", "test", "", diagnostic.ProbeSelection{}, WithProbeTimeout(short)).(model)
+	m1.ctx = context.Background()
+	cmd := m1.runProbe(reportBudget)
+
+	m2 := NewWithSelection(nil, nil, false, false, "", "test", "", diagnostic.ProbeSelection{}, WithProbeTimeout(long)).(model)
+	m2.ctx = context.Background()
+
+	cmd()
+	if got := <-budget; got <= 0 || got > short {
+		t.Errorf("first model's probe budget = %v, want (0, %v]", got, short)
+	}
+	m2.runProbe(reportBudget)()
+	if got := <-budget; got <= time.Minute {
+		t.Errorf("second model's probe budget = %v, want well over a minute", got)
 	}
 }
