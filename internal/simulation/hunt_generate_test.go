@@ -608,9 +608,12 @@ func FuzzGenerateHuntCase(f *testing.F) {
 		base := loadHuntBase(t, baseID)
 		caseNumber := int(rawCase % (HuntMaxCaseNumber + 1))
 		maxFaults := int(rawFaults%HuntMaxFaults) + 1
+		// Every input this harness builds is in range, so an error here is a
+		// generator defect (a mutation that cannot apply, a compatibility gap,
+		// an invalid result), never a rejected input.
 		generated, err := GenerateHuntCase(baseID, base, seed, caseNumber, maxFaults)
 		if err != nil {
-			return
+			t.Fatalf("%s seed %d case %d maxFaults %d: %v", baseID, seed, caseNumber, maxFaults, err)
 		}
 		revalidated := cloneScenario(generated.Scenario)
 		canonicalScenarioInput(revalidated)
