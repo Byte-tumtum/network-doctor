@@ -17,6 +17,13 @@ name: pages
 on:
   push:
     branches: [main]
+  # Build and verify on every pull request. The deploy job is gated on
+  # refs/heads/main, which a pull request ref never is, so this checks the site
+  # without publishing one. Unfiltered by branch or path on purpose: the site is
+  # staged from docs/, the wiki, site/, cmd/docsite, and the summaries in
+  # internal/diagnostic, and the base path is derived from the module path, so
+  # there is no subset of this repository that cannot break a link.
+  pull_request:
   # A wiki page was created or edited.
   gollum:
   workflow_dispatch:
@@ -25,8 +32,15 @@ permissions:
   contents: read
 
 # Never cancel a deploy in flight: a half-replaced site is worse than a late one.
+#
+# Keyed by ref so pull request runs do not share the deploying runs' group. Every
+# event that can reach the deploy job runs on refs/heads/main, so those still
+# serialize against each other exactly as before. Sharing one group with pull
+# requests would not: a queued run cancels the group's previously pending run, so
+# a busy pull request could discard a pending main deploy and leave the published
+# site stale with nothing red to show for it.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

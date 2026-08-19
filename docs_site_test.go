@@ -194,3 +194,52 @@ func TestPagesWorkflowBuildsBothSourcesAndPinsItsActions(t *testing.T) {
 		t.Error("the deploy job does not restrict itself to main")
 	}
 }
+
+// The verifier that holds every internal link, heading anchor, and base path is
+// only useful before a merge, so the workflow runs on pull requests too. That
+// costs a rule about the concurrency group: it is shared repository-wide, and a
+// newly queued run cancels the group's previously pending run. Keyed by ref, the
+// deploying events all land on refs/heads/main and still serialize against each
+// other, while pull requests sit in groups of their own. Keyed by nothing, a
+// busy pull request can discard a pending main deploy and leave the published
+// site stale with no failure anywhere to say so.
+func TestPagesWorkflowVerifiesPullRequestsWithoutContendingWithDeploys(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/pages.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pointers and raw nodes: every field here is written as an empty or false
+	// value, so "absent" and "present" are otherwise the same decode.
+	var workflow struct {
+		On          map[string]yaml.Node `yaml:"on"`
+		Concurrency struct {
+			Group            string `yaml:"group"`
+			CancelInProgress *bool  `yaml:"cancel-in-progress"`
+		} `yaml:"concurrency"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := workflow.On["pull_request"]; !ok {
+		t.Error("pages.yml does not trigger on pull_request, so a broken link or moved anchor goes green and only fails after it has merged")
+	}
+	// Unfiltered: the site is staged from docs/, the wiki, site/, cmd/docsite,
+	// and the summaries in internal/diagnostic, and its base path comes from the
+	// module path, so no subset of this repository is safe to skip. A bare
+	// `pull_request:` decodes to a null scalar; any branch or path filter makes
+	// it a mapping instead, which is what this rejects.
+	if node, ok := workflow.On["pull_request"]; ok && node.Tag != "!!null" {
+		t.Errorf("pages.yml filters the pull_request trigger with %s; any filter leaves some pull request able to break a link unchecked", node.Tag)
+	}
+
+	// The whole expression, not the substring: `github.ref_name` and
+	// `github.ref_type` both contain "github.ref" and neither partitions a pull
+	// request away from refs/heads/main. Surrounding text is still free.
+	if !regexp.MustCompile(`\$\{\{\s*github\.ref\s*\}\}`).MatchString(workflow.Concurrency.Group) {
+		t.Errorf("concurrency group is %q, which does not interpolate ${{ github.ref }}: pull request runs would share the deploying runs' group and could cancel a pending main deploy", workflow.Concurrency.Group)
+	}
+	if workflow.Concurrency.CancelInProgress == nil || *workflow.Concurrency.CancelInProgress {
+		t.Error("concurrency cancel-in-progress is not false; a half-replaced site is worse than a late one")
+	}
+}
