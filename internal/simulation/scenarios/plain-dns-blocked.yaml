@@ -1,0 +1,56 @@
+name: plain-dns-blocked
+description: >-
+  The mirror image: plaintext DNS on port 53 is cut off in both directions of
+  the claim, while DoH and DoT keep completing verified exchanges. Proves the
+  encrypted-DNS row is an independent path rather than a second reading of the
+  system resolver.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    # The same simulated internet the healthy control uses. Its plaintext
+    # resolver is left running and correct: nothing about the fixture changes
+    # here, only whether the client's packets to port 53 survive the trip.
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+faults:
+  # Plaintext DNS only, every destination, both transports port 53 runs on.
+  # The configured resolver and the public second opinion live on the same
+  # node as the encrypted resolver, so scoping these by port rather than by
+  # address is what keeps the two capabilities separable: TCP/443 and TCP/853
+  # to that same node stay open, which is the entire claim being tested.
+  - {type: drop, node: client, direction: outbound, protocol: udp, port: 53}
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 53}
+
+tests:
+  - name: DoH and DoT resolve while plaintext DNS is blocked
+    node: client
+
+expect:
+  verdict: dns
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    # Both plaintext rows are gone: the configured resolver fails outright, and
+    # the public second opinion has nothing to report.
+    - {id: dns, status: FAIL}
+    - {id: dns_public, status: 'N/A'}
+    # The positive half. The encrypted transports dial a bootstrap address
+    # directly and never fall back to port 53, so this row is the one thing on
+    # the machine that can still complete a DNS query.
+    - {id: dns_encrypted, status: PASS}

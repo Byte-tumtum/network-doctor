@@ -1,0 +1,60 @@
+name: encrypted-dns-blocked
+description: >-
+  Ordinary DNS resolves and direct egress works, while both encrypted DNS
+  transports are cut off. The isolation control for the encrypted-DNS row: it
+  has to fail here on its own evidence, not as a symptom of a dead path.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    # The simulated internet, claiming the fixed endpoints netdoc dials. Plain
+    # DNS on 53 and the portal endpoint on 80 answer normally; so does 8.8.8.8
+    # on 443, which is the direct-egress fallback the drop rules leave open.
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+faults:
+  # The two flows the encrypted-DNS row needs, and only those. Both are scoped
+  # to 1.1.1.1 because that is the single bootstrap address the row dials:
+  # RFC 8484 DoH on 443 and RFC 7858 DoT on 853. Everything else the client
+  # sends is untouched, which is the point. Plain DNS on 53 keeps resolving,
+  # UDP/443 keeps carrying QUIC, and direct egress still has 8.8.8.8:443, so a
+  # rule that leaked into any of those rows would show up as a second failure
+  # rather than hiding inside this one.
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 443, to: 1.1.1.1}
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 853, to: 1.1.1.1}
+
+tests:
+  - name: plain DNS resolves while DoH and DoT are blocked
+    node: client
+
+expect:
+  verdict: degraded
+  checks:
+    - {id: iface, status: PASS}
+    # The positive half of the claim. Every one of these rows sharing the
+    # network with the blocked transports has to keep working, or the
+    # encrypted-DNS failure below is collateral rather than isolated.
+    - {id: internet_tcp, status: PASS}
+    - {id: quic_udp_443, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    # Neither transport completed a verified exchange. The drop is silent, so
+    # both halves wait out the probe budget the way a filtering middlebox
+    # leaves them waiting, which is what makes the cause a timeout rather than
+    # a refusal.
+    - {id: dns_encrypted, status: FAIL, cause: timeout}

@@ -1763,7 +1763,7 @@ func TestProxyOnlyNetworkScenario(t *testing.T) {
 	// netdoc's own report: from inside the client namespace, the fixed internet
 	// endpoints on TCP/443 are unreachable.
 	assertObservedFamily(t, rep, "ipv4", FamilyStateUnreachable)
-	if !droppedOutboundTCP(rep.Evidence, "client", 443) {
+	if !droppedOutbound(rep.Evidence, "client", "tcp", 443) {
 		t.Errorf("the client's own TCP/443 filter never matched a packet: %+v", rep.Evidence.PacketDrops)
 	}
 
@@ -1800,6 +1800,139 @@ func TestProxyOnlyNetworkScenario(t *testing.T) {
 	// outage is the regression this scenario exists to catch.
 	if summary := out.Diagnosis.Summary; strings.Contains(summary, "Offline") {
 		t.Errorf("proxy-only network diagnosed as offline: %q", summary)
+	}
+	assertCleanedUp(t, rep)
+}
+
+// TestEncryptedDNSBlockedScenario is one half of the README's independence
+// claim: a network can carry ordinary DNS while blocking DoH and DoT. Both
+// encrypted transports are cut off at the one bootstrap address the row dials,
+// and nothing else is, so every plaintext row around it has to stay green. A
+// FAIL here that came with a dead path or a dead resolver would prove nothing,
+// which is what the passing rows are for.
+func TestEncryptedDNSBlockedScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "encrypted-dns-blocked", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+	}
+	out := rep.Tests[0]
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d: %+v", out.FalsePositives, out.FalseNegatives, out.Checks)
+	}
+
+	// Both filters bit. Without this a scenario whose rules never matched a
+	// packet would still pass on the day the probe broke for its own reasons.
+	for _, port := range []int{443, 853} {
+		if !droppedOutbound(rep.Evidence, "client", "tcp", port) {
+			t.Errorf("the client's outbound TCP/%d filter never matched a packet: %+v", port, rep.Evidence.PacketDrops)
+		}
+	}
+
+	// The negative half, stated per transport. The row passes on either one, so
+	// a DoT that stayed reachable would already have turned this scenario PASS
+	// into a wrong_status; naming both here says which of them the detail
+	// actually accounted for.
+	encrypted := diagnosisCheck(out, string(diagnostic.ProbeDNSEncrypted))
+	if encrypted.Status != "FAIL" || encrypted.Cause != diagnostic.EncryptedDNSCauseTimeout {
+		t.Errorf("dns_encrypted = %+v", encrypted)
+	}
+	for _, transport := range []string{"DoH:", "DoT:"} {
+		if !strings.Contains(encrypted.Detail, transport) {
+			t.Errorf("dns_encrypted detail does not account for %s: %q", transport, encrypted.Detail)
+		}
+	}
+
+	// The positive half, from three independent directions: netdoc resolved
+	// through the plaintext resolver, the fixture recorded answering it, and
+	// direct egress survived on the address the rules left alone. That last one
+	// is what a rule that widened past 1.1.1.1 would break.
+	for _, id := range []diagnostic.ProbeID{diagnostic.ProbeDNS, diagnostic.ProbeDNSPublic, diagnostic.ProbeQUIC} {
+		if check := diagnosisCheck(out, string(id)); check.Status != "PASS" {
+			t.Errorf("%s = %+v, want PASS while only encrypted DNS is blocked", id, check)
+		}
+	}
+	if !hasDNSEvidence(rep, "internet", "10.77.0.10", proxyProbeName, "ANSWER") {
+		t.Errorf("the plaintext resolver never answered the client: %+v", rep.Evidence.DNS)
+	}
+	internet := diagnosisCheck(out, string(diagnostic.ProbeInternet))
+	if internet.Status != "PASS" || !strings.Contains(internet.Detail, "8.8.8.8") {
+		t.Errorf("direct egress row = %+v, want PASS via the address the drop rules exclude", internet)
+	}
+
+	// The user-visible half. netdoc has to name encrypted DNS specifically
+	// rather than call this an outage or a DNS failure.
+	if out.ActualVerdict != "degraded" {
+		t.Errorf("verdict = %q, want degraded", out.ActualVerdict)
+	}
+	summary := out.Diagnosis.Summary
+	if !strings.HasPrefix(summary, "Plain DNS works, but encrypted DNS") {
+		t.Errorf("summary = %q, want the encrypted-DNS-specific one", summary)
+	}
+	if !strings.Contains(encrypted.Detail, "specific to encrypted DNS") {
+		t.Errorf("dns_encrypted detail does not reconcile against plain DNS: %q", encrypted.Detail)
+	}
+	assertCleanedUp(t, rep)
+}
+
+// TestPlainDNSBlockedScenario is the other half: encrypted DNS keeps working
+// when plaintext DNS cannot. The encrypted row is the only name resolution left
+// on the machine here, so a PASS is evidence of an independent path rather than
+// the absence of an assertion.
+func TestPlainDNSBlockedScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "plain-dns-blocked", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+	}
+	out := rep.Tests[0]
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d: %+v", out.FalsePositives, out.FalseNegatives, out.Checks)
+	}
+
+	// UDP is the only transport this run can observe being dropped, so it is
+	// the only one asserted here. The TCP/53 rule beside it is the other half
+	// of "plaintext DNS is blocked", but nothing in this scenario truncates an
+	// answer, so the stub resolver never retries over TCP and that counter
+	// stays at zero. Whether both rules exist is a property of the file, and
+	// TestEncryptedDNSIsolationPair asserts it there.
+	if !droppedOutbound(rep.Evidence, "client", "udp", 53) {
+		t.Errorf("the client's outbound UDP/53 filter never matched a packet: %+v", rep.Evidence.PacketDrops)
+	}
+	// And the plaintext fixture, which is running and correct, never got to
+	// answer. That is the difference between a blocked transport and a broken
+	// resolver.
+	if hasDNSQuery(rep, "10.77.0.10", proxyProbeName) {
+		t.Errorf("a plaintext query from the client still reached the resolver: %+v", rep.Evidence.DNS)
+	}
+
+	// The positive half. "DoH and DoT both completed" is the only detail the
+	// probe writes when neither transport had to cover for the other, so this
+	// is what keeps one of them from being silently unreachable behind a row
+	// that passes on either.
+	encrypted := diagnosisCheck(out, string(diagnostic.ProbeDNSEncrypted))
+	if encrypted.Status != "PASS" || !strings.Contains(encrypted.Detail, "DoH and DoT both completed") {
+		t.Errorf("dns_encrypted = %+v, want both transports completing", encrypted)
+	}
+	// Stated by the fixture rather than by netdoc: the DoH endpoint served a
+	// wire-format answer.
+	if !hasServiceReply(rep, "internet", encryptedDNSProbeService, ServiceEncryptedDNS, 200) {
+		t.Errorf("the encrypted-DNS fixture never answered: %+v", rep.Evidence.ServiceReplies)
+	}
+
+	// The negative half, and the diagnosis it has to produce: a name-resolution
+	// failure, not an outage, and not something encrypted DNS papers over.
+	if check := diagnosisCheck(out, string(diagnostic.ProbeDNS)); check.Status != "FAIL" {
+		t.Errorf("dns = %+v, want FAIL", check)
+	}
+	if check := diagnosisCheck(out, string(diagnostic.ProbeInternet)); check.Status != "PASS" {
+		t.Errorf("internet_tcp = %+v, want PASS", check)
+	}
+	if out.ActualVerdict != "dns" {
+		t.Errorf("verdict = %q, want dns", out.ActualVerdict)
+	}
+	if summary := out.Diagnosis.Summary; !strings.Contains(summary, "DNS resolution is failing") || strings.Contains(summary, "Offline") {
+		t.Errorf("summary = %q, want a DNS failure rather than an outage", summary)
 	}
 	assertCleanedUp(t, rep)
 }
@@ -2393,12 +2526,14 @@ func hasServiceReply(rep Report, node, service, serviceType string, status int) 
 	return false
 }
 
-// droppedOutboundTCP is the kernel's own count for a node's outbound filter.
+// droppedOutbound is the kernel's own count for a node's outbound filter.
 // The oracle's readers cover inbound drops only, and the direction matters:
-// this scenario refuses the packet locally rather than black-holing it remotely.
-func droppedOutboundTCP(evidence Evidence, node string, port int) bool {
+// these scenarios refuse the packet locally rather than black-holing it
+// remotely. A zero count means the rule was installed but never bit, which is
+// a scenario that proves nothing.
+func droppedOutbound(evidence Evidence, node, protocol string, port int) bool {
 	for _, drop := range evidence.PacketDrops {
-		if drop.Node == node && drop.Direction == DirectionOutbound && drop.Protocol == "tcp" &&
+		if drop.Node == node && drop.Direction == DirectionOutbound && drop.Protocol == protocol &&
 			drop.Port == port && drop.Packets > 0 {
 			return true
 		}

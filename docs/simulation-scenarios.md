@@ -120,6 +120,15 @@ Some semantics are easy to get wrong even after reading a scenario:
   is why the simulated internet serves it on 443 instead of a `tcp` sink. A node
   that claims `1.1.1.1` without it makes every scenario report a blocked
   encrypted resolver; a library test enforces that pairing.
+- Plain DNS and encrypted DNS are separate capabilities, and the scenarios that
+  say so have to break one without touching the other.
+  [`encrypted-dns-blocked.yaml`](../internal/simulation/scenarios/encrypted-dns-blocked.yaml)
+  drops TCP/443 and TCP/853 to `1.1.1.1` only, so port 53 keeps resolving and
+  direct egress keeps its `8.8.8.8` fallback;
+  [`plain-dns-blocked.yaml`](../internal/simulation/scenarios/plain-dns-blocked.yaml)
+  drops port 53 on both transports and leaves the encrypted ports alone. Each
+  one asserts the working rows beside the broken one, since an encrypted-DNS
+  result collected on a dead network is evidence about the network.
 
 ### Timed faults
 

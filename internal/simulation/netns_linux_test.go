@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -194,6 +195,45 @@ func TestDropFaultArgvCountsWhatItDrops(t *testing.T) {
 		if strings.IndexFunc(name, func(r rune) bool { return !isNftNameRune(r) }) >= 0 {
 			t.Errorf("counter name %q is not an nft identifier", name)
 		}
+	}
+}
+
+// A drop scoped to both a destination and a port has to carry both matches in
+// one rule. Either half missing widens the fault: without the address it takes
+// out every host on that port, and without the port it takes out every service
+// on that host. The encrypted-DNS isolation scenario is built entirely out of
+// that narrowness, since the address it blocks on 443 is one the direct-egress
+// row is expected to keep reaching on another address.
+func TestDropFaultArgvScopesDestinationAndPort(t *testing.T) {
+	np := &nodeProc{pid: 42, node: &Node{Name: "client"}}
+	env := &netnsEnv{tables: map[string]bool{}}
+	doh := Fault{Type: FaultDrop, Node: "client", Direction: DirectionOutbound, Protocol: "tcp", Port: 443, To: "1.1.1.1"}
+	dot := Fault{Type: FaultDrop, Node: "client", Direction: DirectionOutbound, Protocol: "tcp", Port: 853, To: "1.1.1.1"}
+	all := ""
+	for _, fault := range []Fault{doh, dot} {
+		steps, summary, err := env.faultSteps(fault, np)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, step := range steps {
+			all += strings.Join(step, " ") + "\n"
+		}
+		if want := "client refuses tcp traffic to 1.1.1.1 port " + strconv.Itoa(fault.Port); summary != want {
+			t.Errorf("summary = %q, want %q", summary, want)
+		}
+	}
+	for _, want := range []string{
+		"ip daddr 1.1.1.1 tcp dport 443 counter name " + dropCounterName(doh) + " drop",
+		"ip daddr 1.1.1.1 tcp dport 853 counter name " + dropCounterName(dot) + " drop",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("steps do not contain %q:\n%s", want, all)
+		}
+	}
+	// One counter per transport, or a run could not say which of the two
+	// blocked ports actually swallowed anything.
+	if dropCounterName(doh) == dropCounterName(dot) {
+		t.Errorf("both encrypted-DNS drops feed counter %q", dropCounterName(doh))
 	}
 }
 

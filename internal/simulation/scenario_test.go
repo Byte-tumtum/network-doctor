@@ -412,6 +412,84 @@ func TestLibraryScenariosValidate(t *testing.T) {
 	}
 }
 
+// TestEncryptedDNSIsolationPair pins the two halves of the README's claim that
+// ordinary DNS and encrypted DNS are independent capabilities. Each scenario
+// has to assert a working path beside the broken one: an encrypted-DNS FAIL
+// next to a dead network, or an encrypted-DNS PASS next to a working resolver,
+// proves nothing about either. Deterministic and rootless on purpose, so
+// deleting the positive rows fails the ordinary suite rather than only the
+// namespace one.
+func TestEncryptedDNSIsolationPair(t *testing.T) {
+	for _, tc := range []struct {
+		scenario string
+		drops    []string
+		want     map[string]string
+	}{
+		{
+			scenario: "encrypted-dns-blocked",
+			// Exactly the two flows the encrypted-DNS row dials, each pinned
+			// to the bootstrap address so nothing else on 443 is caught.
+			drops: []string{"tcp/443 to 1.1.1.1", "tcp/853 to 1.1.1.1"},
+			want: map[string]string{
+				string(diagnostic.ProbeDNSEncrypted): "FAIL",
+				string(diagnostic.ProbeDNS):          "PASS",
+				string(diagnostic.ProbeDNSPublic):    "PASS",
+				string(diagnostic.ProbeInternet):     "PASS",
+				string(diagnostic.ProbeQUIC):         "PASS",
+			},
+		},
+		{
+			scenario: "plain-dns-blocked",
+			// Both transports port 53 runs on, every destination, so the fault
+			// is "plaintext DNS" rather than "UDP DNS". The TCP half is stated
+			// here rather than asserted from a run on purpose: nothing in the
+			// scenario truncates an answer, so the stub resolver never retries
+			// over TCP and no namespace run can observe that rule either way.
+			drops: []string{"udp/53", "tcp/53"},
+			want: map[string]string{
+				string(diagnostic.ProbeDNSEncrypted): "PASS",
+				string(diagnostic.ProbeDNS):          "FAIL",
+				string(diagnostic.ProbeInternet):     "PASS",
+			},
+		},
+	} {
+		t.Run(tc.scenario, func(t *testing.T) {
+			s, err := LibraryScenario(tc.scenario)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]string{}
+			for _, check := range s.Expect.Checks {
+				got[check.ID] = check.Status
+			}
+			for id, status := range tc.want {
+				if got[id] != status {
+					t.Errorf("expects %s = %q, want %q", id, got[id], status)
+				}
+			}
+			// The isolation lives in the faults too, and an exact list is the
+			// point: a drop that lost its port or its address would still
+			// produce the rows above on some runs, but by taking out more of
+			// the network than the claim is about.
+			var drops []string
+			for _, fault := range s.Faults {
+				if fault.Type != FaultDrop || fault.Port == 0 {
+					t.Errorf("fault %+v is not a port-scoped drop", fault)
+					continue
+				}
+				drop := fmt.Sprintf("%s/%d", fault.Protocol, fault.Port)
+				if fault.To != "" {
+					drop += " to " + fault.To
+				}
+				drops = append(drops, drop)
+			}
+			if !slices.Equal(drops, tc.drops) {
+				t.Errorf("drops = %v, want %v", drops, tc.drops)
+			}
+		})
+	}
+}
+
 func TestLibraryScenarioReturnsIndependentCopies(t *testing.T) {
 	first, err := LibraryScenario("healthy")
 	if err != nil {
