@@ -261,6 +261,75 @@ func TestDNSProbeResamplesWithoutCuttingTheFirstQuery(t *testing.T) {
 	}
 }
 
+// The resample is bounded and borrows nothing. A resolver that answers costs
+// exactly one query, so the common path pays nothing for the retry; a cancelled
+// parent stops the probe at two queries rather than letting the retry outlive
+// the context it was handed or wait out a budget that is already gone.
+func TestDNSProbeResampleStaysInsideTheParentContext(t *testing.T) {
+	answer := func(context.Context, string) ([]net.IP, string, error) {
+		return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+	}
+	for _, tc := range []struct {
+		name     string
+		lookup   func(context.Context, string) ([]net.IP, string, error)
+		cancel   bool
+		want     Status
+		attempts int32
+	}{
+		{"an answered query is not resampled", answer, false, StatusPass, 1},
+		{"a cancelled parent stops at the one resample", func(ctx context.Context, _ string) ([]net.IP, string, error) {
+			// Bounded rather than a bare <-ctx.Done(): a query handed a context
+			// detached from the parent would otherwise wedge here until the
+			// suite timeout instead of failing on the assertions below.
+			select {
+			case <-ctx.Done():
+			case <-time.After(2 * time.Second):
+				return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+			}
+			return nil, "", &net.DNSError{Err: ctx.Err().Error(), Name: "example.com"}
+		}, true, StatusFail, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			var mu sync.Mutex
+			var seen []context.Context
+			ops := &netops{lookupIP: func(ctx context.Context, host string) ([]net.IP, string, error) {
+				attempts.Add(1)
+				mu.Lock()
+				seen = append(seen, ctx)
+				mu.Unlock()
+				return tc.lookup(ctx, host)
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
+			start := time.Now()
+			r := ops.dnsProbe("example.com", nil)(ctx, nil)
+			// Without a deadline the resample timer is DefaultProbeTimeout/2.
+			// Returning well inside that is what proves the probe followed the
+			// parent rather than waiting out a budget of its own.
+			if elapsed := time.Since(start); tc.cancel && elapsed >= DefaultProbeTimeout/2 {
+				t.Errorf("probe took %s after the parent was cancelled", elapsed)
+			}
+			if r.Status != tc.want || attempts.Load() != tc.attempts {
+				t.Errorf("status = %v after %d lookups, want %v after %d", r.Status, attempts.Load(), tc.want, tc.attempts)
+			}
+			cancel()
+			mu.Lock()
+			defer mu.Unlock()
+			for i, c := range seen {
+				select {
+				case <-c.Done():
+				default:
+					t.Errorf("query %d still holds a live context after the parent was cancelled", i+1)
+				}
+			}
+		})
+	}
+}
+
 // The DNS row names the resolver that answered when the platform reveals it, and
 // says nothing rather than "unknown" when it doesn't (Windows).
 func TestDNSProbeNamesResolver(t *testing.T) {

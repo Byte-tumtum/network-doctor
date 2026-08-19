@@ -146,16 +146,35 @@ func (r *Report) timelineSuggestions() []Suggestion {
 	return out
 }
 
+// carriedQueries reports whether netdoc's queries were actually arriving at
+// this resolver in [start, end). It is the proof that the client had a working
+// path to the service at all: when the queries are being discarded somewhere in
+// between, the resolver's own schedule is not what netdoc is failing on, and
+// the absence of a query at the resolver says nothing about what netdoc asked.
+func (r *Report) carriedQueries(service string, start, end time.Duration) bool {
+	return slices.ContainsFunc(r.Evidence.DNSQueries, func(q DNSQueryEvidence) bool {
+		return q.Service == service && q.placedWithin(start, end)
+	})
+}
+
 // resamplingGap fires when the resolver came back while netdoc was still
 // running and netdoc concluded without asking it again. It is deliberately
 // limited to DNS: the per-query evidence is what proves no second sample was
 // taken, and no other probe leaves that trace.
+//
+// That proof only holds while the path to the resolver carries queries. If none
+// of netdoc's queries reached the service before it recovered, none would have
+// reached it afterwards either, and the silence after the recovery is the path,
+// not a sample netdoc failed to take.
 func (r *Report) resamplingGap(test *TestOutcome, recovery FaultEventEvidence) (Suggestion, bool) {
 	if recovery.Event.Type != FaultScheduledDNS {
 		return Suggestion{}, false
 	}
 	dns := checkByID(test.Diagnosis, string(diagnostic.ProbeDNS))
 	if dns == nil || dns.Status != "FAIL" {
+		return Suggestion{}, false
+	}
+	if !r.carriedQueries(recovery.Event.Service, test.StartOffset, recovery.AppliedOffset) {
 		return Suggestion{}, false
 	}
 	for _, q := range r.Evidence.DNSQueries {
@@ -181,9 +200,20 @@ func (r *Report) resamplingGap(test *TestOutcome, recovery FaultEventEvidence) (
 func (r *Report) permanentWording(test *TestOutcome, recoveries []FaultEventEvidence) []Suggestion {
 	var healed []FaultEventEvidence
 	for _, recovery := range recoveries {
-		if recovery.AppliedOffset >= test.StartOffset && recovery.AppliedOffset < test.EndOffset {
-			healed = append(healed, recovery)
+		if recovery.AppliedOffset < test.StartOffset || recovery.AppliedOffset >= test.EndOffset {
+			continue
 		}
+		// A resolver none of netdoc's queries reached is not what this run
+		// described as lasting: netdoc never saw its schedule, only the path in
+		// front of it, and that did not recover. The window is the whole test,
+		// not resamplingGap's prefix, because the question here is whether
+		// netdoc experienced this resolver at all, and the run that resampled
+		// after the recovery is exactly the one whose wording is at issue.
+		if recovery.Event.Type == FaultScheduledDNS &&
+			!r.carriedQueries(recovery.Event.Service, test.StartOffset, test.EndOffset) {
+			continue
+		}
+		healed = append(healed, recovery)
 	}
 	if len(healed) == 0 {
 		return nil

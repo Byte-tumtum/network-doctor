@@ -26,6 +26,13 @@ func codes(in []Suggestion) map[string]bool {
 	return out
 }
 
+// dropped is the trace a query leaves at a silenced resolver: it arrived, and
+// the service chose not to answer. Its presence is what proves the client had a
+// path to the resolver at all.
+func dropped(offset time.Duration) DNSQueryEvidence {
+	return DNSQueryEvidence{Service: "r", Offset: offset, ActualOutcome: "DROPPED", OffsetKnown: true}
+}
+
 func TestResamplingGapNeedsRecoveryInsideTheRunAndNoLaterQuery(t *testing.T) {
 	timeline := []FaultEventEvidence{
 		applied(0, dnsEvent(DNSOutcomeAnswer)),
@@ -36,6 +43,7 @@ func TestResamplingGapNeedsRecoveryInsideTheRunAndNoLaterQuery(t *testing.T) {
 		Diagnosis: diag("dns", DiagnosisCheck{ID: "dns", Status: "FAIL", Cause: "dns_timeout"})}
 
 	rep := timedReport(timeline, failing)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{dropped(150 * time.Millisecond)}
 	if !codes(rep.timelineSuggestions())[SuggestTransientNotResampled] {
 		t.Errorf("no resampling gap where the resolver recovered mid-run: %+v", rep.timelineSuggestions())
 	}
@@ -43,7 +51,8 @@ func TestResamplingGapNeedsRecoveryInsideTheRunAndNoLaterQuery(t *testing.T) {
 	// A query that reached the recovered resolver inside the same run means
 	// netdoc did resample; there is no gap to report.
 	rep = timedReport(timeline, failing)
-	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER", OffsetKnown: true}}
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{dropped(150 * time.Millisecond),
+		{Service: "r", Offset: 600 * time.Millisecond, ActualOutcome: "ANSWER", OffsetKnown: true}}
 	if codes(rep.timelineSuggestions())[SuggestTransientNotResampled] {
 		t.Errorf("resampling gap reported although a later query was answered: %+v", rep.timelineSuggestions())
 	}
@@ -52,8 +61,70 @@ func TestResamplingGapNeedsRecoveryInsideTheRunAndNoLaterQuery(t *testing.T) {
 	late := failing
 	late.EndOffset = 200 * time.Millisecond
 	rep = timedReport(timeline, late)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{dropped(150 * time.Millisecond)}
 	if codes(rep.timelineSuggestions())[SuggestTransientNotResampled] {
 		t.Errorf("resampling gap reported for a recovery outside the run: %+v", rep.timelineSuggestions())
+	}
+}
+
+// A resolver that netdoc's queries never reached is not evidence about
+// resampling. When the path to it is blackholed, by a route fault the resolver
+// schedule knows nothing about, the resolver records no query before the
+// outage and none after it recovers, and that second silence is the path
+// rather than a sample netdoc declined to take. Reading it as a coverage gap
+// accuses netdoc of skipping a query it did send and that never arrived, and
+// it also has nothing left to call transient: the failure outlives the run.
+func TestTimelineSuggestionsIgnoreAResolverNoQueryReached(t *testing.T) {
+	timeline := []FaultEventEvidence{
+		applied(0, dnsEvent(DNSOutcomeAnswer)),
+		applied(150*time.Millisecond, dnsEvent(DNSOutcomeDrop)),
+		applied(770*time.Millisecond, dnsEvent(DNSOutcomeAnswer)),
+	}
+	blackholed := TestOutcome{Name: "t", EndOffset: 4 * time.Second,
+		Diagnosis: diag("Offline: neither direct egress nor DNS is working.",
+			DiagnosisCheck{ID: "dns", Status: "FAIL", Cause: "dns_timeout"})}
+
+	rep := timedReport(timeline, blackholed)
+	got := codes(rep.timelineSuggestions())
+	if got[SuggestTransientNotResampled] || got[SuggestTransientReportedPermanent] {
+		t.Errorf("transient reported for a resolver no query reached: %+v", rep.timelineSuggestions())
+	}
+
+	// The only difference that matters: one query got through before the
+	// outage healed. Now the silence afterwards is netdoc's to answer for.
+	rep = timedReport(timeline, blackholed)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{dropped(200 * time.Millisecond)}
+	if !codes(rep.timelineSuggestions())[SuggestTransientNotResampled] {
+		t.Errorf("no resampling gap although a query reached the resolver: %+v", rep.timelineSuggestions())
+	}
+
+	// Timing the director could not place is not proof of a reachable path.
+	rep = timedReport(timeline, blackholed)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", ActualOutcome: "DROPPED"}}
+	got = codes(rep.timelineSuggestions())
+	if got[SuggestTransientNotResampled] || got[SuggestTransientReportedPermanent] {
+		t.Errorf("transient reported from a query with no known offset: %+v", rep.timelineSuggestions())
+	}
+
+	// Another resolver's traffic proves nothing about the path to this one.
+	// The premise is checked before the later-query loop, so a scenario with a
+	// second resolver cannot borrow its way into either finding.
+	rep = timedReport(timeline, blackholed)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "other", Offset: 200 * time.Millisecond,
+		ActualOutcome: "DROPPED", OffsetKnown: true}}
+	got = codes(rep.timelineSuggestions())
+	if got[SuggestTransientNotResampled] || got[SuggestTransientReportedPermanent] {
+		t.Errorf("transient reported from another resolver's queries: %+v", rep.timelineSuggestions())
+	}
+
+	// A query that only arrives after the recovery is not a gap either: it is
+	// netdoc resampling, and it still says nothing about a path that was
+	// carrying nothing while the resolver was silent.
+	rep = timedReport(timeline, blackholed)
+	rep.Evidence.DNSQueries = []DNSQueryEvidence{{Service: "r", Offset: 900 * time.Millisecond,
+		ActualOutcome: "ANSWER", OffsetKnown: true}}
+	if codes(rep.timelineSuggestions())[SuggestTransientNotResampled] {
+		t.Errorf("resampling gap reported although the only query landed after recovery: %+v", rep.timelineSuggestions())
 	}
 }
 
