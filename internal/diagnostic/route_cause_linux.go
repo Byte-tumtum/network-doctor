@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"net"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -18,12 +17,6 @@ const (
 	routeFlagUp    = 0x1
 	routeFlagGW    = 0x2
 )
-
-type defaultRouteState struct {
-	iface   string
-	gateway net.IP
-	metric  int
-}
 
 func routeFailureCause(destination net.IP) string {
 	if destination.To4() != nil {
@@ -53,21 +46,6 @@ func routeFailureCauseFrom(routeData, arpData []byte) string {
 
 func routeFailureCauseIPv6From(routeData []byte) string {
 	return classifyDefaultRoutes(parseIPv6DefaultRoutes(routeData), nil)
-}
-
-func classifyDefaultRoutes(routes []defaultRouteState, gatewayFailed func(defaultRouteState) bool) string {
-	if len(routes) == 0 {
-		return RouteCauseNoDefaultRoute
-	}
-	sort.SliceStable(routes, func(i, j int) bool { return routes[i].metric < routes[j].metric })
-	if len(routes) > 1 && routes[0].metric < routes[1].metric {
-		return RouteCausePreferredPathFailed
-	}
-	selected := routes[0]
-	if gatewayFailed != nil && gatewayFailed(selected) {
-		return RouteCauseGatewayUnreachable
-	}
-	return RouteCauseSelectedPathFailed
 }
 
 func parseIPv6DefaultRoutes(raw []byte) []defaultRouteState {
