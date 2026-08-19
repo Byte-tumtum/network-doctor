@@ -74,6 +74,10 @@ jobs:
         run: go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic
       - if: runner.os == 'Linux'
         run: go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic
+      # The Challenge Mode generator builds every hunt case from a seed, so
+      # smoke-fuzz it too: a bad seed there produces an invalid scenario.
+      - if: runner.os == 'Linux'
+        run: go test -fuzz=FuzzGenerateHuntCase -fuzztime=10s ./internal/simulation
   # The container is how macOS and Windows reach Challenge Mode, so the artifact
   # is tested rather than assumed: this job builds the image and runs a real
   # namespace-backed simulation and a real challenge inside it. The runner's
