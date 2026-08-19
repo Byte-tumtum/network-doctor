@@ -711,6 +711,18 @@ func TestMutationScopeIsRequiredForEveryFamily(t *testing.T) {
 			},
 		},
 		{
+			name:   "path-MTU black hole",
+			report: pmtuLinks(minBlackholeMTU, 1500),
+			mutation: GeneratedMutation{ID: "pmtu.blackhole", Node: "gateway", Segment: "upstream",
+				TargetNode: "client", MTU: minBlackholeMTU},
+			blanked: []GeneratedMutation{
+				{ID: "pmtu.blackhole", Segment: "upstream", TargetNode: "client", MTU: minBlackholeMTU},
+				{ID: "pmtu.blackhole", Node: "gateway", TargetNode: "client", MTU: minBlackholeMTU},
+				{ID: "pmtu.blackhole", Node: "gateway", Segment: "upstream", MTU: minBlackholeMTU},
+				{ID: "pmtu.blackhole", Node: "gateway", Segment: "upstream", TargetNode: "client"},
+			},
+		},
+		{
 			name: "transient link down",
 			report: Report{Timeline: []FaultEventEvidence{{Event: TimedEvent{Type: FaultScheduledLink,
 				Node: "gateway", Segment: "upstream", State: LinkStateDown}, Result: EventApplied}}},
@@ -761,6 +773,7 @@ func unstampEvidence(evidence Evidence) Evidence {
 	out.ServiceReplies = append([]ServiceReplyEvidence(nil), evidence.ServiceReplies...)
 	out.DNSQueries = append([]DNSQueryEvidence(nil), evidence.DNSQueries...)
 	out.PacketConditions = append([]PacketConditionEvidence(nil), evidence.PacketConditions...)
+	out.Links = append([]LinkEvidence(nil), evidence.Links...)
 	for i := range out.TLS {
 		out.TLS[i].Node = ""
 	}
@@ -781,6 +794,9 @@ func unstampEvidence(evidence Evidence) Evidence {
 	}
 	for i := range out.PacketConditions {
 		out.PacketConditions[i].Node = ""
+	}
+	for i := range out.Links {
+		out.Links[i].Node = ""
 	}
 	return out
 }
@@ -875,6 +891,14 @@ func TestScheduledFaultThatReachedNobodyIsNotObserved(t *testing.T) {
 				Segment: "upstream", Active: false, LossPercent: 17, Seed: 11}}}},
 		},
 		{
+			name: "black hole whose hop the kernel never narrowed",
+			mutation: GeneratedMutation{ID: "pmtu.blackhole", Node: "gateway", Segment: "upstream",
+				TargetNode: "client", MTU: minBlackholeMTU},
+			report: Report{Faults: []FaultInfo{{Type: FaultPMTUBlackhole, Node: "gateway",
+				Summary: "gateway carries upstream at a 576-byte MTU"}},
+				Evidence: pmtuLinks(1500, 1500).Evidence},
+		},
+		{
 			name: "preferred path failure with no path consequence",
 			mutation: GeneratedMutation{ID: "routing.preferred_path_failure", Node: "preferred-gateway",
 				TargetNode: "client", Segment: "preferred-upstream", Family: "ipv4"},
@@ -956,6 +980,14 @@ var huntFamilyPath = map[string]string{
 	// Mode is where that distinction is graded, against netdoc's own route
 	// causes.
 	"routing.wrong_default_route": "no_finding",
+	// netdoc's Path MTU row is a Warn that states its evidence and carries no
+	// cause, by design: a peer that stops reading stalls a bulk write the same
+	// way, so only an independent protocol timeout promotes the evidence into a
+	// path verdict. There is no cause for recognition to be expressed over, so
+	// there is nothing here for a finding to accuse it of missing. What the
+	// hunt does establish is the condition itself, from the two link MTUs read
+	// back off the kernel.
+	"pmtu.blackhole": "no_finding",
 }
 
 // TestEveryMutationFamilyDeclaresItsHuntPath keeps the classification honest in

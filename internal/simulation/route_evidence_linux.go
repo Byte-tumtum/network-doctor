@@ -48,7 +48,8 @@ func (e *netnsEnv) Evidence(ctx context.Context) (Evidence, error) {
 				}
 			}
 			out.Links = append(out.Links, LinkEvidence{Node: np.node.Name, Segment: iface.logical.Segment,
-				Address: address, IPv4: iface.logical.IPv4, IPv6: iface.logical.IPv6, Up: parseLinkUp(string(res.Stdout))})
+				Address: address, IPv4: iface.logical.IPv4, IPv6: iface.logical.IPv6,
+				Up: parseLinkUp(string(res.Stdout)), MTU: parseLinkMTU(string(res.Stdout))})
 		}
 		if np.node.Role == "router" {
 			raw, readErr := os.ReadFile(filepath.Join(e.work, np.node.Name+"-forwarding"))
@@ -530,6 +531,23 @@ func parseLinkUp(raw string) bool {
 		}
 	}
 	return false
+}
+
+// parseLinkMTU reads the MTU out of one `ip link` line. Zero when the line
+// carries no readable one, which is a different claim from a narrowed link and
+// must not be mistaken for one.
+func parseLinkMTU(raw string) int {
+	fields := strings.Fields(raw)
+	for i, field := range fields {
+		if field != "mtu" || i+1 >= len(fields) {
+			continue
+		}
+		if mtu, err := strconv.Atoi(fields[i+1]); err == nil && mtu > 0 {
+			return mtu
+		}
+		return 0
+	}
+	return 0
 }
 
 func parseRouteGet(raw []byte, np *nodeProc, family string) (RouteEvidence, error) {

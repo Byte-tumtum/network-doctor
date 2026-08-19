@@ -101,9 +101,14 @@ A generated mutation records intent; it is not automatically observed truth.
 `observed_faults` contains a mutation only when service, event, kernel-fault, or
 independent reachability evidence from the executed simulation supports it.
 Persistent netem mutations require matching kernel qdisc state on the intended
-logical node and segment. Timed DNS, netem, and link mutations require the
-specific impairment event to have applied successfully; initialization,
-restoration, failed, and skipped events do not qualify. These timed entries
+logical node and segment. A path-MTU black hole requires both halves of the
+size asymmetry read back off the kernel: the forwarding hop really carrying the
+narrowed MTU, and the client still carrying more. A path that narrowed
+everywhere carries small packets by agreement, and a hop that was never
+narrowed carries everything, so neither half alone is the fault. Timed DNS,
+netem, and link mutations require the specific impairment event to have applied
+successfully; initialization, restoration, failed, and skipped events do not
+qualify. These timed entries
 prove successful simulator state changes, not that netdoc sampled the affected
 window or observed an end-to-end consequence.
 
@@ -152,6 +157,14 @@ HTTP error status is a working service answering, and an invalid DoH response
 while DoT still resolves is encrypted DNS working. Adding an expectation there
 would invent a contract the probes never made.
 
+`pmtu.blackhole` narrows the forwarding hop the client's own route to the
+briefed endpoint leads to, and only that hop: the path-MTU probe writes to that
+endpoint, so a narrowed interface anywhere else leaves the write untouched. It
+needs a router with exactly one interface off the client's link, so which way
+that router forwards is read rather than guessed, and that interface must carry
+no IPv6, because `minIPv6MTU` is the floor IPv6 requires of a link and a hop
+that cannot be narrowed below it black-holes no IPv6 sender.
+
 `routing.preferred_path_failure` uses `two-path-healthy`. It lowers the
 preferred router's upstream interface, beyond the client-visible gateway, so
 the lower-metric client route remains selected. Observation requires the
@@ -169,9 +182,9 @@ current one and `huntGeneratorVersions` lists every version this build can
 still materialize. Each operator carries the version it first appeared in, and
 an older generator is simply the registry truncated there, which is why new
 operators are appended and never interleaved. Case seeds are not versioned:
-`v3` and `v4` draw the same numbers and differ exactly where the operator list
-does. `TestHuntGeneratorVersion3Reproduction` pins the older generator against
-a fixed manifest.
+every version draws the same numbers and they differ exactly where the operator
+list does. `TestHuntGeneratorVersion3Reproduction` pins the older generator
+against a fixed manifest.
 
 ### Route tables, and telling absences apart
 

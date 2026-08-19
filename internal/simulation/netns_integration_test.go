@@ -2110,6 +2110,66 @@ func TestPMTUBlackholeScenario(t *testing.T) {
 	assertHostMTUAndFirewallUntouched(t)
 }
 
+// The whole point of putting the black hole in the hunt catalogue: a case the
+// generator draws on its own has to reach the path-MTU probe, not merely carry
+// a fault declaration nothing exercises. The authored pmtu-blackhole scenario
+// proves the condition is modelable; this proves the generator can invent it.
+func TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	const base = "healthy-routed-network"
+	generated, err := GenerateHuntCase(base, loadHuntBase(t, base), 20260102, 39, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "pmtu.blackhole" {
+		t.Fatalf("case 39 is no longer the black hole case: %+v", generated.Manifest.Mutations)
+	}
+	rep := runScenarioDefinition(t, sim, netdoc, generated.Scenario)
+	if rep.Error != "" {
+		t.Fatalf("run failed: %s", rep.Error)
+	}
+	if len(rep.Tests) != 1 || rep.Tests[0].Diagnosis == nil {
+		t.Fatalf("tests = %+v", rep.Tests)
+	}
+	out := rep.Tests[0]
+
+	// Small packets still cross the narrowed hop in both directions. Without
+	// these the case would only prove the path is broken, which is a different
+	// fault with a different answer.
+	for _, id := range []diagnostic.ProbeID{diagnostic.ProbeDNS, diagnostic.ProbeTargetTCP, diagnostic.ProbeHTTP} {
+		if got := diagnosisCheck(out, string(id)); got.Status != "PASS" {
+			t.Errorf("%s = %+v, want PASS: small packets must still cross the black hole", id, got)
+		}
+	}
+	// The row the mutation exists to exercise: the client's kernel takes the
+	// whole 24 KiB and the peer acknowledges none of it.
+	pmtu := diagnosisCheck(out, string(diagnostic.ProbePMTU))
+	if pmtu.Status != "WARN" {
+		t.Errorf("path_mtu = %+v, want WARN from a generated black hole", pmtu)
+	}
+	if !strings.Contains(pmtu.Detail, "none of it acknowledged") {
+		t.Errorf("path_mtu detail = %q, want the unacknowledged payload named", pmtu.Detail)
+	}
+	if pmtu.Fix == "" {
+		t.Error("path_mtu carries no fix hint")
+	}
+
+	// And the simulator's own independent reading of the same condition: the
+	// hop really narrowed, the client really did not.
+	truth := collectObservedTruth(generated.Manifest, &rep)
+	if !slices.Contains(truth.ObservedFaults, "pmtu.blackhole") {
+		t.Errorf("observed faults = %v, want the black hole; links were %+v", truth.ObservedFaults, rep.Evidence.Links)
+	}
+	for _, finding := range analyzeHuntCase(generated.Manifest, &rep, truth) {
+		if finding.Category == FindingFalseNegative || finding.Category == FindingDiagnosticContradiction {
+			t.Errorf("a correctly diagnosed black hole produced %s/%s: %s", finding.Category, finding.Code, finding.Summary)
+		}
+	}
+	assertCleanedUp(t, rep)
+	assertHostMTUAndFirewallUntouched(t)
+}
+
 // The fault narrows an interface and installs firewall rules, both of which
 // exist only inside namespaces the simulator owns and both of which die with
 // them. Nothing restores them, because nothing on this host was changed.

@@ -74,6 +74,11 @@ type LinkEvidence struct {
 	IPv4    string `json:"ipv4,omitempty"`
 	IPv6    string `json:"ipv6,omitempty"`
 	Up      bool   `json:"up"`
+	// MTU is what the kernel reports for this interface, which is the reading a
+	// path-MTU black hole is made of: one hop carrying less than the endpoints
+	// still offer. Zero means the link was read and reported none, so a fault
+	// that narrows nothing cannot confirm itself from a missing number.
+	MTU int `json:"mtu,omitempty"`
 }
 
 // RouteEvidence combines the validated route with the kernel's selected path.

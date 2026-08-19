@@ -382,8 +382,38 @@ func mutationObserved(mutation GeneratedMutation, report *Report, truth Observed
 		return wrongDefaultRouteObserved(mutation, report)
 	case "routing.missing_subnet_route":
 		return missingSubnetRouteObserved(mutation, report)
+	// A black hole is a size asymmetry, so both halves are read back off the
+	// kernel: the hop really carries the narrowed MTU, and the client's own link
+	// is still wider than it, which is what leaves the client offering packets
+	// that hop cannot forward. A narrowed hop on its own is a small link, and a
+	// small link is discovered and worked around rather than black-holed. The
+	// suppressed fragmentation-needed replies are deliberately not claimed here:
+	// that rule keeps no counter, so nothing independent says it matched.
+	case "pmtu.blackhole":
+		return sameNumber(mutation.MTU, linkMTUAt(report.Evidence, mutation.Node, mutation.Segment)) &&
+			wideLinkAt(report.Evidence, mutation.TargetNode, mutation.MTU)
 	}
 	return false
+}
+
+// linkMTUAt is the MTU one node's kernel reported for one segment. Zero when no
+// such link was read, which no scoped question can match.
+func linkMTUAt(evidence Evidence, node, segment string) int {
+	for _, link := range evidence.Links {
+		if sameName(node, link.Node) && sameName(segment, link.Segment) {
+			return link.MTU
+		}
+	}
+	return 0
+}
+
+// wideLinkAt reports whether this node still holds a link wider than the
+// narrowed hop. It is the other half of the asymmetry, read at the endpoint
+// rather than at the hop.
+func wideLinkAt(evidence Evidence, node string, mtu int) bool {
+	return mtu > 0 && slices.ContainsFunc(evidence.Links, func(link LinkEvidence) bool {
+		return sameName(node, link.Node) && link.MTU > mtu
+	})
 }
 
 // noDefaultRouteObserved wants the table to be empty of defaults and the family

@@ -563,6 +563,43 @@ func preferredPathReport() Report {
 	}
 }
 
+// pmtuLinks is one kernel reading of a three-link path: the client's own link,
+// the hop's client-facing link, and the hop's forwarding link.
+func pmtuLinks(hop, endpoint int) Report {
+	return Report{Evidence: Evidence{Links: []LinkEvidence{
+		{Node: "client", Segment: "client-lan", Address: "10.77.1.10/24", Up: true, MTU: endpoint},
+		{Node: "gateway", Segment: "client-lan", Address: "10.77.1.1/24", Up: true, MTU: endpoint},
+		{Node: "gateway", Segment: "upstream", Address: "10.77.2.1/24", Up: true, MTU: hop},
+	}}}
+}
+
+// A black hole is a size asymmetry, and the observation is that asymmetry read
+// back off two kernels. Either half alone is a different network: a path that
+// narrowed everywhere carries small packets by agreement, and a hop that was
+// never narrowed carries everything.
+func TestPMTUBlackholeObservationNeedsBothLinkMTUs(t *testing.T) {
+	mutation := GeneratedMutation{ID: "pmtu.blackhole", Node: "gateway", Segment: "upstream",
+		TargetNode: "client", MTU: minBlackholeMTU}
+	blackhole := pmtuLinks(minBlackholeMTU, 1500)
+	if !mutationObserved(mutation, &blackhole, ObservedTruth{}) {
+		t.Fatal("a narrowed hop under wider endpoints was not observed")
+	}
+	if truth := collectObservedTruth(huntManifest(mutation), &blackhole); !slices.Contains(truth.ObservedFaults, "pmtu.blackhole") {
+		t.Fatalf("observed faults = %v, want the black hole", truth.ObservedFaults)
+	}
+	for name, links := range map[string][2]int{
+		"the hop was never narrowed":       {1500, 1500},
+		"the endpoints narrowed with it":   {minBlackholeMTU, minBlackholeMTU},
+		"the hop narrowed to another size": {minIPv6MTU, 1500},
+		"no link was read at all":          {0, 0},
+	} {
+		report := pmtuLinks(links[0], links[1])
+		if mutationObserved(mutation, &report, ObservedTruth{}) {
+			t.Errorf("%s was counted as a black hole", name)
+		}
+	}
+}
+
 func TestPreferredPathMutationObservedFromIndependentPathConsequence(t *testing.T) {
 	mutation := GeneratedMutation{ID: "routing.preferred_path_failure", Node: "preferred-gateway",
 		TargetNode: "client", Segment: "preferred-upstream", Family: "ipv4",

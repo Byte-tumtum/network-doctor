@@ -21,7 +21,7 @@ import (
 const (
 	// HuntGeneratorVersion is part of every manifest and seed domain. A future
 	// algorithm change must increment it instead of silently changing old cases.
-	HuntGeneratorVersion = "v4"
+	HuntGeneratorVersion = "v5"
 	huntSeedDomain       = "netdoc-sim-hunt-v3"
 	HuntMaxFaults        = 3
 	HuntMaxCases         = 500
@@ -36,14 +36,14 @@ const (
 // triage finding, keeps resolving through the rules it was minted under.
 //
 // The seed domain is deliberately not versioned. A case seed depends on the
-// base and the case number only, so v3 and v4 draw the same numbers and differ
-// exactly where the operator list differs, which is the smallest possible
-// difference between two generators.
+// base and the case number only, so every version draws the same numbers and
+// they differ exactly where the operator list differs, which is the smallest
+// possible difference between two generators.
 //
 // Literals, not HuntGeneratorVersion. A published version has to stay
 // resolvable after the constant moves on, so a bump appends an entry here
 // rather than replacing the last one.
-var huntGeneratorVersions = []string{"v3", "v4"}
+var huntGeneratorVersions = []string{"v3", "v4", "v5"}
 
 // huntGeneratorIndex places a version on that list. An operator with no `since`
 // belongs to the first version, which is where all of them started.
@@ -104,6 +104,10 @@ type GeneratedMutation struct {
 	NetemSeed        uint32  `json:"netem_seed,omitempty"`
 	TargetPort       int     `json:"target_port,omitempty"`
 	Status           int     `json:"status,omitempty"`
+	// MTU is the size a path-MTU black hole narrows its hop to. The endpoints
+	// keep their own, which is what leaves them offering packets that hop can no
+	// longer carry.
+	MTU int `json:"mtu,omitempty"`
 }
 
 // GeneratedCaseManifest is the stable, display-safe reproduction artifact.
@@ -173,6 +177,9 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "routing.no_default_route", since: "v4", description: "the client's only default route is deleted", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasSoleDefaultRoute, generate: generateNoDefaultRoute},
 	{id: "routing.wrong_default_route", since: "v4", description: "the default route is repointed at an on-link router that goes nowhere", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWrongDefaultRouteCandidate, generate: generateWrongDefaultRoute},
 	{id: "routing.missing_subnet_route", since: "v4", description: "the specific route to the target's subnet is removed", conflictTags: []string{"route-choice"}, applicable: hasMissingSubnetRouteCandidate, generate: generateMissingSubnetRoute},
+	// v5. The condition the path-MTU probe exists for, and the one major fault
+	// the hunt could not invent.
+	{id: "pmtu.blackhole", since: "v5", description: "a forwarding hop carries less than the endpoints offer and stays silent about it", conflictTags: []string{"link-shaping", "path-outage"}, applicable: hasPMTUBlackholeHop, generate: generatePMTUBlackhole},
 }
 
 // huntOperators is the operator list one generator version sees: this registry
@@ -1314,6 +1321,88 @@ func hasMissingSubnetRouteCandidate(s *Scenario) bool {
 	return ok
 }
 
+// --- v5: the path-MTU black hole ---
+
+// huntBlackholeMTU is the size a generated black hole narrows its hop to. Fixed
+// at the smallest datagram every IPv4 host must accept, which is the widest
+// margin the schema allows below the 1500-byte MTU the endpoints keep, so no
+// full-size segment the client offers can cross the hop.
+const huntBlackholeMTU = minBlackholeMTU
+
+// pmtuBlackholeHop is the forwarding hop the client reaches its briefed target
+// through, and the interface that hop forwards out of. Both halves matter. A
+// black hole is a transit condition, so narrowing an endpoint would only make
+// the local kernel refuse the send, and narrowing a hop the path-MTU probe's
+// bulk write never crosses would leave that write untouched.
+type pmtuBlackholeHop struct{ router, segment string }
+
+// findPMTUBlackholeHop walks the client's own route to the briefed endpoint to
+// the first router, then takes that router's one interface off the client's
+// link. Exactly one, so which way it forwards is read rather than guessed: a
+// router with two ways onward would need the choice made from its own table,
+// which is a different question from the one this family asks.
+//
+// IPv4 only. minIPv6MTU is the floor IPv6 requires of a link, so a hop carrying
+// IPv6 cannot be narrowed to anything an IPv6 sender would not already fit
+// inside, and a black hole that black-holes nothing is not this fault.
+func findPMTUBlackholeHop(s *Scenario) (pmtuBlackholeHop, bool) {
+	client := clientNode(s)
+	if client == "" {
+		return pmtuBlackholeHop{}, false
+	}
+	target, err := netip.ParseAddrPort(briefedTargetEndpoint(s))
+	if err != nil || !target.Addr().Is4() {
+		return pmtuBlackholeHop{}, false
+	}
+	route, ok := configuredRouteTo(s.Topology.Routes, client, target.Addr())
+	if !ok {
+		return pmtuBlackholeHop{}, false
+	}
+	via, err := netip.ParseAddr(route.Via)
+	if err != nil {
+		return pmtuBlackholeHop{}, false
+	}
+	clientSegment, ok := nodeSegmentForAddress(s.Topology.node(client), via)
+	if !ok {
+		return pmtuBlackholeHop{}, false
+	}
+	// routerOwning already requires the router role, which is what the schema
+	// requires of a black-holing hop for the same reason.
+	router, ok := routerOwning(s, route.Via)
+	if !ok {
+		return pmtuBlackholeHop{}, false
+	}
+	var egress []Interface
+	for _, iface := range s.Topology.node(router).Interfaces {
+		if iface.Segment != clientSegment {
+			egress = append(egress, iface)
+		}
+	}
+	if len(egress) != 1 {
+		return pmtuBlackholeHop{}, false
+	}
+	if _, carriesIPv6 := egress[0].addressForFamily("ipv6"); carriesIPv6 {
+		return pmtuBlackholeHop{}, false
+	}
+	return pmtuBlackholeHop{router: router, segment: egress[0].Segment}, true
+}
+
+func hasPMTUBlackholeHop(s *Scenario) bool {
+	_, ok := findPMTUBlackholeHop(s)
+	return ok
+}
+
+func generatePMTUBlackhole(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
+	hop, ok := findPMTUBlackholeHop(s)
+	if !ok {
+		return GeneratedMutation{}, errors.New("the forwarding hop to the briefed target disappeared")
+	}
+	client := clientNode(s)
+	return GeneratedMutation{Node: hop.router, Segment: hop.segment, TargetNode: client, MTU: huntBlackholeMTU,
+		Description: fmt.Sprintf("narrow %s/%s to %d bytes and swallow the fragmentation-needed replies about it, leaving %s offering packets that hop cannot carry",
+			hop.router, hop.segment, huntBlackholeMTU, client)}, nil
+}
+
 func generateMissingSubnetRoute(_ *mathrand.Rand, s *Scenario) (GeneratedMutation, error) {
 	candidate, ok := findMissingSubnetRouteCandidate(s)
 	if !ok {
@@ -1489,6 +1578,13 @@ func applyGeneratedMutation(s *Scenario, m GeneratedMutation) error {
 		s.Faults = append(s.Faults, Fault{Type: FaultNoDefaultRoute, Node: m.Node, Family: m.Family})
 	case "routing.wrong_default_route":
 		s.Faults = append(s.Faults, Fault{Type: FaultReplaceDefaultRoute, Node: m.Node, Via: m.RouteVia, Family: m.Family})
+	// One fault, not two: the schema pairs the narrowed hop with the suppressed
+	// fragmentation-needed replies, because narrowing alone is a small link that
+	// gets discovered and worked around rather than a black hole. Nothing is
+	// done to the endpoints, which is what leaves them offering full-size
+	// packets to a hop that can no longer carry them.
+	case "pmtu.blackhole":
+		s.Faults = append(s.Faults, Fault{Type: FaultPMTUBlackhole, Node: m.Node, Segment: m.Segment, MTU: m.MTU})
 	// Removed from the topology rather than deleted by a fault: there is no
 	// route the client ever had, which is what a machine that was configured
 	// without one looks like. The kernel table read back at the end is what

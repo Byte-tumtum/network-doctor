@@ -36,6 +36,8 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 		// truncated at its own version, so a new id may only ever go last.
 		"service.connection_refused", "service.tcp_port_blocked", "service.tls_hostname_mismatch",
 		"routing.no_default_route", "routing.wrong_default_route", "routing.missing_subnet_route",
+		// v5, appended for the same reason.
+		"pmtu.blackhole",
 	}
 	got := make([]string, len(huntMutationRegistry))
 	for i := range huntMutationRegistry {
@@ -155,6 +157,162 @@ func TestGenerateHuntCaseCanSelectIPv6PreferredPathFailure(t *testing.T) {
 		generated.Manifest.Mutations[0].Family != "ipv6" {
 		t.Fatalf("generated mutations = %+v", generated.Manifest.Mutations)
 	}
+}
+
+// The black hole has to land on the hop the client's own bulk write actually
+// crosses, which is what separates it from an interface that merely got
+// narrower somewhere. The two-router base is where that distinction is
+// load-bearing: the internet gateway carries the default, and the briefed
+// target sits behind the other router entirely.
+func TestPMTUBlackholeGeneratorNarrowsTheHopToTheBriefedTarget(t *testing.T) {
+	for _, tc := range []struct{ base, node, segment string }{
+		{"healthy-routed-network", "gateway", "upstream"},
+		{"two-router-healthy", "target-gateway", "target-lan"},
+	} {
+		t.Run(tc.base, func(t *testing.T) {
+			base := validatedHuntBase(t, tc.base)
+			op := huntOperator(t, "pmtu.blackhole")
+			if !op.applicable(base) {
+				t.Fatal("production applicability rejected a base with an IPv4 transit hop")
+			}
+			mutation, err := op.generate(newTestRNG(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = op.id
+			if mutation.Node != tc.node || mutation.Segment != tc.segment ||
+				mutation.TargetNode != "client" || mutation.MTU != minBlackholeMTU {
+				t.Fatalf("generated mutation = %+v", mutation)
+			}
+			control, mutated := cloneScenario(base), cloneScenario(base)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			if len(mutated.Faults) != len(base.Faults)+1 {
+				t.Fatalf("faults = %+v, want exactly one more than the base", mutated.Faults)
+			}
+			got := mutated.Faults[len(mutated.Faults)-1]
+			if got.Type != FaultPMTUBlackhole || got.Node != tc.node || got.Segment != tc.segment ||
+				got.MTU != minBlackholeMTU {
+				t.Fatalf("applied fault = %+v", got)
+			}
+			// The fault is the whole change. Nothing about the endpoints moves,
+			// which is what leaves them offering full-size packets to a hop that
+			// can no longer carry them.
+			control.Faults = mutated.Faults
+			if !reflect.DeepEqual(control, mutated) {
+				t.Fatal("the black hole changed something other than the fault list")
+			}
+			revalidated := cloneScenario(mutated)
+			canonicalScenarioInput(revalidated)
+			if err := revalidated.Validate(); err != nil {
+				t.Fatalf("the generated black hole does not validate: %v", err)
+			}
+		})
+	}
+}
+
+// A black hole is a transit condition on the way to the briefed endpoint, so a
+// base with no forwarding hop in between must not host one. Neither must a hop
+// carrying IPv6: minIPv6MTU is the floor IPv6 requires of a link, so such a hop
+// cannot be narrowed to anything an IPv6 sender would not already fit inside,
+// and a black hole that black-holes nothing is a different fault wearing this
+// one's name.
+func TestPMTUBlackholeApplicabilityNeedsAnIPv4TransitHop(t *testing.T) {
+	op := huntOperator(t, "pmtu.blackhole")
+	for _, name := range []string{"healthy", "tls-valid", "socks5h-remote-dns-succeeds",
+		"dual-stack-healthy", "two-path-healthy", "two-path-ipv6-healthy"} {
+		if op.applicable(validatedHuntBase(t, name)) {
+			t.Errorf("%s hosts a path-MTU black hole it has no IPv4 transit hop for", name)
+		}
+	}
+	// The control that isolates the family rule rather than trusting it: the
+	// dual-stack base has exactly the router and route shape the applicable
+	// bases have, and only the IPv6 address on the forwarding hop keeps it out.
+	dual := validatedHuntBase(t, "dual-stack-healthy")
+	for ni := range dual.Topology.Nodes {
+		if dual.Topology.Nodes[ni].Name != "gateway" {
+			continue
+		}
+		for ii := range dual.Topology.Nodes[ni].Interfaces {
+			if dual.Topology.Nodes[ni].Interfaces[ii].Segment == "upstream" {
+				dual.Topology.Nodes[ni].Interfaces[ii].IPv6 = ""
+			}
+		}
+	}
+	if !op.applicable(dual) {
+		t.Error("a forwarding hop that lost IPv6 still could not host a black hole")
+	}
+}
+
+// The catalogue entry is only worth having if the ordinary generator path
+// reaches it, and anything replaying a published case has to land on it again.
+func TestGenerateHuntCaseCanSelectPMTUBlackhole(t *testing.T) {
+	for _, tc := range []struct {
+		base          string
+		seed          int64
+		caseNumber    int
+		node, segment string
+	}{
+		{"healthy-routed-network", 20260102, 39, "gateway", "upstream"},
+		{"two-router-healthy", 20260108, 12, "target-gateway", "target-lan"},
+	} {
+		t.Run(tc.base, func(t *testing.T) {
+			generated, err := GenerateHuntCase(tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "pmtu.blackhole" {
+				t.Fatalf("generated mutations = %+v", generated.Manifest.Mutations)
+			}
+			if mutation := generated.Manifest.Mutations[0]; mutation.Node != tc.node ||
+				mutation.Segment != tc.segment || mutation.MTU != minBlackholeMTU {
+				t.Fatalf("generated mutation = %+v", mutation)
+			}
+			// The materialized scenario, not only the manifest: a case that
+			// records a black hole and then executes a healthy network is an
+			// unused fault declaration rather than a test.
+			var faults []Fault
+			for _, fault := range generated.Scenario.Faults {
+				if fault.Type == FaultPMTUBlackhole {
+					faults = append(faults, fault)
+				}
+			}
+			if len(faults) != 1 || faults[0].Node != tc.node || faults[0].Segment != tc.segment ||
+				faults[0].MTU != minBlackholeMTU {
+				t.Fatalf("materialized faults = %+v", generated.Scenario.Faults)
+			}
+			replay, err := GenerateHuntCase(tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(replay.Manifest, generated.Manifest) {
+				t.Fatalf("replay = %+v, want %+v", replay.Manifest, generated.Manifest)
+			}
+			// The other half of the version contract: the generator this case
+			// was minted under is the only one that reaches the operator, so an
+			// artifact naming v4 keeps resolving to the case it always did.
+			older, err := generateHuntCase("v4", tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, mutation := range older.Manifest.Mutations {
+				if mutation.ID == "pmtu.blackhole" {
+					t.Error("a v4 case reached an operator that did not exist at v4")
+				}
+			}
+		})
+	}
+}
+
+func validatedHuntBase(t testing.TB, name string) *Scenario {
+	t.Helper()
+	base := loadHuntBase(t, name)
+	canonicalScenarioInput(base)
+	if err := base.Validate(); err != nil {
+		t.Fatalf("%s does not validate: %v", name, err)
+	}
+	return base
 }
 
 func TestProbeFamilyMutationGenerators(t *testing.T) {
@@ -419,7 +577,7 @@ func TestMaxFaultsIsPartOfTheExperimentAndOfItsReproduction(t *testing.T) {
 func TestPublishedHuntGeneratorVersionsStayResolvable(t *testing.T) {
 	// Every version any published artifact records: a challenge manifest, a
 	// filed triage finding, a shared hunt reproduction.
-	for _, version := range []string{"v3", "v4"} {
+	for _, version := range []string{"v3", "v4", "v5"} {
 		if huntGeneratorIndex(version) < 0 {
 			t.Errorf("hunt generator %s was published but this build can no longer materialize a case for it;"+
 				" add it back to huntGeneratorVersions, since challenge ids and filed findings still name it", version)
