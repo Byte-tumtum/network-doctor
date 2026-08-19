@@ -80,12 +80,27 @@ type authoredChallenge struct {
 // pointed at.
 //
 // The set is small on purpose. These are the cases where choosing beats
-// drawing: the three ways a connection to a live host ends badly, which are
-// only tellable apart from one another; the two certificate faults, which a
-// generated draw produces rarely; and the three single-default route faults,
-// which are the rarest families in generation and the ones most worth
-// practising deliberately.
+// drawing: the two resolver faults, which score one answer and so can only be
+// told apart from each other rather than from the menu; the three ways a
+// connection to a live host ends badly, which are likewise only tellable apart
+// from one another; the two certificate faults, which a generated draw produces
+// rarely; and the three single-default route faults, which are the rarest
+// families in generation and the ones most worth practising deliberately.
+//
+// Both resolver cases sit on one base for the reason the refused/blocked pair
+// does: the topology is held still so the only thing that differs between them
+// is what the resolver did, which is the whole lesson.
 var authoredChallenges = []authoredChallenge{
+	{
+		slug: "resolver-refuses", name: "The resolver that answered",
+		base: "healthy-routed-network", mutation: "dns.servfail", answer: AnswerDNSFailure,
+		teaches: "Every name lookup fails, and fails immediately. Something chose to say so, so read what came back before blaming anything underneath it.",
+	},
+	{
+		slug: "resolver-goes-quiet", name: "The resolver that did not answer",
+		base: "healthy-routed-network", mutation: "dns.drop", answer: AnswerDNSFailure,
+		teaches: "The same network and the same lookup, hanging until it gives up instead. Its neighbour above is the case to compare it against.",
+	},
 	{
 		slug: "refused-vs-blocked-refused", name: "The port that answers",
 		base: "healthy-routed-network", mutation: "service.connection_refused", answer: AnswerRefused,

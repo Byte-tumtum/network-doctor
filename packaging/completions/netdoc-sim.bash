@@ -51,7 +51,7 @@ _netdoc_sim() {
             return
             ;;
         -authored | --authored)
-            COMPREPLY=($(compgen -W "refused-vs-blocked-refused refused-vs-blocked-blocked reset-after-accept certificate-expired certificate-wrong-name no-default-route wrong-default-route missing-subnet-route" -- "$cur"))
+            COMPREPLY=($(compgen -W "resolver-refuses resolver-goes-quiet refused-vs-blocked-refused refused-vs-blocked-blocked reset-after-accept certificate-expired certificate-wrong-name no-default-route wrong-default-route missing-subnet-route" -- "$cur"))
             return
             ;;
         -answer | --answer)

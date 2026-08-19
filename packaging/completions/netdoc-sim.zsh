@@ -101,7 +101,7 @@ case $state in
         '(--difficulty -difficulty)'{--difficulty,-difficulty}'[draw a challenge of this difficulty]:level:(easy medium hard)' \
         '(--daily -daily)'{--daily,-daily}"[play today's challenge, or -daily=YYYY-MM-DD]" \
         '(--starter -starter)'{--starter,-starter}'[draw from a curated starter pack]:pack:(fundamentals dns service tls paths routing)' \
-        '(--authored -authored)'{--authored,-authored}'[play a hand-written challenge by slug]:slug:(refused-vs-blocked-refused refused-vs-blocked-blocked reset-after-accept certificate-expired certificate-wrong-name no-default-route wrong-default-route missing-subnet-route)' \
+        '(--authored -authored)'{--authored,-authored}'[play a hand-written challenge by slug]:slug:(resolver-refuses resolver-goes-quiet refused-vs-blocked-refused refused-vs-blocked-blocked reset-after-accept certificate-expired certificate-wrong-name no-default-route wrong-default-route missing-subnet-route)' \
         '(--answer -answer)'{--answer,-answer}'[submit this diagnosis without opening a shell]:diagnosis:(healthy dns_failure no_default_route wrong_default_route missing_subnet_route preferred_route_failure ipv4_failure ipv6_failure tcp_port_blocked connection_refused connection_reset tls_certificate tls_hostname_mismatch http_service proxy_failure quic_udp_blocked packet_loss)' \
         '(--give-up -give-up)'{--give-up,-give-up}'[skip straight to the answer]' \
         '(--json -json)'{--json,-json}'[print the machine-readable result (needs -answer or -give-up)]' \

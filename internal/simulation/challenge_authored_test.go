@@ -106,6 +106,8 @@ func TestAuthoredChallengesReplayDeterministically(t *testing.T) {
 func TestAuthoredChallengeIDsAreFrozen(t *testing.T) {
 	pinned := map[string]struct{}{}
 	for _, tt := range []struct{ slug, id string }{
+		{"resolver-refuses", "A1-BE920A"},
+		{"resolver-goes-quiet", "A1-B27234"},
 		{"refused-vs-blocked-refused", "A1-F78DCB"},
 		{"refused-vs-blocked-blocked", "A1-0DD077"},
 		{"reset-after-accept", "A1-493CD9"},
@@ -187,7 +189,30 @@ func observedReportFor(t *testing.T, c *Challenge) *Report {
 	}
 	mutation := c.Manifest.Mutations[0]
 	report.Evidence = evidenceEstablishing(c, mutation)
+	report.Timeline = timelineEstablishing(mutation)
 	return report
+}
+
+// timelineEstablishing is the scheduler's half for the families whose scoped
+// predicate wants both halves. The resolver families are the ones that do: a
+// service moved into SERVFAIL that nobody queried refused nobody, so the record
+// of the move and the record of a query being served the faulty outcome are
+// separate claims and mutationObserved asks for both. Every other family is
+// established by evidence alone and gets no timeline here.
+func timelineEstablishing(m GeneratedMutation) []FaultEventEvidence {
+	outcome := ""
+	switch m.ID {
+	case "dns.servfail":
+		outcome = DNSOutcomeSERVFAIL
+	case "dns.drop":
+		outcome = DNSOutcomeDrop
+	default:
+		return nil
+	}
+	return []FaultEventEvidence{{
+		Event:  TimedEvent{Type: FaultScheduledDNS, Service: m.Service, Offset: 0, Outcome: outcome},
+		Result: EventApplied,
+	}}
 }
 
 // evidenceEstablishing is the observation each authored family's scoped
@@ -200,6 +225,14 @@ func evidenceEstablishing(c *Challenge, m GeneratedMutation) Evidence {
 		{Node: c.Node, Family: "ipv6", State: FamilyStateUnavailable},
 	}
 	switch m.ID {
+	case "dns.servfail", "dns.drop":
+		served := dnsServedSERVFAIL
+		if m.ID == "dns.drop" {
+			served = dnsServedDropped
+		}
+		return Evidence{FamilyReachability: reachable,
+			DNSQueries: []DNSQueryEvidence{{Node: c.Node, Service: m.Service, Name: "example.test",
+				QueryType: "A", ActualOutcome: served}}}
 	case "service.connection_refused":
 		return Evidence{FamilyReachability: reachable,
 			ControlledTargets: []ControlledTargetEvidence{
