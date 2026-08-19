@@ -152,6 +152,11 @@ const (
 	// address and domain destinations; BIND and UDP ASSOCIATE are intentionally
 	// outside the simulator's needs.
 	ServiceSOCKS5 = "socks5"
+	// ServiceHTTPConnect is a simulator-owned, no-auth HTTP CONNECT proxy. It
+	// tunnels one host:port authority per connection and refuses everything
+	// else with a status code; forward proxying of ordinary methods, upstream
+	// chaining and authentication are outside the simulator's needs.
+	ServiceHTTPConnect = "http_connect"
 	// ServiceTLS generates an in-memory private CA and leaf key, writes only the
 	// public CA certificate to the simulator workspace, and serves bounded TLS.
 	ServiceTLS = "tls"
@@ -168,6 +173,12 @@ const (
 )
 
 const (
+	// Default listen ports for the two proxy fixtures. 1080 is the registered
+	// SOCKS port; 3128 is the conventional HTTP proxy port and keeps a CONNECT
+	// proxy visibly distinct from an ordinary web server on 80 or 8080.
+	defaultSOCKSProxyPort   = 1080
+	defaultCONNECTProxyPort = 3128
+
 	TLSCertificateValid            = "valid"
 	TLSCertificateExpired          = "expired"
 	TLSCertificateHostnameMismatch = "hostname_mismatch"
@@ -695,13 +706,25 @@ func (n *Node) validateServices(names map[string]bool) error {
 			}
 		case ServiceSOCKS5:
 			if svc.Port == 0 {
-				svc.Port = 1080
+				svc.Port = defaultSOCKSProxyPort
 			}
 			if n.Resolver == "" {
 				return fmt.Errorf("node %q: socks5 service needs the node resolver", n.Name)
 			}
 			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil || svc.DoHResponse != "" {
 				return fmt.Errorf("node %q: socks5 service has unsupported options", n.Name)
+			}
+		case ServiceHTTPConnect:
+			if svc.Port == 0 {
+				svc.Port = defaultCONNECTProxyPort
+			}
+			// The proxy resolves the CONNECT authority itself, so it needs a
+			// resolver of its own exactly as the SOCKS fixture does.
+			if n.Resolver == "" {
+				return fmt.Errorf("node %q: http_connect service needs the node resolver", n.Name)
+			}
+			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil || svc.DoHResponse != "" {
+				return fmt.Errorf("node %q: http_connect service has unsupported options", n.Name)
 			}
 		case ServiceTLS, ServiceQUIC:
 			if svc.Port == 0 {
@@ -1200,28 +1223,45 @@ func (t *TestTrust) validate(nodes map[string]*Node) error {
 }
 
 func (p *TestProxy) validate(nodes map[string]*Node) error {
+	var service string
+	var defaultPort int
 	switch p.Scheme {
 	case "socks5", "socks5h":
+		service, defaultPort = ServiceSOCKS5, defaultSOCKSProxyPort
+	case "http":
+		service, defaultPort = ServiceHTTPConnect, defaultCONNECTProxyPort
 	default:
-		return fmt.Errorf("unsupported scheme %q (socks5 or socks5h)", p.Scheme)
+		return fmt.Errorf("unsupported scheme %q (socks5, socks5h or http)", p.Scheme)
 	}
 	n := nodes[p.Node]
 	if n == nil {
 		return fmt.Errorf("unknown node %q", p.Node)
 	}
 	if p.Port == 0 {
-		p.Port = 1080
+		p.Port = defaultPort
 	}
 	if p.Port < 1 || p.Port > 65535 {
 		return fmt.Errorf("port %d is out of range", p.Port)
 	}
 	for _, svc := range n.Services {
-		if svc.Type == ServiceSOCKS5 && svc.Port == p.Port {
+		if svc.Type == service && svc.Port == p.Port {
 			p.address = n.Address
 			return nil
 		}
 	}
-	return fmt.Errorf("node %q has no socks5 service on port %d", p.Node, p.Port)
+	return fmt.Errorf("node %q has no %s service on port %d", p.Node, service, p.Port)
+}
+
+// envName is the environment variable the runner hands this proxy to netdoc
+// through. A SOCKS proxy arrives as ALL_PROXY, which is where the SOCKS
+// ecosystem puts it and the only variable net/http itself ignores. An HTTP
+// CONNECT proxy arrives as HTTPS_PROXY, which is what a proxy-only network sets
+// for tunneled TLS and the scheme netdoc's proxy row asks about first.
+func (p *TestProxy) envName() string {
+	if p.Scheme == "http" {
+		return "HTTPS_PROXY"
+	}
+	return "ALL_PROXY"
 }
 
 func (e *Expect) validate() error {

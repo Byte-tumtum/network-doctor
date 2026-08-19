@@ -142,6 +142,24 @@ func TestRunPassesOnlyValidatedProxyEnvironment(t *testing.T) {
 	}
 }
 
+// The CONNECT proxy has to arrive as HTTPS_PROXY. ALL_PROXY would also reach
+// netdoc's proxy row, so handing it over that way would leave the variable a
+// real proxy-only network actually sets completely untested.
+func TestRunPassesTheCONNECTProxyAsHTTPSProxy(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, resolver: 10.77.0.1, services: [{name: connect-proxy, type: http_connect, port: 3128}]}", 1)
+	raw = strings.Replace(raw, "target: example.test:80", "target: example.test:80, proxy: {scheme: http, node: server, port: 3128}", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &fakeEnv{stdout: okReport}
+	Run(context.Background(), s, &fakeBackend{caps: supported(), env: env}, Options{Netdoc: "netdoc"})
+	if len(env.lastEnv) != 1 || env.lastEnv[0] != "HTTPS_PROXY=http://10.77.0.1:3128" {
+		t.Errorf("env = %q", env.lastEnv)
+	}
+}
+
 func TestRunPassesOnlyGeneratedTLSRootEnvironment(t *testing.T) {
 	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
 		"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443, certificate: {mode: valid, dns_names: [example.test]}}]}", 1)

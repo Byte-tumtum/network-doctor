@@ -57,20 +57,28 @@ type socksServer struct {
 	once   sync.Once
 }
 
+// nodeResolverLookup resolves through the node's own configured resolver
+// rather than through the holder process's resolver. That is what makes a
+// proxy-side lookup observably the proxy's, which is the whole distinction
+// socks5h and an HTTP CONNECT proxy both rest on.
+func nodeResolverLookup(resolver string) socksLookup {
+	address := net.JoinHostPort(resolver, "53")
+	dialer := new(net.Dialer)
+	proxyResolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, network, address)
+	}}
+	return func(ctx context.Context, name string) ([]netip.Addr, error) {
+		return proxyResolver.LookupNetIP(ctx, "ip", name)
+	}
+}
+
 func startSOCKS5(listener net.Listener, service, resolver string, recorder *evidenceRecorder) *socksServer {
 	ctx, cancel := context.WithCancel(context.Background())
-	resolverAddress := net.JoinHostPort(resolver, "53")
-	resolverDialer := new(net.Dialer)
-	proxyResolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return resolverDialer.DialContext(ctx, network, resolverAddress)
-	}}
 	s := &socksServer{
 		listener: listener, service: service, recorder: recorder,
-		lookup: func(ctx context.Context, name string) ([]netip.Addr, error) {
-			return proxyResolver.LookupNetIP(ctx, "ip", name)
-		},
-		dial: new(net.Dialer).DialContext,
-		ctx:  ctx, cancel: cancel, conns: make(map[net.Conn]struct{}),
+		lookup: nodeResolverLookup(resolver),
+		dial:   new(net.Dialer).DialContext,
+		ctx:    ctx, cancel: cancel, conns: make(map[net.Conn]struct{}),
 	}
 	s.wg.Add(1)
 	go s.serve()

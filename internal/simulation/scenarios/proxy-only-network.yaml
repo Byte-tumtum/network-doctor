@@ -1,0 +1,71 @@
+name: proxy-only-network
+description: >-
+  A corporate network with no direct TCP/443 egress at all and one HTTP CONNECT
+  proxy that does have it. Run without a target, so this asks the question the
+  headline proxy claim answers: netdoc should read online via the environment
+  proxy rather than offline.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    # The simulated internet, claiming the fixed endpoints netdoc's direct
+    # egress and public-DNS probes dial. Everything on 443 here is what the
+    # client is cut off from; DNS on 53 and the plain-HTTP portal endpoint on
+    # 80 stay reachable, which is what a proxy-only network actually looks
+    # like and what keeps the DNS rows honest.
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    # The only way out. Its own namespace carries no drop rule, so it reaches
+    # the internet node on 443 that the client cannot.
+    - name: proxy
+      address: 10.77.0.30
+      resolver: 10.77.0.1
+      services:
+        - name: connect-proxy
+          type: http_connect
+          port: 3128
+
+faults:
+  # No `to`, so each rule covers every destination the client can attempt: the
+  # internet endpoints netdoc dials, the encrypted resolver, and the CONNECT
+  # destination itself. 443 and 853 are the two TCP ports netdoc's direct
+  # probes use. The proxy listens on 3128 and is deliberately left reachable,
+  # which is the entire shape of the claim. Plain HTTP on 80 is left alone so
+  # the captive-portal control still answers 204: the direct-egress row has to
+  # fail because the path is blocked, not because something intercepted it.
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 443}
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 853}
+
+tests:
+  - name: generic checks with egress only through the CONNECT proxy
+    node: client
+    proxy: {scheme: http, node: proxy, port: 3128}
+
+expect:
+  verdict: degraded
+  checks:
+    - {id: iface, status: PASS}
+    # WARN rather than FAIL: the direct dial genuinely failed, and netdoc
+    # downgrades that once another path proves the machine is not offline.
+    - {id: internet_tcp, status: WARN}
+    - {id: proxy_connect, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    # DoH and DoT ride the same blocked TCP/443, so an encrypted resolver is
+    # unreachable here for exactly the reason direct egress is.
+    - {id: dns_encrypted, status: FAIL}

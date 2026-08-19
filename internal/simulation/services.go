@@ -166,6 +166,12 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			return nil, nil, err
 		}
 		return []io.Closer{startSOCKS5(ln, svc.Name, resolver, recorder)}, nil, nil
+	case ServiceHTTPConnect:
+		ln, err := net.Listen("tcp", ":"+port)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []io.Closer{startHTTPConnect(ln, svc.Name, svc.Port, resolver, recorder)}, nil, nil
 	case ServiceTLS:
 		server, err := startTLSService(ctx, svc, trustDir, recorder)
 		if err != nil {

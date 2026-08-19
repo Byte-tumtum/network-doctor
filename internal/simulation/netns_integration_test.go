@@ -1739,6 +1739,71 @@ func TestSOCKS5hRemoteDNSScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// TestProxyOnlyNetworkScenario is the regression for netdoc's headline proxy
+// claim: a machine with no direct TCP/443 egress and a working HTTP CONNECT
+// proxy reads as online through that proxy, not as offline. Everything below
+// the diagnosis is real: the client dials nothing but the proxy, the proxy
+// speaks RFC 9110 CONNECT, and the production probe is handed the proxy the way
+// a corporate network hands it over, through HTTPS_PROXY.
+func TestProxyOnlyNetworkScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "proxy-only-network", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+	}
+	out := rep.Tests[0]
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d: %+v", out.FalsePositives, out.FalseNegatives, out.Checks)
+	}
+	if out.Proxy != "http://10.77.0.30:3128" {
+		t.Errorf("netdoc was handed proxy %q", out.Proxy)
+	}
+
+	// Half one of the claim, measured by the simulator rather than read off
+	// netdoc's own report: from inside the client namespace, the fixed internet
+	// endpoints on TCP/443 are unreachable.
+	assertObservedFamily(t, rep, "ipv4", FamilyStateUnreachable)
+	if !droppedOutboundTCP(rep.Evidence, "client", 443) {
+		t.Errorf("the client's own TCP/443 filter never matched a packet: %+v", rep.Evidence.PacketDrops)
+	}
+
+	// Half two, measured by the fixture: the proxy answered a real CONNECT with
+	// 200, which it sends only once it has the upstream connection open. That
+	// is proxy-to-destination reachability, stated by the proxy.
+	if !hasServiceReply(rep, "proxy", "connect-proxy", ServiceHTTPConnect, 200) {
+		t.Errorf("the CONNECT proxy never established a tunnel: %+v", rep.Evidence.ServiceReplies)
+	}
+	for _, reply := range rep.Evidence.ServiceReplies {
+		if reply.Type == ServiceHTTPConnect && reply.Status != 200 {
+			t.Errorf("the CONNECT proxy also answered %d: %+v", reply.Status, reply)
+		}
+	}
+	// The tunnel authority was resolved from the proxy's namespace, which is
+	// what a CONNECT proxy does and what says the request reached it as a name.
+	if !hasDNSEvidence(rep, "internet", "10.77.0.30", proxyProbeName, "ANSWER") {
+		t.Errorf("no proxy-side lookup of the CONNECT authority: %+v", rep.Evidence.DNS)
+	}
+
+	// And the diagnosis those two halves have to produce.
+	internet := diagnosisCheck(out, string(diagnostic.ProbeInternet))
+	if internet.Status != "WARN" || !strings.Contains(internet.Detail, "no direct TCP egress") {
+		t.Errorf("direct egress row = %+v", internet)
+	}
+	proxy := diagnosisCheck(out, string(diagnostic.ProbeProxy))
+	if proxy.Status != "PASS" || !strings.Contains(proxy.Detail, "10.77.0.30:3128 tunnels to "+proxyProbeName+":443") {
+		t.Errorf("proxy_connect = %+v", proxy)
+	}
+	if out.ActualVerdict != "degraded" {
+		t.Errorf("verdict = %q, want degraded", out.ActualVerdict)
+	}
+	// The user-visible half of the claim. A proxy-only network that reads as an
+	// outage is the regression this scenario exists to catch.
+	if summary := out.Diagnosis.Summary; strings.Contains(summary, "Offline") {
+		t.Errorf("proxy-only network diagnosed as offline: %q", summary)
+	}
+	assertCleanedUp(t, rep)
+}
+
 func TestTLSValidScenario(t *testing.T) {
 	rep := runTLSScenario(t, "tls-valid")
 	out := rep.Tests[0]
@@ -2312,6 +2377,29 @@ func hasDNSQuery(rep Report, source, name string) bool {
 func hasSOCKSEvidence(rep Report, event, addressType, result string) bool {
 	for _, item := range rep.Evidence.SOCKSRequests {
 		if item.Event == event && item.AddressType == addressType && item.Result == result && item.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasServiceReply(rep Report, node, service, serviceType string, status int) bool {
+	for _, reply := range rep.Evidence.ServiceReplies {
+		if reply.Node == node && reply.Service == service && reply.Type == serviceType &&
+			reply.Status == status && reply.Result == replyResponded && reply.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// droppedOutboundTCP is the kernel's own count for a node's outbound filter.
+// The oracle's readers cover inbound drops only, and the direction matters:
+// this scenario refuses the packet locally rather than black-holing it remotely.
+func droppedOutboundTCP(evidence Evidence, node string, port int) bool {
+	for _, drop := range evidence.PacketDrops {
+		if drop.Node == node && drop.Direction == DirectionOutbound && drop.Protocol == "tcp" &&
+			drop.Port == port && drop.Packets > 0 {
 			return true
 		}
 	}

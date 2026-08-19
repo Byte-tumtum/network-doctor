@@ -346,7 +346,7 @@ func runTest(ctx context.Context, env Env, t Test, expect Expect, opts Options, 
 	}
 	if t.Proxy != nil {
 		out.Proxy = t.Proxy.Scheme + "://" + net.JoinHostPort(t.Proxy.address, fmt.Sprint(t.Proxy.Port))
-		commandEnv = append(commandEnv, "ALL_PROXY="+out.Proxy)
+		commandEnv = append(commandEnv, t.Proxy.envName()+"="+out.Proxy)
 	}
 	if t.Target != "" {
 		argv = append(argv, t.Target)

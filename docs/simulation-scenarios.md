@@ -101,6 +101,14 @@ Some semantics are easy to get wrong even after reading a scenario:
 - `socks5` resolves on the client before CONNECT; `socks5h` sends the hostname
   to the proxy's resolver. The paired SOCKS scenarios prove the location with
   DNS and CONNECT evidence rather than inferring it from success.
+- A test's `proxy` block decides which variable netdoc is handed the proxy
+  through, and the two fixtures are not interchangeable: a `socks5`/`socks5h`
+  scheme arrives as `ALL_PROXY` and needs a `socks5` service, while `http`
+  arrives as `HTTPS_PROXY` and needs an `http_connect` service. The
+  `http_connect` fixture tunnels one authority per connection and answers
+  anything else with a status code, so a scenario cannot mistake a refused
+  request for a working one; `proxy-only-network.yaml` is the worked example,
+  and it blocks direct egress rather than only pointing netdoc at the proxy.
 - TLS, QUIC, and encrypted-DNS fixtures generate private keys and certificates
   in memory. Only public CA certificates are written inside the mode-`0700` run
   workspace; trusted code points the netdoc process at the selected TLS CA and

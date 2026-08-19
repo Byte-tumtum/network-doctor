@@ -235,6 +235,17 @@ func TestParseScenarioRejects(t *testing.T) {
 			"has no socks5 service",
 		},
 		{
+			"http proxy references no CONNECT service",
+			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: http, node: server}", 1),
+			"has no http_connect service",
+		},
+		{
+			"CONNECT proxy without a node resolver",
+			strings.Replace(minimalScenario, "- {name: server, address: 10.77.0.1}",
+				"- {name: server, address: 10.77.0.1, services: [{name: connect-proxy, type: http_connect}]}", 1),
+			"http_connect service needs the node resolver",
+		},
+		{
 			"unknown proxy option",
 			strings.Replace(minimalScenario, "target: example.test:80", "target: example.test:80, proxy: {scheme: socks5, node: server, command: sh}", 1),
 			"command",
