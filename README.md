@@ -402,13 +402,16 @@ docker build --build-arg VERSION=dev -t netdoc-sim:test .
 NETDOC_CONTAINER_IMAGE=netdoc-sim:test go test -tags container -count=1 -v .
 ```
 
-If the change touched `docs/`, `site/`, `cmd/docsite`, or a summary in
-`internal/diagnostic/diagnosis.go`, also build the documentation site the way
+If the change touched `docs/`, `site/`, `cmd/docsite`, or text the wiki may
+quote as `netdoc` output (a summary in `internal/diagnostic/diagnosis.go`, the
+help text in `main.go`, or `TargetForms` in `internal/diagnostic/target.go`,
+which is the list `programText` in `cmd/docsite/quotes.go` names), also build
+the documentation site the way
 [the pages workflow](.github/workflows/pages.yml) does. It needs the wiki
 checkout and the same container image GitHub Pages builds with, which is why it
 is not in the gate above. The first step is also what holds the wiki's
 quotations of `netdoc` output to the strings the program builds, so a reworded
-summary surfaces here:
+summary or a reworded help line surfaces here:
 
 ```sh
 git clone --depth 1 https://github.com/heymaikol/network-doctor.wiki.git ../network-doctor.wiki

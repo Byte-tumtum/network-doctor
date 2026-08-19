@@ -39,6 +39,13 @@ func fixture(t *testing.T) (docs, wiki, shell string) {
 	write("internal/diagnostic/diagnosis.go", "package diagnostic\n\n"+
 		"func summary(hp string) string {\n"+
 		"\treturn hp + \" is unreachable though DNS and the general internet work.\"\n}\n")
+	// The rest of the quotation corpus: the help text and the target grammar
+	// it renders. Every file programText names has to exist for a stage to
+	// run, so the fixture stands in for all of them.
+	write("main.go", "package main\n\n"+
+		"const usage = `Usage: netdoc [flags] [target]`\n")
+	write("internal/diagnostic/target.go", "package diagnostic\n\n"+
+		"const TargetForms = `  example.com            hostname (default port 443)`\n")
 	write("wiki/_Sidebar.md", "wiki chrome\n")
 	write("README.md", "# Network Doctor\n")
 	write("assets/hero.gif", "gif")

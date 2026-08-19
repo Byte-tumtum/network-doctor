@@ -28,20 +28,34 @@ import (
 // the quotation stands for text the quotation leaves out, either because the
 // program interpolates a hostname there or because the sentence is longer than
 // the point being made, so a quotation is checked as its pieces, in order,
-// inside one program string. Markdown line wrapping is not significant.
+// inside one program string. Runs of whitespace are collapsed on both sides, so
+// neither Markdown's line wrapping nor the Go source's own layout is
+// significant.
 //
 // The check runs in both directions. An unmarked quotation that is long enough
 // to be program text and matches some of it fails too, because otherwise a
 // verified quotation could be quietly demoted to prose by deleting one line.
 const outputMarker = "<!-- netdoc-output -->"
 
-// programText is the file that decides every sentence netdoc calls a diagnosis:
-// the summaries and the verdict details. Every quotation the wiki marks resolves
-// here, and narrowing to it is what keeps the marker meaning "netdoc prints
-// this" rather than "some literal exists somewhere under internal/diagnostic",
-// which would sweep in import paths, exec arguments, and wire-format checks. It
-// is repository-relative, as this command's link checking already is.
-const programText = "internal/diagnostic/diagnosis.go"
+// programText names every file a marked quotation may resolve in: the text
+// netdoc puts in front of a person. diagnosis.go decides every sentence netdoc
+// calls a diagnosis, the summaries and the verdict details; main.go writes the
+// usage banner, the flag descriptions --help prints, and the errors the command
+// exits with; target.go owns TargetForms, the target grammar block --help and
+// the restart prompt render verbatim.
+//
+// It is a list of named files and not a walk of a package, because the marker
+// has to keep meaning "netdoc prints this" rather than "some literal exists
+// somewhere under internal", which would sweep in import paths, exec arguments,
+// and wire-format checks. Adding a file here is a deliberate statement that its
+// strings are netdoc's own words; the paths are repository-relative, as this
+// command's link checking already is. Order is fixed so a failure reports the
+// same nearest string on every run.
+var programText = []string{
+	"internal/diagnostic/diagnosis.go",
+	"internal/diagnostic/target.go",
+	"main.go",
+}
 
 // unmarkedQuoteLen is how much quoted text has to match program text before the
 // match is treated as a quotation rather than a coincidence.
@@ -53,13 +67,10 @@ const unmarkedQuoteLen = 40
 
 // checkQuotations fails the build when the wiki quotes program output that the
 // program no longer prints.
-func checkQuotations(wikiDir, sourceFile string) error {
-	corpus, err := programStrings(sourceFile)
+func checkQuotations(wikiDir string, sourceFiles []string) error {
+	corpus, err := programStrings(sourceFiles)
 	if err != nil {
 		return err
-	}
-	if len(corpus) == 0 {
-		return fmt.Errorf("%s: no program strings to check wiki quotations against; the source is empty or was not checked out", sourceFile)
 	}
 	entries, err := os.ReadDir(wikiDir)
 	if err != nil {
@@ -82,7 +93,7 @@ func checkQuotations(wikiDir, sourceFile string) error {
 			case q.marked:
 				marked++
 				if !quoteMatches(corpus, q.text) {
-					problems = append(problems, fmt.Sprintf("%s: quotation %q is marked %s but netdoc prints no such text.\n      Closest program string: %q\n      Either update the quotation, or drop the marker if this is no longer program output.",
+					problems = append(problems, fmt.Sprintf("%s: quotation %q is marked %s but netdoc prints no such text.\n      Closest program string: %s\n      Either update the quotation, or drop the marker if this is no longer program output.",
 						where, q.text, outputMarker, nearest(corpus, q.text)))
 				}
 			case len(q.text) >= unmarkedQuoteLen && quoteMatches(corpus, q.text):
@@ -188,12 +199,21 @@ func adjacent(gap string) bool {
 	return strings.TrimLeft(gap, " \t\n*_`>") == ""
 }
 
+// A programString is one string a named source file builds, kept beside the
+// file it came from so a failure can say which of them the quotation drifted
+// from rather than leaving that to be hunted across the corpus.
+type programString struct {
+	file string
+	text string
+}
+
 // quoteMatches reports whether a quotation's pieces occur, in order, inside one
-// program string.
-func quoteMatches(corpus []string, quote string) bool {
+// program string. Which of several equal matches wins is never asked, so a
+// sentence two source files happen to share is matched, not made ambiguous.
+func quoteMatches(corpus []programString, quote string) bool {
 	pieces := strings.Split(quote, "…")
 	for _, s := range corpus {
-		rest, ok := s, true
+		rest, ok := s.text, true
 		for _, piece := range pieces {
 			i := strings.Index(rest, piece)
 			if i < 0 {
@@ -211,22 +231,27 @@ func quoteMatches(corpus []string, quote string) bool {
 
 // nearest picks the program string that shares the longest opening run with a
 // quotation, so a failure can show what the sentence has drifted from rather
-// than only that it matched nothing.
-func nearest(corpus []string, quote string) string {
+// than only that it matched nothing, and names the file it lives in. Ties keep
+// the first candidate in corpus order, which programStrings fixes, so the same
+// drift reports the same sentence on every run.
+func nearest(corpus []programString, quote string) string {
 	quote = strings.TrimLeft(quote, "…")
-	best, bestRun := "", 0
+	best, bestRun := programString{}, 0
 	for _, s := range corpus {
 		run := 0
-		for run < len(quote) && strings.Contains(s, quote[:run+1]) {
+		for run < len(quote) && strings.Contains(s.text, quote[:run+1]) {
 			run++
 		}
 		if run > bestRun {
 			best, bestRun = s, run
 		}
 	}
+	if bestRun == 0 {
+		return "none; no program string shares even its first character"
+	}
 	// Shown to a human, so an interpolation point reads as the `…` a quotation
 	// would write there.
-	return strings.ReplaceAll(best, interpolated, "…")
+	return fmt.Sprintf("%s: %q", best.file, strings.ReplaceAll(best.text, interpolated, "…"))
 }
 
 // interpolated stands where a program string takes a runtime value: a hostname,
@@ -235,12 +260,37 @@ func nearest(corpus []string, quote string) string {
 // pretending two unrelated sentences are one.
 const interpolated = "\x00"
 
-// programStrings returns every string the source file builds. Literals joined by
-// + are folded to the value they produce, so a sentence split over several
-// source lines is one string here and rewrapping the Go source cannot break a
-// wiki quotation. Runtime operands become interpolated, which is exactly where a
-// quotation puts its `…`.
-func programStrings(file string) ([]string, error) {
+// programStrings returns every string the named source files build, in the
+// order the files are named and the order they appear in each, so the corpus is
+// the same on every run. Only the files named are read: a sibling in the same
+// directory contributes nothing, which is what keeps the marker a statement
+// about netdoc's own words. Literals joined by + are folded to the value they
+// produce, so a sentence split over several source lines is one string here and
+// rewrapping the Go source cannot break a wiki quotation. Runtime operands
+// become interpolated, which is exactly where a quotation puts its `…`.
+func programStrings(files []string) ([]programString, error) {
+	var out []programString
+	for _, file := range files {
+		strs, err := fileStrings(file)
+		if err != nil {
+			return nil, err
+		}
+		if len(strs) == 0 {
+			return nil, fmt.Errorf("%s: no program strings to check wiki quotations against; the source is empty or was not checked out", file)
+		}
+		for _, s := range strs {
+			out = append(out, programString{file: file, text: s})
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no program source files named; nothing would hold the wiki's quotations to netdoc's output")
+	}
+	return out, nil
+}
+
+// fileStrings is that extraction for one file, which is where the parsing and
+// the folding happen; programStrings is the loop over the named files.
+func fileStrings(file string) ([]string, error) {
 	parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 	if err != nil {
 		return nil, err
@@ -259,7 +309,10 @@ func programStrings(file string) ([]string, error) {
 		case !ok:
 			s = flatten(b)
 		}
-		if strings.Trim(s, interpolated) != "" {
+		// Collapsed the same way a quotation is, so the line breaks and the
+		// column padding a Go source uses to lay a paragraph or a grammar
+		// table out are not what a wiki page has to reproduce.
+		if s = strings.Join(strings.Fields(s), " "); strings.Trim(s, interpolated) != "" {
 			out = append(out, s)
 		}
 		// Its parts are covered by the value assembled here.
