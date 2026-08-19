@@ -56,12 +56,24 @@ type StarterPack struct {
 // Every pack holds at least two different answers, and that is a rule rather
 // than a coincidence. A pack names the layer it is about, which is a hint the
 // player asked for, but a pack with only one possible answer would not be a
-// hint, it would be the answer key. That is why there is no DNS pack: the answer
-// vocabulary has exactly one DNS entry, deliberately (see challengeRecognition),
-// so a pack called "DNS" would be a challenge already solved. DNS is practised
-// inside `fundamentals`, where it is one of four things it could be.
+// hint, it would be the answer key.
 //
-// TestStarterPacksStayPlayable checks both halves of that: every entry still
+// `dns` is the pack that has to earn that rule rather than get it for free. The
+// answer vocabulary has exactly one DNS entry, deliberately (see
+// challengeRecognition), so its two faults score the same word and a pack of
+// faults alone would be solved by its own name. Its third entry is a network
+// with nothing wrong with it, which is the shape `tls` already uses: the
+// question the pack asks is not "which DNS fault" but "is the resolver at fault
+// at all", and it carries both faults because the resolver fails two visibly
+// different ways, refusing and going quiet.
+//
+// Path MTU, QUIC and proxy have no pack because they are not challenge
+// conditions and cannot be: the first is not in the hunt generator any published
+// id resolves through, and the other two are excluded from the challenge
+// contract by name. See the exclusion list above challengeConditions. They are
+// practised through the scenario library instead, with `netdoc-sim run`.
+//
+// TestStarterPacksStayPlayable checks both halves of the rule: every entry still
 // sets the condition it was curated for, and no pack has collapsed to a single
 // answer.
 var starterPacks = []starterPack{
@@ -74,6 +86,16 @@ var starterPacks = []starterPack{
 			{"V3-02E668", "dns.servfail"},
 			{"V3-019223", "routing.no_default_route"},
 			{"V3-022CCE", ""},
+		},
+	},
+	{
+		id:          "dns",
+		name:        "Name resolution",
+		description: "One network three times over: a resolver that refuses, a resolver that says nothing, and a resolver that is fine.",
+		entries: []starterEntry{
+			{"V3-00B99A", "dns.servfail"},
+			{"V3-032446", "dns.drop"},
+			{"V3-024BBD", ""},
 		},
 	},
 	{

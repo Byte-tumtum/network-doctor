@@ -30,7 +30,7 @@ complete -c netdoc-sim -n __fish_use_subcommand -a help -d 'Print usage and exit
 # ask the binary rather than keeping a copy of the list here.
 complete -c netdoc-sim -n '__fish_seen_subcommand_from run campaign validate' -a '(netdoc-sim scenarios 2>/dev/null)'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -a 'dual-stack-healthy healthy healthy-routed-network socks5h-remote-dns-succeeds tls-valid two-path-healthy two-path-ipv6-healthy two-router-healthy'
-complete -c netdoc-sim -n '__fish_seen_subcommand_from starters' -a 'fundamentals service tls paths routing'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from starters' -a 'fundamentals dns service tls paths routing'
 
 # The stdlib flag package accepts both spellings of every flag, so each one is
 # declared as a short option (-json) and a long option (--json).
@@ -61,7 +61,7 @@ complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o revision -l re
 complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o id -l id -r -d 'Replay a specific challenge'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o difficulty -l difficulty -r -d 'Draw a challenge of this difficulty' -a 'easy medium hard'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o daily -l daily -d "Play today's challenge, or -daily=YYYY-MM-DD"
-complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o starter -l starter -r -d 'Draw from a curated starter pack' -a 'fundamentals service tls paths routing'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o starter -l starter -r -d 'Draw from a curated starter pack' -a 'fundamentals dns service tls paths routing'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o authored -l authored -r -d 'Play a hand-written challenge by slug' -a 'refused-vs-blocked-refused refused-vs-blocked-blocked reset-after-accept certificate-expired certificate-wrong-name no-default-route wrong-default-route missing-subnet-route'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o answer -l answer -r -d 'Submit this diagnosis without opening a shell' -a 'healthy dns_failure no_default_route wrong_default_route missing_subnet_route preferred_route_failure ipv4_failure ipv6_failure tcp_port_blocked connection_refused connection_reset tls_certificate tls_hostname_mismatch http_service proxy_failure quic_udp_blocked packet_loss'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from challenge' -o give-up -l give-up -d 'Skip straight to the answer'

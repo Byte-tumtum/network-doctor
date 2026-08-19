@@ -117,11 +117,24 @@ is graded by the same oracle, and is replayable by its own id. `starters <pack>`
 prints a pack's ids in order; `-starter` draws one at random, since the command
 keeps no record of what you have played.
 
-Every pack holds at least two possible answers, and one entry per pack is a
-network with nothing wrong with it, because a single-answer pack would be an answer
-key rather than a hint. That is why there is no DNS pack: the answer vocabulary
-has exactly one DNS entry, so "DNS" would be the whole answer. DNS is practised
-inside `fundamentals` instead, as one of four possibilities.
+Every pack holds at least two possible answers, because a single-answer pack
+would be an answer key rather than a hint. `dns` is the pack that has to earn
+that rather than get it for free: the answer vocabulary has exactly one DNS
+entry, so its two faults score the same word, and a pack of faults alone would
+be solved by its own name. Its third entry is a network with nothing wrong with
+it, the shape `tls` already uses, so the question the pack asks is "is the
+resolver at fault at all" rather than "which DNS fault". It carries both faults
+because the resolver fails two visibly different ways, refusing and going quiet.
+
+There is no path-MTU, QUIC or proxy pack, because none of the three is a
+challenge condition. `pmtu.blackhole` exists only in the `v5` hunt generator,
+which no published challenge id resolves through, and `quic.udp_443_block` and
+`proxy.connect_refused` are excluded from the challenge contract by name: a
+filtered UDP port and a silent one are identical to the tools in an
+investigator's shell, and a proxy handed to netdoc through its environment is
+not handed to a shell at all, so in both cases the two contestants would not be
+looking at the same network. All three are practised through the scenario
+library with `netdoc-sim run` instead.
 
 The ids are written down in `starterPacks` rather than searched for at run time,
 so a generation change cannot quietly re-point a pack at a different lesson.

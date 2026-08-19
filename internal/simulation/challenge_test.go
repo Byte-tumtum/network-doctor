@@ -57,6 +57,7 @@ func challengeWithMutation(t *testing.T, mutation string) *Challenge {
 // entry to challengeGenerators, never to update these rows.
 func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 	pinned := map[string]int{}
+	pinnedIDs := map[string]bool{}
 	for _, tt := range []struct {
 		id, base    string
 		caseNumber  int
@@ -92,6 +93,7 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 		{"V3-001EEF", "healthy-routed-network", 113244, "service.tcp_port_blocked", "medium", "34d875982cc4a92c"},
 		{"V3-005CCD", "healthy-routed-network", 823920, "service.tcp_reset", "easy", "6831d5c06db1a57a"},
 		{"V3-009AAB", "two-router-healthy", 506479, "routing.no_default_route", "easy", "4ac68ae4c8186287"},
+		{"V3-00B99A", "two-path-healthy", 342407, "dns.servfail", "easy", "7fc47de5d4b4b7ce"},
 		{"V3-00D889", "dual-stack-healthy", 226736, "service.connection_refused", "easy", "ba11b14d2cba16f9"},
 		{"V3-011667", "two-router-healthy", 735550, "routing.wrong_default_route", "hard", "aa3ac7ef97ab1bd4"},
 		{"V3-019223", "healthy", 698901, "routing.no_default_route", "easy", "4215c4009595e7c5"},
@@ -99,7 +101,9 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 		{"V3-01EEF0", "tls-valid", -1, "", "easy", "f20e7492fcfcb216"},
 		{"V3-020DDF", "two-router-healthy", 678808, "routing.missing_subnet_route", "hard", "a4417bcf09ae330d"},
 		{"V3-022CCE", "two-router-healthy", -1, "", "easy", "c9d19d64d6021c04"},
+		{"V3-024BBD", "two-path-healthy", -1, "", "medium", "f8ca077177422bd0"},
 		{"V3-02E668", "healthy-routed-network", 712638, "dns.servfail", "easy", "9f7d85c4ce3a63bd"},
+		{"V3-032446", "two-path-healthy", 523512, "dns.drop", "easy", "f0ad4fec76868ce3"},
 		{"V3-034335", "healthy-routed-network", 920724, "netem.loss", "medium", "0418beda7947c876"},
 		{"V3-04599C", "two-path-healthy", 624898, "routing.preferred_path_failure", "hard", "c9d15493189fc1b8"},
 		{"V3-058EF2", "tls-valid", 424504, "service.tls_expired", "medium", "d43e003da7792e6f"},
@@ -120,6 +124,7 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 	} {
 		version, _, _ := strings.Cut(tt.id, "-")
 		pinned[version]++
+		pinnedIDs[tt.id] = true
 		t.Run(tt.id, func(t *testing.T) {
 			challenge, err := BuildChallenge(tt.id)
 			if err != nil {
@@ -165,6 +170,19 @@ func TestChallengeIDsResolveToTheSameCaseForever(t *testing.T) {
 				" Add golden rows for it before it ships: without them a change to the hunt"+
 				" generator, the control scenarios or the condition table repoints every %s id"+
 				" silently.", version, version)
+		}
+	}
+	// The rows above claim to pin every starter entry, and a claim nothing checks
+	// is a wish. A pack entry that is not pinned still resolves, so the omission
+	// stays invisible until a generator change moves it and a beginner is taught
+	// something the pack never promised.
+	for _, pack := range starterPacks {
+		for _, entry := range pack.entries {
+			if !pinnedIDs[entry.id] {
+				t.Errorf("starter pack %s plays %s but no row above pins it;"+
+					" add one so a change that repoints it fails here instead of in a pack",
+					pack.id, entry.id)
+			}
 		}
 	}
 	// V1 is frozen at the conditions it was published with. Its list may only

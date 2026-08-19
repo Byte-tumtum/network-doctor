@@ -113,7 +113,7 @@ func TestStarterPackDiscovery(t *testing.T) {
 	if !slices.Equal(StarterPacks()[0].Challenges, packs[0].Challenges) {
 		t.Fatal("pack contents are not stable between calls")
 	}
-	if !slices.Equal(StarterPackNames(), []string{"fundamentals", "service", "tls", "paths", "routing"}) {
+	if !slices.Equal(StarterPackNames(), []string{"fundamentals", "dns", "service", "tls", "paths", "routing"}) {
 		t.Fatalf("the offered order changed: %v", StarterPackNames())
 	}
 }

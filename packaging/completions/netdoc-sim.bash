@@ -47,7 +47,7 @@ _netdoc_sim() {
             return
             ;;
         -starter | --starter)
-            COMPREPLY=($(compgen -W "fundamentals service tls paths routing" -- "$cur"))
+            COMPREPLY=($(compgen -W "fundamentals dns service tls paths routing" -- "$cur"))
             return
             ;;
         -authored | --authored)
@@ -87,7 +87,7 @@ _netdoc_sim() {
             COMPREPLY=($(compgen -W "dual-stack-healthy healthy healthy-routed-network socks5h-remote-dns-succeeds tls-valid two-path-healthy two-path-ipv6-healthy two-router-healthy" -- "$cur"))
             ;;
         starters)
-            COMPREPLY=($(compgen -W "fundamentals service tls paths routing" -- "$cur"))
+            COMPREPLY=($(compgen -W "fundamentals dns service tls paths routing" -- "$cur"))
             ;;
     esac
 }
