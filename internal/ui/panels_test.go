@@ -45,12 +45,9 @@ func detailsPanelCol(v string) int {
 	return -1
 }
 
-// wifiModel is a finished healthy run on a wireless machine: the interface
-// probe names the link and the Wi-Fi probe carries the network name.
-func wifiModel(t *testing.T) model {
-	t.Helper()
-	m := newModel(mustTarget(t, "example.com:443"), false)
-	doneResults(&m, "")
+// onWireless gives a finished run the interface and Wi-Fi results of a
+// wireless machine, so the network name is there for whatever reads it.
+func onWireless(m model) model {
 	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{
 		ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass,
 		Iface: "wlan0", Detail: "interface wlan0 is up",
@@ -60,6 +57,26 @@ func wifiModel(t *testing.T) model {
 		Network: "homewifi", Detail: "connected to homewifi",
 	}
 	return m
+}
+
+// wifiModel is a finished healthy run on a wireless machine: the interface
+// probe names the link and the Wi-Fi probe carries the network name.
+func wifiModel(t *testing.T) model {
+	t.Helper()
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	doneResults(&m, "")
+	return onWireless(m)
+}
+
+// rowLabel is one rendered Checks row with its cursor marker and status glyph
+// taken off, which leaves the probe name the row is carrying.
+func rowLabel(row string) string {
+	// The status glyph is one rune followed by a space, so the name is what
+	// is left of an un-marked row after its first space.
+	if _, name, ok := strings.Cut(strings.TrimPrefix(row, "› "), " "); ok {
+		return name
+	}
+	return row
 }
 
 // TestNetworkNameIsToldOnceOnTheContextStrip: the context strip under the
@@ -98,6 +115,82 @@ func TestNetworkNameIsToldOnceOnTheContextStrip(t *testing.T) {
 	}
 	if rep := expanded.report(); !strings.Contains(rep, "homewifi") {
 		t.Errorf("the report lost the network name:\n%s", rep)
+	}
+}
+
+// TestChecksPanelReadsBottomUp pins the rendered Checks order as literal row
+// names, for both run shapes. The panel is a protocol stack read from the link
+// upward, and the probe slice is not that order: the Wi-Fi probe sits between
+// Path MTU and TLS in a targeted run and last in a generic one, so a panel
+// that simply drew every probe would break the progression in one mode and
+// disagree with the other. Deriving the expected order from the model, as the
+// order tests around it do, cannot catch that.
+func TestChecksPanelReadsBottomUp(t *testing.T) {
+	public := "DNS (public " + diagnostic.DefaultPublicDNS + ")"
+	for _, tc := range []struct {
+		name, target string
+		want         []string
+	}{
+		{
+			name:   "targeted TLS",
+			target: "example.com:443",
+			want: []string{
+				"Interface",
+				"Internet (TCP egress)",
+				"QUIC / UDP 443",
+				"Internet (env proxy)",
+				"DNS example.com",
+				public,
+				"DNS (encrypted DoH/DoT)",
+				"TCP example.com:443",
+				"Path MTU example.com:443",
+				"TLS example.com",
+				"HTTP example.com",
+				"HTTPS example.com",
+			},
+		},
+		{
+			name: "generic",
+			want: []string{
+				"Interface",
+				"Internet (TCP egress)",
+				"QUIC / UDP 443",
+				"Internet (env proxy)",
+				"DNS",
+				public,
+				"DNS (encrypted DoH/DoT)",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var target *diagnostic.Target
+			if tc.target != "" {
+				target = mustTarget(t, tc.target)
+			}
+			m := newModel(target, false)
+			doneResults(&m, "")
+			// Expanded, so every row the panel has is on screen and a missing
+			// one cannot be blamed on the compact view collapsing it.
+			m, v := renderAt(t, press(t, onWireless(m), "a"))
+			if collapsedRow(v) != "" {
+				t.Fatalf("the expanded view is still collapsing rows:\n%s", v)
+			}
+			var got []string
+			for _, row := range checksRows(v) {
+				got = append(got, rowLabel(row))
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Checks rows = %v, want %v:\n%s", got, tc.want, v)
+			}
+			// The Wi-Fi probe still ran, and its name is on the context strip
+			// rather than in the list above.
+			if got := m.results[diagnostic.ProbeSSID].Network; got != "homewifi" {
+				t.Errorf("the Wi-Fi probe result is gone: Network = %q", got)
+			}
+			if strip := ansi.Strip(m.headerView()); !strings.Contains(strip, "Wi-Fi: homewifi") {
+				t.Errorf("the context strip lost the network name: %q", strip)
+			}
+		})
 	}
 }
 
