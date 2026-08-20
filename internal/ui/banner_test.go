@@ -6,6 +6,7 @@ package ui
 
 import (
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
@@ -62,7 +63,10 @@ func TestBannerFailureGuidance(t *testing.T) {
 			results: map[diagnostic.ProbeID]diagnostic.ProbeResult{
 				diagnostic.ProbeInternet: fail(egressFix),
 			},
-			want: "✗ The target works but direct internet egress is blocked (proxy-only or filtered network?).\n" +
+			// Degraded: the target works, so the banner warns rather than
+			// painting a red failure over a sentence that says so. The
+			// remediation block is unchanged by that.
+			want: "! The target works but direct internet egress is blocked (proxy-only or filtered network?).\n" +
 				"  Fix: " + egressFix + "\n" +
 				"  Next: press p for ping the host (ping)",
 		},
@@ -159,5 +163,118 @@ func TestProbeNextTool(t *testing.T) {
 	}
 	if !maps.Equal(probeNextTool, want) {
 		t.Errorf("probeNextTool = %v, want %v", probeNextTool, want)
+	}
+}
+
+// TestBannerSeverityFollowsVerdict pins the cross-component invariant the
+// banner and the report verdict line share: the diagnosis verdict decides the
+// severity, not the presence of a failed probe row. Degraded diagnoses that
+// carry a FAIL row are shipped behavior, asserted by the
+// quic-udp-443-blocked and encrypted-dns-blocked scenarios, and the two
+// presentations must not contradict the sentence they print.
+//
+// The exit code is asserted alongside them because it deliberately does NOT
+// follow the verdict: README documents "any failed row" as exit 1, and
+// separating presentation severity from exit status is the point, not an
+// oversight.
+func TestBannerSeverityFollowsVerdict(t *testing.T) {
+	oldLookPath := toolLookPath
+	toolLookPath = func(bin string) (string, error) { return bin, nil }
+	t.Cleanup(func() { toolLookPath = oldLookPath })
+
+	const quicFix = "UDP/443 blocked: applications fall back to TCP"
+
+	tests := []struct {
+		name    string
+		results map[diagnostic.ProbeID]diagnostic.ProbeResult
+		// failRow is the probe that must still read FAIL in its own row.
+		failRow     diagnostic.ProbeID
+		wantVerdict string
+		wantGlyph   string
+		wantPrefix  string
+		wantFix     string
+		wantExit    int
+	}{
+		{
+			name:        "everything passes",
+			wantVerdict: diagnostic.VerdictOK,
+			wantGlyph:   "✓",
+			wantPrefix:  "PASS: ",
+			wantExit:    0,
+		},
+		{
+			name: "quic blocked with usable TCP fallback",
+			results: map[diagnostic.ProbeID]diagnostic.ProbeResult{
+				diagnostic.ProbeQUIC: {Status: diagnostic.StatusFail, Fix: quicFix},
+			},
+			failRow:     diagnostic.ProbeQUIC,
+			wantVerdict: diagnostic.VerdictDegraded,
+			wantGlyph:   "!",
+			wantPrefix:  "WARN: ",
+			wantFix:     quicFix,
+			wantExit:    1,
+		},
+		{
+			name: "encrypted DNS blocked while plain DNS resolves",
+			results: map[diagnostic.ProbeID]diagnostic.ProbeResult{
+				diagnostic.ProbeDNSEncrypted: {Status: diagnostic.StatusFail},
+			},
+			failRow:     diagnostic.ProbeDNSEncrypted,
+			wantVerdict: diagnostic.VerdictDegraded,
+			wantGlyph:   "!",
+			wantPrefix:  "WARN: ",
+			wantExit:    1,
+		},
+		{
+			name: "the name does not resolve",
+			results: map[diagnostic.ProbeID]diagnostic.ProbeResult{
+				diagnostic.ProbeDNS: {Status: diagnostic.StatusFail},
+			},
+			failRow:     diagnostic.ProbeDNS,
+			wantVerdict: diagnostic.VerdictDNS,
+			wantGlyph:   "✗",
+			wantPrefix:  "FAIL: ",
+			wantExit:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tgt := mustTarget(t, "example.com:443")
+			m := newModel(tgt, false)
+			m.tools = toolsFor(tgt, "linux", toolBind{})
+			order := make([]diagnostic.ProbeID, len(m.probes))
+			for i, p := range m.probes {
+				order[i] = p.ID
+				r, ok := tt.results[p.ID]
+				if !ok {
+					r = diagnostic.ProbeResult{Status: diagnostic.StatusPass}
+				}
+				r.ID = p.ID
+				m.results[p.ID] = r
+			}
+			summary, verdict := m.diagnose(order)
+			if verdict != tt.wantVerdict {
+				t.Fatalf("verdict = %q, want %q (summary %q)", verdict, tt.wantVerdict, summary)
+			}
+			if tt.failRow != "" && m.results[tt.failRow].Status != diagnostic.StatusFail {
+				t.Fatalf("%s row = %v, want FAIL", tt.failRow, m.results[tt.failRow].Status)
+			}
+			banner := m.banner()
+			if want := tt.wantGlyph + " " + summary; !strings.HasPrefix(banner, want) {
+				t.Errorf("banner =\n%s\nwant it to start with\n%s", banner, want)
+			}
+			if line := m.verdictLine(); line != tt.wantPrefix+summary {
+				t.Errorf("verdictLine = %q, want %q", line, tt.wantPrefix+summary)
+			}
+			// A degraded diagnosis must not cost the reader the remediation
+			// the failing row carries.
+			if tt.wantFix != "" && !strings.Contains(banner, "Fix: "+tt.wantFix) {
+				t.Errorf("banner lost the fix for the failing row:\n%s", banner)
+			}
+			if got := ExitCode(m); got != tt.wantExit {
+				t.Errorf("ExitCode = %d, want %d", got, tt.wantExit)
+			}
+		})
 	}
 }

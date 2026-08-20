@@ -152,15 +152,9 @@ func (m model) report() string {
 }
 
 // verdictLine is the banner verdict without styling: PASS/WARN/FAIL plus the
-// diagnosis summary.
+// diagnosis summary, off the same verdict the banner reads.
 func (m model) verdictLine() string {
-	order, firstFail, anyWarn := m.resultState()
-	summary, _ := m.diagnose(order)
-	switch {
-	case firstFail != nil:
-		return "FAIL: " + summary
-	case anyWarn:
-		return "WARN: " + summary
-	}
-	return "PASS: " + summary
+	order, _ := m.resultState()
+	summary, verdict := m.diagnose(order)
+	return verdictStatus(verdict).String() + ": " + summary
 }

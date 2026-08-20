@@ -702,15 +702,13 @@ func (m model) banner() string {
 		return m.spinner.View() + " Checking your connection… " +
 			progressBar(done, total, 20) + faintStyle.Render(fmt.Sprintf(" %d of %d done", done, total))
 	}
-	order, firstFail, anyWarn := m.resultState()
-	summary, _ := m.diagnose(order)
+	order, firstFail := m.resultState()
+	summary, verdict := m.diagnose(order)
+	st := verdictStatus(verdict)
+	lines := []string{statusStyles[st].Render(probeGlyph(st) + " " + summary)}
 	if firstFail == nil {
-		if anyWarn {
-			return warnStyle.Render("! " + summary)
-		}
-		return passStyle.Render("✓ " + summary)
+		return lines[0]
 	}
-	lines := []string{failStyle.Render("✗ " + summary)}
 	if firstFail.Fix != "" {
 		lines = append(lines, faintStyle.Render("  Fix: "+firstFail.Fix))
 	}
@@ -726,9 +724,10 @@ func (m model) banner() string {
 	return strings.Join(lines, "\n")
 }
 
-// resultState collects the ordered probe IDs and the severity flags shared by
-// the styled banner and plain-text report verdict.
-func (m model) resultState() (order []diagnostic.ProbeID, firstFail *diagnostic.ProbeResult, anyWarn bool) {
+// resultState collects the ordered probe IDs and the first failing row, which
+// is where the banner takes its remediation from. It says nothing about how
+// severe the run was: that is verdictStatus's job.
+func (m model) resultState() (order []diagnostic.ProbeID, firstFail *diagnostic.ProbeResult) {
 	order = make([]diagnostic.ProbeID, len(m.probes))
 	for i, probe := range m.probes {
 		order[i] = probe.ID
@@ -737,16 +736,30 @@ func (m model) resultState() (order []diagnostic.ProbeID, firstFail *diagnostic.
 			rr := r
 			firstFail = &rr
 		}
-		anyWarn = anyWarn || r.Status == diagnostic.StatusWarn
 	}
-	return order, firstFail, anyWarn
+	return order, firstFail
+}
+
+// verdictStatus is the presentation severity of a finished run, and the
+// diagnosis verdict is the only thing that decides it. A degraded verdict may
+// legitimately carry a failed row (QUIC blocked while TCP carries the traffic,
+// encrypted DNS blocked while plain DNS resolves), so painting the banner red
+// for any failed row would contradict the sentence printed next to it.
+func verdictStatus(verdict string) diagnostic.Status {
+	switch verdict {
+	case diagnostic.VerdictOK:
+		return diagnostic.StatusPass
+	case diagnostic.VerdictDegraded:
+		return diagnostic.StatusWarn
+	}
+	return diagnostic.StatusFail
 }
 
 // focusRow is the probe row a finished run should put the cursor on and take
 // its drill-down from: the row the verdict blames when it names one, and
 // otherwise the first failing row. -1 when the run blames no row at all.
 func (m model) focusRow() int {
-	order, _, _ := m.resultState()
+	order, _ := m.resultState()
 	focus := diagnostic.FocusProbe(m.target, order, m.results)
 	first := -1
 	for i, probe := range m.probes {
