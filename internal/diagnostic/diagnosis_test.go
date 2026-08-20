@@ -501,6 +501,13 @@ func TestReconcileDNS(t *testing.T) {
 			name           string
 			system, public []net.IP
 		}{
+			// The v4 floor is the /16 allocation, not the announced /24:
+			// comparing at /24 would split one operator's block in two.
+			{
+				"same v4 allocation, different /24",
+				[]net.IP{net.ParseIP("142.250.9.94")},
+				[]net.IP{net.ParseIP("142.250.189.99")},
+			},
 			{"same block, different hosts", []net.IP{ip1}, []net.IP{ip2}},
 			{
 				// The default probe host: Google anycast, observed answering
@@ -538,14 +545,39 @@ func TestReconcileDNS(t *testing.T) {
 		}
 	})
 	// Split DNS proper: an internal answer against a public one.
-	t.Run("private against public warns", func(t *testing.T) {
-		res := map[ProbeID]ProbeResult{
-			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{net.ParseIP("10.1.2.3")}},
-			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{ip1}},
-		}
-		reconcileDNS(res)
-		if res[ProbeDNSPublic].Status != StatusWarn {
-			t.Fatalf("public result = %+v, want internal-vs-public warning", res[ProbeDNSPublic])
+	t.Run("disjoint allocations warn", func(t *testing.T) {
+		for _, tc := range []struct {
+			name           string
+			system, public []net.IP
+		}{
+			{"private against public", []net.IP{net.ParseIP("10.1.2.3")}, []net.IP{ip1}},
+			{
+				// Both sides sit in 172.0.0.0/8, so only a comparison no
+				// coarser than /16 sees an RFC 1918 answer standing against
+				// a Google one.
+				"same v4 /8, different allocation",
+				[]net.IP{net.ParseIP("172.16.5.10")},
+				[]net.IP{net.ParseIP("172.217.14.206")},
+			},
+			{
+				// Both sides sit in 2001::/16, so only a comparison no
+				// coarser than /32 separates the documentation block from
+				// Google's allocation.
+				"same v6 /16, different allocation",
+				[]net.IP{net.ParseIP("2001:db8:1::5e")},
+				[]net.IP{net.ParseIP("2001:4860:4860::8888")},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				res := map[ProbeID]ProbeResult{
+					ProbeDNS:       {Status: StatusPass, Addrs: tc.system},
+					ProbeDNSPublic: {Status: StatusPass, Addrs: tc.public},
+				}
+				reconcileDNS(res)
+				if res[ProbeDNSPublic].Status != StatusWarn {
+					t.Fatalf("public result = %+v, want disjoint allocations to warn", res[ProbeDNSPublic])
+				}
+			})
 		}
 	})
 	t.Run("unavailable public resolver is neutral", func(t *testing.T) {
