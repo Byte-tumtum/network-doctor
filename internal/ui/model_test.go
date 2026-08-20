@@ -925,20 +925,7 @@ func TestCompletionSelectsBlamedRow(t *testing.T) {
 // The banner's drill-down must not send a path MTU black hole to curl, which
 // stalls for exactly the reason the protocol rows did.
 func TestBlackHoleBannerAvoidsCurl(t *testing.T) {
-	m := newModel(mustTarget(t, "example.com:443"), false)
-	m.tools = toolsFor(m.target, "linux", toolBind{})
-	for _, p := range m.probes {
-		r := diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
-		switch p.ID {
-		case diagnostic.ProbePMTU:
-			r.Status = diagnostic.StatusWarn
-		case diagnostic.ProbeTLS:
-			r.Status, r.Cause = diagnostic.StatusFail, diagnostic.TLSCauseTimeout
-		case diagnostic.ProbeHTTP, diagnostic.ProbeHTTPS:
-			r.Status = diagnostic.StatusFail
-		}
-		m.results[p.ID] = r
-	}
+	m := blackHoleModel(t)
 	banner := m.banner()
 	if !strings.Contains(banner, "path MTU black hole") {
 		t.Fatalf("banner is not the path MTU verdict:\n%s", banner)
