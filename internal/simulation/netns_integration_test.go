@@ -185,6 +185,54 @@ func TestNoDefaultRouteScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// TestLinkDownScenario covers the first branch Diagnose takes. With the
+// client's only link administratively down there is no interface to send from,
+// and that has to be the whole answer rather than the pile of downstream
+// failures it would otherwise be read as.
+func TestLinkDownScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "link-down")
+	if rep.Result != ResultPass {
+		t.Errorf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
+	}
+	// The fault has to bite the client and only the client. A downed router
+	// link is a different fault with a different diagnosis, and a client that
+	// keeps a second usable link is not this case at all.
+	clientLinks := 0
+	for _, link := range rep.Evidence.Links {
+		if link.Node != "client" {
+			if !link.Up {
+				t.Errorf("%s link to %s is down; only the client's may be", link.Node, link.Segment)
+			}
+			continue
+		}
+		clientLinks++
+		if link.Up {
+			t.Errorf("client link to %s is up; the client must be left with no usable link", link.Segment)
+		}
+	}
+	if clientLinks != 1 {
+		t.Errorf("client has %d links, want exactly one so nothing else can carry its traffic", clientLinks)
+	}
+	if len(rep.Tests) != 1 || rep.Tests[0].Diagnosis == nil {
+		t.Fatalf("tests = %+v", rep.Tests)
+	}
+	out := rep.Tests[0]
+	if check := diagnosisCheck(out, string(diagnostic.ProbeIface)); check.Status != "FAIL" {
+		t.Errorf("iface = %+v, want FAIL", check)
+	}
+	// The prose of the highest-priority branch, exactly. The verdict alone
+	// would pass for any other dead network, which is the confusion this
+	// scenario exists to rule out.
+	if summary := out.Diagnosis.Summary; summary != "No usable network interface: the link is down." {
+		t.Errorf("summary = %q, want the link-down diagnosis", summary)
+	}
+	if out.ActualVerdict != diagnostic.VerdictNetwork {
+		t.Errorf("verdict = %s, want %s", out.ActualVerdict, diagnostic.VerdictNetwork)
+	}
+	assertCleanedUp(t, rep)
+}
+
 func TestHighLatencyScenario(t *testing.T) {
 	requireBackend(t)
 	rep := runScenario(t, "high-latency")
