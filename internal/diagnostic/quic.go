@@ -162,7 +162,7 @@ func (o *netops) quicProbe(host string, port int) func(context.Context, map[Prob
 		state, selected, source, attempts, rtt, err := o.dialQUICIPs(ctx, ips, host, port)
 		r := ProbeResult{SelectedIP: selected, Source: source, Attempts: attempts}
 		if source != nil {
-			r.Iface = o.ifaceForIP(source)
+			r.Iface, r.ifaceAmbiguous = o.ifaceForIP(source)
 		}
 		if err == nil {
 			r.Status = StatusPass

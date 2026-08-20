@@ -301,9 +301,9 @@ func (o *netops) encryptedDNSProbe(ep encryptedDNSEndpoint, name string) func(co
 			r.SelectedIP, r.Source = won.selected, won.source
 			if won.source != nil {
 				if o.sources != nil {
-					r.Iface = deps[ProbeIface].Iface
+					r.Iface, r.ifaceAmbiguous = deps[ProbeIface].Iface, deps[ProbeIface].ifaceAmbiguous
 				} else {
-					r.Iface = o.ifaceForIP(won.source)
+					r.Iface, r.ifaceAmbiguous = o.ifaceForIP(won.source)
 				}
 			}
 		}

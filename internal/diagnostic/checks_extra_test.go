@@ -261,12 +261,12 @@ func TestPathIdentityFromConn(t *testing.T) {
 	}
 	conn := fakeConn{local: &net.TCPAddr{IP: net.ParseIP("192.0.2.7"), Port: 40000}}
 
-	src, iface := ops.pathIdentity(context.Background(), conn, net.ParseIP("192.0.2.1"), 80)
+	src, iface, ambiguous := ops.pathIdentity(context.Background(), conn, net.ParseIP("192.0.2.1"), 80)
 	if !src.Equal(net.ParseIP("192.0.2.7")) {
 		t.Errorf("src = %v, want 192.0.2.7", src)
 	}
-	if iface != "fake0" {
-		t.Errorf("iface = %q, want fake0", iface)
+	if iface != "fake0" || ambiguous {
+		t.Errorf("iface = %q (ambiguous %t), want fake0 and not ambiguous", iface, ambiguous)
 	}
 }
 
@@ -285,13 +285,13 @@ func TestIfaceForIPUnknown(t *testing.T) {
 			return nil, nil
 		},
 	}
-	if got := ops.ifaceForIP(net.ParseIP("203.0.113.213")); got != "(unknown iface)" {
-		t.Errorf("ifaceForIP(unassigned) = %q, want '(unknown iface)'", got)
+	if got, ambiguous := ops.ifaceForIP(net.ParseIP("203.0.113.213")); got != "(unknown iface)" || ambiguous {
+		t.Errorf("ifaceForIP(unassigned) = %q (ambiguous %t), want '(unknown iface)' and not ambiguous", got, ambiguous)
 	}
 	// The same stub still resolves an address it does hold, so the unknown
 	// above is a real miss and not an empty interface list.
-	if got := ops.ifaceForIP(net.ParseIP("192.0.2.7")); got != "fake1" {
-		t.Errorf("ifaceForIP(assigned) = %q, want fake1", got)
+	if got, ambiguous := ops.ifaceForIP(net.ParseIP("192.0.2.7")); got != "fake1" || ambiguous {
+		t.Errorf("ifaceForIP(assigned) = %q (ambiguous %t), want fake1 and not ambiguous", got, ambiguous)
 	}
 }
 
@@ -333,16 +333,20 @@ func TestApplyDialWarnings(t *testing.T) {
 		attempts []Attempt
 		rtt      time.Duration
 		iface    string
+		amb      bool
 		want     Status
 		note     string
 	}{
-		{"clean", []Attempt{{IP: ip}}, 10 * time.Millisecond, "eth0", StatusPass, ""},
-		{"high latency", []Attempt{{IP: ip}}, warnRTT, "eth0", StatusWarn, "high latency"},
-		{"partial addresses", []Attempt{{IP: ip, Err: errors.New("refused")}, {IP: ip}}, 10 * time.Millisecond, "eth0", StatusWarn, "1 of 2 address(es) failed"},
-		{"ambiguous iface", []Attempt{{IP: ip}}, 10 * time.Millisecond, "(ambiguous)", StatusWarn, "ambiguous source interface"},
+		{"clean", []Attempt{{IP: ip}}, 10 * time.Millisecond, "eth0", false, StatusPass, ""},
+		{"high latency", []Attempt{{IP: ip}}, warnRTT, "eth0", false, StatusWarn, "high latency"},
+		{"partial addresses", []Attempt{{IP: ip, Err: errors.New("refused")}, {IP: ip}}, 10 * time.Millisecond, "eth0", false, StatusWarn, "1 of 2 address(es) failed"},
+		{"ambiguous iface", []Attempt{{IP: ip}}, 10 * time.Millisecond, "eth0", true, StatusWarn, "ambiguous source interface"},
+		// The display text is not the control channel: an interface whose real
+		// name reads like the placeholder is a clean pass.
+		{"iface named like the placeholder", []Attempt{{IP: ip}}, 10 * time.Millisecond, "(ambiguous)", false, StatusPass, ""},
 	}
 	for _, c := range cases {
-		r := ProbeResult{Status: StatusPass, Attempts: c.attempts, Iface: c.iface, Detail: "connected"}
+		r := ProbeResult{Status: StatusPass, Attempts: c.attempts, Iface: c.iface, ifaceAmbiguous: c.amb, Detail: "connected"}
 		applyDialWarnings(&r, c.rtt)
 		if r.Status != c.want {
 			t.Errorf("%s: status = %v, want %v", c.name, r.Status, c.want)
@@ -1191,5 +1195,48 @@ func TestLoneFamilyDialIsNotDiscarded(t *testing.T) {
 	case <-only.closed:
 		t.Error("the only connection was closed instead of returned")
 	default:
+	}
+}
+
+// Ambiguous interface selection is structured state, not the display string.
+// A source address held by two interfaces warns through a real probe, and an
+// interface whose actual name matches the placeholder text does not, while the
+// placeholder still shows up where a human reads it.
+func TestAmbiguousIfaceIsStateNotDisplayText(t *testing.T) {
+	src := net.ParseIP("192.0.2.7")
+	twoIfaces := func() ([]net.Interface, error) {
+		return []net.Interface{{Name: "fake0", Flags: net.FlagUp | net.FlagRunning}, {Name: "fake1", Flags: net.FlagUp | net.FlagRunning}}, nil
+	}
+	holdsSrc := func(*net.Interface) ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: src, Mask: net.CIDRMask(24, 32)}}, nil
+	}
+
+	// The producer that renders the placeholder: --iface pinned an address that
+	// two interfaces hold, so the row shows "(ambiguous)" and records the state.
+	pinned := netops{interfaces: twoIfaces, interfaceAddrs: holdsSrc, sources: &SourceAddresses{IPv4: src}}
+	r := pinned.ifaceProbe(context.Background(), nil)
+	if r.Status != StatusWarn || r.Iface != "(ambiguous)" || !r.ifaceAmbiguous {
+		t.Fatalf("ifaceProbe(two matches) = %v iface %q ambiguous %t, want WARN, the placeholder, and the state set", r.Status, r.Iface, r.ifaceAmbiguous)
+	}
+
+	// The consumer: a dial whose source maps to two interfaces still warns.
+	ops := netops{interfaces: twoIfaces, interfaceAddrs: holdsSrc}
+	conn := fakeConn{local: &net.TCPAddr{IP: src, Port: 40000}}
+	r = ops.proxyTunnelOK(context.Background(), conn, "proxy.example:8080", time.Millisecond)
+	if r.Status != StatusWarn || !r.ifaceAmbiguous || !strings.Contains(r.Detail, "ambiguous source interface") {
+		t.Fatalf("proxyTunnelOK(two matches) = %v ambiguous %t detail %q, want a WARN naming the ambiguous source interface", r.Status, r.ifaceAmbiguous, r.Detail)
+	}
+
+	// The regression: one interface, whose real name happens to be the
+	// placeholder. Unambiguous, so no warning, even though Iface matches.
+	ops.interfaces = func() ([]net.Interface, error) {
+		return []net.Interface{{Name: "(ambiguous)", Flags: net.FlagUp | net.FlagRunning}}, nil
+	}
+	r = ops.proxyTunnelOK(context.Background(), conn, "proxy.example:8080", time.Millisecond)
+	if r.Iface != "(ambiguous)" {
+		t.Fatalf("proxyTunnelOK iface = %q, want the interface name reported as-is", r.Iface)
+	}
+	if r.Status != StatusPass || r.ifaceAmbiguous || strings.Contains(r.Detail, "ambiguous source interface") {
+		t.Fatalf("proxyTunnelOK(interface named %q) = %v ambiguous %t detail %q, want a clean PASS", r.Iface, r.Status, r.ifaceAmbiguous, r.Detail)
 	}
 }

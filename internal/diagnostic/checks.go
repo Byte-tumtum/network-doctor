@@ -174,6 +174,11 @@ type ProbeResult struct {
 	// resolver is the second-opinion DNS server ProbeDNSPublic queried, so the
 	// cross-probe pass can name it in prose without reaching for a constant.
 	resolver string
+	// ifaceAmbiguous records that the source address resolved to more than one
+	// interface. Iface carries display text for that case, so this flag is what
+	// the warning path reads: an interface whose real name happens to match
+	// that text is not ambiguous.
+	ifaceAmbiguous bool
 }
 
 // Portal is structured captive-portal evidence. RedirectURL is empty when the
@@ -832,7 +837,7 @@ func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeR
 			return r
 		}
 		if len(matches) > 1 {
-			r.Status, r.Source, r.Iface = StatusWarn, primary, "(ambiguous)"
+			r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusWarn, primary, "(ambiguous)", true
 			r.Detail = "selected source address is assigned to multiple interfaces"
 			return r
 		}
@@ -945,8 +950,8 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		r.Attempts = append(v4.attempts, v6.attempts...)
 		all := append(append([]net.IP{}, v4.ips...), v6.ips...)
 		r.Detail = "no direct TCP egress to " + joinIPs(all) + " (port 443)"
-		src, iface := o.pathIdentity(ctx, nil, all[0], 443)
-		r.Status, r.Source, r.Iface = StatusFail, src, iface
+		src, iface, ambiguous := o.pathIdentity(ctx, nil, all[0], 443)
+		r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, src, iface, ambiguous
 		// Portals commonly drop 443 outright while still intercepting plain
 		// HTTP. The 204 endpoint answering anything else is proof of a portal
 		// even with no handshake to show for it, so report that, not "check
@@ -970,20 +975,20 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	if sec.conn != nil {
 		_ = sec.conn.Close()
 	}
-	src, iface := o.pathIdentity(ctx, prim.conn, prim.sel, 443)
+	src, iface, ambiguous := o.pathIdentity(ctx, prim.conn, prim.sel, 443)
 	// A completed handshake only proves that something answered. A captive
 	// portal or transparent filter terminates the connection itself and is
 	// indistinguishable from real egress at this layer; the 204 endpoint is
 	// what tells them apart, so ask before calling the network online.
 	if portalCode != 0 && portalCode != http.StatusNoContent {
-		r.Status, r.SelectedIP, r.Source, r.Iface = StatusFail, prim.sel, src, iface
+		r.Status, r.SelectedIP, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, prim.sel, src, iface, ambiguous
 		r.Attempts = append(prim.attempts, sec.attempts...)
 		r.Portal = &Portal{RedirectURL: portalURL}
 		r.Detail = fmt.Sprintf("TCP reaches %s but HTTP is intercepted: %s answered %d, want 204", prim.sel, portalProbeURL, portalCode)
 		r.Fix = "captive portal or transparent filter: open a browser and sign in to the network"
 		return r
 	}
-	r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, prim.sel, src, iface
+	r.Status, r.SelectedIP, r.Source, r.Iface, r.ifaceAmbiguous = StatusPass, prim.sel, src, iface, ambiguous
 	r.Detail = fmt.Sprintf("%s egress via %s in %dms (src %s %s)", primName, prim.sel, Ms(prim.rtt), src, iface)
 	switch {
 	case sec.conn != nil:
@@ -1252,8 +1257,8 @@ func dnsFailureCause(err error) string {
 // proxyTunnelOK builds the PASS result shared by the CONNECT and SOCKS5 paths.
 func (o *netops) proxyTunnelOK(ctx context.Context, conn net.Conn, addr string, rtt time.Duration) ProbeResult {
 	var r ProbeResult
-	src, iface := o.pathIdentity(ctx, conn, nil, 0)
-	r.Status, r.Source, r.Iface = StatusPass, src, iface
+	src, iface, ambiguous := o.pathIdentity(ctx, conn, nil, 0)
+	r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusPass, src, iface, ambiguous
 	r.Detail = fmt.Sprintf("proxy %s tunnels to %s:443 in %dms", addr, ConnectivityProbeHost, Ms(rtt))
 	applyDialWarnings(&r, rtt)
 	return r
@@ -1584,8 +1589,8 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 		r.Attempts = attempts
 		if conn != nil {
 			defer conn.Close()
-			src, iface := o.pathIdentity(ctx, conn, sel, port)
-			r.Status, r.SelectedIP, r.Source, r.Iface = StatusPass, sel, src, iface
+			src, iface, ambiguous := o.pathIdentity(ctx, conn, sel, port)
+			r.Status, r.SelectedIP, r.Source, r.Iface, r.ifaceAmbiguous = StatusPass, sel, src, iface, ambiguous
 			r.Detail = fmt.Sprintf("connected to %s:%d in %dms (src %s %s)", sel, port, Ms(rtt), src, iface)
 			// Warnings judge only the winning family, exactly as the egress row
 			// does: dialIPs races both at once, so a family this network simply
@@ -1601,8 +1606,8 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			return r
 		}
 		// All addresses failed: deterministic fallback path = first address.
-		src, iface := o.pathIdentity(ctx, nil, addrs[0], port)
-		r.Status, r.Source, r.Iface = StatusFail, src, iface
+		src, iface, ambiguous := o.pathIdentity(ctx, nil, addrs[0], port)
+		r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, src, iface, ambiguous
 		tried := make([]net.IP, len(attempts))
 		for i, a := range attempts {
 			tried[i] = a.IP
@@ -2053,7 +2058,7 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 	if n := len(r.Attempts) - 1; n > 0 {
 		notes = append(notes, fmt.Sprintf("%d of %d address(es) failed", n, len(r.Attempts)))
 	}
-	if r.Iface == "(ambiguous)" {
+	if r.ifaceAmbiguous {
 		notes = append(notes, "ambiguous source interface")
 	}
 	if len(notes) > 0 {
@@ -2233,11 +2238,12 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 	return nil, nil, attempts, 0
 }
 
-// pathIdentity returns the source IP + interface for a destination. On a
-// successful connect it reads the winning LocalAddr (ground truth); otherwise it
-// falls back to a UDP "connect" (sends no packets) for path identity only, not
-// a reachability claim.
-func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, port int) (net.IP, string) {
+// pathIdentity returns the source IP for a destination, the interface name to
+// show for it, and whether that mapping was ambiguous. On a successful connect
+// it reads the winning LocalAddr (ground truth); otherwise it falls back to a
+// UDP "connect" (sends no packets) for path identity only, not a reachability
+// claim.
+func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, port int) (net.IP, string, bool) {
 	var src net.IP
 	if conn != nil {
 		if la, ok := conn.LocalAddr().(*net.TCPAddr); ok {
@@ -2252,9 +2258,10 @@ func (o *netops) pathIdentity(ctx context.Context, conn net.Conn, dstIP net.IP, 
 		}
 	}
 	if src == nil {
-		return nil, ""
+		return nil, "", false
 	}
-	return src, o.ifaceForIP(src)
+	name, ambiguous := o.ifaceForIP(src)
+	return src, name, ambiguous
 }
 
 // hasGlobalUnicast reports whether any live non-loopback interface holds a
@@ -2303,13 +2310,14 @@ func (o *netops) hasGlobalUnicast(v4 bool) bool {
 	return false
 }
 
-// ifaceForIP maps a source IP back to an interface name. LocalAddr gives an IP,
-// not a name, so ambiguity (same IP on >1 iface) and no-match are explicit
-// states, not a guess.
-func (o *netops) ifaceForIP(ip net.IP) string {
+// ifaceForIP maps a source IP back to an interface name, plus whether that
+// mapping was ambiguous. LocalAddr gives an IP, not a name, so ambiguity (same
+// IP on >1 iface) and no-match are explicit states, not a guess. The name is
+// display text; the bool is the state callers act on.
+func (o *netops) ifaceForIP(ip net.IP) (string, bool) {
 	ifaces, err := o.interfaces()
 	if err != nil {
-		return ""
+		return "", false
 	}
 	name, count := "", 0
 	for _, ifi := range ifaces {
@@ -2325,11 +2333,11 @@ func (o *netops) ifaceForIP(ip net.IP) string {
 	}
 	switch {
 	case count == 0:
-		return "(unknown iface)"
+		return "(unknown iface)", false
 	case count > 1:
-		return "(ambiguous)"
+		return "(ambiguous)", true
 	default:
-		return name
+		return name, false
 	}
 }
 
