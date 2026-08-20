@@ -80,8 +80,11 @@ func startServices(ctx context.Context, services []Service, addresses []string, 
 		}
 		if svc.Type == ServiceHTTP || svc.Type == ServiceTLS || svc.Type == ServiceEncryptedDNS {
 			mode := svc.DoHResponse
-			if svc.Type == ServiceTLS {
+			switch {
+			case svc.Type == ServiceTLS:
 				mode = svc.Certificate.Mode
+			case svc.Type == ServiceHTTP && svc.Portal:
+				mode = portalMode
 			}
 			if err := recorder.record(evidenceEvent{Kind: evidenceServiceState, Service: svc.Name,
 				ServiceType: svc.Type, ServicePort: svc.Port, ServiceMode: mode, ServiceStatus: svc.Status}); err != nil {
@@ -277,8 +280,22 @@ func dnsKey(name string) string {
 	return strings.ToLower(strings.TrimSuffix(name, "."))
 }
 
+// portalMode is what an intercepting HTTP fixture records as its service mode,
+// beside an expired certificate or an invalid DoH reply. It names the fixture's
+// behavior in the evidence; unlike those two it is not a word a scenario types,
+// since Service.Portal is a flag.
+const portalMode = "portal"
+
+// portalSignInURL is the sign-in page a portal-mode HTTP fixture sends the
+// connectivity check to. Fixed rather than scenario-supplied so a golden
+// expectation has something deterministic to name, and never dialed: netdoc
+// reports the redirect instead of following it.
+const portalSignInURL = "http://portal.test/signin"
+
 // serveHTTP answers netdoc's captive-portal probe with the 204 it wants and
-// everything else with the scenario's configured status.
+// everything else with the scenario's configured status. A portal-mode service
+// intercepts that one path instead, which is the whole of what a captive portal
+// looks like to the probe.
 func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 	body := svc.Body
 	if body == "" {
@@ -292,7 +309,12 @@ func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 			ServicePort: svc.Port, ServiceStatus: status, Result: replyResponded})
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/generate_204", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/generate_204", func(w http.ResponseWriter, r *http.Request) {
+		if svc.Portal {
+			http.Redirect(w, r, portalSignInURL, http.StatusFound)
+			served(http.StatusFound)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		served(http.StatusNoContent)
 	})

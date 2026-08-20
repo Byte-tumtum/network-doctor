@@ -214,3 +214,59 @@ func TestHolderProbeReplyObservesRealSockets(t *testing.T) {
 		})
 	}
 }
+
+// The captive-portal fixture, over a real socket. A portal answers the
+// connectivity check with a redirect to its sign-in page instead of the 204 the
+// probe wants, and touches nothing else it serves: a mode that also rewrote the
+// ordinary paths would break every unrelated row in the same scenario, and a
+// scenario without the mode has to keep answering 204 or every other fixture
+// turns into a portal by accident.
+func TestHTTPServicePortalModeInterceptsOnlyTheConnectivityCheck(t *testing.T) {
+	serve := func(t *testing.T, svc Service) string {
+		t.Helper()
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go serveHTTP(ln, svc, nil)
+		return "http://" + ln.Addr().String()
+	}
+	// The probe reports the 3xx rather than chasing it, so the fixture has to be
+	// read the same way: a client that followed the redirect would report the
+	// sign-in page's status and hide the interception entirely.
+	client := &http.Client{
+		Timeout:       5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	get := func(t *testing.T, url string) *http.Response {
+		t.Helper()
+		resp, err := client.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+
+	portal := serve(t, Service{Type: ServiceHTTP, Port: 80, Status: 200, Portal: true})
+	resp := get(t, portal+"/generate_204")
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("portal /generate_204 = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+	if got := resp.Header.Get("Location"); got != portalSignInURL {
+		t.Errorf("portal Location = %q, want %q", got, portalSignInURL)
+	}
+	if resp := get(t, portal+"/"); resp.StatusCode != 200 {
+		t.Errorf("portal / = %d, want the configured 200: portal mode is scoped to the connectivity check", resp.StatusCode)
+	}
+
+	plain := serve(t, Service{Type: ServiceHTTP, Port: 80, Status: 200})
+	resp = get(t, plain+"/generate_204")
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("plain /generate_204 = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if got := resp.Header.Get("Location"); got != "" {
+		t.Errorf("plain Location = %q, want none", got)
+	}
+}

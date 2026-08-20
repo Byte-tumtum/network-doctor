@@ -1,0 +1,71 @@
+name: captive-portal
+description: >-
+  A hotel/airport network: the path is up, the resolver answers, TCP/443
+  completes, and the target replies, but plain HTTP is intercepted and the
+  connectivity check is redirected to a sign-in page. Every lower rung looks
+  healthy, so this is what makes the captive-portal verdict outrank the DNS,
+  network and service explanations rather than merely coexist with them.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    # The simulated internet, claiming the fixed endpoints netdoc's probes dial,
+    # exactly as the healthy control does. Only one thing differs: the plain
+    # HTTP service is the portal, so the connectivity check on port 80 answers
+    # 302 instead of 204 while 443, DNS and QUIC stay perfectly healthy. That is
+    # the interception a portal performs, and the reason a completed TCP
+    # handshake is not proof the network is usable.
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            example.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {name: internet-portal, type: http, port: 80, portal: true}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    - name: server
+      address: 10.77.0.20
+      services:
+        - type: http
+          port: 80
+
+tests:
+  - name: generic checks behind the portal
+    node: client
+  # The same network with a target that works at every rung. The portal verdict
+  # has to win over the DNS, TCP and HTTP rows all reporting success, and the
+  # passing target connect is also what would let downgradeEgress launder the
+  # egress FAIL into a WARN if its portal exemption were ever dropped.
+  - name: a target that answers from behind the portal
+    node: client
+    target: example.test:80
+    expect:
+      verdict: network
+      checks:
+        - {id: iface, status: PASS}
+        - {id: internet_tcp, status: FAIL}
+        - {id: dns, status: PASS}
+        - {id: dns_public, status: PASS}
+        - {id: target_tcp, status: PASS}
+        - {id: http, status: PASS}
+
+expect:
+  verdict: network
+  checks:
+    - {id: iface, status: PASS}
+    # FAIL, not WARN: DNS answering is what a portal does, so it must not be
+    # read as another path proving the network usable.
+    - {id: internet_tcp, status: FAIL}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    - {id: quic_udp_443, status: PASS}

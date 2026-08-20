@@ -135,6 +135,15 @@ Some semantics are easy to get wrong even after reading a scenario:
   drops port 53 on both transports and leaves the encrypted ports alone. Each
   one asserts the working rows beside the broken one, since an encrypted-DNS
   result collected on a dead network is evidence about the network.
+- An `http` service with `portal: true` intercepts netdoc's connectivity check
+  the way a captive portal does: `/generate_204` answers `302` to a fixed
+  sign-in URL instead of `204`, and every other path it serves is untouched.
+  [`captive-portal.yaml`](../internal/simulation/scenarios/captive-portal.yaml)
+  is the worked example, and it leaves DNS, TCP/443, QUIC and the target
+  healthy on purpose. That is what makes it a test of precedence: the portal
+  verdict has to outrank the rows that all report success, and the direct-egress
+  row has to stay FAIL rather than be downgraded by them, since behind a portal
+  it is the portal answering.
 
 ### Timed faults
 

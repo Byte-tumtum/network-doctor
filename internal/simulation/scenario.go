@@ -112,10 +112,17 @@ type Service struct {
 	// Records is the dual-stack form. Zone remains the compatible single-record
 	// shorthand; both forms describe static address records only.
 	Records []DNSRecord `yaml:"records"`
-	// Body and Status shape the ServiceHTTP reply; /generate_204 always answers
-	// 204 so netdoc's captive-portal check passes.
+	// Body and Status shape the ServiceHTTP reply on every path but the
+	// connectivity check, which answers 204 so netdoc's captive-portal check
+	// passes unless Portal says otherwise.
 	Status int    `yaml:"status"`
 	Body   string `yaml:"body"`
+	// Portal makes ServiceHTTP intercept the connectivity check the way a
+	// captive portal does: /generate_204 redirects to a fixed sign-in page
+	// instead of answering 204. Intent only, as every other fixture mode is:
+	// the sign-in URL is the simulator's, since a scenario-supplied one would
+	// be a raw URL in a file that is otherwise not allowed to carry any.
+	Portal bool `yaml:"portal"`
 	// Certificate describes simulator-generated TLS identity. Scenario files
 	// select intent only; they cannot provide keys, PEM, paths, or algorithms.
 	Certificate *TLSCertificate `yaml:"certificate"`
@@ -630,7 +637,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Port == 0 {
 				svc.Port = 53
 			}
-			if svc.Certificate != nil || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" {
+			if svc.Certificate != nil || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: dns service has unsupported options", n.Name)
 			}
 			if len(svc.Zone)+len(svc.Records) > dnsMaxRecords {
@@ -694,14 +701,14 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Port == 0 {
 				return fmt.Errorf("node %q: tcp service needs a port", n.Name)
 			}
-			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" {
+			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: tcp service has unsupported options", n.Name)
 			}
 		case ServiceTCPReset:
 			if svc.Port == 0 {
 				return fmt.Errorf("node %q: tcp_reset service needs a port", n.Name)
 			}
-			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" {
+			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: tcp_reset service has unsupported options", n.Name)
 			}
 		case ServiceSOCKS5:
@@ -711,7 +718,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if n.Resolver == "" {
 				return fmt.Errorf("node %q: socks5 service needs the node resolver", n.Name)
 			}
-			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil || svc.DoHResponse != "" {
+			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: socks5 service has unsupported options", n.Name)
 			}
 		case ServiceHTTPConnect:
@@ -723,7 +730,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if n.Resolver == "" {
 				return fmt.Errorf("node %q: http_connect service needs the node resolver", n.Name)
 			}
-			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil || svc.DoHResponse != "" {
+			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.Certificate != nil || svc.DNSFault != nil || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: http_connect service has unsupported options", n.Name)
 			}
 		case ServiceTLS, ServiceQUIC:
@@ -733,7 +740,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Name == "" {
 				return fmt.Errorf("node %q: %s service needs a name", n.Name, svc.Type)
 			}
-			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DNSFault != nil || svc.DoHResponse != "" {
+			if len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DNSFault != nil || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: %s service has unsupported options", n.Name, svc.Type)
 			}
 			if err := validateTLSCertificate(svc.Certificate); err != nil {
@@ -748,7 +755,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if svc.Name == "" {
 				return fmt.Errorf("node %q: encrypted_dns service needs a name", n.Name)
 			}
-			if svc.Status != 0 || svc.Body != "" || svc.DNSFault != nil {
+			if svc.Status != 0 || svc.Body != "" || svc.DNSFault != nil || svc.Portal {
 				return fmt.Errorf("node %q: encrypted_dns service has unsupported options", n.Name)
 			}
 			if svc.DoHResponse != "" && svc.DoHResponse != DoHResponseInvalid {

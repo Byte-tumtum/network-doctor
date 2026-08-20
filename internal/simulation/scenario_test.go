@@ -139,6 +139,12 @@ func TestParseScenarioRejects(t *testing.T) {
 			"unsupported options",
 		},
 		{
+			"portal mode on a non-HTTP service",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{type: tcp, port: 80, portal: true}]}", 1),
+			"unsupported options",
+		},
+		{
 			"TLS missing certificate",
 			strings.Replace(minimalScenario, "address: 10.77.0.1}",
 				"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443}]}", 1),

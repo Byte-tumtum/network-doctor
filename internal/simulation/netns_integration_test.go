@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1997,6 +1998,80 @@ func TestPlainDNSBlockedScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// TestCaptivePortalScenario is the end-to-end half of captive-portal detection:
+// the simulator's own HTTP fixture intercepts the connectivity check, and a real
+// netdoc run has to discover the portal from that alone. Nothing here constructs
+// portal evidence; the 302 comes off a socket.
+//
+// The scenario is deliberately healthy everywhere else. DNS answers, TCP/443
+// completes, QUIC handshakes, and the target replies over HTTP, so every
+// cheaper explanation is available and the portal verdict has to beat all of
+// them rather than win by default.
+func TestCaptivePortalScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "captive-portal")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+	}
+	if len(rep.Tests) != 2 {
+		t.Fatalf("tests = %+v", rep.Tests)
+	}
+
+	// The fixture half, from the server's side of the wire. Without this a run
+	// that failed egress for some unrelated reason could still satisfy every
+	// assertion below.
+	if !hasServiceReply(rep, "internet", "internet-portal", ServiceHTTP, http.StatusFound) {
+		t.Errorf("the portal fixture never redirected the connectivity check: %+v", rep.Evidence.ServiceReplies)
+	}
+	if !hasServiceState(rep, "internet", "internet-portal", portalMode) {
+		t.Errorf("the HTTP fixture did not come up in portal mode: %+v", rep.Evidence.ServiceStates)
+	}
+
+	generic, targeted := rep.Tests[0], rep.Tests[1]
+	for _, out := range rep.Tests {
+		if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+			t.Errorf("%s: comparison fp=%d fn=%d: %+v", out.Name, out.FalsePositives, out.FalseNegatives, out.Checks)
+		}
+		// FAIL rather than WARN is the downgradeEgress portal exemption holding.
+		// Both runs hand it exactly the evidence it downgrades on: DNS passes in
+		// each, and the targeted one adds a target connect that also succeeded.
+		// Behind a portal both of those are the portal answering, so neither is
+		// allowed to launder the intercepted path into a degradation.
+		internet := diagnosisCheck(out, string(diagnostic.ProbeInternet))
+		if internet.Status != "FAIL" {
+			t.Errorf("%s: internet_tcp = %+v, want FAIL to survive a passing DNS and target", out.Name, internet)
+		}
+		if !strings.Contains(internet.Detail, "intercepted") || !strings.Contains(internet.Detail, "302") {
+			t.Errorf("%s: internet_tcp detail does not name the interception: %q", out.Name, internet.Detail)
+		}
+		if !strings.Contains(internet.Fix, "sign in") {
+			t.Errorf("%s: internet_tcp fix = %q, want the sign-in hint", out.Name, internet.Fix)
+		}
+		if out.ActualVerdict != diagnostic.VerdictNetwork {
+			t.Errorf("%s: verdict = %q, want %q", out.Name, out.ActualVerdict, diagnostic.VerdictNetwork)
+		}
+	}
+
+	// Precedence, stated as the two summaries netdoc reserves for a portal. The
+	// generic run has a working resolver, so without the portal branch it would
+	// read as a filtered network; the targeted run has every rung under the
+	// target passing, so it would read as online.
+	if summary := generic.Diagnosis.Summary; !strings.HasPrefix(summary, "Behind a captive portal") {
+		t.Errorf("generic summary = %q, want the captive-portal one", summary)
+	}
+	if summary := targeted.Diagnosis.Summary; !strings.HasPrefix(summary, "Behind a captive portal") ||
+		!strings.Contains(summary, "example.test") {
+		t.Errorf("targeted summary = %q, want the captive-portal one naming the target", summary)
+	}
+	// The rungs the portal verdict outranked, named rather than implied.
+	for _, id := range []diagnostic.ProbeID{diagnostic.ProbeDNS, diagnostic.ProbeTargetTCP, diagnostic.ProbeHTTP} {
+		if check := diagnosisCheck(targeted, string(id)); check.Status != "PASS" {
+			t.Errorf("%s = %+v, want PASS: the portal verdict has to outrank a working rung, not replace it", id, check)
+		}
+	}
+	assertCleanedUp(t, rep)
+}
+
 func TestTLSValidScenario(t *testing.T) {
 	rep := runTLSScenario(t, "tls-valid")
 	out := rep.Tests[0]
@@ -2630,6 +2705,18 @@ func hasDNSQuery(rep Report, source, name string) bool {
 func hasSOCKSEvidence(rep Report, event, addressType, result string) bool {
 	for _, item := range rep.Evidence.SOCKSRequests {
 		if item.Event == event && item.AddressType == addressType && item.Result == result && item.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasServiceState is the companion reader to hasServiceReply: it says the
+// fixture came up in the mode the scenario asked for, where the reply says it
+// then did something to a client.
+func hasServiceState(rep Report, node, service, mode string) bool {
+	for _, state := range rep.Evidence.ServiceStates {
+		if state.Node == node && state.Service == service && state.Mode == mode {
 			return true
 		}
 	}
