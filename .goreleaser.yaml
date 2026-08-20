@@ -48,7 +48,7 @@ archives:
   - id: netdoc
     ids: [netdoc]
     formats: [binary]
-    # winget and Scoop both refuse a bare binary; Windows gets a zip instead.
+    # Scoop refuses a bare binary; Windows gets a zip instead.
     format_overrides:
       - goos: windows
         formats: [zip]
@@ -131,7 +131,7 @@ nfpms:
       - src: packaging/completions/netdoc-sim.fish
         dst: /usr/share/fish/vendor_completions.d/netdoc-sim.fish
 
-# netdoc only, in all three. A tap/bucket/manifest accepts one archive per
+# netdoc only, in both. A tap or bucket accepts one archive per
 # OS+arch, and the simulator is Linux-only anyway: without this filter the
 # extra Linux archives make GoReleaser refuse the whole publish.
 homebrew_casks:
@@ -150,8 +150,6 @@ homebrew_casks:
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}"]
           end
 
-# Scoop publishes to our own bucket immediately; winget opens a PR upstream that
-# Microsoft reviews, so releases land there some time later.
 scoops:
   - ids: [netdoc]
     repository:
@@ -161,30 +159,6 @@ scoops:
     homepage: https://heymaikol.github.io/network-doctor/
     description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
     license: Apache-2.0
-
-winget:
-  - package_name: Network Doctor
-    package_identifier: heymaikol.NetworkDoctor
-    publisher: Michael Placzek
-    publisher_url: https://github.com/heymaikol
-    publisher_support_url: https://github.com/heymaikol/network-doctor/issues
-    short_description: Terminal UI that diagnoses network connectivity and explains where the connection breaks
-    homepage: https://heymaikol.github.io/network-doctor/
-    license: Apache-2.0
-    tags:
-      - cli
-      - network
-      - diagnostics
-    repository:
-      owner: heymaikol
-      name: winget-pkgs
-      token: "{{ .Env.WINDOWS_PACKAGES_TOKEN }}"
-      pull_request:
-        enabled: true
-        base:
-          owner: microsoft
-          name: winget-pkgs
-          branch: master
 
 changelog:
   use: github-native

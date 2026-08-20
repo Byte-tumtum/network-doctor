@@ -79,7 +79,7 @@ func TestPackagedHomepagesPointAtTheDocumentationSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	homepages := regexp.MustCompile(`(?m)^\s*homepage:\s*(\S+)\s*$`).FindAllStringSubmatch(string(data), -1)
-	if len(homepages) < 4 {
+	if len(homepages) < 3 {
 		t.Fatalf("found %d homepage fields in .goreleaser.yaml; the test is not reaching the publish targets", len(homepages))
 	}
 	for _, m := range homepages {

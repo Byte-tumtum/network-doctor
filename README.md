@@ -57,13 +57,7 @@ scoop bucket add heymaikol https://github.com/heymaikol/scoop-bucket
 scoop install network-doctor
 ```
 
-Or winget:
-
-```powershell
-winget install heymaikol.NetworkDoctor
-```
-
-A release reaches the Scoop bucket right away; winget lands whenever Microsoft merges the manifest PR, so it can trail a version behind.
+A release reaches the bucket as soon as it publishes, so `scoop update network-doctor` picks it up like any other app.
 
 ### macOS and Linux (Homebrew)
 

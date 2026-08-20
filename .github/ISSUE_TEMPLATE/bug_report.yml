@@ -35,7 +35,6 @@ body:
       options:
         - Homebrew
         - Scoop
-        - winget
         - COPR
         - deb/rpm/apk package
         - Release binary
