@@ -46,6 +46,8 @@ func fixture(t *testing.T) (docs, wiki, shell string) {
 		"const usage = `Usage: netdoc [flags] [target]`\n")
 	write("internal/diagnostic/target.go", "package diagnostic\n\n"+
 		"const TargetForms = `  example.com            hostname (default port 443)`\n")
+	write("internal/diagnostic/fixhints.go", "package diagnostic\n\n"+
+		"func dnsFix() string { return \"name resolution failing: check /etc/resolv.conf / DNS\" }\n")
 	write("wiki/_Sidebar.md", "wiki chrome\n")
 	write("README.md", "# Network Doctor\n")
 	write("assets/hero.gif", "gif")

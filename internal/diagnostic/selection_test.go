@@ -141,6 +141,82 @@ func TestSelectableProbeIDsCoverDeclaredProbeIDs(t *testing.T) {
 	}
 }
 
+// probeRowNameHost stands in for the target in a row name. It never resolves,
+// and building the DAG names rows without probing anything.
+const probeRowNameHost = "example.invalid"
+
+// The row names are a published contract: docs/reference.md tabulates them, the
+// wiki repeats them, and people write them into runbooks and bug reports.
+// Renaming one is a documentation change, so it has to be a deliberate edit
+// here rather than a side effect of touching the probe beside it. Only the
+// names are pinned; what each probe reports is its own tests' business.
+func TestStableProbeRowNames(t *testing.T) {
+	// The rows a generic run shows, whose names carry no target at all.
+	generic := map[ProbeID]string{
+		ProbeIface:        "Interface",
+		ProbeInternet:     "Internet (TCP egress)",
+		ProbeQUIC:         "QUIC / UDP 443",
+		ProbeProxy:        "Internet (env proxy)",
+		ProbeDNS:          "DNS",
+		ProbeDNSPublic:    "DNS (public " + DefaultPublicDNS + ")",
+		ProbeDNSEncrypted: "DNS (encrypted DoH/DoT)",
+		ProbeSSID:         "Wi-Fi network",
+	}
+	// The rows a target adds, plus the DNS row a target renames. Everything
+	// else keeps the generic name.
+	targeted := map[ProbeID]string{
+		ProbeDNS:       "DNS " + probeRowNameHost,
+		ProbeTargetTCP: "TCP " + probeRowNameHost + ":443",
+		ProbePMTU:      "Path MTU " + probeRowNameHost + ":443",
+		ProbeTLS:       "TLS " + probeRowNameHost,
+		ProbeHTTP:      "HTTP " + probeRowNameHost,
+		ProbeHTTPS:     "HTTPS " + probeRowNameHost,
+		ProbeSSH:       "SSH banner " + probeRowNameHost + ":443",
+		ProbeSMTP:      "SMTP banner " + probeRowNameHost + ":443",
+	}
+	withTarget := map[ProbeID]string{}
+	for id, name := range generic {
+		withTarget[id] = name
+	}
+	for id, name := range targeted {
+		withTarget[id] = name
+	}
+
+	seen := map[ProbeID]struct{}{}
+	check := func(probes []Probe, want map[ProbeID]string) {
+		for _, p := range probes {
+			name, ok := want[p.ID]
+			if !ok {
+				t.Errorf("probe %q shows row name %q that no documented name is pinned to", p.ID, p.Name)
+				continue
+			}
+			seen[p.ID] = struct{}{}
+			if p.Name != name {
+				t.Errorf("probe %q row name = %q, want %q; the documentation names this row", p.ID, p.Name, name)
+			}
+		}
+	}
+	// Naming rows runs no probe, so an empty seam is all the DAG needs here.
+	o := &netops{}
+	check(o.buildProbes(nil, DefaultPublicDNS), generic)
+	for proto := range protoNames {
+		check(o.buildProbes(&Target{Host: probeRowNameHost, Port: 443, Proto: Proto(proto)}, DefaultPublicDNS), withTarget)
+	}
+
+	// A pinned name no DAG produces any more is a name that moved without this
+	// test noticing.
+	for id := range withTarget {
+		if _, ok := seen[id]; !ok {
+			t.Errorf("no probe shows the pinned row name for %q any more", id)
+		}
+	}
+	for _, id := range selectableProbeIDs() {
+		if _, ok := seen[id]; !ok {
+			t.Errorf("selectable probe %q has no pinned row name", id)
+		}
+	}
+}
+
 func probeSet(ids ...ProbeID) map[ProbeID]struct{} {
 	set := make(map[ProbeID]struct{}, len(ids))
 	for _, id := range ids {

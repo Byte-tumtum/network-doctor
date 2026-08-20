@@ -17,6 +17,7 @@ import (
 // files programText names, addressed the way that list addresses them.
 const (
 	diagnosisFile = "internal/diagnostic/diagnosis.go"
+	fixHintsFile  = "internal/diagnostic/fixhints.go"
 	grammarFile   = "internal/diagnostic/target.go"
 	helpFile      = "main.go"
 )
@@ -193,6 +194,16 @@ func printUsage(w io.Writer) {
 
 const TargetForms = "  example.com:8022       hostname with port (protocol inferred from the port)"
 `
+	// The Fix line under a failed row, per-GOOS the way the real hints are.
+	fixHintsSource = `package diagnostic
+
+func dnsFix(goos string) string {
+	if goos == "windows" {
+		return "name resolution failing: check DNS in ` + "`ipconfig /all`" + `"
+	}
+	return "name resolution failing: check /etc/resolv.conf / DNS"
+}
+`
 )
 
 // corpusSources is every file programText names, each holding the text the
@@ -200,6 +211,7 @@ const TargetForms = "  example.com:8022       hostname with port (protocol infer
 func corpusSources() map[string]string {
 	return map[string]string{
 		diagnosisFile: portalSource,
+		fixHintsFile:  fixHintsSource,
 		helpFile:      helpSource,
 		grammarFile:   grammarSource,
 	}
@@ -365,5 +377,86 @@ func TestANamedSourceWithNoStringsFailsTheBuild(t *testing.T) {
 	// Emptying the list itself is the same removal, one level up.
 	if _, err := programStrings(nil); err == nil {
 		t.Error("a corpus of no source files was accepted; nothing would be verified against it")
+	}
+}
+
+// The repository's own docs/ are the other half of the same site, and they
+// quote netdoc as freely as the wiki does. The marker has to mean the same
+// thing on both halves, or half the site drifts unwatched.
+//
+// stagedDocsPage puts the quotation on a repository doc instead, leaving the
+// wiki and the program sources as the fixture wrote them, and overwrites the
+// named sources on top of that.
+func stagedDocsPage(t *testing.T, page string, sources map[string]string) error {
+	t.Helper()
+	docs, wiki, shell := fixture(t)
+	for rel, body := range sources {
+		if err := os.WriteFile(filepath.FromSlash(rel), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The fixture's own docs page links here, so the heading has to stay.
+	if err := os.WriteFile(filepath.Join(docs, "scenarios.md"), []byte("# Scenarios\n\n## Authoring\n\n"+page), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return build("/network-doctor", shell, docs, wiki, "assets", filepath.Join(t.TempDir(), "out"))
+}
+
+// The Fix line under a failed row is netdoc's own words as much as a diagnosis
+// is, so a doc quoting one is verified rather than trusted.
+func TestARepositoryDocQuotationIsVerified(t *testing.T) {
+	const hint = "name resolution failing: check /etc/resolv.conf / DNS"
+	if err := stagedDocsPage(t, "<!-- netdoc-output -->\n**\""+hint+"\"**\n", nil); err != nil {
+		t.Fatalf("the build rejected a fix hint netdoc does print: %v", err)
+	}
+}
+
+// Each case is a way a repository doc could come apart from the program, the
+// same ways the wiki can.
+func TestRepositoryDocQuotationsThatNoLongerMatchFailTheBuild(t *testing.T) {
+	for _, tc := range []struct{ name, page, want string }{
+		{
+			name: "a fix hint the program stopped printing",
+			page: "<!-- netdoc-output -->\n**\"name resolution failing: check /etc/hosts / DNS\"**\n",
+			want: "netdoc prints no such text",
+		},
+		{
+			name: "a diagnosis quoted without the marker",
+			page: "*\"…is unreachable though DNS and the general internet work.\"*\n",
+			want: "carries no <!-- netdoc-output --> marker",
+		},
+		{
+			name: "a marker that claims nothing",
+			page: "<!-- netdoc-output -->\n\nUnrelated prose, and then a quotation of *\"something else entirely\"*.\n",
+			want: "marks nothing",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := stagedDocsPage(t, tc.page, nil)
+			if err == nil {
+				t.Fatal("the build published a docs quotation the program does not back")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not explain %q", err, tc.want)
+			}
+			if !strings.Contains(err.Error(), filepath.Join("docs", "scenarios.md")+":") {
+				t.Errorf("error %q does not name the docs page and line that failed", err)
+			}
+		})
+	}
+}
+
+// Rewording a fix hint is a documentation change: the doc that quotes it has to
+// stop verifying until it is updated too.
+func TestDriftInAFixHintFailsTheBuild(t *testing.T) {
+	const hint = "name resolution failing: check /etc/resolv.conf / DNS"
+	err := stagedDocsPage(t, "<!-- netdoc-output -->\n**\""+hint+"\"**\n", map[string]string{
+		fixHintsFile: "package diagnostic\n\nfunc dnsFix() string { return \"DNS is broken, good luck\" }\n",
+	})
+	if err == nil {
+		t.Fatal("the build published a quotation of a fix hint the program no longer prints")
+	}
+	if !strings.Contains(err.Error(), "netdoc prints no such text") {
+		t.Errorf("error %q does not explain that the program prints no such text", err)
 	}
 }

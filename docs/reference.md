@@ -171,6 +171,13 @@ Resolver failures can add `dns_timeout` or `dns_temporary_failure`; a banner
 peer that accepted TCP before resetting adds `connection_reset`. These are
 optional additions to the existing check objects.
 
+`fix` is the one-line remedy netdoc prints as that row's `Fix:` line, on a Warn row as well as a failed one, and is omitted where there is nothing useful to suggest. Some hints name the thing to change by whatever the host OS calls it, so one failure reads differently per platform: name resolution failing on Linux gives
+
+<!-- netdoc-output -->
+**"name resolution failing: check /etc/resolv.conf / DNS"**
+
+while macOS points at System Settings and Windows at `ipconfig /all`. Others, such as the certificate and routing hints, carry no OS-specific wording at all.
+
 `failed_stage` names the first check that failed (`dns`, `target_tcp`, `tls`, …) and is omitted when none did, which is enough to route a bug report without reading any prose.
 
 `--json --watch` prints the same document once per pass, compacted onto a single line (NDJSON), five seconds apart, until the process is interrupted, for the intermittent failure you can't sit and watch:

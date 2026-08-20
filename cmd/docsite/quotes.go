@@ -12,11 +12,13 @@ import (
 	"strings"
 )
 
-// The wiki explains what netdoc prints, so some of its sentences are netdoc's
-// own sentences. Nothing compared them: the wiki is a git repository of its own
-// with no Actions in it, and this repository has no copy of it to test against.
-// Staging the site is the one moment both halves exist on the same disk, which
-// is why the comparison lives here rather than in a test.
+// The documentation explains what netdoc prints, so some of its sentences are
+// netdoc's own sentences. Nothing compared them: the wiki is a git repository
+// of its own with no Actions in it, and this repository has no copy of it to
+// test against. Staging the site is the one moment both halves exist on the
+// same disk, which is why the comparison lives here rather than in a test, and
+// why docs/ is held to the same rule from the same place: one marker means the
+// same thing on both halves of one site.
 //
 // A quotation opts in with a marker immediately before it:
 //
@@ -39,10 +41,11 @@ const outputMarker = "<!-- netdoc-output -->"
 
 // programText names every file a marked quotation may resolve in: the text
 // netdoc puts in front of a person. diagnosis.go decides every sentence netdoc
-// calls a diagnosis, the summaries and the verdict details; main.go writes the
-// usage banner, the flag descriptions --help prints, and the errors the command
-// exits with; target.go owns TargetForms, the target grammar block --help and
-// the restart prompt render verbatim.
+// calls a diagnosis, the summaries and the verdict details; fixhints.go writes
+// the Fix line a failed row shows and the JSON report carries; main.go writes
+// the usage banner, the flag descriptions --help prints, and the errors the
+// command exits with; target.go owns TargetForms, the target grammar block
+// --help and the restart prompt render verbatim.
 //
 // It is a list of named files and not a walk of a package, because the marker
 // has to keep meaning "netdoc prints this" rather than "some literal exists
@@ -53,6 +56,7 @@ const outputMarker = "<!-- netdoc-output -->"
 // same nearest string on every run.
 var programText = []string{
 	"internal/diagnostic/diagnosis.go",
+	"internal/diagnostic/fixhints.go",
 	"internal/diagnostic/target.go",
 	"main.go",
 }
@@ -65,51 +69,55 @@ var programText = []string{
 // that ever stops being the right trade.
 const unmarkedQuoteLen = 40
 
-// checkQuotations fails the build when the wiki quotes program output that the
-// program no longer prints.
-func checkQuotations(wikiDir string, sourceFiles []string) error {
+// checkQuotations fails the build when the documentation quotes program output
+// that the program no longer prints. Every directory the site publishes pages
+// from is checked, and they are checked together: the marker is a property of
+// the site, so losing every one of them anywhere is the removal worth naming.
+func checkQuotations(pageDirs []string, sourceFiles []string) error {
 	corpus, err := programStrings(sourceFiles)
-	if err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(wikiDir)
 	if err != nil {
 		return err
 	}
 	var problems []string
 	marked := 0
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
-			continue
-		}
-		// #nosec G304 -- a Markdown file this walk just found in the wiki directory the command was pointed at.
-		data, err := os.ReadFile(filepath.Join(wikiDir, e.Name()))
+	for _, dir := range pageDirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return err
 		}
-		for _, q := range quotations(string(data)) {
-			where := fmt.Sprintf("%s:%d", e.Name(), q.line)
-			switch {
-			case q.marked:
-				marked++
-				if !quoteMatches(corpus, q.text) {
-					problems = append(problems, fmt.Sprintf("%s: quotation %q is marked %s but netdoc prints no such text.\n      Closest program string: %s\n      Either update the quotation, or drop the marker if this is no longer program output.",
-						where, q.text, outputMarker, nearest(corpus, q.text)))
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+				continue
+			}
+			// #nosec G304 -- a Markdown file this walk just found in a documentation directory the command was pointed at.
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return err
+			}
+			for _, q := range quotations(string(data)) {
+				where := fmt.Sprintf("%s:%d", filepath.Join(dir, e.Name()), q.line)
+				switch {
+				case q.marked:
+					marked++
+					if !quoteMatches(corpus, q.text) {
+						problems = append(problems, fmt.Sprintf("%s: quotation %q is marked %s but netdoc prints no such text.\n      Closest program string: %s\n      Either update the quotation, or drop the marker if this is no longer program output.",
+							where, q.text, outputMarker, nearest(corpus, q.text)))
+					}
+				case len(q.text) >= unmarkedQuoteLen && quoteMatches(corpus, q.text):
+					problems = append(problems, fmt.Sprintf("%s: quotation %q is netdoc's own output but carries no %s marker immediately before it, so nothing would notice it going stale.",
+						where, q.text, outputMarker))
+				case q.orphanMarker:
+					problems = append(problems, fmt.Sprintf("%s: %s marks nothing; it has to sit immediately before a \"quotation\", with nothing but emphasis in between.", where, outputMarker))
 				}
-			case len(q.text) >= unmarkedQuoteLen && quoteMatches(corpus, q.text):
-				problems = append(problems, fmt.Sprintf("%s: quotation %q is netdoc's own output but carries no %s marker immediately before it, so nothing would notice it going stale.",
-					where, q.text, outputMarker))
-			case q.orphanMarker:
-				problems = append(problems, fmt.Sprintf("%s: %s marks nothing; it has to sit immediately before a \"quotation\", with nothing but emphasis in between.", where, outputMarker))
 			}
 		}
 	}
 	if marked == 0 && len(problems) == 0 {
-		return fmt.Errorf("%s: no %s marker anywhere in the wiki; the quotations that repeat netdoc's output are no longer verified", wikiDir, outputMarker)
+		return fmt.Errorf("%s: no %s marker anywhere in the documentation; the quotations that repeat netdoc's output are no longer verified", strings.Join(pageDirs, ", "), outputMarker)
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
-		return fmt.Errorf("%d wiki quotations no longer agree with the program:\n  %s", len(problems), strings.Join(problems, "\n  "))
+		return fmt.Errorf("%d documentation quotations no longer agree with the program:\n  %s", len(problems), strings.Join(problems, "\n  "))
 	}
 	return nil
 }
