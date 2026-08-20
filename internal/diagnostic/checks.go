@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -506,6 +507,17 @@ func dialerFromSource(source net.IP, network string, resolverDial func(context.C
 	return d
 }
 
+// dialFamily performs one source-bound dial. It is a variable so tests can
+// order per-family results without a live network.
+var dialFamily = func(ctx context.Context, source net.IP, network, addr string, resolverDial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	return dialerFromSource(source, network, resolverDial).DialContext(ctx, network, addr)
+}
+
+// errFamilyLost stands in for a connection discarded because the other address
+// family answered first. It never reaches a caller: the winning family's
+// connection is in the same channel and ends the fan-in loop.
+var errFamilyLost = errors.New("connection superseded by the other address family")
+
 func dialContextFromSources(sources *SourceAddresses) func(context.Context, string, string) (net.Conn, error) {
 	var dial func(context.Context, string, string) (net.Conn, error)
 	dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -513,7 +525,7 @@ func dialContextFromSources(sources *SourceAddresses) func(context.Context, stri
 			if source == nil {
 				return nil, fmt.Errorf("selected interface has no IPv%d source address", family)
 			}
-			return dialerFromSource(source, network, dial).DialContext(ctx, network, addr)
+			return dialFamily(ctx, source, network, addr, dial)
 		}
 
 		ctx, cancel := context.WithCancel(ctx)
@@ -523,6 +535,9 @@ func dialContextFromSources(sources *SourceAddresses) func(context.Context, stri
 			err  error
 		}
 		results := make(chan result, 2)
+		// won marks the connection the fan-in below will hand to the caller.
+		// Whoever loses the claim owns its socket and has to close it.
+		var won atomic.Bool
 		families := 0
 		for _, item := range []struct {
 			source  net.IP
@@ -533,10 +548,17 @@ func dialContextFromSources(sources *SourceAddresses) func(context.Context, stri
 			}
 			families++
 			go func(source net.IP, familyNetwork string) {
-				conn, err := dialerFromSource(source, familyNetwork, dial).DialContext(ctx, familyNetwork, addr)
-				if err == nil && ctx.Err() != nil {
+				conn, err := dialFamily(ctx, source, familyNetwork, addr, dial)
+				// Exactly one report per launched goroutine, or the fan-in waits
+				// for a result that can never arrive. A connection that cannot be
+				// handed back, because the deadline passed or the other family
+				// already won, is closed here rather than left to the GC.
+				if err == nil && (ctx.Err() != nil || !won.CompareAndSwap(false, true)) {
 					_ = conn.Close()
-					return
+					conn = nil
+					if err = ctx.Err(); err == nil {
+						err = errFamilyLost
+					}
 				}
 				results <- result{conn, err}
 			}(item.source, item.network)

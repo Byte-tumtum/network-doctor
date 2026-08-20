@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1048,5 +1050,146 @@ func TestHasGlobalUnicastIgnoresRunningState(t *testing.T) {
 				t.Errorf("hasGlobalUnicast(v4=%v) = %v, want %v", tc.v4, got, tc.want)
 			}
 		})
+	}
+}
+
+// closeTrackingConn records that the code under test closed it. A second Close
+// panics, which is the point: a discarded connection is closed exactly once.
+type closeTrackingConn struct {
+	fakeConn
+	closed chan struct{}
+}
+
+func (c *closeTrackingConn) Close() error { close(c.closed); return nil }
+
+// TestDualFamilyDialCancellationDoesNotStrandFanIn pins the invariant that every
+// launched family goroutine reports exactly once. The ordering is forced, not
+// raced: IPv4 cancels the context and then releases IPv6, so the IPv6 dial is
+// guaranteed to succeed with the context already done, which is the branch that
+// used to return without sending anything and wedge the receive loop forever.
+func TestDualFamilyDialCancellationDoesNotStrandFanIn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cancelled := make(chan struct{})
+	late := &closeTrackingConn{closed: make(chan struct{})}
+	var mu sync.Mutex
+	var dialed []string
+
+	restore := dialFamily
+	defer func() { dialFamily = restore }()
+	dialFamily = func(dctx context.Context, _ net.IP, network, _ string, _ func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, network)
+		mu.Unlock()
+		if strings.HasSuffix(network, "6") {
+			<-cancelled
+			if dctx.Err() == nil {
+				t.Error("IPv6 dial finished with a live context, ordering seam broke")
+			}
+			return late, nil
+		}
+		cancel()
+		close(cancelled)
+		return nil, errors.New("v4 refused")
+	}
+
+	type outcome struct {
+		conn net.Conn
+		err  error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		conn, err := dialContextFromSources(&SourceAddresses{
+			IPv4: net.ParseIP("127.0.0.1"),
+			IPv6: net.ParseIP("::1"),
+		})(ctx, "tcp", "example.invalid:443")
+		done <- outcome{conn, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.conn != nil {
+			t.Errorf("conn = %v, want nil after cancellation", got.conn)
+		}
+		if !errors.Is(got.err, context.Canceled) {
+			t.Errorf("err = %v, want it to carry context.Canceled", got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial never returned: a family goroutine reported no result")
+	}
+
+	select {
+	case <-late.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection dialed after cancellation was leaked")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialed) != 2 || !slices.Contains(dialed, "tcp4") || !slices.Contains(dialed, "tcp6") {
+		t.Fatalf("dialed families = %v, want both tcp4 and tcp6", dialed)
+	}
+}
+
+// TestDualFamilyDialClosesTheLosingConnection covers the other half of the
+// completion invariant: when both families connect, one connection goes to the
+// caller and the other is closed by the goroutine that owns it. Repeated so the
+// two families interleave differently, and closeTrackingConn panics on a second
+// Close, so a double completion is caught too.
+func TestDualFamilyDialClosesTheLosingConnection(t *testing.T) {
+	restore := dialFamily
+	defer func() { dialFamily = restore }()
+
+	for range 50 {
+		conns := map[string]*closeTrackingConn{
+			"tcp4": {closed: make(chan struct{})},
+			"tcp6": {closed: make(chan struct{})},
+		}
+		dialFamily = func(_ context.Context, _ net.IP, network, _ string, _ func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+			return conns[network], nil
+		}
+		conn, err := dialContextFromSources(&SourceAddresses{
+			IPv4: net.ParseIP("127.0.0.1"),
+			IPv6: net.ParseIP("::1"),
+		})(context.Background(), "tcp", "example.invalid:443")
+		if err != nil || conn == nil {
+			t.Fatalf("dial = (%v, %v), want a connection", conn, err)
+		}
+		for network, c := range conns {
+			if net.Conn(c) == conn {
+				continue
+			}
+			select {
+			case <-c.closed:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("losing %s connection was never closed", network)
+			}
+		}
+	}
+}
+
+// TestLoneFamilyDialIsNotDiscarded covers the fan-out with a single selected
+// family, which is what an IPv4-only interface gets. Nothing competes for the
+// claim, so the connection has to reach the caller. A claim that discarded its
+// own winner would fail every hostname dial on such an interface and would push
+// errFamilyLost out into a probe error, which the dual-family tests cannot see.
+func TestLoneFamilyDialIsNotDiscarded(t *testing.T) {
+	restore := dialFamily
+	defer func() { dialFamily = restore }()
+
+	only := &closeTrackingConn{closed: make(chan struct{})}
+	dialFamily = func(_ context.Context, _ net.IP, _, _ string, _ func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+		return only, nil
+	}
+	conn, err := dialContextFromSources(&SourceAddresses{IPv4: net.ParseIP("127.0.0.1")})(
+		context.Background(), "tcp", "example.invalid:443")
+	if err != nil || net.Conn(only) != conn {
+		t.Fatalf("dial = (%v, %v), want the dialed connection and no error", conn, err)
+	}
+	select {
+	case <-only.closed:
+		t.Error("the only connection was closed instead of returned")
+	default:
 	}
 }
