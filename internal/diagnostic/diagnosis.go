@@ -537,6 +537,11 @@ func downgradeEgress(res map[ProbeID]ProbeResult) {
 	}
 	r.Status = StatusWarn
 	r.downgraded = true
+	// Another path carries traffic, so whatever the routing table said about
+	// the dead direct path is no longer a repair to hand the user: a proxy-only
+	// network with no default route is working as designed. The cause stays in
+	// the JSON as evidence; only the advice reverts.
+	r.Fix = egressFix
 	if otherOK {
 		r.Detail += ", but another path works"
 	} else {

@@ -954,10 +954,13 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 			r.Fix = "captive portal or transparent filter: open a browser and sign in to the network"
 			return r
 		}
-		r.Fix = "no internet egress: proxy-only/filtered network? check upstream"
 		if o.routeCause != nil {
 			r.Cause = o.routeCause(all[0])
 		}
+		// The routing table decides the advice: a missing default route and a
+		// filtered upstream are different repairs. An empty or unrecognized
+		// cause keeps the generic hint.
+		r.Fix = routeFix(r.Cause)
 		return r
 	}
 	defer prim.conn.Close()

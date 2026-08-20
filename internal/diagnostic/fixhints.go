@@ -111,3 +111,26 @@ func certWindow(c *x509.Certificate) string {
 	}
 	return "cert is only valid " + c.NotBefore.Format("2006-01-02") + " → " + c.NotAfter.Format("2006-01-02")
 }
+
+// egressFix is what a dead direct path gets when the routing table has nothing
+// specific to say, and what downgradeEgress restores once another path proves
+// the network usable.
+const egressFix = "no internet egress: proxy-only/filtered network? check upstream"
+
+// routeFix turns a route cause the local kernel supplied into advice about the
+// thing that actually broke. The routing backends decide the cause; the prose
+// lives here so all three platforms share one vocabulary. An empty or
+// unrecognized cause keeps the generic hint rather than guessing.
+func routeFix(cause string) string {
+	switch cause {
+	case RouteCauseNoDefaultRoute:
+		return "no default route: nothing in the routing table leads off this network, check DHCP, the VPN, or a static route"
+	case RouteCauseGatewayUnreachable:
+		return "the default gateway is not answering at the link layer: check the cable/Wi-Fi link, the gateway itself, or a wrong static IP/subnet"
+	case RouteCauseSelectedPathFailed:
+		return "the default route and its gateway look fine, so the break is upstream: check the router's own uplink or a filter"
+	case RouteCausePreferredPathFailed:
+		return "the preferred default route failed while another default route exists: check that interface (VPN or Wi-Fi vs Ethernet), or prefer the other route"
+	}
+	return egressFix
+}
