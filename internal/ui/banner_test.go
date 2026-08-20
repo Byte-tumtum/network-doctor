@@ -1,6 +1,7 @@
 // The failure banner's remediation block: the verdict line, the "Fix:" line,
 // and the "Next: press ..." drill-down hint, plus the rule that all of them
-// describe the FIRST failing probe in probe order rather than the last one.
+// describe one row: the first failing probe in probe order, unless the
+// diagnosis blames a row of its own.
 
 package ui
 
@@ -21,11 +22,12 @@ import (
 // the first failing probe is the cause and the ones below it are symptoms, so
 // remediation taken from the last failure contradicts the verdict above it.
 //
-// The one exception to "everything follows the first failure" is the drill-down
-// hint, which follows the row the verdict blames: the path MTU black hole fails
-// TLS but says to read the Path MTU row, so it must not send the reader back to
-// curl. Cases 4 and 5 are the same rows with and without the TLS timeout that
-// turns the first into the second.
+// The one exception to "everything follows the first failure" is a verdict that
+// names a row of its own: the path MTU black hole fails TLS first but blames
+// the Path MTU row, so both remediation lines come from there instead. They
+// move together, because a "Fix:" about one row above a "Next:" about another
+// sends the reader two ways at once. Cases 4 and 5 are the same rows with and
+// without the TLS timeout that turns the first into the second.
 func TestBannerFailureGuidance(t *testing.T) {
 	oldLookPath := toolLookPath
 	toolLookPath = func(bin string) (string, error) { return bin, nil }
@@ -118,7 +120,7 @@ func TestBannerFailureGuidance(t *testing.T) {
 				diagnostic.ProbeHTTPS: fail(httpsFix),
 			},
 			want: "✗ TCP reaches example.com:443 but the protocol and bulk-transfer checks both stall, which is evidence of a path MTU black hole rather than a broken service (see the Path MTU row).\n" +
-				"  Fix: " + tlsFix + "\n" +
+				"  Fix: " + pmtuFix + "\n" +
 				"  Next: press t for trace the path (traceroute)",
 		},
 	}
@@ -276,5 +278,79 @@ func TestBannerSeverityFollowsVerdict(t *testing.T) {
 				t.Errorf("ExitCode = %d, want %d", got, tt.wantExit)
 			}
 		})
+	}
+}
+
+// Fix strings the probes really emit. The black hole is the case where the
+// diagnosis blames a row other than the first failing one: TCP connects, the
+// Path MTU row warns about a bulk stall, and TLS, HTTP and HTTPS all time out
+// behind it. TLS is the first FAIL in probe order; Path MTU is what the
+// verdict names.
+const (
+	blackHolePMTUFix = "bulk TCP stalled after the handshake; if lowering MTU makes it drain, lower the interface MTU"
+	blackHoleTLSFix  = "TLS timed out after TCP connected; read the Path MTU row: it says whether full-size packets are reaching the far end (VPN, PPPoE, or tunnel)"
+	blackHoleHTTPFix = "HTTP blocked: proxy or firewall?"
+)
+
+// blackHoleModel is a finished run whose verdict blames the Path MTU row.
+func blackHoleModel(t *testing.T) model {
+	t.Helper()
+	oldLookPath := toolLookPath
+	toolLookPath = func(bin string) (string, error) { return bin, nil }
+	t.Cleanup(func() { toolLookPath = oldLookPath })
+
+	tgt := mustTarget(t, "example.com:443")
+	m := newModel(tgt, false)
+	// One fixed GOOS table keeps the "Next:" label identical wherever the
+	// suite runs.
+	m.tools = toolsFor(tgt, "linux", toolBind{})
+	stalls := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbePMTU:  {Status: diagnostic.StatusWarn, Fix: blackHolePMTUFix},
+		diagnostic.ProbeTLS:   {Status: diagnostic.StatusFail, Fix: blackHoleTLSFix, Cause: diagnostic.TLSCauseTimeout},
+		diagnostic.ProbeHTTP:  {Status: diagnostic.StatusFail, Fix: blackHoleHTTPFix},
+		diagnostic.ProbeHTTPS: {Status: diagnostic.StatusFail, Fix: blackHoleHTTPFix},
+	}
+	for _, p := range m.probes {
+		r, ok := stalls[p.ID]
+		if !ok {
+			r = diagnostic.ProbeResult{Status: diagnostic.StatusPass}
+		}
+		r.ID = p.ID
+		m.results[p.ID] = r
+	}
+	return m
+}
+
+// TestBannerActionFollowsBlamedRowNotFirstFailure is the contract the two
+// remediation lines share. The first failing row is TLS and its own hint just
+// forwards the reader to the Path MTU row, so taking "Fix:" from it costs the
+// reader the one line that says what to actually change.
+func TestBannerActionFollowsBlamedRowNotFirstFailure(t *testing.T) {
+	m := blackHoleModel(t)
+
+	firstFail := diagnostic.ProbeID("")
+	for _, p := range m.probes {
+		if m.results[p.ID].Status == diagnostic.StatusFail {
+			firstFail = p.ID
+			break
+		}
+	}
+	if firstFail != diagnostic.ProbeTLS {
+		t.Fatalf("first failing row = %q, want the TLS row: the case no longer separates the two candidates", firstFail)
+	}
+	blamed := diagnostic.FocusProbe(m.target, m.probeOrder(), m.results)
+	if blamed != diagnostic.ProbePMTU {
+		t.Fatalf("diagnosis blames %q, want the Path MTU row", blamed)
+	}
+
+	banner := m.banner()
+	if !strings.Contains(banner, "Fix: "+blackHolePMTUFix) {
+		t.Errorf("Fix: must come from the blamed row:\n%s", banner)
+	}
+	if strings.Contains(banner, blackHoleTLSFix) {
+		t.Errorf("Fix: still follows the first failing row:\n%s", banner)
+	}
+	if !strings.Contains(banner, "Next: press t for trace the path (traceroute)") {
+		t.Errorf("Next: must come from the blamed row:\n%s", banner)
 	}
 }

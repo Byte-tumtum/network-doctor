@@ -702,42 +702,36 @@ func (m model) banner() string {
 		return m.spinner.View() + " Checking your connection… " +
 			progressBar(done, total, 20) + faintStyle.Render(fmt.Sprintf(" %d of %d done", done, total))
 	}
-	order, firstFail := m.resultState()
-	summary, verdict := m.diagnose(order)
+	summary, verdict := m.diagnose(m.probeOrder())
 	st := verdictStatus(verdict)
 	lines := []string{statusStyles[st].Render(probeGlyph(st) + " " + summary)}
-	if firstFail == nil {
+	// Both remediation lines follow the row the verdict blames rather than the
+	// first failing row: a path MTU black hole fails TLS but the evidence and
+	// the remedy are both on the Path MTU row, and a "Fix:" taken from one row
+	// with a "Next:" taken from another sends the reader two ways at once.
+	i := m.focusRow()
+	if i < 0 {
 		return lines[0]
 	}
-	if firstFail.Fix != "" {
-		lines = append(lines, faintStyle.Render("  Fix: "+firstFail.Fix))
+	blamed := m.probes[i].ID
+	if fix := m.results[blamed].Fix; fix != "" {
+		lines = append(lines, faintStyle.Render("  Fix: "+fix))
 	}
-	// The drill-down follows the row the verdict blames rather than the first
-	// failure: a path MTU black hole fails TLS but wants the Path MTU row.
-	nextID := firstFail.ID
-	if i := m.focusRow(); i >= 0 {
-		nextID = m.probes[i].ID
-	}
-	if next := m.nextStep(nextID); next != "" {
+	if next := m.nextStep(blamed); next != "" {
 		lines = append(lines, "  "+next)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// resultState collects the ordered probe IDs and the first failing row, which
-// is where the banner takes its remediation from. It says nothing about how
-// severe the run was: that is verdictStatus's job.
-func (m model) resultState() (order []diagnostic.ProbeID, firstFail *diagnostic.ProbeResult) {
-	order = make([]diagnostic.ProbeID, len(m.probes))
+// probeOrder is the run's probe IDs in DAG order, which is what the diagnosis
+// reads. It deliberately reports nothing about which row failed: the blamed
+// row is Diagnose's call alone, and focusRow is the only place that asks.
+func (m model) probeOrder() []diagnostic.ProbeID {
+	order := make([]diagnostic.ProbeID, len(m.probes))
 	for i, probe := range m.probes {
 		order[i] = probe.ID
-		r := m.results[probe.ID]
-		if firstFail == nil && r.Status == diagnostic.StatusFail {
-			rr := r
-			firstFail = &rr
-		}
 	}
-	return order, firstFail
+	return order
 }
 
 // verdictStatus is the presentation severity of a finished run, and the
@@ -759,8 +753,7 @@ func verdictStatus(verdict string) diagnostic.Status {
 // its drill-down from: the row the verdict blames when it names one, and
 // otherwise the first failing row. -1 when the run blames no row at all.
 func (m model) focusRow() int {
-	order, _ := m.resultState()
-	focus := diagnostic.FocusProbe(m.target, order, m.results)
+	focus := diagnostic.FocusProbe(m.target, m.probeOrder(), m.results)
 	first := -1
 	for i, probe := range m.probes {
 		if probe.ID == focus {
