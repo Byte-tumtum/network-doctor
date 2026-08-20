@@ -1804,6 +1804,66 @@ func TestProxyOnlyNetworkScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// TestProxyOnlyNetworkBrokenDNSScenario is the same proxy-only network with its
+// configured resolver taken away as well. It is the regression for a summary
+// that used to read a downgraded egress row as working egress: the direct route
+// is dead, no name resolves, and the CONNECT proxy is the only thing carrying
+// traffic, so the diagnosis has to say both halves and promise neither.
+func TestProxyOnlyNetworkBrokenDNSScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "proxy-only-network-broken-dns", "-timeout", timedTimeout)
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+	}
+	out := rep.Tests[0]
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d: %+v", out.FalsePositives, out.FalseNegatives, out.Checks)
+	}
+
+	// The three halves of the state, each measured rather than assumed. The
+	// client's own filters matched real packets on TCP/443 and on both
+	// transports port 53 runs on, and the proxy answered a real CONNECT with
+	// the 200 it sends only once the upstream connection is open.
+	if !droppedOutbound(rep.Evidence, "client", "tcp", 443) {
+		t.Errorf("the client's own TCP/443 filter never matched a packet: %+v", rep.Evidence.PacketDrops)
+	}
+	if !droppedOutbound(rep.Evidence, "client", "udp", 53) {
+		t.Errorf("the client's own UDP/53 filter never matched a packet: %+v", rep.Evidence.PacketDrops)
+	}
+	if !hasServiceReply(rep, "proxy", "connect-proxy", ServiceHTTPConnect, 200) {
+		t.Errorf("the CONNECT proxy never established a tunnel: %+v", rep.Evidence.ServiceReplies)
+	}
+	// Resolved from the proxy's namespace, which is what keeps the tunnel
+	// working while the client resolves nothing.
+	if !hasDNSEvidence(rep, "internet", "10.77.0.30", proxyProbeName, "ANSWER") {
+		t.Errorf("no proxy-side lookup of the CONNECT authority: %+v", rep.Evidence.DNS)
+	}
+
+	// The rows those measurements have to produce.
+	internet := diagnosisCheck(out, string(diagnostic.ProbeInternet))
+	if internet.Status != "WARN" || !strings.Contains(internet.Detail, "but the environment proxy works") {
+		t.Errorf("direct egress row = %+v", internet)
+	}
+	if proxy := diagnosisCheck(out, string(diagnostic.ProbeProxy)); proxy.Status != "PASS" {
+		t.Errorf("proxy_connect = %+v", proxy)
+	}
+	if dns := diagnosisCheck(out, string(diagnostic.ProbeDNS)); dns.Status != "FAIL" {
+		t.Errorf("dns = %+v", dns)
+	}
+	if out.ActualVerdict != "network" {
+		t.Errorf("verdict = %q, want network", out.ActualVerdict)
+	}
+
+	// And the user-visible claim. A WARN that downgradeEgress planted is a dead
+	// direct route, so the summary may not open by saying egress works.
+	summary := out.Diagnosis.Summary
+	want := "Direct egress is blocked and DNS resolution is failing; only the environment proxy is carrying traffic."
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+	assertCleanedUp(t, rep)
+}
+
 // TestEncryptedDNSBlockedScenario is one half of the README's independence
 // claim: a network can carry ordinary DNS while blocking DoH and DoT. Both
 // encrypted transports are cut off at the one bootstrap address the row dials,

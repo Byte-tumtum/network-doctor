@@ -104,9 +104,19 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 			return "Online: direct TCP egress and DNS both work.", gv
 		case warn(ProbeInternet) && res[ProbeInternet].downgraded && dn && prx:
 			return "Online via the environment proxy: direct egress is blocked (proxy-only network).", gv
+		case warn(ProbeInternet) && res[ProbeInternet].downgraded && fail(ProbeDNS) && prx:
+			// The same proxy-only network as the case above, with its resolver
+			// gone too. The Warn here is downgradeEgress's, not the probe's, so
+			// the direct route is dead rather than impaired and the prose must
+			// not promise egress the machine does not have.
+			return "Direct egress is blocked and DNS resolution is failing; only the environment proxy is carrying traffic.", gv
 		case directOK() && warn(ProbeInternet) && dn:
 			return "Online but degraded: direct egress is impaired (see the ! row for details).", gv
-		case warn(ProbeInternet) && fail(ProbeDNS):
+		case directOK() && warn(ProbeInternet) && fail(ProbeDNS):
+			// directOK, so this is a Warn the egress probe raised itself: one
+			// family down, packet loss, and so on. Direct egress really does
+			// carry traffic here, which is what separates it from the case
+			// above.
 			return "Internet egress works (degraded) but DNS resolution is failing.", gv
 		case ip && fail(ProbeDNS):
 			return "Internet egress works but DNS resolution is failing.", gv

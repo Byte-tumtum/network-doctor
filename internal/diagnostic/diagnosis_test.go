@@ -50,6 +50,14 @@ func TestDiagnoseProxy(t *testing.T) {
 		{"degraded direct with proxy", StatusWarn, StatusPass, StatusPass, false, "Online but degraded"},
 		{"proxy failed, direct fine", StatusPass, StatusFail, StatusPass, false, "proxy check failed"},
 		{"no proxy configured", StatusPass, StatusNA, StatusPass, false, "Online: direct TCP egress"},
+		// A downgraded egress row is a dead direct route wearing a Warn, so a
+		// resolver failure beside it cannot be prefaced with working egress.
+		{"proxy-only network with broken DNS", StatusWarn, StatusPass, StatusFail, true, "Direct egress is blocked and DNS resolution is failing"},
+		// The probe's own Warn, with no proxy in the picture: direct egress
+		// genuinely carries traffic, so the older wording still holds.
+		{"degraded direct, no proxy, broken DNS", StatusWarn, StatusNA, StatusFail, false, "Internet egress works (degraded)"},
+		// Nothing carries traffic, so nothing may be described as carrying it.
+		{"everything down", StatusFail, StatusFail, StatusFail, false, "Offline"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -63,6 +71,52 @@ func TestDiagnoseProxy(t *testing.T) {
 				t.Errorf("got %q, want substring %q", v, c.want)
 			}
 		})
+	}
+}
+
+// A proxy-only network whose resolver is also gone, assembled the way a real
+// run assembles it: raw probe results in, Finalize, then Diagnose. The direct
+// dial failed outright and only the environment proxy carries traffic, so the
+// summary may not open by saying internet egress works.
+func TestDiagnoseProxyOnlyBrokenDNS(t *testing.T) {
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS}
+	res := map[ProbeID]ProbeResult{
+		ProbeIface:    {Status: StatusPass},
+		ProbeInternet: {Status: StatusFail, Detail: "no direct TCP egress to 1.1.1.1, 8.8.8.8 (port 443)"},
+		ProbeProxy:    {Status: StatusPass, Detail: "proxy proxy.corp:3128 tunnels to connectivitycheck.gstatic.com:443"},
+		ProbeDNS:      {Status: StatusFail, Detail: "cannot resolve connectivitycheck.gstatic.com: i/o timeout"},
+	}
+	Finalize(res)
+
+	// The state transition the diagnosis has to read correctly: the working
+	// proxy turned an egress Fail into a Warn, and the Warn is flagged as one
+	// Finalize planted rather than one the probe raised.
+	internet := res[ProbeInternet]
+	if internet.Status != StatusWarn || !internet.downgraded {
+		t.Fatalf("egress after Finalize = %v (downgraded %t), want a downgraded WARN", internet.Status, internet.downgraded)
+	}
+	if !strings.Contains(internet.Detail, "but the environment proxy works") {
+		t.Errorf("egress detail = %q, want the proxy named as the surviving path", internet.Detail)
+	}
+	if directEgressOK(res) {
+		t.Error("directEgressOK is true for an egress row that only the proxy rescued")
+	}
+	if res[ProbeDNS].Status != StatusFail {
+		t.Fatalf("DNS after Finalize = %v, want FAIL", res[ProbeDNS].Status)
+	}
+
+	summary, verdict := Diagnose(nil, order, res)
+	want := "Direct egress is blocked and DNS resolution is failing; only the environment proxy is carrying traffic."
+	if summary != want {
+		t.Errorf("summary = %q, want %q", summary, want)
+	}
+	for _, claim := range []string{"Internet egress works", "Online"} {
+		if strings.Contains(summary, claim) {
+			t.Errorf("summary %q claims %q on a network with no direct egress", summary, claim)
+		}
+	}
+	if verdict != VerdictNetwork {
+		t.Errorf("verdict = %q, want %q", verdict, VerdictNetwork)
 	}
 }
 
@@ -309,6 +363,13 @@ func TestVerdict(t *testing.T) {
 			ProbeInternet: {Status: StatusWarn, downgraded: true},
 			ProbeProxy:    {Status: StatusPass},
 		}, VerdictDegraded},
+		// Same network, resolver gone: the direct route is dead and no name
+		// resolves, which is a broken path rather than a degraded one.
+		{"generic proxy-only with broken DNS", nil, genericOrder, map[ProbeID]ProbeResult{
+			ProbeInternet: {Status: StatusWarn, downgraded: true},
+			ProbeProxy:    {Status: StatusPass},
+			ProbeDNS:      {Status: StatusFail},
+		}, VerdictNetwork},
 		// Direct internet and DNS both work; only the configured proxy check
 		// failed. The summary already warns proxy-aware apps will fail, so
 		// the verdict can't say ok.

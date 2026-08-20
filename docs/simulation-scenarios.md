@@ -109,6 +109,12 @@ Some semantics are easy to get wrong even after reading a scenario:
   anything else with a status code, so a scenario cannot mistake a refused
   request for a working one; `proxy-only-network.yaml` is the worked example,
   and it blocks direct egress rather than only pointing netdoc at the proxy.
+  [`proxy-only-network-broken-dns.yaml`](../internal/simulation/scenarios/proxy-only-network-broken-dns.yaml)
+  is the same network with the client's resolver taken away too. Its port 53
+  drops are scoped to the client and to the configured resolver address on
+  purpose: a CONNECT proxy resolves the tunnel authority in its own namespace,
+  so a drop that also caught the proxy's lookups would take the proxy down
+  along with the client and stop testing anything.
 - TLS, QUIC, and encrypted-DNS fixtures generate private keys and certificates
   in memory. Only public CA certificates are written inside the mode-`0700` run
   workspace; trusted code points the netdoc process at the selected TLS CA and

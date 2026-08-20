@@ -1,0 +1,80 @@
+name: proxy-only-network-broken-dns
+description: >-
+  The proxy-only network again, with its configured resolver taken away too.
+  Direct TCP/443 is blocked, the CONNECT proxy still carries traffic, and the
+  client cannot resolve a name of its own. netdoc has to say both halves: the
+  direct route is dead and DNS is failing, with the proxy the only path left.
+  Reading this as working internet egress is the regression it exists to catch.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    # The same simulated internet the proxy-only control uses, unchanged: every
+    # service here stays up, and only which of the client's packets survive the
+    # trip differs. The resolver on 10.77.0.1 still answers, which is what lets
+    # the proxy resolve the CONNECT authority while the client cannot.
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    # The only way out, and it keeps its own working resolver: a CONNECT proxy
+    # resolves the authority in its own namespace, which is exactly why a
+    # proxy-only network can carry traffic while its clients resolve nothing.
+    - name: proxy
+      address: 10.77.0.30
+      resolver: 10.77.0.1
+      services:
+        - name: connect-proxy
+          type: http_connect
+          port: 3128
+
+faults:
+  # The proxy-only half, unchanged from the control: 443 and 853 are the two
+  # TCP ports netdoc's direct probes use, and 3128 is deliberately left
+  # reachable.
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 443}
+  - {type: drop, node: client, direction: outbound, protocol: tcp, port: 853}
+  # The new half. Both transports port 53 runs on, so nothing survives on a TCP
+  # retry, and scoped to the configured resolver so the public second opinion
+  # on 8.8.8.8 keeps answering: that is what proves this is an unreachable
+  # resolver rather than a network with no DNS anywhere. Dropped on the way out
+  # of the client, so the proxy's own lookups on the same resolver are
+  # untouched and the tunnel still opens.
+  - {type: drop, node: client, direction: outbound, to: 10.77.0.1, protocol: udp, port: 53}
+  - {type: drop, node: client, direction: outbound, to: 10.77.0.1, protocol: tcp, port: 53}
+
+tests:
+  - name: generic checks with egress only through the CONNECT proxy and no resolver
+    node: client
+    proxy: {scheme: http, node: proxy, port: 3128}
+
+expect:
+  # Not degraded: with the direct route dead and no name resolving, the path
+  # itself is the finding, not an impairment on a working one.
+  verdict: network
+  checks:
+    - {id: iface, status: PASS}
+    # WARN rather than FAIL, same as the control: the direct dial genuinely
+    # failed, and netdoc downgrades that once the proxy proves the machine is
+    # not offline. The diagnosis must not read that WARN as working egress.
+    - {id: internet_tcp, status: WARN}
+    - {id: proxy_connect, status: PASS}
+    - {id: dns, status: FAIL}
+    # The working path beside the broken one: the fault is the configured
+    # resolver, not DNS everywhere.
+    - {id: dns_public, status: PASS}
+    # DoH and DoT ride the same blocked TCP/443 and TCP/853.
+    - {id: dns_encrypted, status: FAIL}
