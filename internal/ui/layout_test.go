@@ -96,6 +96,10 @@ func TestPersistentBlockSurvivesLongResultList(t *testing.T) {
 // it: the rows scroll, the conclusion does not.
 func TestPersistentBlockUnchangedWhileScrolling(t *testing.T) {
 	m := blackHoleModel(t)
+	// Expanded, because the compact view collapses the passing rows into one
+	// line and a list that short has nothing to scroll. Scrolling is the
+	// expanded list's problem now.
+	m.expanded = true
 	u, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	top := asModel(t, u)
 	topView := top.View()

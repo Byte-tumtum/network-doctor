@@ -141,6 +141,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Same confirm gate as nmap: a /24 sweep is an active scan too.
 		m.confirmTool = &tool
 		return m, nil
+	case actExpand:
+		// Presentation only: what the Checks panel and the toolbox draw, never
+		// what ran, what the diagnosis concluded, or what the report carries.
+		m.expanded = !m.expanded
+		return m, nil
 	case actCancelJob:
 		// Cancel only the focused job (tab picks which); quit remains the
 		// nuke-everything path. The terminal event arrives as JobCanceled.

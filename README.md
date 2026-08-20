@@ -223,6 +223,7 @@ netdoc --no-history host          # don't read or save the target history file
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
+| `a` | expand the checks a finished run collapsed (the passing rows, and the toolbox on a clean run), and collapse them again |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | set the selected map device as the new target, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |

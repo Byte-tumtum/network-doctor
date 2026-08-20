@@ -6,6 +6,7 @@ package ui
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -206,9 +207,14 @@ func (m model) headerView() string {
 // list rather than being clipped from the bottom, because clipping a bordered
 // panel eats the border that closes it.
 func (m model) bodyView(deferred bool, rows int) string {
+	shown, hidden := m.compactRows()
+	// The cursor row is always in shown, so the windowed panel still scrolls to
+	// the row the Details panel is describing.
+	sel := max(slices.Index(shown, m.selected), 0)
 	var left strings.Builder
 	left.WriteString(panelTitleStyle.Render("Checks") + "\n")
-	for i, probe := range m.probes {
+	for _, i := range shown {
+		probe := m.probes[i]
 		if deferred {
 			left.WriteString(faintStyle.Render("  · "+probe.Name) + "\n")
 			continue
@@ -222,6 +228,9 @@ func (m model) bodyView(deferred bool, rows int) string {
 			left.WriteString("  " + m.statusSparkline(probe.ID, 8))
 		}
 		left.WriteString("\n")
+	}
+	if hidden > 0 {
+		left.WriteString(m.collapsedChecksRow(hidden) + "\n")
 	}
 
 	var right strings.Builder
@@ -282,16 +291,16 @@ func (m model) bodyView(deferred bool, rows int) string {
 		// row that wraps costs a display row no row count can see coming.
 		inner := rows - 2*frame
 		right := fitRows(rightRows, max(inner/2, 1), w-pad)
-		both := stack(windowRows(leftRows, m.selected, inner-displayRows(right, w-pad), w-pad), right)
+		both := stack(windowRows(leftRows, sel, inner-displayRows(right, w-pad), w-pad), right)
 		if lipgloss.Height(both) <= rows {
 			return both
 		}
-		return fitBlock(stack(windowRows(leftRows, m.selected, rows-frame, w-pad), nil), rows)
+		return fitBlock(stack(windowRows(leftRows, sel, rows-frame, w-pad), nil), rows)
 	}
 	leftW := 38
 	rightW := max(m.width-leftW-5, 36)
 	if rows > 0 {
-		leftRows = windowRows(leftRows, m.selected, rows-frame, leftW-pad)
+		leftRows = windowRows(leftRows, sel, rows-frame, leftW-pad)
 		rightRows = fitRows(rightRows, rows-frame, rightW-pad)
 	}
 	leftStr := strings.Join(leftRows, "\n")
@@ -734,6 +743,13 @@ func (m model) helpView(deferred bool) string {
 		add(m.keys.pairLabel(ctxList, actUp, actDown), "scroll")
 		addPair(ctxList, actTop, actBottom)
 		addAction(ctxList, actNetworkMap)
+		// The way back is only on the help bar: expanding removes the summary
+		// line that advertised the key.
+		if _, hidden := m.compactRows(); m.expanded && m.allDone() {
+			add(m.keys.label(ctxList, actExpand), "collapse")
+		} else if hidden > 0 || m.toolsCollapsed() {
+			addAction(ctxList, actExpand)
+		}
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
 	// hint tracks exactly when the key does something. On the map with devices
@@ -919,6 +935,76 @@ func (m model) focusRow() int {
 	return first
 }
 
+// compactRows is the Checks panel's default row set: the probe indices worth
+// reading, and how many passing rows that left behind. A finished run keeps
+// every Fail and Warn, the row the diagnosis blames (a path MTU black hole
+// rests on a Warn, so severity alone would drop the one row the verdict sends
+// the reader to), the cursor row (the Details panel is showing it, and a panel
+// describing a row the list does not offer is worse than the row it costs),
+// and anything that neither passed nor ran. Everything else is one summary
+// line. Nothing is hidden while the run is still going, while the reader has
+// expanded the list, or when the expand action has no key to reach it by.
+//
+// The blamed row comes from focusRow, so the list and the banner cannot
+// disagree about which row matters. Every row FocusProbe can name today is
+// also a Warn, so that clause currently keeps nothing the severity test would
+// have dropped; it stays because the row worth reading is the diagnosis's
+// call, not a severity comparison made over here.
+func (m model) compactRows() (shown []int, hidden int) {
+	all := make([]int, len(m.probes))
+	for i := range m.probes {
+		all[i] = i
+	}
+	if m.expanded || !m.allDone() || !m.keys.bound(ctxList, actExpand) {
+		return all, 0
+	}
+	blamed := m.focusRow()
+	for i, probe := range m.probes {
+		if i == blamed || i == m.selected || m.results[probe.ID].Status != diagnostic.StatusPass {
+			shown = append(shown, i)
+			continue
+		}
+		hidden++
+	}
+	return shown, hidden
+}
+
+// collapsedChecksRow is the one line the hidden passing rows are worth. It
+// counts what compactRows actually hid, never how many rows passed: the
+// blamed row and the cursor row pass too and are still on screen.
+//
+// It sits in the marker column rather than indented with the probe rows,
+// which is also what keeps it inside the 36 columns the Checks panel has:
+// a row that wraps costs the panel a second display row and desynchronises
+// the two panels' heights.
+func (m model) collapsedChecksRow(hidden int) string {
+	checks := "checks"
+	if hidden == 1 {
+		checks = "check"
+	}
+	return faintStyle.Render(fmt.Sprintf("· %d other %s passed (%s expand)",
+		hidden, checks, m.keys.label(ctxList, actExpand)))
+}
+
+// toolsCollapsed reports whether the "Dig deeper" chips have to justify their
+// rows. A finished run the diagnosis calls healthy has nothing to dig into, so
+// they collapse to their count. Every other state keeps them: an unfinished
+// run has no verdict yet, and an abnormal one puts the banner's "Next:" line
+// one keypress from a chip it names.
+//
+// --toolbox is the state that outranks the verdict. That mode opens on the
+// chips and holds the chain back until r, so the chips are what the reader
+// came for; a clean run is not a reason to take away the thing they asked
+// for. The checks still collapse there, since the diagnosis is the part a
+// clean verdict has finished talking about.
+func (m model) toolsCollapsed() bool {
+	if m.toolbox || m.expanded || !m.allDone() || !m.keys.bound(ctxList, actExpand) {
+		return false
+	}
+	_, verdict := m.diagnose(m.probeOrder())
+	return verdict == diagnostic.VerdictOK
+}
+
 // probeNextTool maps a blamed probe to the toolbox hotkey that best
 // investigates it.
 var probeNextTool = map[diagnostic.ProbeID]string{
@@ -1081,6 +1167,11 @@ func progressBar(done, total, w int) string {
 func (m model) toolboxView(compact bool) string {
 	if len(m.tools) == 0 {
 		return faintStyle.Render("Tools need a host, press ") + keyStyle.Render("r") + faintStyle.Render(" to set one") + "\n"
+	}
+	// The SSH chip below is not in m.tools, so the count has to include it.
+	if m.toolsCollapsed() {
+		return titleStyle.Render("Dig deeper") + faintStyle.Render(fmt.Sprintf("  %d tools (%s expand)",
+			len(m.tools)+1, m.keys.label(ctxList, actExpand))) + "\n"
 	}
 	chip := func(available bool, key, rest string) string {
 		if compact {

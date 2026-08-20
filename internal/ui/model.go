@@ -205,6 +205,12 @@ type model struct {
 	keys        Keymap
 	pendingKeys []string
 
+	// expanded is presentation state and nothing else: the finished-run view
+	// collapses the passing checks and the toolbox chips behind one summary
+	// line each, and the expand action toggles that. No probe, diagnosis, or
+	// report path reads it.
+	expanded bool
+
 	toolbox    bool // --toolbox: chain deferred until 'r'
 	watch      bool
 	runHistory map[diagnostic.ProbeID][]diagnostic.Status
