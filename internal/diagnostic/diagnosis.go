@@ -84,7 +84,7 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		return "No usable network interface: the link is down.", VerdictNetwork
 	}
 
-	prx := has(ProbeProxy) && functional(res[ProbeProxy].Status)
+	prx := proxyCarries(res)
 	prxDown := has(ProbeProxy) && fail(ProbeProxy)
 	publicResolves := has(ProbeDNSPublic) && len(res[ProbeDNSPublic].Addrs) > 0
 	bothNotFound := has(ProbeDNS) && res[ProbeDNS].DNSNotFound && has(ProbeDNSPublic) && res[ProbeDNSPublic].DNSNotFound
@@ -291,6 +291,13 @@ func directEgressOK(res map[ProbeID]ProbeResult) bool {
 	return ok && functional(r.Status) && !r.downgraded
 }
 
+// proxyCarries reports whether the configured environment proxy is carrying
+// traffic, which is the other way this machine can be online.
+func proxyCarries(res map[ProbeID]ProbeResult) bool {
+	r, ok := res[ProbeProxy]
+	return ok && functional(r.Status)
+}
+
 // encryptedDNSBlocked reports the one state that is specific to encrypted DNS:
 // the encrypted row failed while the network is otherwise carrying traffic and
 // plaintext resolution still works. When DNS is failing outright, or when there
@@ -315,6 +322,100 @@ func encryptedDNSBlocked(res map[ProbeID]ProbeResult) bool {
 		}
 	}
 	return false
+}
+
+// Collateral names the failed probes a finished diagnosis already explains as
+// downstream evidence of the failure it blames, rather than as something to go
+// and act on. An offline machine fails egress, QUIC, plain DNS and encrypted
+// DNS at once, and only the first of those is a thing to fix: the other three
+// are what one dead path looks like from three more probes.
+//
+// It is a presentation answer and nothing else. Raw statuses, the report and
+// the JSON output all keep saying Fail, because a failed probe really did
+// fail; this only says which of those failures the diagnosis has already
+// accounted for elsewhere.
+//
+// nil while a run is unfinished, and nil in the ordinary case where every
+// failed probe had a working rung under it: a failure with its prerequisite
+// met is evidence about that probe alone.
+func Collateral(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) map[ProbeID]bool {
+	focus := new(ProbeID)
+	_, verdict := diagnose(t, order, res, focus)
+	if verdict == VerdictIncomplete {
+		return nil
+	}
+	// The blamed row, read the same way the banner reads it: the row the
+	// verdict names when it names one, and otherwise the first failure. It is
+	// never collateral to itself.
+	blamed := *focus
+	if blamed == "" {
+		for _, id := range order {
+			if r, ok := res[id]; ok && r.Status == StatusFail {
+				blamed = id
+				break
+			}
+		}
+	}
+	var out map[ProbeID]bool
+	for _, id := range order {
+		r, ok := res[id]
+		if !ok || r.Status != StatusFail || id == blamed || causeSatisfied(id, res) {
+			continue
+		}
+		// A DNS verdict is the summary sentence naming the resolver, so the
+		// plaintext rows that sentence is about stay prominent even when the
+		// path under them is down: dimming the row the prose blames would
+		// contradict the prose. The encrypted row is deliberately not here,
+		// because encryptedDNSBlocked has already said that a plaintext
+		// failure makes the encrypted one a symptom.
+		if verdict == VerdictDNS && (id == ProbeDNS || id == ProbeDNSPublic) {
+			continue
+		}
+		if out == nil {
+			out = make(map[ProbeID]bool, len(order))
+		}
+		out[id] = true
+	}
+	return out
+}
+
+// causeSatisfied reports whether the rung a probe sits on was demonstrably
+// carrying traffic when that probe ran. A failure with its rung up is evidence
+// about the probe itself; a failure without one is evidence about the rung
+// below it, which another row is already reporting.
+//
+// The probe DAG deliberately keeps these rows as siblings so that one failure
+// never stops another from collecting evidence. This is the causal reading of
+// the same network, kept apart from the graph the scheduler walks and read
+// only to decide how loudly a failed row speaks.
+//
+// A rung that was not part of the run counts as up. It measured nothing, so it
+// is no evidence that anything above it was doomed, and calling a failure a
+// consequence of a check nobody made would be a guess.
+func causeSatisfied(id ProbeID, res map[ProbeID]ProbeResult) bool {
+	ran := func(dep ProbeID) bool { _, ok := res[dep]; return ok }
+	switch id {
+	case ProbeInternet, ProbeProxy:
+		return !ran(ProbeIface) || functional(res[ProbeIface].Status)
+	case ProbeQUIC, ProbeDNSPublic, ProbeTargetTCP:
+		return !ran(ProbeInternet) || directEgressOK(res)
+	case ProbeDNS:
+		// The system resolver is the one row here the environment proxy can
+		// stand in for: a proxy-only network is carrying traffic, so a
+		// resolver failing on one is its own problem rather than the outage
+		// restated. The rows above go direct by construction, so a working
+		// proxy says nothing about them.
+		return !ran(ProbeInternet) || directEgressOK(res) || proxyCarries(res)
+	case ProbeDNSEncrypted:
+		// encryptedDNSBlocked is this package's existing answer to exactly
+		// this question: it says yes only when the path carries traffic and
+		// plaintext resolution works at the same time, and no when the
+		// encrypted row is a symptom of one of those two instead.
+		return !ran(ProbeInternet) || encryptedDNSBlocked(res)
+	case ProbeTLS, ProbeHTTP, ProbeHTTPS, ProbeSSH, ProbeSMTP, ProbePMTU:
+		return !ran(ProbeTargetTCP) || functional(res[ProbeTargetTCP].Status)
+	}
+	return true
 }
 
 // Finalize applies the cross-probe passes that only make sense once every probe

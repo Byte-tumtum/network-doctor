@@ -5,6 +5,8 @@ package diagnostic
 
 import (
 	"crypto/x509"
+	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -431,4 +433,147 @@ func TestClockSkewRewritesRealTLSHint(t *testing.T) {
 			}
 		})
 	}
+}
+
+// genericOrder is the no-target probe order the Checks panel renders, which is
+// the run the offline case is reported against.
+var genericOrder = []ProbeID{ProbeIface, ProbeInternet, ProbeQUIC, ProbeProxy, ProbeDNS, ProbeDNSPublic, ProbeDNSEncrypted}
+
+// TestCollateralNamesOnlyExplainedFailures is the causal half of the Checks
+// panel: which failed rows the diagnosis has already accounted for as
+// downstream of another failure, and which ones it has not. The negative rows
+// matter as much as the positive ones, because a failure the diagnosis really
+// does blame must never be dimmed for merely following another one down the
+// list.
+func TestCollateralNamesOnlyExplainedFailures(t *testing.T) {
+	pass := ProbeResult{Status: StatusPass}
+	fail := ProbeResult{Status: StatusFail}
+	na := ProbeResult{Status: StatusNA}
+	resolved := ProbeResult{Status: StatusPass, Addrs: []net.IP{net.ParseIP("93.184.216.34")}}
+
+	cases := []struct {
+		name   string
+		target *Target
+		order  []ProbeID
+		res    map[ProbeID]ProbeResult
+		want   []ProbeID
+	}{
+		{
+			name:  "offline: egress is the failure, the rest is what it looks like",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: fail, ProbeQUIC: fail, ProbeProxy: na,
+				ProbeDNS: fail, ProbeDNSPublic: na, ProbeDNSEncrypted: fail,
+			},
+			want: []ProbeID{ProbeQUIC, ProbeDNS, ProbeDNSEncrypted},
+		},
+		{
+			name:  "DNS alone, with egress working",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: pass, ProbeQUIC: pass, ProbeProxy: na,
+				ProbeDNS: fail, ProbeDNSPublic: na, ProbeDNSEncrypted: pass,
+			},
+		},
+		{
+			name:  "encrypted DNS blocked while plain DNS resolves",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: pass, ProbeQUIC: pass, ProbeProxy: na,
+				ProbeDNS: resolved, ProbeDNSPublic: na, ProbeDNSEncrypted: fail,
+			},
+		},
+		{
+			name:  "QUIC blocked while TCP carries traffic",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: pass, ProbeQUIC: fail, ProbeProxy: na,
+				ProbeDNS: pass, ProbeDNSPublic: na, ProbeDNSEncrypted: pass,
+			},
+		},
+		{
+			name:  "three failures the working path leaves independently actionable",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: pass, ProbeQUIC: fail, ProbeProxy: fail,
+				ProbeDNS: resolved, ProbeDNSPublic: pass, ProbeDNSEncrypted: fail,
+			},
+		},
+		{
+			name:  "proxy-only: the resolver is its own problem, the direct rows are not",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: {Status: StatusWarn, downgraded: true},
+				ProbeQUIC: fail, ProbeProxy: pass,
+				ProbeDNS: fail, ProbeDNSPublic: na, ProbeDNSEncrypted: fail,
+			},
+			want: []ProbeID{ProbeDNSEncrypted},
+		},
+		{
+			name:   "target service failure with every rung under it working",
+			target: mustTarget(t, "github.com"),
+			order:  targetOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: pass, ProbeDNS: resolved,
+				ProbeTargetTCP: pass, ProbeTLS: fail, ProbeHTTP: fail, ProbeHTTPS: fail,
+			},
+		},
+		{
+			name:   "offline with a target: the verdict names DNS, so DNS keeps its red",
+			target: mustTarget(t, "github.com"),
+			order:  genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: fail, ProbeQUIC: fail, ProbeProxy: na,
+				ProbeDNS: fail, ProbeDNSPublic: na, ProbeDNSEncrypted: fail,
+			},
+			want: []ProbeID{ProbeQUIC, ProbeDNSEncrypted},
+		},
+		{
+			name:  "a run with no egress row has nothing to call a failure a consequence of",
+			order: []ProbeID{ProbeIface, ProbeQUIC, ProbeDNS},
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeQUIC: fail, ProbeDNS: fail,
+			},
+		},
+		{
+			name:  "unfinished run",
+			order: genericOrder,
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: fail, ProbeQUIC: fail,
+			},
+		},
+		{name: "no checks at all"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Collateral(c.target, c.order, c.res)
+			for _, id := range c.want {
+				if !got[id] {
+					t.Errorf("%s is not marked a consequence; got %v", id, sortedIDs(got))
+				}
+			}
+			for id := range got {
+				if !slices.Contains(c.want, id) {
+					t.Errorf("%s marked a consequence, want only %v", id, c.want)
+				}
+			}
+			// Whatever the presentation decided, the evidence is untouched.
+			for id, r := range c.res {
+				if got[id] && r.Status != StatusFail {
+					t.Errorf("%s is %s, so it cannot be a failed row's consequence", id, r.Status)
+				}
+			}
+		})
+	}
+}
+
+// sortedIDs is a stable rendering of the collateral set for failure messages.
+func sortedIDs(set map[ProbeID]bool) []ProbeID {
+	ids := make([]ProbeID, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
 }

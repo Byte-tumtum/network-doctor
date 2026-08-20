@@ -175,6 +175,29 @@ func (m model) View() string {
 // rendered as a frame with nothing in it.
 const bodyMinRows = 4
 
+// consequenceLabel marks a failed row the diagnosis has already explained as
+// downstream of the failure it blames. It is spelled out rather than left to
+// the dimmed glyph, because colour alone is not a distinction every reader or
+// every terminal can see.
+const consequenceLabel = "consequence"
+
+// detailsMinWidth is the narrowest the Details panel is allowed to be beside
+// the Checks panel. Below it the evidence lines wrap into unreadable stubs.
+const detailsMinWidth = 36
+
+// labelRight sets label against the right edge of a row in a panel width
+// columns wide, the way the network map pairs its title with the shared
+// domain. A row too long to share its line keeps the label on a second one,
+// still at the right edge, rather than dropping it or cutting the probe name.
+// The pair stays one row as far as the panel is concerned, so it scrolls as
+// one and the block's budget prices both of its display rows.
+func labelRight(row, label string, width int) string {
+	if gap := width - lipgloss.Width(row) - lipgloss.Width(label); gap > 0 {
+		return row + strings.Repeat(" ", gap) + label
+	}
+	return row + "\n" + lipgloss.NewStyle().Width(width).Align(lipgloss.Right).Render(label)
+}
+
 // targetHP is the target endpoint as host:port; JoinHostPort brackets IPv6
 // literals so the rendered endpoint reads back as the same target.
 func (m model) targetHP() string {
@@ -214,42 +237,76 @@ func (m model) bodyView(deferred bool, rows int) string {
 	// The cursor row is always in shown, so the windowed panel still scrolls to
 	// the row the Details panel is describing.
 	sel := max(slices.Index(shown, m.selected), 0)
-	var left strings.Builder
-	left.WriteString(panelTitleStyle.Render("Checks") + "\n")
+	pad := panelStyle.GetHorizontalPadding()
+	// Which of the failed rows the diagnosis has already explained as
+	// downstream of another one. It is read from the current results on every
+	// render, so a watch pass that repairs the path takes the labels with it.
+	collateral := diagnostic.Collateral(m.target, m.probeOrder(), m.results)
+
+	// The rows are built before the panel has a width, because a labelled row
+	// is what decides that width, so the label is placed in a second pass.
+	label := faintStyle.Render(consequenceLabel)
+	checks := make([]string, 0, len(shown))
+	labelled := make([]bool, 0, len(shown))
+	want := 0
 	for _, i := range shown {
 		probe := m.probes[i]
 		if deferred {
-			left.WriteString(faintStyle.Render("  · "+probe.Name) + "\n")
+			checks = append(checks, faintStyle.Render("  · "+probe.Name))
+			labelled = append(labelled, false)
 			continue
 		}
 		marker, name := "  ", probe.Name
 		if i == m.selected {
 			marker, name = selStyle.Render("› "), selStyle.Render(name)
 		}
-		left.WriteString(marker + m.glyph(probe.ID) + " " + name)
-		if m.watch && len(m.runHistory[probe.ID]) > 0 {
-			left.WriteString("  " + m.statusSparkline(probe.ID, 8))
+		// A collateral failure keeps its glyph and its Fail status; only the
+		// red comes off it, so the row still carrying red is the one the
+		// reader has something to do about.
+		glyph := m.glyph(probe.ID)
+		if collateral[probe.ID] {
+			glyph = faintStyle.Render(probeGlyph(diagnostic.StatusFail))
 		}
-		left.WriteString("\n")
+		row := marker + glyph + " " + name
+		if m.watch && len(m.runHistory[probe.ID]) > 0 {
+			row += "  " + m.statusSparkline(probe.ID, 8)
+		}
+		checks = append(checks, row)
+		labelled = append(labelled, collateral[probe.ID])
+		if collateral[probe.ID] {
+			want = max(want, lipgloss.Width(row)+1+lipgloss.Width(label)+pad)
+		}
 	}
-	if hiddenPass+hiddenNA > 0 {
-		left.WriteString(m.collapsedChecksRow(hiddenPass, hiddenNA) + "\n")
+	// checkPanel is the Checks panel's rows once the panel width is settled:
+	// the labels are placed against that width, so they land at its right edge.
+	checkPanel := func(width int) []string {
+		out := make([]string, 0, len(checks)+2)
+		out = append(out, panelTitleStyle.Render("Checks"))
+		for j, row := range checks {
+			if labelled[j] {
+				row = labelRight(row, label, width-pad)
+			}
+			out = append(out, row)
+		}
+		if hiddenPass+hiddenNA > 0 {
+			out = append(out, m.collapsedChecksRow(hiddenPass, hiddenNA))
+		}
+		return out
 	}
 
-	leftRows := strings.Split(strings.TrimRight(left.String(), "\n"), "\n")
 	rightRows := m.detailRows(deferred)
 	frame := panelStyle.GetVerticalFrameSize()
-	pad := panelStyle.GetHorizontalPadding()
 
 	if m.width < 80 { // too narrow for two columns, so stack
 		w := max(m.width-2, 24)
+		leftRows := checkPanel(w)
 		stack := func(left, right []string) string {
-			checks := panelStyle.Width(w).Render(strings.Join(left, "\n"))
+			panel := panelStyle.Width(w).Render(strings.Join(left, "\n"))
 			if len(right) == 0 {
-				return checks
+				return panel
 			}
 			return lipgloss.JoinVertical(lipgloss.Left,
-				checks, panelStyle.Width(w).Render(strings.Join(right, "\n")))
+				panel, panelStyle.Width(w).Render(strings.Join(right, "\n")))
 		}
 		if rows <= 0 {
 			return stack(leftRows, rightRows)
@@ -270,16 +327,25 @@ func (m model) bodyView(deferred bool, rows int) string {
 		return fitBlock(stack(windowRows(leftRows, sel, rows-frame, w-pad), nil), rows)
 	}
 	leftW := 38
-	rightW := max(m.width-leftW-5, 36)
+	if want > leftW {
+		// A label pushes the widest probe row past the panel's usual width,
+		// and a row that wraps costs the block a display row its budget never
+		// saw coming. Take the columns those rows ask for, but never out of
+		// the width the Details panel is guaranteed beside them: a terminal
+		// with nothing to spare takes the wrap instead.
+		leftW = min(want, max(m.width-detailsMinWidth-5, leftW))
+	}
+	leftRows := checkPanel(leftW)
+	rightW := max(m.width-leftW-5, detailsMinWidth)
 	if rows > 0 {
 		leftRows = windowRows(leftRows, sel, rows-frame, leftW-pad)
 		rightRows = panelBody(fitRows(rightRows, rows-frame, rightW-pad))
 	}
-	checks := panelStyle.Width(leftW).Render(strings.Join(leftRows, "\n"))
+	left := panelStyle.Width(leftW).Render(strings.Join(leftRows, "\n"))
 	if len(rightRows) == 0 {
-		return fitBlock(checks, rows)
+		return fitBlock(left, rows)
 	}
-	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top, checks, " ",
+	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top, left, " ",
 		panelStyle.Width(rightW).Render(strings.Join(rightRows, "\n"))), rows)
 }
 
