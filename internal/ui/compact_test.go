@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
@@ -39,10 +41,13 @@ func hasRow(v, name string) bool {
 	return slices.ContainsFunc(checksRows(v), func(row string) bool { return strings.Contains(row, name) })
 }
 
-// collapsedRow is the Checks panel's summary line, "" when it drew none.
+// collapsedRow is the Checks panel's summary line, "" when it drew none. It
+// matches on the expand hint rather than on the wording, because the summary
+// names passing and not-applicable rows apart and a wording match would find
+// only one of those phrasings.
 func collapsedRow(v string) string {
 	for _, row := range checksRows(v) {
-		if strings.Contains(row, "other check") {
+		if strings.Contains(row, "expand)") {
 			return row
 		}
 	}
@@ -523,4 +528,221 @@ func probeName(t *testing.T, m model, id diagnostic.ProbeID) string {
 	}
 	t.Fatalf("probe %q is not in this run", id)
 	return ""
+}
+
+// naProbeDetails are the not-applicable rows a real run produces on a machine
+// with no proxy set, no Wi-Fi radio, and no reachable public resolver. The
+// details are the strings the probes themselves write, so a test that finds
+// one has found the probe's own evidence and not a fixture's invention.
+var naProbeDetails = map[diagnostic.ProbeID]string{
+	diagnostic.ProbeProxy:     "no proxy environment variables set",
+	diagnostic.ProbeSSID:      "Wi-Fi network unavailable",
+	diagnostic.ProbeDNSPublic: "public DNS unavailable via 8.8.8.8: timeout",
+}
+
+// naModel is a finished run carrying those three not-applicable rows. failID
+// fails, everything else passes.
+func naModel(t *testing.T, failID diagnostic.ProbeID) model {
+	t.Helper()
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	doneResults(&m, failID)
+	for id, detail := range naProbeDetails {
+		r, ok := m.results[id]
+		if !ok {
+			t.Fatalf("probe %s is not in this run, so the fixture cannot make it N/A", id)
+		}
+		r.Status, r.Detail = diagnostic.StatusNA, detail
+		m.results[id] = r
+	}
+	return m
+}
+
+// naRowsOffScreen counts the not-applicable probes with no row of their own.
+func naRowsOffScreen(m model, v string) int {
+	n := 0
+	for _, probe := range m.probes {
+		if m.results[probe.ID].Status == diagnostic.StatusNA && !hasRow(v, probe.Name) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestCompactViewHidesNotApplicableRows: "not applicable" is not a call to
+// action, so those rows do not spend a line of the default screen saying so.
+// The row the reader came for is still there.
+func TestCompactViewHidesNotApplicableRows(t *testing.T) {
+	m, v := renderAt(t, naModel(t, diagnostic.ProbeDNS))
+	for id, detail := range naProbeDetails {
+		name := probeName(t, m, id)
+		if hasRow(v, name) {
+			t.Errorf("N/A row %q is still in the Checks view:\n%s", name, v)
+		}
+		if strings.Contains(v, detail) {
+			t.Errorf("N/A evidence %q leaked out of Details:\n%s", detail, v)
+		}
+	}
+	if !hasRow(v, probeName(t, m, diagnostic.ProbeDNS)) {
+		t.Errorf("the failing row was hidden along with the N/A ones:\n%s", v)
+	}
+}
+
+// TestCollapsedRowCountsPassedAndNAApart pins the summary to the rows the
+// mechanism actually hid, and keeps the two kinds named apart: "passed" is a
+// claim about the network, "N/A" is a claim about the question.
+func TestCollapsedRowCountsPassedAndNAApart(t *testing.T) {
+	t.Run("mixed", func(t *testing.T) {
+		m, v := renderAt(t, naModel(t, diagnostic.ProbeDNS))
+		pass, na := passingRowsOffScreen(m, v), naRowsOffScreen(m, v)
+		if pass == 0 || na == 0 {
+			t.Fatalf("fixture hid %d passing and %d N/A rows, so it cannot tell the wording apart", pass, na)
+		}
+		want := fmt.Sprintf("%d passed, %d N/A", pass, na)
+		if summary := collapsedRow(v); !strings.Contains(summary, want) {
+			t.Errorf("summary = %q, want %q:\n%s", summary, want, v)
+		}
+	})
+	t.Run("only N/A hidden", func(t *testing.T) {
+		m := naModel(t, "")
+		// Everything that is not N/A fails, so no passing row is left to hide.
+		for _, probe := range m.probes {
+			if r := m.results[probe.ID]; r.Status == diagnostic.StatusPass {
+				r.Status = diagnostic.StatusFail
+				m.results[probe.ID] = r
+			}
+		}
+		m, v := renderAt(t, m)
+		na := naRowsOffScreen(m, v)
+		if na == 0 {
+			t.Fatalf("no N/A row was hidden:\n%s", v)
+		}
+		want := fmt.Sprintf("%d other checks N/A", na)
+		if summary := collapsedRow(v); !strings.Contains(summary, want) {
+			t.Errorf("summary = %q, want %q:\n%s", summary, want, v)
+		}
+	})
+}
+
+// TestCollapsedRowFitsThePanel: the summary sits in a 36-column panel, and a
+// row that wraps costs a second display row and desynchronises the two panels.
+func TestCollapsedRowFitsThePanel(t *testing.T) {
+	for _, tc := range []struct{ pass, na int }{{13, 0}, {0, 13}, {13, 13}, {1, 1}} {
+		row := ansi.Strip(healthyModel(t).collapsedChecksRow(tc.pass, tc.na))
+		if w := lipgloss.Width(row); w > 36 {
+			t.Errorf("collapsedChecksRow(%d, %d) = %q, %d columns wide, want at most 36", tc.pass, tc.na, row, w)
+		}
+	}
+}
+
+// TestNotApplicableRowsStayReachableWithTheCursor is the discoverability
+// contract. The cursor walks every probe, hidden or not, and the row it lands
+// on comes back with the Details panel that carries the probe's evidence.
+func TestNotApplicableRowsStayReachableWithTheCursor(t *testing.T) {
+	m := naModel(t, diagnostic.ProbeDNS)
+	m, _ = renderAt(t, m)
+	for id, detail := range naProbeDetails {
+		want := probeIndex(t, m, id)
+		sel := m
+		for sel.selected != want {
+			sel = press(t, sel, "j")
+		}
+		v := sel.View()
+		name := probeName(t, m, id)
+		if !hasRow(v, name) {
+			t.Errorf("cursor is on %q but the Checks view does not offer the row:\n%s", name, v)
+		}
+		if !strings.Contains(v, "Details: "+name) {
+			t.Errorf("Details is not describing the selected N/A row %q:\n%s", name, v)
+		}
+		if !strings.Contains(v, detail) {
+			t.Errorf("Details lost the N/A evidence %q:\n%s", detail, v)
+		}
+	}
+}
+
+// TestExpandRevealsNotApplicableRows: the other way back, the same one the
+// hidden passing rows use.
+func TestExpandRevealsNotApplicableRows(t *testing.T) {
+	m, v := renderAt(t, naModel(t, diagnostic.ProbeDNS))
+	if collapsedRow(v) == "" {
+		t.Fatalf("nothing was hidden, so there is nothing for expand to reveal:\n%s", v)
+	}
+	_, ev := renderAt(t, press(t, m, "a"))
+	for id := range naProbeDetails {
+		if name := probeName(t, m, id); !hasRow(ev, name) {
+			t.Errorf("expand did not reveal the N/A row %q:\n%s", name, ev)
+		}
+	}
+}
+
+// TestVisibleRowOrderAcrossMixedStatuses: hiding rows must not reorder the
+// ones that stay, and must keep every Warn, Fail and Skip.
+func TestVisibleRowOrderAcrossMixedStatuses(t *testing.T) {
+	m := naModel(t, diagnostic.ProbeTLS)
+	for id, status := range map[diagnostic.ProbeID]diagnostic.Status{
+		diagnostic.ProbePMTU: diagnostic.StatusWarn,
+		diagnostic.ProbeHTTP: diagnostic.StatusSkip,
+	} {
+		r := m.results[id]
+		r.Status = status
+		m.results[id] = r
+	}
+	m, v := renderAt(t, m)
+
+	var want []string
+	for i, probe := range m.probes {
+		switch status := m.results[probe.ID].Status; {
+		case i == m.selected || i == m.focusRow():
+			want = append(want, probe.Name)
+		case status == diagnostic.StatusPass || status == diagnostic.StatusNA:
+		default:
+			want = append(want, probe.Name)
+		}
+	}
+	var got []string
+	for _, row := range checksRows(v) {
+		for _, probe := range m.probes {
+			if strings.Contains(row, probe.Name) {
+				got = append(got, probe.Name)
+				break
+			}
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("visible row order = %v, want %v:\n%s", got, want, v)
+	}
+}
+
+// TestCursorWalkKeepsDetailsAligned: hiding rows must not decouple the cursor
+// from the panel that describes it. Every step down names its own probe.
+func TestCursorWalkKeepsDetailsAligned(t *testing.T) {
+	m, _ := renderAt(t, naModel(t, diagnostic.ProbeDNS))
+	for i := range m.probes {
+		if m.selected != i {
+			t.Fatalf("cursor is on row %d, want %d", m.selected, i)
+		}
+		v := m.View()
+		name := m.probes[i].Name
+		if !strings.Contains(v, "Details: "+name) {
+			t.Fatalf("row %d (%q) has the wrong Details panel:\n%s", i, name, v)
+		}
+		if !hasRow(v, name) {
+			t.Fatalf("the cursor row %q is not in the Checks view:\n%s", name, v)
+		}
+		if i+1 < len(m.probes) {
+			m = press(t, m, "j")
+		}
+	}
+}
+
+// probeIndex is a probe's position in the run, which is also its cursor row.
+func probeIndex(t *testing.T, m model, id diagnostic.ProbeID) int {
+	t.Helper()
+	for i, probe := range m.probes {
+		if probe.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("probe %s is not in this run", id)
+	return -1
 }

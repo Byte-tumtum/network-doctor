@@ -1,0 +1,228 @@
+// The split between the two panels: Checks answers what needs attention,
+// Details answers what evidence produced that answer. These tests fail if
+// per-address attempts, source and interface identity, or the retained watch
+// history drift back into the Checks panel.
+
+package ui
+
+import (
+	"errors"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
+)
+
+// detailsRows is the Details panel's rows as rendered. The panels are drawn
+// side by side, so the right column is the text between the third and fourth
+// border characters of each line.
+func detailsRows(v string) []string {
+	var rows []string
+	for _, line := range strings.Split(v, "\n") {
+		parts := strings.Split(line, "│")
+		if len(parts) < 4 {
+			continue
+		}
+		if row := strings.TrimSpace(parts[3]); row != "" {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// containsRow reports whether any of rows carries want.
+func containsRow(rows []string, want string) bool {
+	for _, row := range rows {
+		if strings.Contains(row, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// glyphCount is how many status glyphs a rendered row carries. A probe row
+// carries one for its own status, plus one per tick of history beside it.
+func glyphCount(row string) int {
+	n := 0
+	for _, r := range row {
+		if strings.ContainsRune("✓!✗⊘–", r) {
+			n++
+		}
+	}
+	return n
+}
+
+// rowFor is the Checks panel's row for one probe, "" when it drew none.
+func rowFor(v, name string) string {
+	for _, row := range checksRows(v) {
+		if strings.Contains(row, name) {
+			return row
+		}
+	}
+	return ""
+}
+
+// evidenceModel is a finished run whose failing DNS row carries every kind of
+// evidence a probe can attach, with the cursor on it so Details describes it.
+func evidenceModel(t *testing.T) model {
+	t.Helper()
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	doneResults(&m, diagnostic.ProbeDNS)
+	r := m.results[diagnostic.ProbeDNS]
+	r.Detail = "no A or AAAA record"
+	r.Source, r.Iface = net.ParseIP("192.0.2.7"), "eth0"
+	r.Attempts = []diagnostic.Attempt{
+		{IP: net.ParseIP("198.51.100.9"), Dur: 12 * time.Millisecond},
+		{IP: net.ParseIP("198.51.100.10"), Dur: 34 * time.Millisecond, Err: errors.New("connection refused")},
+	}
+	m.results[diagnostic.ProbeDNS] = r
+	m.selected = probeIndex(t, m, diagnostic.ProbeDNS)
+	return m
+}
+
+// TestSourceIdentityIsDetailsOnly: which local address and interface a probe
+// went out of is evidence for the result, not the result. It belongs beside
+// the probe in Details, never on the Checks row.
+func TestSourceIdentityIsDetailsOnly(t *testing.T) {
+	_, v := renderAt(t, evidenceModel(t))
+	for _, row := range checksRows(v) {
+		if strings.Contains(row, "src ") || strings.Contains(row, "192.0.2.7") || strings.Contains(row, "eth0") {
+			t.Errorf("source evidence is on a Checks row: %q\n%s", row, v)
+		}
+	}
+	if !containsRow(detailsRows(v), "src 192.0.2.7 eth0") {
+		t.Errorf("Details lost the source and interface identity:\n%s", v)
+	}
+}
+
+// TestPerAddressAttemptsAreDetailsOnly: the attempt list is the longest piece
+// of evidence a probe produces and the least useful at a glance.
+func TestPerAddressAttemptsAreDetailsOnly(t *testing.T) {
+	_, v := renderAt(t, evidenceModel(t))
+	for _, row := range checksRows(v) {
+		if strings.Contains(row, "198.51.100.") || strings.Contains(row, "connection refused") {
+			t.Errorf("an attempt leaked into a Checks row: %q\n%s", row, v)
+		}
+	}
+	details := detailsRows(v)
+	for _, want := range []string{"198.51.100.9 12ms ok", "198.51.100.10 34ms connection refused"} {
+		if !containsRow(details, want) {
+			t.Errorf("Details lost the attempt %q:\n%s", want, v)
+		}
+	}
+}
+
+// watchHistoryModel is a finished watch pass with runs recorded ticks long for
+// the failing DNS row, which is also the row the cursor is on.
+func watchHistoryModel(t *testing.T, ticks int) model {
+	t.Helper()
+	m := evidenceModel(t)
+	m.watch = true
+	history := make([]diagnostic.Status, 0, ticks)
+	for i := range ticks {
+		status := diagnostic.StatusPass
+		if i%3 == 0 {
+			status = diagnostic.StatusFail
+		}
+		history = append(history, status)
+	}
+	m.runHistory[diagnostic.ProbeDNS] = history
+	return m
+}
+
+// TestChecksHaveNoHistoryStripOutsideWatch: a single run has no pass-by-pass
+// story to tell, so the Checks row spends no columns implying it has one.
+func TestChecksHaveNoHistoryStripOutsideWatch(t *testing.T) {
+	m := watchHistoryModel(t, 12)
+	m.watch = false
+	m, v := renderAt(t, m)
+	row := rowFor(v, probeName(t, m, diagnostic.ProbeDNS))
+	if row == "" {
+		t.Fatalf("the failing row is missing:\n%s", v)
+	}
+	if n := glyphCount(row); n != 1 {
+		t.Errorf("row = %q carries %d status glyphs, want only its own", row, n)
+	}
+}
+
+// TestWatchChecksShowTheCompactEightTickStrip: watch mode earns the strip, but
+// only the last eight passes of it. The full retained history is Details' job.
+func TestWatchChecksShowTheCompactEightTickStrip(t *testing.T) {
+	for _, ticks := range []int{1, 8, 12, watchRuns} {
+		m, v := renderAt(t, watchHistoryModel(t, ticks))
+		row := rowFor(v, probeName(t, m, diagnostic.ProbeDNS))
+		if row == "" {
+			t.Fatalf("the failing row is missing at %d ticks:\n%s", ticks, v)
+		}
+		want := min(ticks, 8) + 1 // the strip, plus the row's own status glyph
+		if n := glyphCount(row); n != want {
+			t.Errorf("at %d ticks the row = %q carries %d glyphs, want %d", ticks, row, n, want)
+		}
+	}
+}
+
+// TestDetailsKeepsTheFullRetainedHistory: Details is the evidence surface, so
+// it shows every pass the model still holds, not the compact eight.
+func TestDetailsKeepsTheFullRetainedHistory(t *testing.T) {
+	const ticks = 12
+	m, v := renderAt(t, watchHistoryModel(t, ticks))
+	var history string
+	for _, row := range detailsRows(v) {
+		if strings.Contains(row, "History:") {
+			history = row
+		}
+	}
+	if history == "" {
+		t.Fatalf("Details drew no history line:\n%s", v)
+	}
+	if n := glyphCount(history); n != ticks {
+		t.Errorf("Details history = %q carries %d ticks, want all %d", history, n, ticks)
+	}
+	failed := 0
+	for _, status := range m.runHistory[diagnostic.ProbeDNS] {
+		if status == diagnostic.StatusFail {
+			failed++
+		}
+	}
+	if want := "failed 4 of 12 runs"; !strings.Contains(history, want) || failed != 4 {
+		t.Errorf("Details history = %q, want %q over the full retained run count", history, want)
+	}
+}
+
+// TestWatchStripFollowsTheRowThroughAChange: the strip is presentation, so a
+// row that flipped keeps every recorded state, including the earlier failure a
+// currently passing row is hiding.
+func TestWatchStripFollowsTheRowThroughAChange(t *testing.T) {
+	m := evidenceModel(t)
+	m.watch = true
+	r := m.results[diagnostic.ProbeDNS]
+	r.Status = diagnostic.StatusPass
+	m.results[diagnostic.ProbeDNS] = r
+	m.runHistory[diagnostic.ProbeDNS] = []diagnostic.Status{diagnostic.StatusFail, diagnostic.StatusPass}
+	m, v := renderAt(t, m)
+
+	row := rowFor(v, probeName(t, m, diagnostic.ProbeDNS))
+	if n := glyphCount(row); n != 3 {
+		t.Errorf("row = %q carries %d glyphs, want the status plus both recorded passes", row, n)
+	}
+	if !containsRow(detailsRows(v), "failed 1 of 2 runs") {
+		t.Errorf("Details lost the earlier failure of a now-passing row:\n%s", v)
+	}
+}
+
+// TestWatchStripIsAbsentBeforeTheFirstRecordedPass: the first pass has nothing
+// to draw, and an empty strip is two columns of nothing.
+func TestWatchStripIsAbsentBeforeTheFirstRecordedPass(t *testing.T) {
+	m := evidenceModel(t)
+	m.watch = true
+	m, v := renderAt(t, m)
+	row := rowFor(v, probeName(t, m, diagnostic.ProbeDNS))
+	if n := glyphCount(row); n != 1 {
+		t.Errorf("row = %q carries %d glyphs before any pass was recorded, want only its own", row, n)
+	}
+	if containsRow(detailsRows(v), "History:") {
+		t.Errorf("Details drew a history line with no history:\n%s", v)
+	}
+}

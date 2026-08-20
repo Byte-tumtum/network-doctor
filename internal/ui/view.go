@@ -207,7 +207,7 @@ func (m model) headerView() string {
 // list rather than being clipped from the bottom, because clipping a bordered
 // panel eats the border that closes it.
 func (m model) bodyView(deferred bool, rows int) string {
-	shown, hidden := m.compactRows()
+	shown, hiddenPass, hiddenNA := m.compactRows()
 	// The cursor row is always in shown, so the windowed panel still scrolls to
 	// the row the Details panel is describing.
 	sel := max(slices.Index(shown, m.selected), 0)
@@ -229,8 +229,8 @@ func (m model) bodyView(deferred bool, rows int) string {
 		}
 		left.WriteString("\n")
 	}
-	if hidden > 0 {
-		left.WriteString(m.collapsedChecksRow(hidden) + "\n")
+	if hiddenPass+hiddenNA > 0 {
+		left.WriteString(m.collapsedChecksRow(hiddenPass, hiddenNA) + "\n")
 	}
 
 	var right strings.Builder
@@ -745,9 +745,9 @@ func (m model) helpView(deferred bool) string {
 		addAction(ctxList, actNetworkMap)
 		// The way back is only on the help bar: expanding removes the summary
 		// line that advertised the key.
-		if _, hidden := m.compactRows(); m.expanded && m.allDone() {
+		if _, hiddenPass, hiddenNA := m.compactRows(); m.expanded && m.allDone() {
 			add(m.keys.label(ctxList, actExpand), "collapse")
-		} else if hidden > 0 || m.toolsCollapsed() {
+		} else if hiddenPass+hiddenNA > 0 || m.toolsCollapsed() {
 			addAction(ctxList, actExpand)
 		}
 	}
@@ -936,54 +936,80 @@ func (m model) focusRow() int {
 }
 
 // compactRows is the Checks panel's default row set: the probe indices worth
-// reading, and how many passing rows that left behind. A finished run keeps
-// every Fail and Warn, the row the diagnosis blames (a path MTU black hole
-// rests on a Warn, so severity alone would drop the one row the verdict sends
-// the reader to), the cursor row (the Details panel is showing it, and a panel
-// describing a row the list does not offer is worse than the row it costs),
-// and anything that neither passed nor ran. Everything else is one summary
-// line. Nothing is hidden while the run is still going, while the reader has
-// expanded the list, or when the expand action has no key to reach it by.
+// reading, and how many passing and not-applicable rows that left behind. A
+// finished run keeps every Fail, Warn and Skip, the row the diagnosis blames
+// (a path MTU black hole rests on a Warn, so severity alone would drop the one
+// row the verdict sends the reader to), and the cursor row (the Details panel
+// is showing it, and a panel describing a row the list does not offer is worse
+// than the row it costs). Everything else is one summary line. Nothing is
+// hidden while the run is still going, while the reader has expanded the list,
+// or when the expand action has no key to reach it by.
+//
+// N/A rows collapse alongside the passing ones: an unset proxy or an absent
+// Wi-Fi radio is not something to act on, and the Checks panel answers what
+// needs attention. Their evidence is not lost, because the cursor still walks
+// every probe and a hidden row the cursor lands on comes back with the Details
+// panel that describes it.
 //
 // The blamed row comes from focusRow, so the list and the banner cannot
 // disagree about which row matters. Every row FocusProbe can name today is
 // also a Warn, so that clause currently keeps nothing the severity test would
 // have dropped; it stays because the row worth reading is the diagnosis's
 // call, not a severity comparison made over here.
-func (m model) compactRows() (shown []int, hidden int) {
+func (m model) compactRows() (shown []int, hiddenPass, hiddenNA int) {
 	all := make([]int, len(m.probes))
 	for i := range m.probes {
 		all[i] = i
 	}
 	if m.expanded || !m.allDone() || !m.keys.bound(ctxList, actExpand) {
-		return all, 0
+		return all, 0, 0
 	}
 	blamed := m.focusRow()
 	for i, probe := range m.probes {
-		if i == blamed || i == m.selected || m.results[probe.ID].Status != diagnostic.StatusPass {
+		if i == blamed || i == m.selected {
 			shown = append(shown, i)
 			continue
 		}
-		hidden++
+		switch m.results[probe.ID].Status {
+		case diagnostic.StatusPass:
+			hiddenPass++
+		case diagnostic.StatusNA:
+			hiddenNA++
+		default:
+			shown = append(shown, i)
+		}
 	}
-	return shown, hidden
+	return shown, hiddenPass, hiddenNA
 }
 
-// collapsedChecksRow is the one line the hidden passing rows are worth. It
-// counts what compactRows actually hid, never how many rows passed: the
-// blamed row and the cursor row pass too and are still on screen.
+// collapsedChecksRow is the one line the hidden passing and not-applicable
+// rows are worth. It counts what compactRows actually hid, never how many rows
+// passed: the blamed row and the cursor row pass too and are still on screen.
+// The two counts are named apart, because "passed" is a claim about the
+// network and "N/A" is a claim about the question having no answer here.
 //
 // It sits in the marker column rather than indented with the probe rows,
 // which is also what keeps it inside the 36 columns the Checks panel has:
 // a row that wraps costs the panel a second display row and desynchronises
-// the two panels' heights.
-func (m model) collapsedChecksRow(hidden int) string {
-	checks := "checks"
-	if hidden == 1 {
-		checks = "check"
+// the two panels' heights. That budget is why the mixed wording is the terse
+// one and why "N/A" is not spelled out.
+func (m model) collapsedChecksRow(hiddenPass, hiddenNA int) string {
+	checks := func(n int) string {
+		if n == 1 {
+			return "check"
+		}
+		return "checks"
 	}
-	return faintStyle.Render(fmt.Sprintf("· %d other %s passed (%s expand)",
-		hidden, checks, m.keys.label(ctxList, actExpand)))
+	var summary string
+	switch {
+	case hiddenNA == 0:
+		summary = fmt.Sprintf("%d other %s passed", hiddenPass, checks(hiddenPass))
+	case hiddenPass == 0:
+		summary = fmt.Sprintf("%d other %s N/A", hiddenNA, checks(hiddenNA))
+	default:
+		summary = fmt.Sprintf("%d passed, %d N/A", hiddenPass, hiddenNA)
+	}
+	return faintStyle.Render(fmt.Sprintf("· %s (%s expand)", summary, m.keys.label(ctxList, actExpand)))
 }
 
 // toolsCollapsed reports whether the "Dig deeper" chips have to justify their
