@@ -201,11 +201,14 @@ func (m model) headerView() string {
 	return faintStyle.Render(strings.Join(parts, "  ·  "))
 }
 
-// bodyView renders the Checks and Details panels side by side, stacking them
-// vertically when the terminal is too narrow for two columns. rows caps the
-// block's display height; 0 means no cap. A capped block scrolls its probe
-// list rather than being clipped from the bottom, because clipping a bordered
-// panel eats the border that closes it.
+// bodyView renders the Checks panel and, beside it, the Details panel when
+// there is anything to put in one. They stack vertically when the terminal is
+// too narrow for two columns. rows caps the block's display height; 0 means no
+// cap. A capped block scrolls its probe list rather than being clipped from the
+// bottom, because clipping a bordered panel eats the border that closes it.
+//
+// Neither panel is padded out to the other's height: each is as tall as its own
+// content, and the block is as tall as the taller of the two.
 func (m model) bodyView(deferred bool, rows int) string {
 	shown, hiddenPass, hiddenNA := m.compactRows()
 	// The cursor row is always in shown, so the windowed panel still scrolls to
@@ -233,41 +236,8 @@ func (m model) bodyView(deferred bool, rows int) string {
 		left.WriteString(m.collapsedChecksRow(hiddenPass, hiddenNA) + "\n")
 	}
 
-	var right strings.Builder
-	if deferred {
-		right.WriteString(panelTitleStyle.Render("Details") + "\n")
-		right.WriteString(faintStyle.Render("Nothing to show yet: the checks haven't run.") + "\n")
-	} else {
-		probe := m.probes[m.selected]
-		right.WriteString(panelTitleStyle.Render("Details: "+probe.Name) + "\n")
-		if r, ok := m.results[probe.ID]; ok {
-			right.WriteString(statusStyles[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
-			if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
-				right.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
-			}
-			if r.Portal != nil && r.Portal.RedirectURL != "" {
-				right.WriteString(faintStyle.Render("portal "+r.Portal.RedirectURL) + "\n")
-			}
-			if r.Source != nil {
-				right.WriteString(faintStyle.Render("src "+r.Source.String()+" "+r.Iface) + "\n")
-			}
-			for _, a := range r.Attempts {
-				st := "ok"
-				if a.Err != nil {
-					st = a.Err.Error()
-				}
-				right.WriteString(faintStyle.Render(fmt.Sprintf("  %s %dms %s", a.IP, diagnostic.Ms(a.Dur), st)) + "\n")
-			}
-		} else {
-			right.WriteString(m.spinner.View() + faintStyle.Render(" checking…") + "\n")
-		}
-		if history := m.historyLine(probe.ID); history != "" {
-			right.WriteString(history + "\n")
-		}
-	}
-
 	leftRows := strings.Split(strings.TrimRight(left.String(), "\n"), "\n")
-	rightRows := strings.Split(strings.TrimRight(right.String(), "\n"), "\n")
+	rightRows := m.detailRows(deferred)
 	frame := panelStyle.GetVerticalFrameSize()
 	pad := panelStyle.GetHorizontalPadding()
 
@@ -290,26 +260,91 @@ func (m model) bodyView(deferred bool, rows int) string {
 		// not fit. Whether they fit is measured rather than predicted: a probe
 		// row that wraps costs a display row no row count can see coming.
 		inner := rows - 2*frame
-		right := fitRows(rightRows, max(inner/2, 1), w-pad)
-		both := stack(windowRows(leftRows, sel, inner-displayRows(right, w-pad), w-pad), right)
-		if lipgloss.Height(both) <= rows {
-			return both
+		if right := panelBody(fitRows(rightRows, max(inner/2, 1), w-pad)); len(right) > 0 {
+			both := stack(windowRows(leftRows, sel, inner-displayRows(right, w-pad), w-pad), right)
+			if lipgloss.Height(both) <= rows {
+				return both
+			}
 		}
+		// Checks on its own, so there is only one border to pay for.
 		return fitBlock(stack(windowRows(leftRows, sel, rows-frame, w-pad), nil), rows)
 	}
 	leftW := 38
 	rightW := max(m.width-leftW-5, 36)
 	if rows > 0 {
 		leftRows = windowRows(leftRows, sel, rows-frame, leftW-pad)
-		rightRows = fitRows(rightRows, rows-frame, rightW-pad)
+		rightRows = panelBody(fitRows(rightRows, rows-frame, rightW-pad))
 	}
-	leftStr := strings.Join(leftRows, "\n")
-	rightStr := strings.Join(rightRows, "\n")
-	h := max(lipgloss.Height(leftStr), lipgloss.Height(rightStr))
-	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top,
-		panelStyle.Width(leftW).Height(h).Render(leftStr),
-		" ",
-		panelStyle.Width(rightW).Height(h).Render(rightStr)), rows)
+	checks := panelStyle.Width(leftW).Render(strings.Join(leftRows, "\n"))
+	if len(rightRows) == 0 {
+		return fitBlock(checks, rows)
+	}
+	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top, checks, " ",
+		panelStyle.Width(rightW).Render(strings.Join(rightRows, "\n"))), rows)
+}
+
+// detailRows is the Details panel: its title row followed by the evidence for
+// the cursor row, or nil when there is no evidence to show. A panel with
+// nothing under its title is a bordered box of whitespace, so it is left out
+// rather than drawn empty, and it comes back the moment the cursor row has
+// something to say.
+func (m model) detailRows(deferred bool) []string {
+	if deferred {
+		return []string{
+			panelTitleStyle.Render("Details"),
+			faintStyle.Render("Nothing to show yet: the checks haven't run."),
+		}
+	}
+	// No row to describe: --check and --skip can between them select nothing
+	// at all, and a run with no checks has no evidence to lay out.
+	if m.selected < 0 || m.selected >= len(m.probes) {
+		return nil
+	}
+	probe := m.probes[m.selected]
+	var body strings.Builder
+	if r, ok := m.results[probe.ID]; ok {
+		body.WriteString(statusStyles[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
+		if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
+			body.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
+		}
+		if r.Portal != nil && r.Portal.RedirectURL != "" {
+			body.WriteString(faintStyle.Render("portal "+r.Portal.RedirectURL) + "\n")
+		}
+		if r.Source != nil {
+			body.WriteString(faintStyle.Render("src "+r.Source.String()+" "+r.Iface) + "\n")
+		}
+		for _, a := range r.Attempts {
+			st := "ok"
+			if a.Err != nil {
+				st = a.Err.Error()
+			}
+			body.WriteString(faintStyle.Render(fmt.Sprintf("  %s %dms %s", a.IP, diagnostic.Ms(a.Dur), st)) + "\n")
+		}
+	} else {
+		body.WriteString(m.spinner.View() + faintStyle.Render(" checking…") + "\n")
+	}
+	if history := m.historyLine(probe.ID); history != "" {
+		body.WriteString(history + "\n")
+	}
+	rows := append([]string{panelTitleStyle.Render("Details: " + probe.Name)},
+		strings.Split(strings.TrimRight(body.String(), "\n"), "\n")...)
+	return panelBody(rows)
+}
+
+// panelBody drops a panel that has a title and nothing readable under it,
+// which the reader sees as a bordered box of whitespace. Emptiness is measured
+// on the text with its styling stripped, because a row of spaces or of escape
+// sequences alone still draws the box.
+func panelBody(rows []string) []string {
+	if len(rows) < 2 {
+		return nil
+	}
+	for _, row := range rows[1:] {
+		if strings.TrimSpace(ansi.Strip(row)) != "" {
+			return rows
+		}
+	}
+	return nil
 }
 
 // fitBlock is bodyView's last word on its own row budget: a block that still
@@ -925,6 +960,12 @@ func (m model) focusRow() int {
 	focus := diagnostic.FocusProbe(m.target, m.probeOrder(), m.results)
 	first := -1
 	for i, probe := range m.probes {
+		// A probe with no row cannot be the row to send the reader to, and
+		// putting the cursor there would leave the Details panel describing a
+		// row the list does not offer.
+		if !hasCheckRow(probe.ID) {
+			continue
+		}
 		if probe.ID == focus {
 			return i
 		}
@@ -935,9 +976,10 @@ func (m model) focusRow() int {
 	return first
 }
 
-// compactRows is the Checks panel's default row set: the probe indices worth
-// reading, and how many passing and not-applicable rows that left behind. A
-// finished run keeps every Fail, Warn and Skip, the row the diagnosis blames
+// compactRows is the Checks panel's default row set: of the probes that have a
+// row at all (see checkRows), the indices worth reading, and how many passing
+// and not-applicable rows that left behind. A finished run keeps every Fail,
+// Warn and Skip, the row the diagnosis blames
 // (a path MTU black hole rests on a Warn, so severity alone would drop the one
 // row the verdict sends the reader to), and the cursor row (the Details panel
 // is showing it, and a panel describing a row the list does not offer is worse
@@ -945,11 +987,11 @@ func (m model) focusRow() int {
 // hidden while the run is still going, while the reader has expanded the list,
 // or when the expand action has no key to reach it by.
 //
-// N/A rows collapse alongside the passing ones: an unset proxy or an absent
-// Wi-Fi radio is not something to act on, and the Checks panel answers what
-// needs attention. Their evidence is not lost, because the cursor still walks
-// every probe and a hidden row the cursor lands on comes back with the Details
-// panel that describes it.
+// N/A rows collapse alongside the passing ones: an unset proxy or an
+// unreachable second-opinion resolver is not something to act on, and the
+// Checks panel answers what needs attention. Their evidence is not lost,
+// because the cursor still walks every row and a hidden row the cursor lands
+// on comes back with the Details panel that describes it.
 //
 // The blamed row comes from focusRow, so the list and the banner cannot
 // disagree about which row matters. Every row FocusProbe can name today is
@@ -957,15 +999,13 @@ func (m model) focusRow() int {
 // have dropped; it stays because the row worth reading is the diagnosis's
 // call, not a severity comparison made over here.
 func (m model) compactRows() (shown []int, hiddenPass, hiddenNA int) {
-	all := make([]int, len(m.probes))
-	for i := range m.probes {
-		all[i] = i
-	}
+	all := m.checkRows()
 	if m.expanded || !m.allDone() || !m.keys.bound(ctxList, actExpand) {
 		return all, 0, 0
 	}
 	blamed := m.focusRow()
-	for i, probe := range m.probes {
+	for _, i := range all {
+		probe := m.probes[i]
 		if i == blamed || i == m.selected {
 			shown = append(shown, i)
 			continue
@@ -982,6 +1022,32 @@ func (m model) compactRows() (shown []int, hiddenPass, hiddenNA int) {
 	return shown, hiddenPass, hiddenNA
 }
 
+// hasCheckRow reports whether a probe is worth a row in the Checks panel.
+//
+// The Wi-Fi probe is not. Its whole result is the network name, and the
+// context strip under the banner already prints that name from the same
+// result ("Wi-Fi: homewifi"), so the row is the same fact a second time. It
+// carries no actionable finding to lose either: the probe reports Pass with
+// the name or N/A without it, never a Warn or a Fail, and the interface row
+// beside it is the one that speaks when the link itself is the problem. The
+// probe keeps running: the context strip, the report, and the JSON output all
+// read its result.
+func hasCheckRow(id diagnostic.ProbeID) bool { return id != diagnostic.ProbeSSID }
+
+// checkRows is the probe indices the Checks panel offers as rows, in probe
+// order. It is also the list the cursor walks: an index that is not in here is
+// a cursor position with no row under it and a Details panel describing
+// something the reader cannot see.
+func (m model) checkRows() []int {
+	rows := make([]int, 0, len(m.probes))
+	for i, probe := range m.probes {
+		if hasCheckRow(probe.ID) {
+			rows = append(rows, i)
+		}
+	}
+	return rows
+}
+
 // collapsedChecksRow is the one line the hidden passing and not-applicable
 // rows are worth. It counts what compactRows actually hid, never how many rows
 // passed: the blamed row and the cursor row pass too and are still on screen.
@@ -990,9 +1056,9 @@ func (m model) compactRows() (shown []int, hiddenPass, hiddenNA int) {
 //
 // It sits in the marker column rather than indented with the probe rows,
 // which is also what keeps it inside the 36 columns the Checks panel has:
-// a row that wraps costs the panel a second display row and desynchronises
-// the two panels' heights. That budget is why the mixed wording is the terse
-// one and why "N/A" is not spelled out.
+// a row that wraps costs the panel a second display row that no row count
+// saw coming, and the block has a row budget to stay inside. That budget is
+// why the mixed wording is the terse one and why "N/A" is not spelled out.
 func (m model) collapsedChecksRow(hiddenPass, hiddenNA int) string {
 	checks := func(n int) string {
 		if n == 1 {

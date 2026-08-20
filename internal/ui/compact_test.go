@@ -15,25 +15,57 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
+// panelCells splits one rendered line into the panel cells it carries, keyed
+// by the display column each cell's opening border sits at. The two panels are
+// no longer padded to a shared height, so a line may carry only the taller one
+// and a cell's position along the line no longer says which panel it belongs
+// to; the column its border opens at does.
+func panelCells(line string) map[int]string {
+	cells := map[int]string{}
+	runes := []rune(ansi.Strip(line))
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '│' {
+			continue
+		}
+		end := i + 1
+		for end < len(runes) && runes[end] != '│' {
+			end++
+		}
+		if end == len(runes) {
+			break
+		}
+		cells[i] = strings.TrimSpace(string(runes[i+1 : end]))
+		i = end
+	}
+	return cells
+}
+
 // checksRows is the Checks panel's rows as rendered, title and padding
-// removed. The panels are drawn side by side, so the left column is the text
-// between the first and second border characters of each line; the Details
-// panel repeats probe names in its own title and status line, and a plain
-// substring search over the whole view would count those as visible rows.
+// removed. Checks is the panel whose border opens at column 0, in the
+// side-by-side layout and the stacked one alike. The Details panel repeats
+// probe names in its own title and status line, and a plain substring search
+// over the whole view would count those as visible rows.
 func checksRows(v string) []string {
 	var rows []string
 	for _, line := range strings.Split(v, "\n") {
-		parts := strings.Split(line, "│")
-		if len(parts) < 2 {
-			continue
-		}
-		row := strings.TrimSpace(parts[1])
+		row := panelCells(line)[0]
 		if row == "" || row == "Checks" {
 			continue
 		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// rowProbes is the probes the Checks panel gives a row to, which is not every
+// probe in the run: the Wi-Fi row is gone from the panel while its probe still
+// runs for the context strip, the report and the JSON output.
+func rowProbes(m model) []diagnostic.Probe {
+	var probes []diagnostic.Probe
+	for _, i := range m.checkRows() {
+		probes = append(probes, m.probes[i])
+	}
+	return probes
 }
 
 // hasRow reports whether name is one of the Checks panel's own rows.
@@ -93,7 +125,7 @@ func press(t *testing.T, m model, key string) model {
 // count the view derived some other way.
 func passingRowsOffScreen(m model, v string) int {
 	n := 0
-	for _, probe := range m.probes {
+	for _, probe := range rowProbes(m) {
 		if m.results[probe.ID].Status == diagnostic.StatusPass && !hasRow(v, probe.Name) {
 			n++
 		}
@@ -326,7 +358,7 @@ func TestNothingCollapsesWhileTheRunIsUnfinished(t *testing.T) {
 	if collapsedRow(v) != "" {
 		t.Errorf("an unfinished run must not collapse anything:\n%s", v)
 	}
-	for _, probe := range m.probes {
+	for _, probe := range rowProbes(m) {
 		if !hasRow(v, probe.Name) {
 			t.Errorf("row %q disappeared mid-run:\n%s", probe.Name, v)
 		}
@@ -359,7 +391,7 @@ func TestCursorRowStaysVisibleInCompactView(t *testing.T) {
 func TestExpandRevealsExactlyTheHiddenRows(t *testing.T) {
 	compact, v := renderAt(t, healthyModel(t))
 	var hiddenNames []string
-	for _, probe := range compact.probes {
+	for _, probe := range rowProbes(compact) {
 		if !hasRow(v, probe.Name) {
 			hiddenNames = append(hiddenNames, probe.Name)
 		}
@@ -380,7 +412,7 @@ func TestExpandRevealsExactlyTheHiddenRows(t *testing.T) {
 	// Deterministic ordering: the rows read in probe order, the same order the
 	// diagnosis walks them in.
 	var want []string
-	for _, probe := range expanded.probes {
+	for _, probe := range rowProbes(expanded) {
 		want = append(want, probe.Name)
 	}
 	var got []string
@@ -531,12 +563,15 @@ func probeName(t *testing.T, m model, id diagnostic.ProbeID) string {
 }
 
 // naProbeDetails are the not-applicable rows a real run produces on a machine
-// with no proxy set, no Wi-Fi radio, and no reachable public resolver. The
-// details are the strings the probes themselves write, so a test that finds
-// one has found the probe's own evidence and not a fixture's invention.
+// with no proxy set and no reachable public resolver. The details are the
+// strings the probes themselves write, so a test that finds one has found the
+// probe's own evidence and not a fixture's invention.
+//
+// The Wi-Fi probe is N/A on the same machine and is deliberately not here: it
+// has no Checks row to collapse, reveal or walk the cursor onto, so it says
+// nothing about the mechanism these fixtures exercise.
 var naProbeDetails = map[diagnostic.ProbeID]string{
 	diagnostic.ProbeProxy:     "no proxy environment variables set",
-	diagnostic.ProbeSSID:      "Wi-Fi network unavailable",
 	diagnostic.ProbeDNSPublic: "public DNS unavailable via 8.8.8.8: timeout",
 }
 
@@ -560,7 +595,7 @@ func naModel(t *testing.T, failID diagnostic.ProbeID) model {
 // naRowsOffScreen counts the not-applicable probes with no row of their own.
 func naRowsOffScreen(m model, v string) int {
 	n := 0
-	for _, probe := range m.probes {
+	for _, probe := range rowProbes(m) {
 		if m.results[probe.ID].Status == diagnostic.StatusNA && !hasRow(v, probe.Name) {
 			n++
 		}
@@ -624,7 +659,7 @@ func TestCollapsedRowCountsPassedAndNAApart(t *testing.T) {
 }
 
 // TestCollapsedRowFitsThePanel: the summary sits in a 36-column panel, and a
-// row that wraps costs a second display row and desynchronises the two panels.
+// row that wraps costs the block a second display row no row count saw coming.
 func TestCollapsedRowFitsThePanel(t *testing.T) {
 	for _, tc := range []struct{ pass, na int }{{13, 0}, {0, 13}, {13, 13}, {1, 1}} {
 		row := ansi.Strip(healthyModel(t).collapsedChecksRow(tc.pass, tc.na))
@@ -690,7 +725,8 @@ func TestVisibleRowOrderAcrossMixedStatuses(t *testing.T) {
 	m, v := renderAt(t, m)
 
 	var want []string
-	for i, probe := range m.probes {
+	for _, i := range m.checkRows() {
+		probe := m.probes[i]
 		switch status := m.results[probe.ID].Status; {
 		case i == m.selected || i == m.focusRow():
 			want = append(want, probe.Name)
@@ -717,9 +753,10 @@ func TestVisibleRowOrderAcrossMixedStatuses(t *testing.T) {
 // from the panel that describes it. Every step down names its own probe.
 func TestCursorWalkKeepsDetailsAligned(t *testing.T) {
 	m, _ := renderAt(t, naModel(t, diagnostic.ProbeDNS))
-	for i := range m.probes {
+	rows := m.checkRows()
+	for step, i := range rows {
 		if m.selected != i {
-			t.Fatalf("cursor is on row %d, want %d", m.selected, i)
+			t.Fatalf("step %d: cursor is on row %d, want %d", step, m.selected, i)
 		}
 		v := m.View()
 		name := m.probes[i].Name
@@ -729,7 +766,7 @@ func TestCursorWalkKeepsDetailsAligned(t *testing.T) {
 		if !hasRow(v, name) {
 			t.Fatalf("the cursor row %q is not in the Checks view:\n%s", name, v)
 		}
-		if i+1 < len(m.probes) {
+		if step+1 < len(rows) {
 			m = press(t, m, "j")
 		}
 	}

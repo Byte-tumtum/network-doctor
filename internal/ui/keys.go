@@ -163,10 +163,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.selected > 0 {
-			m.selected--
-		}
-		m.selMoved = true
+		m.moveRow(-1)
 		return m, nil
 	case actDown:
 		if m.networkMap {
@@ -175,28 +172,21 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.selected < len(m.probes)-1 {
-			m.selected++
-		}
-		m.selMoved = true
+		m.moveRow(1)
 		return m, nil
 	case actTop:
 		if m.networkMap {
 			m.mapSelected = 0
 			return m, nil
 		}
-		m.selected = 0
-		m.selMoved = true
+		m.moveRow(-len(m.probes))
 		return m, nil
 	case actBottom:
 		if m.networkMap {
 			m.mapSelected = max(len(m.networkHosts())-1, 0)
 			return m, nil
 		}
-		// max, not len-1: an empty list would otherwise select row -1, and the
-		// check list is empty for as long as the first probe takes to arrive.
-		m.selected = max(len(m.probes)-1, 0)
-		m.selMoved = true
+		m.moveRow(len(m.probes))
 		return m, nil
 	case actOpen:
 		if hosts := m.networkHosts(); m.networkMap && len(hosts) > 0 {
@@ -236,6 +226,28 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// moveRow walks the cursor delta rows through the Checks panel's row list and
+// clamps it at both ends. It steps through that list rather than through
+// m.probes, because a probe with no row of its own is not a place the cursor
+// can stop: the Details panel would be left describing a row the reader cannot
+// see or move off. A delta wider than the list is how top and bottom are spelled.
+//
+// The cursor stays an index into m.probes, so an empty list leaves it where it
+// was rather than selecting row -1; the check list is empty for as long as the
+// first probe takes to arrive.
+func (m *model) moveRow(delta int) {
+	m.selMoved = true
+	rows := m.checkRows()
+	if len(rows) == 0 {
+		return
+	}
+	at := slices.Index(rows, m.selected)
+	if at < 0 {
+		at = 0 // cursor on a rowless probe: the row list is where it belongs
+	}
+	m.selected = rows[min(max(at+delta, 0), len(rows)-1)]
 }
 
 // handleConfirmKey handles keys while an advanced tool's command is shown: 'y'

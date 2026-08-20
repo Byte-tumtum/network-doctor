@@ -15,18 +15,18 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
-// detailsRows is the Details panel's rows as rendered. The panels are drawn
-// side by side, so the right column is the text between the third and fourth
-// border characters of each line.
+// detailsRows is the Details panel's rows as rendered, in the side-by-side
+// layout these tests render at. Details is the right-hand panel, so its border
+// opens past column 0 while Checks opens at 0. The two are no longer padded to
+// a shared height, so a Details row taller than the Checks panel is the only
+// cell on its line, and the count of border characters before it is not fixed.
 func detailsRows(v string) []string {
 	var rows []string
 	for _, line := range strings.Split(v, "\n") {
-		parts := strings.Split(line, "│")
-		if len(parts) < 4 {
-			continue
-		}
-		if row := strings.TrimSpace(parts[3]); row != "" {
-			rows = append(rows, row)
+		for col, row := range panelCells(line) {
+			if col > 0 && row != "" {
+				rows = append(rows, row)
+			}
 		}
 	}
 	return rows

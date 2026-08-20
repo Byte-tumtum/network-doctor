@@ -813,18 +813,27 @@ func TestRunProbeSnapshotIndependence(t *testing.T) {
 	}
 }
 
+// The cursor clamps at the ends of the Checks panel's row list, which is not
+// the end of the probe list: the Wi-Fi probe has no row, and here it is the
+// last probe of the run, so the cursor must stop on the row before it rather
+// than park on a probe the panel is not showing.
 func TestSelectionClamp(t *testing.T) {
 	m := newModel(nil, false)
+	rows := m.checkRows()
+	last := rows[len(rows)-1]
+	if last == len(m.probes)-1 {
+		t.Fatalf("every probe has a row, so this no longer covers the clamp past a rowless one")
+	}
 	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if asModel(t, u).selected != 0 {
-		t.Error("up at top must stay 0")
+	if asModel(t, u).selected != rows[0] {
+		t.Error("up at top must stay on the first row")
 	}
 	for i := 0; i < len(m.probes); i++ {
 		u, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 		m = asModel(t, u)
 	}
-	if want := len(m.probes) - 1; m.selected != want {
-		t.Errorf("selected = %d, want clamp at %d", m.selected, want)
+	if m.selected != last {
+		t.Errorf("selected = %d, want clamp at the last row %d", m.selected, last)
 	}
 }
 
