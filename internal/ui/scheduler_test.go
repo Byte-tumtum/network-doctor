@@ -114,7 +114,7 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 	if nm.selected != 7 {
 		t.Fatalf("selected = %d, want first failed probe 7", nm.selected)
 	}
-	if !strings.Contains(nm.bodyView(false), "connection refused") {
+	if !strings.Contains(nm.bodyView(false, 0), "connection refused") {
 		t.Error("details panel must show the selected failure")
 	}
 }

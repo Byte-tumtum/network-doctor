@@ -906,7 +906,7 @@ func TestCompletionSelectsBlamedRow(t *testing.T) {
 					wantName = "Details: " + p.Name
 				}
 			}
-			if body := done.bodyView(false); !strings.Contains(body, wantName) {
+			if body := done.bodyView(false, 0); !strings.Contains(body, wantName) {
 				t.Errorf("Details pane does not show %q:\n%s", wantName, body)
 			}
 		})
@@ -1030,9 +1030,11 @@ func TestViewFitsTerminal(t *testing.T) {
 	}
 }
 
-// A short or narrow terminal sheds the toolbox names, then the header, then the
-// panels, and clips the help bar last. The banner never yields: it carries the
-// plain-English verdict, and it is the first thing the renderer would eat.
+// A short or narrow terminal sheds the toolbox names, then scrolls the panels
+// down, then drops the chips and the panels outright. The banner never yields:
+// it carries the plain-English verdict, and it is the first thing the renderer
+// would eat. See TestPersistentBlockSurvivesLongResultList for the header and
+// the help bar, which outlive the panels for the same reason.
 func TestShortTerminalKeepsBanner(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:443"), false)
 	m.cur.status = JobRunning

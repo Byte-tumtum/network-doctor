@@ -84,7 +84,7 @@ func TestPortalURLDisplayed(t *testing.T) {
 			break
 		}
 	}
-	for name, got := range map[string]string{"details": m.bodyView(false), "report": m.report()} {
+	for name, got := range map[string]string{"details": m.bodyView(false, 0), "report": m.report()} {
 		if !strings.Contains(got, portalURL) {
 			t.Errorf("%s missing portal URL:\n%s", name, got)
 		}

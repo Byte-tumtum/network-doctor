@@ -73,10 +73,18 @@ func (m model) View() string {
 	}
 	deferred := m.toolbox && !m.chainRan()
 
-	body := m.bodyView(deferred)
+	// shrink re-renders the results block inside a row budget. The network map
+	// has no cursor-following list to scroll, so it is clipped instead.
+	shrink := func(rows int) string { return m.bodyView(deferred, rows) }
 	if m.networkMap {
-		body = m.networkMapView()
+		shrink = func(rows int) string {
+			if rows <= 0 {
+				return m.networkMapView()
+			}
+			return lipgloss.NewStyle().MaxHeight(rows).Render(m.networkMapView())
+		}
 	}
+	body := shrink(0)
 	help := m.helpView(deferred)
 	if m.entering {
 		help = m.promptView(true)
@@ -100,7 +108,13 @@ func (m model) View() string {
 	var fixed string
 	var avail int
 	budget := func() {
-		fixed = banner + header + "\n" + body + "\n" + toolbox + "\n"
+		fixed = banner + header
+		if body != "" {
+			fixed += "\n" + body + "\n"
+		}
+		if toolbox != "" {
+			fixed += toolbox + "\n"
+		}
 		avail = m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
 	}
 	budget()
@@ -117,20 +131,27 @@ func (m model) View() string {
 	if m.entering && m.hasJob() {
 		minAvail = 5
 	}
-	// Still overflowing: shed chrome before content. The toolbox chips go
-	// first (they wrap to a row per couple of tools on a narrow terminal),
-	// then the header line, then the panels are clipped to what is left. The
-	// banner is the plain-English verdict, so it never yields.
+	// Still overflowing: shed in order of what the reader can do without. The
+	// toolbox chips lose their names first (they wrap to a row per couple of
+	// tools on a narrow terminal), then the results block scrolls down toward
+	// a single probe row, then the chips and finally the block go entirely.
+	// The banner carries the verdict with its Fix and Next lines, the header
+	// carries the target that verdict is about, and the help bar is the way to
+	// anywhere else, so those three never yield to the results block.
 	if m.height > 0 && avail < minAvail {
 		toolbox = m.toolboxView(true)
 		budget()
 	}
-	if m.height > 0 && avail < minAvail && header != "" {
-		header = ""
+	if m.height > 0 && avail < minAvail {
+		body = shrink(max(lipgloss.Height(body)+avail-minAvail, bodyMinRows))
 		budget()
 	}
-	if m.height > 0 && avail < minAvail {
-		body = lipgloss.NewStyle().MaxHeight(max(lipgloss.Height(body)+avail-minAvail, 1)).Render(body)
+	if m.height > 0 && avail < minAvail && toolbox != "" {
+		toolbox = ""
+		budget()
+	}
+	if m.height > 0 && avail < minAvail && body != "" {
+		body = ""
 		budget()
 	}
 	job := m.jobView(avail)
@@ -139,14 +160,19 @@ func (m model) View() string {
 	}
 	out := fixed + job + tail
 	if m.height > 0 {
-		// Last resort: the panels bottom out at one row and the help bar has no
-		// floor at all, so on a very short terminal the view can still overflow.
-		// Clip from the bottom: losing the help bar beats the renderer eating
-		// the top of the screen, which is where the banner lives.
+		// Last resort: a terminal too short for the banner, the header and the
+		// help bar together. Clip from the bottom: losing the help bar beats
+		// the renderer eating the top of the screen, which is where the
+		// verdict and its Fix and Next lines live.
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
 	}
 	return out
 }
+
+// bodyMinRows is the shortest useful results block: both borders, the Checks
+// title, and one probe row. Below that the block is dropped rather than
+// rendered as a frame with nothing in it.
+const bodyMinRows = 4
 
 // targetHP is the target endpoint as host:port; JoinHostPort brackets IPv6
 // literals so the rendered endpoint reads back as the same target.
@@ -175,8 +201,11 @@ func (m model) headerView() string {
 }
 
 // bodyView renders the Checks and Details panels side by side, stacking them
-// vertically when the terminal is too narrow for two columns.
-func (m model) bodyView(deferred bool) string {
+// vertically when the terminal is too narrow for two columns. rows caps the
+// block's display height; 0 means no cap. A capped block scrolls its probe
+// list rather than being clipped from the bottom, because clipping a bordered
+// panel eats the border that closes it.
+func (m model) bodyView(deferred bool, rows int) string {
 	var left strings.Builder
 	left.WriteString(panelTitleStyle.Render("Checks") + "\n")
 	for i, probe := range m.probes {
@@ -228,22 +257,146 @@ func (m model) bodyView(deferred bool) string {
 		}
 	}
 
-	leftStr := strings.TrimRight(left.String(), "\n")
-	rightStr := strings.TrimRight(right.String(), "\n")
+	leftRows := strings.Split(strings.TrimRight(left.String(), "\n"), "\n")
+	rightRows := strings.Split(strings.TrimRight(right.String(), "\n"), "\n")
+	frame := panelStyle.GetVerticalFrameSize()
+	pad := panelStyle.GetHorizontalPadding()
 
 	if m.width < 80 { // too narrow for two columns, so stack
 		w := max(m.width-2, 24)
-		return lipgloss.JoinVertical(lipgloss.Left,
-			panelStyle.Width(w).Render(leftStr),
-			panelStyle.Width(w).Render(rightStr))
+		stack := func(left, right []string) string {
+			checks := panelStyle.Width(w).Render(strings.Join(left, "\n"))
+			if len(right) == 0 {
+				return checks
+			}
+			return lipgloss.JoinVertical(lipgloss.Left,
+				checks, panelStyle.Width(w).Render(strings.Join(right, "\n")))
+		}
+		if rows <= 0 {
+			return stack(leftRows, rightRows)
+		}
+		// Stacked, there are two borders to pay for. Details keeps at most half
+		// of what is left, so a long attempt list cannot squeeze the checks
+		// out, and it gives its panel up entirely when the two of them still do
+		// not fit. Whether they fit is measured rather than predicted: a probe
+		// row that wraps costs a display row no row count can see coming.
+		inner := rows - 2*frame
+		right := fitRows(rightRows, max(inner/2, 1), w-pad)
+		both := stack(windowRows(leftRows, m.selected, inner-displayRows(right, w-pad), w-pad), right)
+		if lipgloss.Height(both) <= rows {
+			return both
+		}
+		return fitBlock(stack(windowRows(leftRows, m.selected, rows-frame, w-pad), nil), rows)
 	}
 	leftW := 38
 	rightW := max(m.width-leftW-5, 36)
+	if rows > 0 {
+		leftRows = windowRows(leftRows, m.selected, rows-frame, leftW-pad)
+		rightRows = fitRows(rightRows, rows-frame, rightW-pad)
+	}
+	leftStr := strings.Join(leftRows, "\n")
+	rightStr := strings.Join(rightRows, "\n")
 	h := max(lipgloss.Height(leftStr), lipgloss.Height(rightStr))
-	return lipgloss.JoinHorizontal(lipgloss.Top,
+	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top,
 		panelStyle.Width(leftW).Height(h).Render(leftStr),
 		" ",
-		panelStyle.Width(rightW).Height(h).Render(rightStr))
+		panelStyle.Width(rightW).Height(h).Render(rightStr)), rows)
+}
+
+// fitBlock is bodyView's last word on its own row budget: a block that still
+// does not fit is dropped, because View counts the rows it hands back and a
+// bordered panel cannot be clipped without losing the border that closes it.
+func fitBlock(block string, rows int) string {
+	if rows > 0 && lipgloss.Height(block) > rows {
+		return ""
+	}
+	return block
+}
+
+// displayRows is what rows cost on screen once a panel width columns wide has
+// wrapped them. Budgeting in logical rows instead undercounts every row that
+// wraps, which is how a narrow terminal used to overflow its own row budget.
+func displayRows(rows []string, width int) int {
+	total := 0
+	for _, r := range rows {
+		total += rowCost(r, width)
+	}
+	return total
+}
+
+// rowCost is what one row costs on screen once a panel width columns wide has
+// wrapped it. Lip Gloss breaks on word boundaries, so dividing the row's width
+// by the panel's undercounts every row that has to break early at a space.
+// Render it at that width and count instead: the renderer is the only oracle
+// that cannot drift from what actually lands on screen.
+func rowCost(row string, width int) int {
+	if width <= 0 {
+		return 1
+	}
+	return lipgloss.Height(lipgloss.NewStyle().Width(width).Render(row))
+}
+
+// fitRows keeps the longest prefix of rows that costs at most n display rows.
+func fitRows(rows []string, n, width int) []string {
+	spent := 0
+	for i, r := range rows {
+		if spent += rowCost(r, width); spent > n {
+			return rows[:i]
+		}
+	}
+	return rows
+}
+
+// windowRows fits a panel's rows into n display rows in a panel width columns
+// wide. rows[0] is the panel title and stays pinned; the list below it scrolls
+// so that sel, an index into that list, is always on screen. A truncated list
+// spends its last row saying how many it hid, since nothing else on the panel
+// admits that it goes on.
+func windowRows(rows []string, sel, n, width int) []string {
+	if len(rows) < 2 || displayRows(rows, width) <= n {
+		return rows // a bare title has nothing to scroll
+	}
+	list := rows[1:]
+	sel = min(max(sel, 0), len(list)-1)
+	// The cursor row is not optional: a window that drops it to keep inside the
+	// budget shows the reader a row they did not select, or no rows at all. So
+	// it is spent first and the rest grows outward from it, downward first. A
+	// cursor row that overruns the budget on its own leaves fitBlock to drop
+	// the block, which beats a panel pointing at the wrong row.
+	budget := n - rowCost(rows[0], width) - rowCost(list[sel], width)
+	lo, hi := sel, sel+1
+	// The "… N more" line costs rows of its own, priced at the widest count it
+	// could carry, and it yields to the last row the list can still show: a
+	// panel with the cursor in it beats a panel that only says how much it is
+	// hiding.
+	cost := rowCost(faintStyle.Render(fmt.Sprintf("… %d more", len(list))), width)
+	marker := budget >= cost
+	if marker {
+		budget -= cost
+	}
+	for grow := true; grow; {
+		grow = false
+		if hi < len(list) {
+			if c := rowCost(list[hi], width); c <= budget {
+				budget -= c
+				hi++
+				grow = true
+			}
+		}
+		if lo == 0 {
+			continue
+		}
+		if c := rowCost(list[lo-1], width); c <= budget {
+			budget -= c
+			lo--
+			grow = true
+		}
+	}
+	shown := append([]string{rows[0]}, list[lo:hi]...)
+	if hidden := len(list) - (hi - lo); marker && hidden > 0 {
+		shown = append(shown, faintStyle.Render(fmt.Sprintf("… %d more", hidden)))
+	}
+	return shown
 }
 
 func (m model) historyLine(id diagnostic.ProbeID) string {
