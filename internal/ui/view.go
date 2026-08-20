@@ -714,7 +714,13 @@ func (m model) banner() string {
 	if firstFail.Fix != "" {
 		lines = append(lines, faintStyle.Render("  Fix: "+firstFail.Fix))
 	}
-	if next := m.nextStep(firstFail.ID); next != "" {
+	// The drill-down follows the row the verdict blames rather than the first
+	// failure: a path MTU black hole fails TLS but wants the Path MTU row.
+	nextID := firstFail.ID
+	if i := m.focusRow(); i >= 0 {
+		nextID = m.probes[i].ID
+	}
+	if next := m.nextStep(nextID); next != "" {
 		lines = append(lines, "  "+next)
 	}
 	return strings.Join(lines, "\n")
@@ -736,12 +742,31 @@ func (m model) resultState() (order []diagnostic.ProbeID, firstFail *diagnostic.
 	return order, firstFail, anyWarn
 }
 
-// probeNextTool maps a failed probe to the toolbox hotkey that best
+// focusRow is the probe row a finished run should put the cursor on and take
+// its drill-down from: the row the verdict blames when it names one, and
+// otherwise the first failing row. -1 when the run blames no row at all.
+func (m model) focusRow() int {
+	order, _, _ := m.resultState()
+	focus := diagnostic.FocusProbe(m.target, order, m.results)
+	first := -1
+	for i, probe := range m.probes {
+		if probe.ID == focus {
+			return i
+		}
+		if first < 0 && m.results[probe.ID].Status == diagnostic.StatusFail {
+			first = i
+		}
+	}
+	return first
+}
+
+// probeNextTool maps a blamed probe to the toolbox hotkey that best
 // investigates it.
 var probeNextTool = map[diagnostic.ProbeID]string{
 	diagnostic.ProbeInternet:  "p",
 	diagnostic.ProbeDNS:       "d",
 	diagnostic.ProbeTargetTCP: "t",
+	diagnostic.ProbePMTU:      "t",
 	diagnostic.ProbeTLS:       "c",
 	diagnostic.ProbeHTTP:      "c",
 	diagnostic.ProbeHTTPS:     "c",

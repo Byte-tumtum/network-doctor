@@ -162,7 +162,10 @@ type ProbeResult struct {
 	Dur         time.Duration // wall time the probe took; zero for probes that never ran
 	Detail      string
 	Fix         string
-	timedOut    bool // protocol failure was a timeout; used to correlate PMTU evidence.
+	// timedOut marks an HTTP/HTTPS failure that was a timeout, which is half
+	// the PMTU black-hole correlation. TLS reports the same fact through
+	// Cause, so it has no flag of its own.
+	timedOut bool
 	// clockOffset is this machine's clock minus the Date of a 204 from
 	// portalProbeURL: positive when the local clock runs fast. Zero means
 	// there was no usable reading, which behaves the same as a correct clock
@@ -1624,7 +1627,6 @@ func (o *netops) tlsProbe(host string, port int) func(context.Context, map[Probe
 			// resolver handed us, and that's often the actual culprit.
 			r.Status, r.SelectedIP = StatusFail, ip
 			r.Cause = tlsFailureCause(err, time.Now())
-			r.timedOut = timeoutError(err)
 			r.Detail = "TLS handshake to " + ip.String() + " failed: " + err.Error()
 			r.Fix = tlsFix(err)
 			if iface := deps[ProbeTargetTCP].Iface; timeoutError(err) {

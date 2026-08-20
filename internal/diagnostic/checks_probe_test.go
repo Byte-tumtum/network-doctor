@@ -792,7 +792,7 @@ func TestTLSProbeTimeoutReportsMTU(t *testing.T) {
 
 	r := ops.tlsProbe("example.com", 443)(context.Background(), deps)
 	if !strings.Contains(r.Detail, "fake0 MTU is 1420") ||
-		!strings.Contains(r.Fix, "Path MTU row") || !r.timedOut {
+		!strings.Contains(r.Fix, "Path MTU row") || r.Cause != TLSCauseTimeout {
 		t.Errorf("TLS timeout = %+v, want MTU detail and a pointer at the PMTU row", r)
 	}
 }

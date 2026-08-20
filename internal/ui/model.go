@@ -579,11 +579,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.allDone() {
 			diagnostic.Finalize(m.results)
 			if !m.selMoved && !m.viewing {
-				for i, p := range m.probes {
-					if m.results[p.ID].Status == diagnostic.StatusFail {
-						m.selected = i
-						break
-					}
+				if i := m.focusRow(); i >= 0 {
+					m.selected = i
 				}
 			}
 			if m.watch {

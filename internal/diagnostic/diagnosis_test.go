@@ -225,7 +225,7 @@ func TestDiagnoseDoesNotInferMissingEvidence(t *testing.T) {
 			ProbeInternet:  {Status: StatusPass},
 			ProbeDNS:       {Status: StatusPass},
 			ProbeTargetTCP: {Status: StatusPass},
-			ProbeTLS:       {Status: StatusFail, timedOut: true},
+			ProbeTLS:       {Status: StatusFail, Cause: TLSCauseTimeout},
 		}
 		if summary, verdict := Diagnose(tg, order, results); verdict != VerdictService || strings.Contains(summary, "MTU") {
 			t.Fatalf("Diagnose without PMTU evidence = %q/%q", summary, verdict)
@@ -285,6 +285,57 @@ func TestDiagnoseTargetWarnings(t *testing.T) {
 	}
 }
 
+// FocusProbe is what lets the UI park the cursor on the row the prose points
+// at. It has to stay tied to the verdict that was actually reached: a black
+// hole preempted by a broken resolver blames nothing, or the cursor would land
+// on Path MTU while the banner talks about DNS.
+func TestFocusProbe(t *testing.T) {
+	tg := mustTarget(t, "github.com")
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbePMTU, ProbeTLS, ProbeHTTP, ProbeHTTPS}
+	blackHole := map[ProbeID]ProbeResult{
+		ProbePMTU:  {Status: StatusWarn},
+		ProbeTLS:   {Status: StatusFail, Cause: TLSCauseTimeout},
+		ProbeHTTP:  {Status: StatusFail, timedOut: true},
+		ProbeHTTPS: {Status: StatusFail, timedOut: true},
+	}
+	withDNSDown := map[ProbeID]ProbeResult{ProbeDNS: {Status: StatusFail}}
+	for id, r := range blackHole {
+		withDNSDown[id] = r
+	}
+
+	cases := []struct {
+		name string
+		res  map[ProbeID]ProbeResult
+		want ProbeID
+	}{
+		{"path MTU black hole", blackHole, ProbePMTU},
+		{"immediate TLS failure", map[ProbeID]ProbeResult{ProbeTLS: {Status: StatusFail}}, ""},
+		{"a stall with no PMTU warning", map[ProbeID]ProbeResult{ProbeTLS: {Status: StatusFail, Cause: TLSCauseTimeout}}, ""},
+		// TLS reaching the far end while the bulk rows do not is the same
+		// black hole seen through the other half of the correlation.
+		{"the stall shows only on the HTTP rows", map[ProbeID]ProbeResult{
+			ProbePMTU: {Status: StatusWarn},
+			ProbeHTTP: {Status: StatusFail, timedOut: true},
+		}, ProbePMTU},
+		{"everything passes", nil, ""},
+		{"resolver failure outranks the stall", withDNSDown, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := make(map[ProbeID]ProbeResult, len(order))
+			for _, id := range order {
+				res[id] = ProbeResult{Status: StatusPass}
+			}
+			for id, r := range c.res {
+				res[id] = r
+			}
+			if got := FocusProbe(tg, order, res); got != c.want {
+				t.Errorf("FocusProbe = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // The service/network split is the whole point of the machine-readable
 // verdict: the same target failure classifies differently depending on
 // whether anything else proved the path usable.
@@ -324,7 +375,7 @@ func TestVerdict(t *testing.T) {
 		// it broke; an immediate protocol error does not.
 		{"tls broken by a black hole", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbePMTU: {Status: StatusWarn},
-			ProbeTLS:  {Status: StatusFail, timedOut: true},
+			ProbeTLS:  {Status: StatusFail, Cause: TLSCauseTimeout},
 		}, VerdictNetwork},
 		{"certificate failure alongside a bulk stall", tg, targetOrder, map[ProbeID]ProbeResult{
 			ProbePMTU: {Status: StatusWarn},

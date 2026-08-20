@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
@@ -19,11 +20,11 @@ import (
 // the first failing probe is the cause and the ones below it are symptoms, so
 // remediation taken from the last failure contradicts the verdict above it.
 //
-// The path-MTU black hole is represented by its protocol rows (case 4). The
-// summary that names path MTU additionally requires ProbeResult.timedOut,
-// which is unexported to package diagnostic and unreachable from here; the
-// contract this test protects, first failure wins over the later ones, is the
-// same either way.
+// The one exception to "everything follows the first failure" is the drill-down
+// hint, which follows the row the verdict blames: the path MTU black hole fails
+// TLS but says to read the Path MTU row, so it must not send the reader back to
+// curl. Cases 4 and 5 are the same rows with and without the TLS timeout that
+// turns the first into the second.
 func TestBannerFailureGuidance(t *testing.T) {
 	oldLookPath := toolLookPath
 	toolLookPath = func(bin string) (string, error) { return bin, nil }
@@ -31,6 +32,11 @@ func TestBannerFailureGuidance(t *testing.T) {
 
 	fail := func(fix string) diagnostic.ProbeResult {
 		return diagnostic.ProbeResult{Status: diagnostic.StatusFail, Fix: fix}
+	}
+	// A handshake that ran out of time rather than failing outright. It is the
+	// half of the black-hole correlation the protocol rows contribute.
+	stalled := func(fix string) diagnostic.ProbeResult {
+		return diagnostic.ProbeResult{Status: diagnostic.StatusFail, Fix: fix, Cause: diagnostic.TLSCauseTimeout}
 	}
 	// Fix strings are the real ones the probes emit, so a case reads like a
 	// screen a user would actually see.
@@ -99,6 +105,18 @@ func TestBannerFailureGuidance(t *testing.T) {
 				"  Fix: " + tlsFix + "\n" +
 				"  Next: press c for web check (curl)",
 		},
+		{
+			name: "protocol rows stall behind a path MTU warning and TLS times out",
+			results: map[diagnostic.ProbeID]diagnostic.ProbeResult{
+				diagnostic.ProbePMTU:  {Status: diagnostic.StatusWarn, Fix: pmtuFix},
+				diagnostic.ProbeTLS:   stalled(tlsFix),
+				diagnostic.ProbeHTTP:  fail(httpFix),
+				diagnostic.ProbeHTTPS: fail(httpsFix),
+			},
+			want: "✗ TCP reaches example.com:443 but the protocol and bulk-transfer checks both stall, which is evidence of a path MTU black hole rather than a broken service (see the Path MTU row).\n" +
+				"  Fix: " + tlsFix + "\n" +
+				"  Next: press t for trace the path (traceroute)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -121,5 +139,25 @@ func TestBannerFailureGuidance(t *testing.T) {
 				t.Errorf("banner() =\n%s\n\nwant\n%s", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestProbeNextTool pins the whole failure-to-hotkey table. The keys are frozen
+// user-visible bindings, and Path MTU in particular must reach for the path
+// tools rather than curl, which stalls for the same reason the probe rows did.
+func TestProbeNextTool(t *testing.T) {
+	want := map[diagnostic.ProbeID]string{
+		diagnostic.ProbeInternet:  "p",
+		diagnostic.ProbeDNS:       "d",
+		diagnostic.ProbeTargetTCP: "t",
+		diagnostic.ProbePMTU:      "t",
+		diagnostic.ProbeTLS:       "c",
+		diagnostic.ProbeHTTP:      "c",
+		diagnostic.ProbeHTTPS:     "c",
+		diagnostic.ProbeSSH:       "t",
+		diagnostic.ProbeSMTP:      "t",
+	}
+	if !maps.Equal(probeNextTool, want) {
+		t.Errorf("probeNextTool = %v, want %v", probeNextTool, want)
 	}
 }

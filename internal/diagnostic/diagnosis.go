@@ -14,6 +14,25 @@ import (
 // "Running diagnostics…" until every probe in order has a result. A completed
 // run always returns a verdict.
 func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, string) {
+	// new(), not a var: the probe-ID inventory test reads every ProbeID
+	// declaration in this package as a stable ID.
+	return diagnose(t, order, res, new(ProbeID))
+}
+
+// FocusProbe names the probe row a finished diagnosis sends the reader to when
+// the verdict points somewhere other than the first failure, as the path MTU
+// black hole does: the protocol rows fail, but the evidence is on the Path MTU
+// row. Empty when the verdict points at nothing but the first failure. It runs
+// the same pass Diagnose does, so the row and the prose cannot disagree.
+func FocusProbe(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) ProbeID {
+	focus := new(ProbeID)
+	diagnose(t, order, res, focus)
+	return *focus
+}
+
+// diagnose is Diagnose plus the row the verdict blames: cases that redirect
+// the reader to a row other than the first failure write it to focus.
+func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *ProbeID) (string, string) {
 	if len(order) == 0 {
 		return "No checks selected.", VerdictOK
 	}
@@ -34,7 +53,13 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 	pass := func(id ProbeID) bool { r, ok := res[id]; return ok && r.Status == StatusPass }
 	fail := func(id ProbeID) bool { r, ok := res[id]; return ok && r.Status == StatusFail }
 	warn := func(id ProbeID) bool { r, ok := res[id]; return ok && r.Status == StatusWarn }
-	timedOut := func(id ProbeID) bool { r, ok := res[id]; return ok && r.timedOut }
+	// Each protocol probe reports a timeout in the vocabulary it has: TLS
+	// classifies every handshake failure into a Cause, HTTP and HTTPS have no
+	// such taxonomy and carry a plain flag.
+	timedOut := func(id ProbeID) bool {
+		r, ok := res[id]
+		return ok && (r.timedOut || r.Cause == TLSCauseTimeout)
+	}
 	directOK := func() bool { return directEgressOK(res) }
 	fallback := func() (string, string) {
 		for _, id := range order {
@@ -185,6 +210,7 @@ func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, 
 		// A protocol timeout and a separate bulk-write stall are correlated
 		// evidence for a path problem. Immediate failures such as a bad
 		// certificate must continue down to their service-specific verdict.
+		*focus = ProbePMTU
 		return "TCP reaches " + hp + " but the protocol and bulk-transfer checks both stall, which is evidence of a path MTU black hole rather than a broken service (see the Path MTU row).", VerdictNetwork
 	case has(ProbeTLS) && fail(ProbeTLS):
 		// With a measured offset that points the same way as the certificate

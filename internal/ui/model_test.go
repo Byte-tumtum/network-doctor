@@ -844,6 +844,104 @@ func TestCompletionKeepsMovedSelection(t *testing.T) {
 	}
 }
 
+// A finished run parks the cursor on the row the verdict blames, which is not
+// always the first failure: a path MTU black hole fails TLS, HTTP, and HTTPS,
+// but the evidence and the remediation are on the Path MTU row, so leaving the
+// cursor (and therefore the Details pane) on TLS contradicts the banner.
+func TestCompletionSelectsBlamedRow(t *testing.T) {
+	// A TLS handshake that ran out of time, which is what the black-hole
+	// verdict correlates with the Path MTU warning.
+	stall := func(r *diagnostic.ProbeResult) {
+		r.Status, r.Cause = diagnostic.StatusFail, diagnostic.TLSCauseTimeout
+	}
+	breakTLS := func(r *diagnostic.ProbeResult) { r.Status = diagnostic.StatusFail }
+
+	tests := []struct {
+		name    string
+		results map[diagnostic.ProbeID]func(*diagnostic.ProbeResult)
+		want    diagnostic.ProbeID
+	}{
+		{
+			name: "path MTU black hole",
+			results: map[diagnostic.ProbeID]func(*diagnostic.ProbeResult){
+				diagnostic.ProbePMTU:  func(r *diagnostic.ProbeResult) { r.Status = diagnostic.StatusWarn },
+				diagnostic.ProbeTLS:   stall,
+				diagnostic.ProbeHTTP:  breakTLS,
+				diagnostic.ProbeHTTPS: breakTLS,
+			},
+			want: diagnostic.ProbePMTU,
+		},
+		{
+			// No redirected blame: the ordinary first-failure rule still holds.
+			name:    "plain TLS failure",
+			results: map[diagnostic.ProbeID]func(*diagnostic.ProbeResult){diagnostic.ProbeTLS: breakTLS},
+			want:    diagnostic.ProbeTLS,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(mustTarget(t, "example.com:443"), false)
+			m.tools = toolsFor(m.target, "linux", toolBind{})
+			var last diagnostic.Probe
+			for _, p := range m.probes {
+				r := diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass, Detail: string(p.ID) + " detail"}
+				if mut, ok := tt.results[p.ID]; ok {
+					mut(&r)
+				}
+				m.started[p.ID] = true
+				m.results[p.ID] = r
+				last = p
+			}
+			// The real completion path: the last probe reporting in is what
+			// finalizes the run and moves the cursor.
+			u, _ := m.Update(probeDoneMsg{id: last.ID, gen: m.generation, res: m.results[last.ID]})
+			done := asModel(t, u)
+			if got := done.probes[done.selected].ID; got != tt.want {
+				t.Fatalf("selected row = %s, want %s", got, tt.want)
+			}
+			var wantName string
+			for _, p := range done.probes {
+				if p.ID == tt.want {
+					wantName = "Details: " + p.Name
+				}
+			}
+			if body := done.bodyView(false); !strings.Contains(body, wantName) {
+				t.Errorf("Details pane does not show %q:\n%s", wantName, body)
+			}
+		})
+	}
+}
+
+// The banner's drill-down must not send a path MTU black hole to curl, which
+// stalls for exactly the reason the protocol rows did.
+func TestBlackHoleBannerAvoidsCurl(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	m.tools = toolsFor(m.target, "linux", toolBind{})
+	for _, p := range m.probes {
+		r := diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+		switch p.ID {
+		case diagnostic.ProbePMTU:
+			r.Status = diagnostic.StatusWarn
+		case diagnostic.ProbeTLS:
+			r.Status, r.Cause = diagnostic.StatusFail, diagnostic.TLSCauseTimeout
+		case diagnostic.ProbeHTTP, diagnostic.ProbeHTTPS:
+			r.Status = diagnostic.StatusFail
+		}
+		m.results[p.ID] = r
+	}
+	banner := m.banner()
+	if !strings.Contains(banner, "path MTU black hole") {
+		t.Fatalf("banner is not the path MTU verdict:\n%s", banner)
+	}
+	if !strings.Contains(banner, "press t for trace the path") {
+		t.Errorf("banner does not offer the path tool:\n%s", banner)
+	}
+	if strings.Contains(banner, "web check") {
+		t.Errorf("banner still sends the reader to curl:\n%s", banner)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	m := newModel(nil, false)
 	if ExitCode(m) != 1 {
