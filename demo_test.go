@@ -42,6 +42,22 @@ func demoSteps(t *testing.T) string {
 	return strings.Join(kept, "\n")
 }
 
+func heroSteps(t *testing.T) string {
+	t.Helper()
+	tape, err := os.ReadFile("hero.tape")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []string
+	for _, line := range strings.Split(string(tape), "\n") {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.TrimSpace(code) != "" {
+			steps = append(steps, code)
+		}
+	}
+	return strings.Join(steps, "\n")
+}
+
 // VHS, ttyd and ffmpeg are the action's job. Installing any of them here would
 // mean a second, unpinned toolchain deciding what the recording looks like.
 func TestDemoWorkflowRecordsThroughTheOfficialVHSAction(t *testing.T) {
@@ -119,24 +135,31 @@ func TestDemoWorkflowInstallsTheToolsTheRecordedScreenOffers(t *testing.T) {
 }
 
 func TestHeroRecordingRunsNetworkDoctorDirectly(t *testing.T) {
-	tape, err := os.ReadFile("hero.tape")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var steps []string
-	for _, line := range strings.Split(string(tape), "\n") {
-		code, _, _ := strings.Cut(line, "#")
-		if strings.TrimSpace(code) != "" {
-			steps = append(steps, code)
-		}
-	}
-	recording := strings.Join(steps, "\n")
+	recording := heroSteps(t)
 	if !strings.Contains(recording, `Type "netdoc printer.invalid"`) {
 		t.Error("hero.tape does not visibly invoke netdoc printer.invalid")
 	}
 	for _, forbidden := range []string{"netdoc-sim", "nsenter", "netdoc()", `$PWD/netdoc`, "has no A/AAAA", "Fix:", "Next:"} {
 		if strings.Contains(recording, forbidden) {
 			t.Errorf("hero.tape executable steps contain %q; the recording must run netdoc directly without injected results", forbidden)
+		}
+	}
+}
+
+// VHS gives the recorded command a real xterm-256color pseudo-terminal, but
+// inherits NO_COLOR locally and CI on GitHub-hosted runners. termenv treats
+// either as an instruction to return its uncolored profile before inspecting
+// the TTY, so the tape clears only those inherited policy flags.
+func TestHeroRecordingUsesItsColorCapableTerminal(t *testing.T) {
+	recording := heroSteps(t)
+	for _, env := range []string{`Env NO_COLOR ""`, `Env CI ""`} {
+		if !strings.Contains(recording, env) {
+			t.Errorf("hero.tape lacks %q; termenv will disable color in a supported recording environment", env)
+		}
+	}
+	for _, forced := range []string{"CLICOLOR_FORCE", "FORCE_COLOR"} {
+		if strings.Contains(recording, forced) {
+			t.Errorf("hero.tape contains %q; advertise the pseudo-terminal's real capability instead of forcing color", forced)
 		}
 	}
 }

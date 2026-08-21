@@ -34,6 +34,13 @@ Set Height 640
 Set Padding 12
 Set TypingSpeed 70ms
 
+# VHS runs a real xterm-256color pseudo-terminal. Clear policy flags inherited
+# from local automation or GitHub Actions so Lip Gloss detects that terminal as
+# ANSI256. This advertises the recorder's actual capability rather than forcing
+# color from Network Doctor.
+Env NO_COLOR ""
+Env CI ""
+
 # Put the freshly built binary on PATH and start from a clean screen. This is
 # the only hidden setup; netdoc remains the binary that the visible command runs.
 Hide
