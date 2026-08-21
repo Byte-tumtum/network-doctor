@@ -105,6 +105,7 @@ func runScenario(t *testing.T, name string, extra ...string) Report {
 	if jsonErr := json.Unmarshal(out, &rep); jsonErr != nil {
 		t.Fatalf("run %s: report is not JSON (%v): %s", name, jsonErr, out)
 	}
+	noteNetnsScenarioExecution(name, &rep)
 	return rep
 }
 
@@ -782,6 +783,7 @@ func TestFlappingCampaignTimelinesAreReproducible(t *testing.T) {
 		if err := json.Unmarshal(out, &result); err != nil {
 			t.Fatalf("campaign JSON: %v: %s", err, out)
 		}
+		noteNetnsCampaignExecution("flapping-connectivity", &result)
 		return result
 	}
 	first, second := run("--runs", "3"), run("--runs", "3")
@@ -848,6 +850,7 @@ func TestUnstableConnectivityCampaignIsReproducible(t *testing.T) {
 		if err := json.Unmarshal(out, &result); err != nil {
 			t.Fatalf("campaign JSON: %v: %s", err, out)
 		}
+		noteNetnsCampaignExecution("unstable-connectivity", &result)
 		return result
 	}
 	first, second := run(""), run("")
@@ -896,6 +899,7 @@ func TestDNSTimeoutBoundaryCampaignCrossesTheDeadline(t *testing.T) {
 		if err := json.Unmarshal(out, &result); err != nil {
 			t.Fatalf("campaign JSON: %v: %s", err, out)
 		}
+		noteNetnsCampaignExecution("dns-timeout-boundary", &result)
 		if len(result.Outcomes) != 1 {
 			t.Fatalf("outcomes = %+v", result.Outcomes)
 		}
@@ -1012,30 +1016,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 	netdoc, sim := buildBinaries(t)
 	run := func(t *testing.T, scenario *Scenario) Report {
 		t.Helper()
-		definition := cloneScenario(scenario)
-		canonicalScenarioInput(definition)
-		blob, err := yaml.Marshal(definition)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(t.TempDir(), "mutation.yaml")
-		if err := os.WriteFile(path, blob, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc, "-timeout", timedTimeout)
-		out, err := cmd.Output()
-		var exit *exec.ExitError
-		if err != nil && !asExitError(err, &exit) {
-			t.Fatalf("run mutation: %v", err)
-		}
-		var rep Report
-		if err := json.Unmarshal(out, &rep); err != nil {
-			t.Fatalf("mutation report is not JSON: %v: %s", err, out)
-		}
-		if rep.Error != "" {
-			t.Fatalf("mutated run failed: %s", rep.Error)
-		}
-		return rep
+		return runScenarioDefinition(t, sim, netdoc, scenario, "-timeout", timedTimeout)
 	}
 	// conditions are the semantic facts the generic hunt oracle should establish
 	// from this run's independent evidence, in registry order, and empty where
@@ -1260,7 +1241,7 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 			}
 			controlReport, ok := controls[tc.base]
 			if !ok {
-				controlReport = run(t, control)
+				controlReport = runLibraryScenarioDefinition(t, sim, netdoc, tc.base, "-timeout", timedTimeout)
 				if controlReport.Result != ResultPass {
 					t.Fatalf("control result = %s, suggestions = %+v", controlReport.Result, controlReport.Suggestions)
 				}
@@ -1331,30 +1312,7 @@ func TestHuntNetemDNSTimelineAndLinkMutationsAreObserved(t *testing.T) {
 	netdoc, sim := buildBinaries(t)
 	run := func(t *testing.T, scenario *Scenario) Report {
 		t.Helper()
-		definition := cloneScenario(scenario)
-		canonicalScenarioInput(definition)
-		blob, err := yaml.Marshal(definition)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(t.TempDir(), "mutation.yaml")
-		if err := os.WriteFile(path, blob, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc, "-timeout", timedTimeout)
-		out, err := cmd.Output()
-		var exit *exec.ExitError
-		if err != nil && !asExitError(err, &exit) {
-			t.Fatalf("run mutation: %v", err)
-		}
-		var rep Report
-		if err := json.Unmarshal(out, &rep); err != nil {
-			t.Fatalf("mutation report is not JSON: %v: %s", err, out)
-		}
-		if rep.Error != "" || !rep.Cleanup.Done {
-			t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
-		}
-		return rep
+		return runScenarioDefinition(t, sim, netdoc, scenario, "-timeout", timedTimeout)
 	}
 
 	base := loadHuntBase(t, "healthy-routed-network")
@@ -1363,7 +1321,7 @@ func TestHuntNetemDNSTimelineAndLinkMutationsAreObserved(t *testing.T) {
 	if err := control.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	controlReport := run(t, control)
+	controlReport := runLibraryScenarioDefinition(t, sim, netdoc, "healthy-routed-network", "-timeout", timedTimeout)
 	for _, id := range []string{
 		"netem.loss", "netem.latency", "netem.jitter", "timeline.netem_spike",
 		"dns.servfail", "dns.drop", "timeline.dns_outage", "link.transient_down",
@@ -1420,30 +1378,7 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 	netdoc, sim := buildBinaries(t)
 	run := func(t *testing.T, scenario *Scenario) Report {
 		t.Helper()
-		definition := cloneScenario(scenario)
-		canonicalScenarioInput(definition)
-		blob, err := yaml.Marshal(definition)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(t.TempDir(), "preferred-path.yaml")
-		if err := os.WriteFile(path, blob, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc)
-		out, err := cmd.Output()
-		var exit *exec.ExitError
-		if err != nil && !asExitError(err, &exit) {
-			t.Fatalf("run preferred path: %v", err)
-		}
-		var rep Report
-		if err := json.Unmarshal(out, &rep); err != nil {
-			t.Fatalf("preferred-path report is not JSON: %v: %s", err, out)
-		}
-		if rep.Error != "" || !rep.Cleanup.Done {
-			t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
-		}
-		return rep
+		return runScenarioDefinition(t, sim, netdoc, scenario)
 	}
 	targetObservation := func(t *testing.T, report Report, target string) ControlledTargetEvidence {
 		t.Helper()
@@ -1475,7 +1410,7 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 			mutation.ID = op.id
 			manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
 
-			baseline := run(t, base)
+			baseline := runLibraryScenarioDefinition(t, sim, netdoc, tc.base)
 			if baseline.Result != ResultPass {
 				t.Fatalf("baseline result = %s; tests=%+v suggestions=%+v", baseline.Result, baseline.Tests, baseline.Suggestions)
 			}
@@ -1557,7 +1492,7 @@ func TestFamilyDropMutationsMoveHolderSideObservation(t *testing.T) {
 		return map[string]string{"ipv4": truth.IPv4, "ipv6": truth.IPv6}
 	}
 
-	baseline := runScenarioDefinition(t, sim, netdoc, control)
+	baseline := runLibraryScenarioDefinition(t, sim, netdoc, "dual-stack-healthy")
 	for _, family := range []string{"ipv4", "ipv6"} {
 		if item := clientFamilyObservation(t, baseline, family); item.State != FamilyStateReachable {
 			t.Fatalf("healthy dual-stack %s observation = %q, want %q", family, item.State, FamilyStateReachable)
@@ -1737,7 +1672,7 @@ func TestHuntFamilyMutationsMoveIndependentReachability(t *testing.T) {
 		return clientFamilyObservation(t, rep, family)
 	}
 
-	baseline := run(t, control)
+	baseline := runLibraryScenarioDefinition(t, sim, netdoc, "dual-stack-healthy")
 	baseline4, baseline6 := observed(t, baseline, "ipv4"), observed(t, baseline, "ipv6")
 	if baseline4.State != FamilyStateReachable || baseline6.State != FamilyStateReachable {
 		t.Fatalf("dual-stack baseline = IPv4 %q, IPv6 %q; want both reachable", baseline4.State, baseline6.State)
@@ -3027,7 +2962,7 @@ func familyState(reachable bool) string {
 
 // runScenarioDefinition runs an in-memory scenario end to end through the real
 // simulator binary, the same way the CLI does, and returns its report.
-func runScenarioDefinition(t *testing.T, sim, netdoc string, scenario *Scenario) Report {
+func runScenarioDefinition(t *testing.T, sim, netdoc string, scenario *Scenario, extra ...string) Report {
 	t.Helper()
 	definition := cloneScenario(scenario)
 	canonicalScenarioInput(definition)
@@ -3039,7 +2974,7 @@ func runScenarioDefinition(t *testing.T, sim, netdoc string, scenario *Scenario)
 	if err := os.WriteFile(path, blob, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(sim, "run", path, "-json", "-netdoc", netdoc)
+	cmd := exec.Command(sim, append([]string{"run", path, "-json", "-netdoc", netdoc}, extra...)...)
 	out, err := cmd.Output()
 	var exit *exec.ExitError
 	if err != nil && !asExitError(err, &exit) {
@@ -3052,6 +2987,17 @@ func runScenarioDefinition(t *testing.T, sim, netdoc string, scenario *Scenario)
 	if rep.Error != "" || !rep.Cleanup.Done {
 		t.Fatalf("run failed: error=%q cleanup=%+v", rep.Error, rep.Cleanup)
 	}
+	return rep
+}
+
+func runLibraryScenarioDefinition(t *testing.T, sim, netdoc, name string, extra ...string) Report {
+	t.Helper()
+	scenario, err := LibraryScenario(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := runScenarioDefinition(t, sim, netdoc, scenario, extra...)
+	noteNetnsScenarioExecution(name, &rep)
 	return rep
 }
 
