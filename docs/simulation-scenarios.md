@@ -169,6 +169,9 @@ Some semantics are easy to get wrong even after reading a scenario:
   verdict has to outrank the rows that all report success, and the direct-egress
   row has to stay FAIL rather than be downgraded by them, since behind a portal
   it is the portal answering.
+- A `tcp` service with `banner` writes that fixed, newline-terminated greeting
+  and then drains the connection until the client closes it. Banners are
+  limited to 1024 bytes, and active connections close with the service.
 
 ### Timed faults
 

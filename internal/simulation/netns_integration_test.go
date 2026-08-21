@@ -444,6 +444,42 @@ func TestTCPResetScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+func TestServiceBannerScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "service-banners")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); tests=%+v", rep.Result, rep.Error, rep.Tests)
+	}
+	if len(rep.Tests) != 4 {
+		t.Fatalf("tests = %+v", rep.Tests)
+	}
+
+	checks := []struct {
+		index  int
+		id     diagnostic.ProbeID
+		status string
+		detail string
+	}{
+		{0, diagnostic.ProbeSSH, "PASS", "banner: SSH-2.0-NetworkDoctorSimulator"},
+		{1, diagnostic.ProbeSMTP, "PASS", "banner: 220 mail.test ESMTP Network Doctor Simulator"},
+		{2, diagnostic.ProbeSMTP, "FAIL", "unexpected service banner: 554 mail.test ESMTP unavailable"},
+		{3, diagnostic.ProbeSSH, "FAIL", "unexpected service banner: 220 mail.test ESMTP Network Doctor Simulator"},
+	}
+	for _, want := range checks {
+		out := rep.Tests[want.index]
+		if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+			t.Errorf("%s: comparison fp=%d fn=%d: %+v", out.Name, out.FalsePositives, out.FalseNegatives, out.Checks)
+		}
+		if tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); tcp.Status != "PASS" {
+			t.Errorf("%s: target_tcp = %+v", out.Name, tcp)
+		}
+		if got := diagnosisCheck(out, string(want.id)); got.Status != want.status || got.Detail != want.detail {
+			t.Errorf("%s: %s = %+v, want %s %q", out.Name, want.id, got, want.status, want.detail)
+		}
+	}
+	assertCleanedUp(t, rep)
+}
+
 // timedTimeout keeps the timed scenarios short in CI. Their timelines are
 // designed so the transitions land the same way at any probe timeout above a
 // few hundred milliseconds; this only decides how long the run that waits out a

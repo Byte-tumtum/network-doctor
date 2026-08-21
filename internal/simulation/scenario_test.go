@@ -408,6 +408,32 @@ func TestTCPConnectionLimitValidation(t *testing.T) {
 	}
 }
 
+func TestTCPBannerValidation(t *testing.T) {
+	withService := func(service string) string {
+		return strings.Replace(minimalScenario, "address: 10.77.0.1}",
+			"address: 10.77.0.1, services: ["+service+"]}", 1)
+	}
+	valid := withService(fmt.Sprintf("{type: tcp, port: 9443, banner: %q}", "SSH-2.0-test\r\n"))
+	s, err := ParseScenario(strings.NewReader(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Topology.Nodes[1].Services[0].Banner; got != "SSH-2.0-test\r\n" {
+		t.Errorf("banner = %q", got)
+	}
+
+	for _, raw := range []string{
+		withService(`{type: http, port: 8080, banner: "220 mail.test ESMTP\r\n"}`),
+		withService(`{type: tcp, port: 9443, banner: "SSH-2.0-test"}`),
+		withService(fmt.Sprintf("{type: tcp, port: 9443, banner: %q}", strings.Repeat("x", maxServiceBannerBytes)+"\n")),
+		withService(`{type: tcp, port: 9443, max_connections: 1, banner: "SSH-2.0-test\r\n"}`),
+	} {
+		if _, err := ParseScenario(strings.NewReader(raw)); err == nil {
+			t.Errorf("accepted invalid banner scenario: %s", raw)
+		}
+	}
+}
+
 func TestTLSCertificateRejectsExcessiveOrInvalidNames(t *testing.T) {
 	many := make([]string, tlsMaxDNSNames+1)
 	for i := range many {

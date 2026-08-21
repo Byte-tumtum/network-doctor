@@ -3,6 +3,7 @@
 package simulation
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -74,6 +75,57 @@ func TestLimitedTCPServiceStopsListening(t *testing.T) {
 	}
 	if err := closeServices([]io.Closer{listener}); err != nil {
 		t.Fatalf("cleanup of exhausted TCP fixture: %v", err)
+	}
+}
+
+func TestBannerServiceWritesAndStaysOpenUntilShutdown(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	server := startBannerServer(ctx, []net.Listener{listener}, "SSH-2.0-test\r\n")
+	t.Cleanup(func() {
+		cancel()
+		_ = server.Close()
+	})
+
+	conn, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil || line != "SSH-2.0-test\r\n" {
+		t.Fatalf("banner = %q, error = %v", line, err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	if _, err := conn.Read(one[:]); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read after banner = %v, want an open connection", err)
+	}
+	if _, err := conn.Write([]byte("client interaction\r\n")); err != nil {
+		t.Fatalf("write after banner: %v", err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if _, err := conn.Read(one[:]); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read after cancellation = %v, want the connection closed", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- server.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("banner service did not shut down")
 	}
 }
 

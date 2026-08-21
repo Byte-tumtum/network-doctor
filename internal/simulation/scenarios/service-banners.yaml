@@ -1,0 +1,63 @@
+name: service-banners
+description: Real TCP greetings exercise successful and mismatched SSH and SMTP banner checks.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            ssh-target.test: 10.77.0.20
+            smtp-target.test: 10.77.0.20
+            bad-smtp-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {type: tcp, port: 2222, banner: "SSH-2.0-NetworkDoctorSimulator\r\n"}
+        - {type: tcp, port: 2525, banner: "220 mail.test ESMTP Network Doctor Simulator\r\n"}
+        - {type: tcp, port: 2526, banner: "554 mail.test ESMTP unavailable\r\n"}
+
+tests:
+  - {name: valid SSH identification, node: client, target: 'ssh://ssh-target.test:2222'}
+  - name: valid SMTP greeting
+    node: client
+    target: 'smtp://smtp-target.test:2525'
+    expect:
+      verdict: ok
+      checks:
+        - {id: target_tcp, status: PASS}
+        - {id: smtp_banner, status: PASS}
+  - name: invalid SMTP greeting
+    node: client
+    target: 'smtp://bad-smtp-target.test:2526'
+    expect:
+      verdict: service
+      checks:
+        - {id: target_tcp, status: PASS}
+        - {id: smtp_banner, status: FAIL}
+  - name: SMTP service on an SSH target
+    node: client
+    target: 'ssh://smtp-target.test:2525'
+    expect:
+      verdict: service
+      checks:
+        - {id: target_tcp, status: PASS}
+        - {id: ssh_banner, status: FAIL}
+
+expect:
+  verdict: ok
+  checks:
+    - {id: target_tcp, status: PASS}
+    - {id: ssh_banner, status: PASS}

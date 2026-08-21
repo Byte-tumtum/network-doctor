@@ -109,6 +109,9 @@ type Service struct {
 	// MaxConnections makes a TCP fixture stop listening after this many
 	// accepted connections. Zero keeps accepting until the scenario ends.
 	MaxConnections int `yaml:"max_connections"`
+	// Banner makes a TCP fixture write one bounded, newline-terminated protocol
+	// greeting before it drains the client connection.
+	Banner string `yaml:"banner"`
 	// Zone maps a name to an address for ServiceDNS. A name that is absent
 	// answers NXDOMAIN, which is how "DNS returns NXDOMAIN" is expressed.
 	Zone map[string]string `yaml:"zone"`
@@ -196,6 +199,7 @@ const (
 	DoHResponseInvalid             = "invalid"
 	tlsMaxDNSNames                 = 16
 	maxServiceConnections          = 1024
+	maxServiceBannerBytes          = 1024
 	dnsMaxRecords                  = 64
 	dnsMaxScheduledOutcomes        = 256
 	maxNetemDuration               = 10 * time.Second
@@ -634,6 +638,9 @@ func (n *Node) validateServices(names map[string]bool) error {
 		if svc.MaxConnections != 0 && svc.Type != ServiceTCP {
 			return fmt.Errorf("node %q: max_connections is only supported by tcp services", n.Name)
 		}
+		if svc.Banner != "" && svc.Type != ServiceTCP {
+			return fmt.Errorf("node %q: banner is only supported by tcp services", n.Name)
+		}
 		if svc.Name != "" {
 			if !isSafeName(svc.Name) {
 				return fmt.Errorf("node %q: service name %q must be letters, digits or dashes", n.Name, svc.Name)
@@ -711,6 +718,15 @@ func (n *Node) validateServices(names map[string]bool) error {
 		case ServiceTCP:
 			if svc.Port == 0 {
 				return fmt.Errorf("node %q: tcp service needs a port", n.Name)
+			}
+			if len(svc.Banner) > maxServiceBannerBytes {
+				return fmt.Errorf("node %q: tcp banner must be at most %d bytes", n.Name, maxServiceBannerBytes)
+			}
+			if svc.Banner != "" && !strings.HasSuffix(svc.Banner, "\n") {
+				return fmt.Errorf("node %q: tcp banner must end with a newline", n.Name)
+			}
+			if svc.Banner != "" && svc.MaxConnections != 0 {
+				return fmt.Errorf("node %q: tcp banner does not support max_connections", n.Name)
 			}
 			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: tcp service has unsupported options", n.Name)

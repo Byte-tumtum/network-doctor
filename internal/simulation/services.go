@@ -155,6 +155,9 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 		if err != nil {
 			return nil, nil, err
 		}
+		if svc.Banner != "" {
+			return []io.Closer{startBannerServer(ctx, listeners, svc.Banner)}, nil, nil
+		}
 		for _, ln := range listeners {
 			go serveSink(ln, svc.MaxConnections)
 		}
@@ -351,6 +354,51 @@ func serveSink(ln net.Listener, maxConnections int) {
 			return
 		}
 	}
+}
+
+type bannerServer struct {
+	listeners []net.Listener
+	cancel    context.CancelFunc
+	banner    string
+	wg        sync.WaitGroup
+}
+
+func startBannerServer(parent context.Context, listeners []net.Listener, banner string) *bannerServer {
+	ctx, cancel := context.WithCancel(parent)
+	s := &bannerServer{listeners: listeners, cancel: cancel, banner: banner}
+	for _, listener := range listeners {
+		s.wg.Add(1)
+		go s.serve(ctx, listener)
+	}
+	return s
+}
+
+func (s *bannerServer) serve(ctx context.Context, listener net.Listener) {
+	defer s.wg.Done()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		s.wg.Add(1)
+		go func(conn net.Conn) {
+			defer s.wg.Done()
+			defer conn.Close()
+			stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+			defer stop()
+			if _, err := io.WriteString(conn, s.banner); err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, conn)
+		}(conn)
+	}
+}
+
+func (s *bannerServer) Close() error {
+	s.cancel()
+	err := closeServices(listenersAsClosers(s.listeners))
+	s.wg.Wait()
+	return err
 }
 
 type tcpResetServer struct {
