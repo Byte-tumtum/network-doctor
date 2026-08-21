@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -143,6 +144,80 @@ func TestHealthyScenario(t *testing.T) {
 	// untested is not an observed IPv6 outage, and it is not silence either.
 	assertObservedFamily(t, rep, "ipv4", FamilyStateReachable)
 	assertObservedFamily(t, rep, "ipv6", FamilyStateUnavailable)
+	assertCleanedUp(t, rep)
+}
+
+func TestSameFamilyFailoverScenario(t *testing.T) {
+	requireBackend(t)
+	const (
+		deadIP    = "10.77.0.20"
+		healthyIP = "10.77.0.21"
+	)
+	scenario, err := LibraryScenario("same-family-failover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ordered []string
+	for _, node := range scenario.Topology.Nodes {
+		for _, service := range node.Services {
+			if service.Type != ServiceDNS {
+				continue
+			}
+			for _, record := range service.Records {
+				if record.Name == "failover-target.test" {
+					ordered = append(ordered, record.Address)
+				}
+			}
+		}
+	}
+	if !slices.Equal(ordered, []string{deadIP, healthyIP}) {
+		t.Fatalf("ordered A records = %v, want [%s %s]", ordered, deadIP, healthyIP)
+	}
+
+	rep := runScenario(t, "same-family-failover")
+	if rep.Result != ResultPass || len(rep.Tests) != 1 {
+		t.Fatalf("result = %s (error %q); tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+	}
+	out := rep.Tests[0]
+	if dns := diagnosisCheck(out, string(diagnostic.ProbeDNS)); dns.Status != "PASS" {
+		t.Errorf("dns = %+v, want both A records resolved", dns)
+	}
+	tcp := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP))
+	if tcp.Status != "PASS" || len(tcp.Attempts) != 2 {
+		t.Fatalf("target_tcp = %+v, want successful two-address failover", tcp)
+	}
+	first, second := tcp.Attempts[0], tcp.Attempts[1]
+	if first.IP != deadIP || first.Error == "" || !strings.Contains(strings.ToLower(first.Error), "cancel") {
+		t.Errorf("first attempt = %+v, want cancelled black-holed address %s", first, deadIP)
+	}
+	if first.Ms < 200 {
+		t.Errorf("first attempt = %dms, want evidence that the 250ms fallback stagger elapsed", first.Ms)
+	}
+	if second.IP != healthyIP || second.Error != "" {
+		t.Errorf("second attempt = %+v, want successful address %s", second, healthyIP)
+	}
+	for _, attempt := range tcp.Attempts {
+		if ip := net.ParseIP(attempt.IP); ip == nil || ip.To4() == nil {
+			t.Errorf("attempt %q is not IPv4", attempt.IP)
+		}
+	}
+	if httpCheck := diagnosisCheck(out, string(diagnostic.ProbeHTTP)); httpCheck.Status != "PASS" ||
+		!hasServiceReply(rep, "healthy-target", "failover-http", ServiceHTTP, http.StatusOK) {
+		t.Errorf("HTTP did not use the healthy selected address: check=%+v replies=%+v", httpCheck, rep.Evidence.ServiceReplies)
+	}
+	matchedDrop := false
+	for _, drop := range rep.Evidence.PacketDrops {
+		if drop.Node == "black-holed-target" && drop.Direction == DirectionInbound && drop.To == deadIP &&
+			drop.Protocol == "tcp" && drop.Port == 80 && drop.Packets > 0 {
+			matchedDrop = true
+		}
+	}
+	if !matchedDrop {
+		t.Errorf("black-hole rule did not count the first real SYN: %+v", rep.Evidence.PacketDrops)
+	}
+	if out.ActualVerdict != diagnostic.VerdictOK {
+		t.Errorf("verdict = %s, want %s after successful fallback", out.ActualVerdict, diagnostic.VerdictOK)
+	}
 	assertCleanedUp(t, rep)
 }
 

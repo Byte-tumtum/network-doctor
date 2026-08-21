@@ -109,6 +109,36 @@ func TestDNSReplyDualStackName(t *testing.T) {
 	}
 }
 
+func TestDNSReplyPreservesSameFamilyRecordOrder(t *testing.T) {
+	records := []DNSRecord{
+		{Name: "failover.test", Address: "10.77.0.20"},
+		{Name: "failover.test", Address: "10.77.0.21"},
+	}
+	zone, err := parseZone(nil, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := dnsQuery("failover.test", dnsTypeA)
+	reply := dnsReply(query, zone)
+	if reply == nil || answers(reply) != len(records) {
+		t.Fatalf("reply has %d answers, want %d", answers(reply), len(records))
+	}
+
+	nameLen := len(query) - dnsHeaderLen - 4
+	offset := len(query)
+	for i, record := range records {
+		offset += nameLen + 10
+		if offset+4 > len(reply) {
+			t.Fatalf("answer %d runs past %d-byte reply", i, len(reply))
+		}
+		got, ok := netip.AddrFromSlice(reply[offset : offset+4])
+		if !ok || got.String() != record.Address {
+			t.Errorf("answer %d = %v, want %s", i, got, record.Address)
+		}
+		offset += 4
+	}
+}
+
 func TestDNSReplyRejectsJunk(t *testing.T) {
 	zone := testZone(t)
 	// An answer, not a query: replying would make two of these servers talk to

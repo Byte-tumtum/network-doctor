@@ -291,6 +291,25 @@ func TestFaultDefaults(t *testing.T) {
 	}
 }
 
+func TestDNSRecordsAllowOrderedSameFamilyAnswers(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, services: [{type: dns, records: [{name: Failover.Test, address: 10.77.0.20}, {name: failover.test., address: 10.77.0.21}]}]}", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := s.Topology.Nodes[1].Services[0].Records
+	if len(records) != 2 || records[0].Name != "failover.test" || records[0].Address != "10.77.0.20" ||
+		records[1].Name != "failover.test" || records[1].Address != "10.77.0.21" {
+		t.Fatalf("records = %+v, want canonicalized input order", records)
+	}
+
+	duplicate := strings.Replace(raw, "10.77.0.21", "10.77.0.20", 1)
+	if _, err := ParseScenario(strings.NewReader(duplicate)); err == nil || !strings.Contains(err.Error(), "duplicate DNS record") {
+		t.Errorf("duplicate address error = %v, want duplicate DNS record", err)
+	}
+}
+
 // dualStackRoutedScenario gives the router a transit interface carrying IPv6,
 // which is the only case where the MTU floor a scenario may ask for changes.
 var dualStackRoutedScenario = strings.NewReplacer(

@@ -115,8 +115,8 @@ type Service struct {
 	// Zone maps a name to an address for ServiceDNS. A name that is absent
 	// answers NXDOMAIN, which is how "DNS returns NXDOMAIN" is expressed.
 	Zone map[string]string `yaml:"zone"`
-	// Records is the dual-stack form. Zone remains the compatible single-record
-	// shorthand; both forms describe static address records only.
+	// Records is the ordered multi-record form. Zone remains the compatible
+	// single-record shorthand; both forms describe static address records only.
 	Records []DNSRecord `yaml:"records"`
 	// Body and Status shape the ServiceHTTP reply on every path but the
 	// connectivity check, which answers 204 so netdoc's captive-portal check
@@ -661,7 +661,7 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if len(svc.Zone)+len(svc.Records) > dnsMaxRecords {
 				return fmt.Errorf("node %q: dns service has %d records, maximum is %d", n.Name, len(svc.Zone)+len(svc.Records), dnsMaxRecords)
 			}
-			zoneNames := make(map[string]string, len(svc.Zone)+len(svc.Records))
+			zoneFamilies := make(map[string]string, len(svc.Zone))
 			for name, ip := range svc.Zone {
 				if !isSafeHostname(name) {
 					return fmt.Errorf("node %q: zone name %q is not a hostname", n.Name, name)
@@ -674,12 +674,13 @@ func (n *Node) validateServices(names map[string]bool) error {
 					return fmt.Errorf("node %q: zone %s: %w", n.Name, name, err)
 				}
 				key := dnsKey(name) + "\x00" + addressFamily(addr)
-				if previous, exists := zoneNames[key]; exists {
+				if previous, exists := zoneFamilies[key]; exists {
 					return fmt.Errorf("node %q: duplicate DNS record %q conflicts with %q", n.Name, name, previous)
 				}
-				zoneNames[key] = name
+				zoneFamilies[key] = name
 				svc.Zone[name] = canonical
 			}
+			recordAddresses := make(map[string]string, len(svc.Records))
 			for ri := range svc.Records {
 				record := &svc.Records[ri]
 				if !isSafeHostname(record.Name) {
@@ -692,11 +693,15 @@ func (n *Node) validateServices(names map[string]bool) error {
 				if err := validateInterfaceAddr(addr); err != nil {
 					return fmt.Errorf("node %q: record %s: %w", n.Name, record.Name, err)
 				}
-				key := dnsKey(record.Name) + "\x00" + addressFamily(addr)
-				if previous, exists := zoneNames[key]; exists {
+				familyKey := dnsKey(record.Name) + "\x00" + addressFamily(addr)
+				if previous, exists := zoneFamilies[familyKey]; exists {
 					return fmt.Errorf("node %q: duplicate DNS record %q conflicts with %q", n.Name, record.Name, previous)
 				}
-				zoneNames[key] = record.Name
+				addressKey := dnsKey(record.Name) + "\x00" + canonical
+				if previous, exists := recordAddresses[addressKey]; exists {
+					return fmt.Errorf("node %q: duplicate DNS record %q conflicts with %q", n.Name, record.Name, previous)
+				}
+				recordAddresses[addressKey] = record.Name
 				record.Name, record.Address = dnsKey(record.Name), canonical
 			}
 			if err := validateDNSFault(svc.DNSFault); err != nil {

@@ -144,11 +144,18 @@ func TestDialIPsRacesStaggered(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	conn, sel, _, _ := ops.dialIPs(ctx, []net.IP{net.ParseIP("192.0.2.1"), win}, 80)
+	conn, sel, attempts, _ := ops.dialIPs(ctx, []net.IP{net.ParseIP("192.0.2.1"), win}, 80)
 	if conn == nil || !sel.Equal(win) {
 		t.Fatalf("sel = %v, want the second address to win the race", sel)
 	}
 	_ = conn.Close()
+	if len(attempts) != 2 || !attempts[0].IP.Equal(net.ParseIP("192.0.2.1")) || attempts[0].Err == nil ||
+		!attempts[1].IP.Equal(win) || attempts[1].Err != nil {
+		t.Fatalf("attempts = %+v, want cancelled first address followed by the winner", attempts)
+	}
+	if attempts[0].Dur < 200*time.Millisecond {
+		t.Errorf("first attempt lasted %v, want evidence that the 250ms stagger elapsed", attempts[0].Dur)
+	}
 	if e := time.Since(start); e > 2*time.Second {
 		t.Errorf("race took %v, want well under the hung address's deadline", e)
 	}

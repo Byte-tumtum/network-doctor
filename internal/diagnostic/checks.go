@@ -2052,11 +2052,17 @@ func applyDialWarnings(r *ProbeResult, rtt time.Duration, extra ...string) {
 	if rtt >= warnRTT {
 		notes = append(notes, fmt.Sprintf("high latency (%dms)", rtt.Milliseconds()))
 	}
-	// dialIPs records completed attempts plus the winner (last), so every
-	// earlier attempt genuinely failed before the win. Callers hand over only
-	// the winning family's attempts (see targetTCPProbe).
-	if n := len(r.Attempts) - 1; n > 0 {
-		notes = append(notes, fmt.Sprintf("%d of %d address(es) failed", n, len(r.Attempts)))
+	// A dial canceled because another address won is useful attempt evidence,
+	// but it does not prove that address failed. Callers hand over only the
+	// winning family's attempts (see targetTCPProbe).
+	failed := 0
+	for _, attempt := range r.Attempts[:max(0, len(r.Attempts)-1)] {
+		if attempt.Err != nil && !errors.Is(attempt.Err, context.Canceled) {
+			failed++
+		}
+	}
+	if failed > 0 {
+		notes = append(notes, fmt.Sprintf("%d of %d address(es) failed", failed, len(r.Attempts)))
 	}
 	if r.ifaceAmbiguous {
 		notes = append(notes, "ambiguous source interface")
@@ -2153,8 +2159,8 @@ func splitFamilies(ips []net.IP) (v4, v6 []net.IP) {
 // addresses are interleaved by family (IPv6 first), each attempt starts
 // attemptDelay after the previous one (sooner once it fails), and the first
 // success cancels the rest. Returns the winning conn, the IP that won (pinned
-// for protocol probes), the attempts that completed before the win, and the
-// winning RTT. A cancelled/expired ctx dials nothing.
+// for protocol probes), failed attempts that started before the win plus the
+// winner, and the winning RTT. A cancelled/expired ctx dials nothing.
 func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn, net.IP, []Attempt, time.Duration) {
 	ips = interleaveFamilies(ips)
 	if len(ips) > maxAttempts {
@@ -2170,11 +2176,13 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 		conn net.Conn
 		att  Attempt
 	}
-	winner := make(chan result)           // unbuffered: hand off or close, never leak
-	fails := make(chan Attempt, len(ips)) // buffered: a failure never blocks its goroutine
+	results := make(chan result, len(ips))
 	next := make(chan struct{}, len(ips)) // a failure fast-forwards the stagger
+	started := make(chan struct{}, len(ips))
+	scheduled := make(chan struct{})
 
 	go func() {
+		defer close(scheduled)
 		for i, ip := range ips {
 			if i > 0 {
 				t := time.NewTimer(attemptDelay)
@@ -2190,6 +2198,7 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 			if dctx.Err() != nil {
 				return
 			}
+			started <- struct{}{}
 			go func(ip net.IP) {
 				start := time.Now()
 				network := "tcp6"
@@ -2198,43 +2207,52 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 				}
 				conn, err := o.dialContext(dctx, network, net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 				att := Attempt{IP: ip, Dur: since(start), Err: err}
+				results <- result{conn, att}
 				if err != nil {
-					fails <- att
 					next <- struct{}{}
-					return
-				}
-				select {
-				case winner <- result{conn, att}:
-				case <-dctx.Done():
-					_ = conn.Close() // lost the race
 				}
 			}(ip)
 		}
 	}()
 
-	// Every address either wins, fails, or never starts; pending bounds the
-	// loop either way. On a win we return at once, and the deferred cancel tells
-	// stragglers still dialing to give up and close whatever they got.
+	// A winner cancels the dials already in flight. Drain those started dials so
+	// their failures remain visible and no successful loser leaks its socket.
 	var attempts []Attempt
-	for pending := len(ips); pending > 0; pending-- {
-		select {
-		case w := <-winner:
-			// Both channels can be ready at once and select picks blind, so
-			// siblings that already failed may still be queued. Collect them
-			// before leaving, since dropping one turns a documented WARN into a PASS
-			// and loses the evidence. Nothing else reads fails, so no receive
-			// here can block.
-			for len(fails) > 0 {
-				attempts = append(attempts, <-fails)
+	completed := 0
+	drain := func() {
+		cancel()
+		<-scheduled
+		for completed < len(started) {
+			got := <-results
+			completed++
+			if got.conn != nil {
+				_ = got.conn.Close()
 			}
-			attempts = append(attempts, w.att) // winner last; applyDialWarnings counts on it
-			return w.conn, w.att.IP, attempts, w.att.Dur
-		case att := <-fails:
-			attempts = append(attempts, att)
+			if got.att.Err != nil {
+				attempts = append(attempts, got.att)
+			}
+		}
+	}
+	for completed < len(ips) {
+		select {
+		case got := <-results:
+			completed++
+			if got.att.Err != nil {
+				if got.conn != nil {
+					_ = got.conn.Close()
+				}
+				attempts = append(attempts, got.att)
+				continue
+			}
+			drain()
+			attempts = append(attempts, got.att) // winner last; applyDialWarnings counts on it
+			return got.conn, got.att.IP, attempts, got.att.Dur
 		case <-ctx.Done():
+			drain()
 			return nil, nil, attempts, 0
 		}
 	}
+	<-scheduled
 	return nil, nil, attempts, 0
 }
 
