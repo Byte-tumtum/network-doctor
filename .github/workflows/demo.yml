@@ -1,0 +1,117 @@
+name: demo
+
+# Records the README's hero GIF from hero.tape, against the binary built from
+# this commit, using the official VHS action. VHS, ttyd and ffmpeg all come from
+# that action; nothing here installs them.
+#
+# This job proves the tape still runs. It deliberately does not compare the
+# recording against the committed assets/hero.gif, because that comparison
+# cannot be made to mean anything:
+#
+#   * The screen carries live measurements. Two runs of the same probe chain,
+#     back to back on one machine, disagree on the latency in the detail pane
+#     ("IPv4 egress via 1.1.1.1 in 5ms" against "in 4ms"), and the egress row
+#     names the recording host's own source address and interface.
+#   * The checks panel animates a spinner on its own ticker while VHS samples
+#     frames on a separate 25fps one. The two have no phase relationship, so
+#     which spinner glyph each frame catches is a race even with every
+#     measurement held fixed.
+#
+# So a byte comparison would fail on every run while the recording stayed
+# visually correct, and a failing check nobody can satisfy gets switched off.
+# What is worth catching is the tape breaking: a renamed flag, a moved key
+# binding, a TUI that panics on startup. That is what a run here fails on, and
+# the recording is uploaded so a reviewer can watch the result of a change in
+# the pull request that makes it.
+#
+# Refreshing the committed GIF stays a deliberate act: download this run's
+# artifact, or record locally per the instructions in hero.tape. Nothing here
+# commits to the repository, so this workflow needs no write permission and runs
+# the same way on a fork's pull request as on main.
+#
+# demo.tape is not recorded here. It sweeps the recording machine's local /24
+# with nmap and shows the device names it finds, which on a hosted runner means
+# port scanning a subnet belonging to someone else, and it fills the SSH form
+# from the current user. It stays a local recording on a network its author is
+# happy to publish, exactly as its header says.
+
+# Anything the recorded screen is made of: the tape, this workflow, and the
+# program itself, whose check names, verdict sentences and layout are all on
+# screen. Not an anchor shared between the two triggers, because GitHub Actions
+# does not resolve YAML anchors. Docs, packaging and the site are left out; they
+# are where most of the churn here is and none of it reaches the recording.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - hero.tape
+      - .github/workflows/demo.yml
+  pull_request:
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - hero.tape
+      - .github/workflows/demo.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hero:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # hero.tape puts $PWD on PATH and then types `netdoc`, so the binary has
+      # to land in the workspace root, which is also where the action runs VHS
+      # from. That is the same build the tape's own header documents, and it is
+      # what stops the recording picking up an installed netdoc from elsewhere.
+      - run: go build -o netdoc .
+        env:
+          CGO_ENABLED: "0"
+      # The action supplies JetBrains Mono, which is the first family in VHS's
+      # own default font stack and the one hero.tape records with, so
+      # install-fonts stays off. The VHS version is pinned for the same reason
+      # every other tool in this repository is: a recording that changes because
+      # the renderer moved underneath it is not a recording of a change here.
+      - uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf # v2.1.1
+        with:
+          path: hero.tape
+          version: v0.11.0
+      # A tape that fails part way still leaves a file behind, so check that the
+      # recording is a real one: the dimensions hero.tape declares, and enough
+      # frames to be the whole story rather than a truncated screen. ffprobe is
+      # already on PATH; VHS cannot encode a GIF without ffmpeg.
+      - name: Verify the recording
+        run: |
+          set -euo pipefail
+          test -f assets/hero.gif
+          # A GIF carries no frame count in its header, so -count_frames walks
+          # them. mapfile rather than read, because ffprobe's last line has no
+          # newline after it and read reports that as failure under set -e even
+          # though every variable was assigned.
+          mapfile -t recording < <(ffprobe -v error -select_streams v:0 \
+            -count_frames -show_entries stream=width,height,nb_read_frames \
+            -of default=nw=1:nk=1 assets/hero.gif)
+          printf 'assets/hero.gif: %sx%s, %s frames\n' "${recording[@]}"
+          # Set Width 1100 / Set Height 640 in hero.tape.
+          test "${recording[0]}" = "1100"
+          test "${recording[1]}" = "640"
+          # The tape holds the finished screen for 10s at 25fps. Well under the
+          # 250 that implies, so a slow runner does not fail the build, but far
+          # above what a chain that died on startup would produce.
+          test "${recording[2]}" -ge 100
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hero-gif
+          path: assets/hero.gif
+          if-no-files-found: error

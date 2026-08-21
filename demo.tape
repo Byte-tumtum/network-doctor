@@ -6,6 +6,11 @@
 #
 #   go build -o netdoc . && HOME=$(mktemp -d) vhs demo.tape
 #
+# Local only, unlike hero.tape. The network-map segment below sweeps the
+# recording machine's own /24 with nmap and the SSH form fills itself from the
+# current user, neither of which a hosted CI runner has any business doing, so
+# .github/workflows/demo.yml records the hero tape and leaves this one alone.
+#
 # Needs a working network connection; probes run live against github.com:443.
 # The network-map segment sweeps the local /24 and shows real device names, so
 # record on a network you're happy to publish.

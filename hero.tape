@@ -6,6 +6,15 @@
 #
 #   go build -o netdoc . && HOME=$(mktemp -d) vhs hero.tape
 #
+# CI records this tape too, on every change to the Go code or to the tape, in
+# .github/workflows/demo.yml through charmbracelet/vhs-action. That run is what
+# holds the tape to the program: it fails if a flag, a key binding or the
+# startup path the tape depends on has moved. It does not compare its recording
+# against the committed assets/hero.gif and does not commit one, because the
+# screen carries live latencies and an animated spinner, so no two recordings
+# are alike. To refresh the committed GIF, record locally with the line above,
+# or download the hero-gif artifact from a run of that workflow.
+#
 # Needs a working network connection: the interface, egress, QUIC and public-DNS
 # rows are live probes. The failing row is the reproducible part:
 # api.acme.invalid sits under the reserved `.invalid` TLD (RFC 6761), so
