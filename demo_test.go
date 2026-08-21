@@ -118,14 +118,25 @@ func TestDemoWorkflowInstallsTheToolsTheRecordedScreenOffers(t *testing.T) {
 	}
 }
 
-func TestHeroRecordingUsesTheSimulator(t *testing.T) {
+func TestHeroRecordingRunsNetworkDoctorDirectly(t *testing.T) {
 	tape, err := os.ReadFile("hero.tape")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"netdoc-sim run ", "nsenter -t ", `$PWD/netdoc "$@"`, "netdoc-sim cleanup "} {
-		if !strings.Contains(string(tape), want) {
-			t.Errorf("hero.tape does not contain %q", want)
+	var steps []string
+	for _, line := range strings.Split(string(tape), "\n") {
+		code, _, _ := strings.Cut(line, "#")
+		if strings.TrimSpace(code) != "" {
+			steps = append(steps, code)
+		}
+	}
+	recording := strings.Join(steps, "\n")
+	if !strings.Contains(recording, `Type "netdoc printer.invalid"`) {
+		t.Error("hero.tape does not visibly invoke netdoc printer.invalid")
+	}
+	for _, forbidden := range []string{"netdoc-sim", "nsenter", "netdoc()", `$PWD/netdoc`, "has no A/AAAA", "Fix:", "Next:"} {
+		if strings.Contains(recording, forbidden) {
+			t.Errorf("hero.tape executable steps contain %q; the recording must run netdoc directly without injected results", forbidden)
 		}
 	}
 }
@@ -179,11 +190,10 @@ func TestDemoWorkflowPinsItsActionsAndItsVHS(t *testing.T) {
 	}
 }
 
-// Nothing here writes: the recording is uploaded as an artifact for a reviewer
-// rather than committed. That is what lets the workflow run unchanged on a
-// pull request from a fork, and what keeps it from committing to main and
-// triggering itself.
-func TestDemoWorkflowIsReadOnlyAndTriggerableByHand(t *testing.T) {
+// Nothing here writes: the manually requested recording is uploaded as an
+// artifact for review rather than committed. This also prevents a recording
+// run from triggering itself.
+func TestDemoWorkflowIsReadOnlyAndManual(t *testing.T) {
 	data, err := os.ReadFile(".github/workflows/demo.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -198,10 +208,11 @@ func TestDemoWorkflowIsReadOnlyAndTriggerableByHand(t *testing.T) {
 		t.Fatalf("demo.yml is not valid YAML: %v", err)
 	}
 
-	for _, trigger := range []string{"pull_request", "workflow_dispatch"} {
-		if _, ok := workflow.On[trigger]; !ok {
-			t.Errorf("demo.yml does not trigger on %s", trigger)
-		}
+	if len(workflow.On) != 1 {
+		t.Errorf("demo.yml triggers on %v; live network recording must be manual only", workflow.On)
+	}
+	if _, ok := workflow.On["workflow_dispatch"]; !ok {
+		t.Error("demo.yml cannot be triggered by hand")
 	}
 	if got := workflow.Permissions["contents"]; got != "read" {
 		t.Errorf("demo.yml grants contents: %q, want read", got)

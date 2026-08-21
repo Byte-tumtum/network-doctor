@@ -41,12 +41,12 @@ Use
 [`broken-dns.yaml`](../internal/simulation/scenarios/broken-dns.yaml) as the
 complete, validated single-segment example.
 
-### README hero scenario
+### Deterministic NXDOMAIN scenario
 
-The README hero reuses the built-in `dns-nxdomain` scenario. It represents an
-office printer whose hostname, `printer.office.test`, has no DNS record while
-the interface, direct internet path, QUIC, public DNS and encrypted DNS remain
-healthy. The normal diagnosis is:
+The built-in `dns-nxdomain` scenario represents an office printer whose
+hostname, `printer.office.test`, has no DNS record while the interface, direct
+internet path, QUIC, public DNS and encrypted DNS remain healthy. It is the
+deterministic regression fixture for an isolated missing-name diagnosis:
 
 ```text
 printer.office.test has no A/AAAA records according to either system or public DNS. (The general internet is reachable.)
@@ -65,26 +65,6 @@ The run provisions the network, executes the real
 `netdoc printer.office.test` diagnostic in its client node, and cleans up. Add
 `-keep` to retain it for inspection; the report prints its simulation id, and
 `./netdoc-sim cleanup <id>` releases it.
-
-`hero.tape` automates that same `-keep` lifecycle while hiding simulator setup,
-so the recorded terminal shows only the command and Network Doctor. Recording
-is Linux-only and needs VHS plus the simulator host tools listed in
-[Requirements and safety](simulation.md#requirements-and-safety). Regenerate
-`assets/hero.gif` with:
-
-```sh
-CGO_ENABLED=0 go build -o netdoc .
-CGO_ENABLED=0 go build -o netdoc-sim ./cmd/netdoc-sim
-hero_home=$(mktemp -d)
-HOME="$hero_home" vhs hero.tape
-XDG_RUNTIME_DIR="$hero_home" ./netdoc-sim cleanup -all
-rm -rf "$hero_home"
-```
-
-The tape exits Network Doctor and releases the kept simulation after its final
-hold. The explicit cleanup also covers an interrupted recording, then removes
-the isolated history and log files. The demo workflow records the tape on a
-Linux runner and uploads the GIF for review.
 
 The original `topology.subnet`, node `address`, and node `gateway` fields are
 single-segment compatibility shorthand. Routed scenarios use named `segments`,

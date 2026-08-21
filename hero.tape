@@ -1,35 +1,27 @@
 # VHS tape for the README hero GIF (https://github.com/charmbracelet/vhs).
-# One story, start to finish: a host that doesn't resolve, the chain stopping at
-# the layer that broke, and the fix.
+# One ordinary Network Doctor run: the machine can reach the internet, but a
+# printer name does not exist, so the chain stops at DNS and explains the fix.
+#
+# Record on a clean Linux machine whose interface name and optional Wi-Fi name
+# are safe to publish. The machine needs ordinary internet access, Go, VHS
+# v0.11.0, plus ping, dig, curl, traceroute, mtr, ss, ip, nmap, and ssh so every
+# Dig deeper action is available. VHS also needs its normal ttyd, browser,
+# ffmpeg, and font setup.
 #
 # Regenerate with:
 #
 #   CGO_ENABLED=0 go build -o netdoc .
-#   CGO_ENABLED=0 go build -o netdoc-sim ./cmd/netdoc-sim
-#   hero_home=$(mktemp -d)
-#   HOME="$hero_home" vhs hero.tape
-#   XDG_RUNTIME_DIR="$hero_home" ./netdoc-sim cleanup -all
-#   rm -rf "$hero_home"
+#   hero_config=$(mktemp -d)
+#   XDG_CONFIG_HOME="$hero_config" vhs hero.tape
+#   rm -rf "$hero_config"
 #
-# CI records this tape too, on every change to the Go code or to the tape, in
-# .github/workflows/demo.yml through charmbracelet/vhs-action. That run is what
-# holds the tape to the program: it fails if a flag, a key binding or the
-# startup path the tape depends on has moved. It does not compare its recording
-# against the committed assets/hero.gif and does not commit one, because the
-# screen carries live latencies and an animated spinner, so no two recordings
-# are alike. To refresh the committed GIF, record locally with the line above,
-# or download the hero-gif artifact from a run of that workflow.
+# The temporary config directory keeps netdoc's target history out of the
+# recording account without replacing HOME, which VHS and its renderer may use.
+# The tape writes the tracked result to assets/hero.gif.
 #
-# The tape starts the built-in dns-nxdomain scenario before recording. Every
-# probe runs inside its rootless Linux namespaces against simulator-owned DNS,
-# HTTP, QUIC and encrypted-DNS services. Nothing reaches the host network or
-# the public internet.
-#
-# Record under a throwaway HOME so netdoc's target-history file and the kept
-# simulator state are written to a temp dir instead of your own config.
-#
-# No visible keypresses follow the command: the TUI moves the cursor to the
-# first failed row itself, so what you see is what a first-time user sees.
+# The interface, egress, QUIC, public-DNS, and encrypted-DNS rows are live
+# probes. printer.invalid uses the reserved .invalid namespace, so the target
+# itself cannot unexpectedly acquire a DNS record.
 
 Output assets/hero.gif
 
@@ -40,51 +32,24 @@ Set FontSize 16
 Set Width 1100
 Set Height 640
 Set Padding 12
-Set TypingSpeed 45ms
+Set TypingSpeed 70ms
 
-# Put both freshly built binaries on PATH. The simulator first grades the same
-# scenario once through its normal runner, then keeps the network alive. Enter
-# the director's user namespace before the client network and mount namespaces,
-# and trust only the simulator-generated roots used by the ordinary runner.
-# All of this is hidden because the visible story begins with the user's command.
+# Put the freshly built binary on PATH and start from a clean screen. This is
+# the only hidden setup; netdoc remains the binary that the visible command runs.
 Hide
-Type "export PATH=$PWD:$PATH XDG_RUNTIME_DIR=$HOME"
-Enter
-Type "netdoc-sim run dns-nxdomain -keep -netdoc $PWD/netdoc >$HOME/hero-sim.log 2>&1 &"
-Enter
-Type "hero_deadline=$((SECONDS + 30))"
-Enter
-Type `while ! hero_state=$(find $XDG_RUNTIME_DIR/netdoc-sim -name '*.json' -type f -print -quit 2>/dev/null) || [ -z "$hero_state" ]; do if (( SECONDS >= hero_deadline )); then cat $HOME/hero-sim.log; exit 1; fi; sleep .05; done`
-Enter
-Type "hero_id=${hero_state##*/}; hero_id=${hero_id%.json}"
-Enter
-Type `hero_director=$(awk '/"pid":/{gsub(/[^0-9]/,""); print; exit}' $hero_state)`
-Enter
-Type `hero_client=$(awk '/"name": "client"/{client=1} client && /"pid":/{gsub(/[^0-9]/,""); print; exit}' $hero_state)`
-Enter
-Type `hero_workspace=$(awk -F'"' '/"workspace":/{print $4; exit}' $hero_state)`
-Enter
-Type `netdoc() { nsenter -t $hero_director -U -n -m --preserve-credentials -- nsenter -t $hero_client -n -m -- env SSL_CERT_DIR=$hero_workspace/probe-roots $PWD/netdoc "$@"; }`
+Type "export PATH=$PWD:$PATH"
 Enter
 Type "clear"
 Enter
 Show
 
-Type "netdoc printer.office.test"
+# Let the empty terminal breathe so the loop starts cleanly, then type exactly
+# what someone with Network Doctor installed would type.
+Sleep 800ms
+Type "netdoc printer.invalid"
 Sleep 400ms
 Enter
 
-# The chain resolves in well under a second: link, egress and QUIC pass, DNS
-# fails, and everything downstream of DNS is skipped rather than guessed at.
-# The banner names the failure in a sentence and the fix under it; the cursor
-# lands on the failed row on its own, so the details pane already holds the
-# evidence. Hold there, because that is the whole story.
-Sleep 10s
-
-# Leave no kept simulator or workspace behind. Hide before quitting so the GIF
-# ends on the diagnosis instead of flashing back to the shell prompt.
-Hide
-Type "q"
-Sleep 500ms
-Type "netdoc-sim cleanup $hero_id >/dev/null"
-Enter
+# The live probes settle at their real speed. Hold only the completed result so
+# the diagnosis, Fix, and Next lines can be read before the tape loops.
+Sleep 4s

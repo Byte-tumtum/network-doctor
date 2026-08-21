@@ -1,31 +1,19 @@
 name: demo
 
-# Records the README's hero GIF from hero.tape, against the binaries built from
-# this commit and the rootless dns-nxdomain simulator scenario, using the
-# official VHS action. VHS, ttyd and ffmpeg all come from that action.
+# Manually records the README's hero GIF from hero.tape on a disposable Linux
+# runner with ordinary outbound networking. VHS, ttyd and ffmpeg all come from
+# the official action.
 #
-# This job proves the tape still runs. It deliberately does not compare the
-# recording against the committed assets/hero.gif, because that comparison
-# cannot be made to mean anything:
+# The recording is intentionally not a push or pull-request gate. Its live
+# probes depend on the runner's network and may vary in timing or fail for an
+# environmental reason unrelated to the change under review. The ordinary Go
+# tests hold the tape's structural contracts; this workflow exists to produce
+# an intentionally requested artifact for visual review.
 #
-#   * The screen carries live measurements. Two runs of the same simulated
-#     probe chain can disagree on the latency in the detail pane.
-#   * The checks panel animates a spinner on its own ticker while VHS samples
-#     frames on a separate 25fps one. The two have no phase relationship, so
-#     which spinner glyph each frame catches is a race even with every
-#     measurement held fixed.
-#
-# So a byte comparison would fail on every run while the recording stayed
-# visually correct, and a failing check nobody can satisfy gets switched off.
-# What is worth catching is the tape breaking: a renamed flag, a moved key
-# binding, a TUI that panics on startup. That is what a run here fails on, and
-# the recording is uploaded so a reviewer can watch the result of a change in
-# the pull request that makes it.
-#
-# Refreshing the committed GIF stays a deliberate act: download this run's
-# artifact, or record locally per the instructions in hero.tape. Nothing here
-# commits to the repository, so this workflow needs no write permission and runs
-# the same way on a fork's pull request as on main.
+# The job does not compare against or update the tracked assets/hero.gif. Live
+# latencies and spinner phases make byte equality meaningless. Download the
+# artifact, inspect it, and replace the tracked GIF deliberately. Nothing here
+# needs write permission.
 #
 # demo.tape is not recorded here. It sweeps the recording machine's local /24
 # with nmap and shows the device names it finds, which on a hosted runner means
@@ -33,29 +21,7 @@ name: demo
 # from the current user. It stays a local recording on a network its author is
 # happy to publish, exactly as its header says.
 
-# Anything the recorded screen is made of: the tape, this workflow, and the
-# program itself, whose check names, verdict sentences and layout are all on
-# screen. Not an anchor shared between the two triggers, because GitHub Actions
-# does not resolve YAML anchors. Docs, packaging and the site are left out; they
-# are where most of the churn here is and none of it reaches the recording.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.go"
-      - go.mod
-      - go.sum
-      - hero.tape
-      - internal/simulation/scenarios/dns-nxdomain.yaml
-      - .github/workflows/demo.yml
-  pull_request:
-    paths:
-      - "**.go"
-      - go.mod
-      - go.sum
-      - hero.tape
-      - internal/simulation/scenarios/dns-nxdomain.yaml
-      - .github/workflows/demo.yml
   workflow_dispatch:
 
 permissions:
@@ -75,10 +41,8 @@ jobs:
       # to land in the workspace root, which is also where the action runs VHS
       # from. That is the same build the tape's own header documents, and it is
       # what stops the recording picking up an installed netdoc from elsewhere.
-      - name: Build Network Doctor and its simulator
-        run: |
-          go build -o netdoc .
-          go build -o netdoc-sim ./cmd/netdoc-sim
+      - name: Build Network Doctor
+        run: go build -o netdoc .
         env:
           CGO_ENABLED: "0"
       # hero.tape's screen offers a row of Dig deeper actions and greys out
@@ -95,21 +59,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends traceroute nmap
           # traceroute lands in /usr/sbin. If that ever drops off the PATH the
           # recording inherits, the chip greys out again and the only symptom
-          # is a wrong GIF, so resolve both the way the program will. The
-          # namespace tools are part of the same runner image used by CI's
-          # netns integration job; resolve them here so image drift fails early.
+          # is a wrong GIF, so resolve both the way the program will.
           command -v traceroute
           command -v nmap
-          command -v ip
-          command -v nft
-          command -v nsenter
-          command -v tc
-      # Ubuntu runners restrict unprivileged user namespaces with AppArmor.
-      # Clearing the host switch on this throwaway runner lets netdoc-sim create
-      # its rootless private namespaces. The simulator still gains no authority
-      # over the host network and never asks for elevated privileges itself.
-      - name: Allow rootless simulator namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The action installs its default fonts whatever its install-fonts input
       # says, JetBrains Mono among them, which is the first family in VHS's own
       # default font stack and the one hero.tape records with. install-fonts
@@ -121,15 +73,6 @@ jobs:
         with:
           path: hero.tape
           version: v0.11.0
-      # The tape cleans up on success. This catches a recorder or shell failure
-      # after the kept simulation has started; the runner is disposable, but a
-      # failed job should still release its process tree before it exits.
-      - name: Clean up the simulator
-        if: always()
-        run: |
-          if test -x ./netdoc-sim; then
-            XDG_RUNTIME_DIR="$HOME" ./netdoc-sim cleanup -all
-          fi
       # A tape that fails part way still leaves a file behind, so check that the
       # recording is a real one: the dimensions hero.tape declares, and enough
       # frames to be the whole story rather than a truncated screen. ffprobe is
@@ -149,9 +92,9 @@ jobs:
           # Set Width 1100 / Set Height 640 in hero.tape.
           test "${recording[0]}" = "1100"
           test "${recording[1]}" = "640"
-          # The tape holds the finished screen for 10s at 25fps. Well under the
-          # 250 that implies, so a slow runner does not fail the build, but far
-          # above what a chain that died on startup would produce.
+          # The tape includes a four-second final hold at 25fps. Stay below that
+          # exact count so encoder timing cannot make a healthy recording fail,
+          # but reject a file that stopped before the finished screen was shown.
           test "${recording[2]}" -ge 100
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
