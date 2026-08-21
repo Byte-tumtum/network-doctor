@@ -71,8 +71,11 @@ func generateTLSMaterial(ctx context.Context, cfg TLSCertificate, now time.Time)
 		return tlsMaterial{}, fmt.Errorf("generate leaf key: %w", err)
 	}
 	notBefore, notAfter := now.Add(-24*time.Hour), now.AddDate(1, 0, 0)
-	if cfg.Mode == TLSCertificateExpired {
+	switch cfg.Mode {
+	case TLSCertificateExpired:
 		notBefore, notAfter = now.AddDate(-2, 0, 0), now.Add(-24*time.Hour)
+	case TLSCertificateNotYetValid:
+		notBefore, notAfter = now.Add(24*time.Hour), now.AddDate(1, 0, 0)
 	}
 	dnsNames := append([]string(nil), cfg.DNSNames...)
 	sort.Strings(dnsNames)

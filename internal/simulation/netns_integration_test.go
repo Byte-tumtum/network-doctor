@@ -343,6 +343,29 @@ func TestTierOneScenarios(t *testing.T) {
 	}
 }
 
+func TestStableCauseScenarios(t *testing.T) {
+	requireBackend(t)
+	for _, tc := range []struct {
+		name  string
+		tests int
+	}{
+		{name: "tls-failure-causes", tests: 5},
+		{name: "secure-transport-failures", tests: 1},
+		{name: "proxy-failure-causes", tests: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := runScenario(t, tc.name)
+			if rep.Result != ResultPass {
+				t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+			}
+			if len(rep.Tests) != tc.tests {
+				t.Fatalf("tests = %d, want %d", len(rep.Tests), tc.tests)
+			}
+			assertCleanedUp(t, rep)
+		})
+	}
+}
+
 func TestHighJitterScenario(t *testing.T) {
 	requireBackend(t)
 	requireNetemSeed(t)
@@ -1751,7 +1774,8 @@ func TestSOCKS5LocalDNSScenario(t *testing.T) {
 	}
 	out := rep.Tests[0]
 	proxy := diagnosisCheck(out, string(diagnostic.ProbeProxy))
-	if proxy.Status != "FAIL" || !strings.Contains(proxy.Detail, "is reachable, but local DNS cannot resolve") {
+	if proxy.Status != "FAIL" || proxy.Cause != diagnostic.ProxyCauseClientDNS ||
+		!strings.Contains(proxy.Detail, "is reachable, but local DNS cannot resolve") {
 		t.Errorf("proxy_connect = %+v", proxy)
 	}
 	if out.FalsePositives != 0 || out.FalseNegatives != 0 {

@@ -106,6 +106,9 @@ type Service struct {
 	Name string `yaml:"name"`
 	Type string `yaml:"type"`
 	Port int    `yaml:"port"`
+	// MaxConnections makes a TCP fixture stop listening after this many
+	// accepted connections. Zero keeps accepting until the scenario ends.
+	MaxConnections int `yaml:"max_connections"`
 	// Zone maps a name to an address for ServiceDNS. A name that is absent
 	// answers NXDOMAIN, which is how "DNS returns NXDOMAIN" is expressed.
 	Zone map[string]string `yaml:"zone"`
@@ -188,9 +191,11 @@ const (
 
 	TLSCertificateValid            = "valid"
 	TLSCertificateExpired          = "expired"
+	TLSCertificateNotYetValid      = "not_yet_valid"
 	TLSCertificateHostnameMismatch = "hostname_mismatch"
 	DoHResponseInvalid             = "invalid"
 	tlsMaxDNSNames                 = 16
+	maxServiceConnections          = 1024
 	dnsMaxRecords                  = 64
 	dnsMaxScheduledOutcomes        = 256
 	maxNetemDuration               = 10 * time.Second
@@ -623,6 +628,12 @@ func parseAddr(raw string) (netip.Addr, string, error) {
 func (n *Node) validateServices(names map[string]bool) error {
 	for i := range n.Services {
 		svc := &n.Services[i]
+		if svc.MaxConnections < 0 || svc.MaxConnections > maxServiceConnections {
+			return fmt.Errorf("node %q: max_connections must be between 0 and %d", n.Name, maxServiceConnections)
+		}
+		if svc.MaxConnections != 0 && svc.Type != ServiceTCP {
+			return fmt.Errorf("node %q: max_connections is only supported by tcp services", n.Name)
+		}
 		if svc.Name != "" {
 			if !isSafeName(svc.Name) {
 				return fmt.Errorf("node %q: service name %q must be letters, digits or dashes", n.Name, svc.Name)
@@ -1039,7 +1050,7 @@ func validateTLSCertificate(c *TLSCertificate) error {
 		return errors.New("configuration is required")
 	}
 	switch c.Mode {
-	case TLSCertificateValid, TLSCertificateExpired, TLSCertificateHostnameMismatch:
+	case TLSCertificateValid, TLSCertificateExpired, TLSCertificateNotYetValid, TLSCertificateHostnameMismatch:
 	default:
 		return fmt.Errorf("unknown mode %q", c.Mode)
 	}

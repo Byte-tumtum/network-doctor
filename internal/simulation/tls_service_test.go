@@ -64,6 +64,16 @@ func TestTLSCertificateGeneration(t *testing.T) {
 		t.Fatalf("expired verification = %v", err)
 	}
 
+	notYetValid := testTLSMaterial(t, TLSCertificateNotYetValid, "secure-target.test")
+	if !notYetValid.notBefore.After(tlsTestNow.Add(23 * time.Hour)) {
+		t.Fatalf("not-yet-valid NotBefore = %s", notYetValid.notBefore)
+	}
+	if _, err := notYetValid.certificate.Leaf.Verify(x509.VerifyOptions{
+		DNSName: "secure-target.test", Roots: rootsFromMaterial(t, notYetValid), CurrentTime: tlsTestNow,
+	}); err == nil || !strings.Contains(err.Error(), "not yet valid") {
+		t.Fatalf("not-yet-valid verification = %v", err)
+	}
+
 	mismatch := testTLSMaterial(t, TLSCertificateHostnameMismatch, "other-target.test")
 	if err := mismatch.certificate.Leaf.VerifyHostname("secure-target.test"); err == nil {
 		t.Fatal("mismatched SAN verified")
@@ -127,6 +137,7 @@ func TestTLSServerHandshakeEvidence(t *testing.T) {
 	}{
 		{"valid", TLSCertificateValid, []string{"secure-target.test"}, "secure-target.test", true, "passed"},
 		{"expired", TLSCertificateExpired, []string{"secure-target.test"}, "secure-target.test", false, "client_rejected_certificate"},
+		{"not yet valid", TLSCertificateNotYetValid, []string{"secure-target.test"}, "secure-target.test", false, "client_rejected_certificate"},
 		{"hostname mismatch", TLSCertificateHostnameMismatch, []string{"other-target.test"}, "secure-target.test", false, "client_rejected_certificate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

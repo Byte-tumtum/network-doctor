@@ -102,7 +102,9 @@ func startServices(ctx context.Context, services []Service, addresses []string, 
 func closeServices(closers []io.Closer) error {
 	var err error
 	for _, closer := range closers {
-		err = errors.Join(err, closer.Close())
+		if closeErr := closer.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			err = errors.Join(err, closeErr)
+		}
 	}
 	return err
 }
@@ -154,7 +156,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			return nil, nil, err
 		}
 		for _, ln := range listeners {
-			go serveSink(ln)
+			go serveSink(ln, svc.MaxConnections)
 		}
 		return listenersAsClosers(listeners), nil, nil
 	case ServiceTCPReset:
@@ -332,16 +334,22 @@ func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 // netdoc's path-MTU probe writes a few megabytes and times how long the peer
 // takes to take them, and a peer that hangs up immediately would look like a
 // black hole on a healthy link.
-func serveSink(ln net.Listener) {
-	for {
+func serveSink(ln net.Listener, maxConnections int) {
+	for accepted := 0; ; accepted++ {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
+		}
+		if maxConnections > 0 && accepted+1 == maxConnections {
+			_ = ln.Close()
 		}
 		go func() {
 			defer conn.Close()
 			_, _ = io.Copy(io.Discard, conn)
 		}()
+		if maxConnections > 0 && accepted+1 == maxConnections {
+			return
+		}
 	}
 }
 

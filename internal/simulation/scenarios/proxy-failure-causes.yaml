@@ -1,0 +1,104 @@
+name: proxy-failure-causes
+description: >-
+  Four SOCKS5 proxies expose independent reachability, protocol, remote DNS,
+  and destination failures while direct egress and a literal control target
+  remain healthy.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.20
+      resolver: 10.77.0.20
+
+    - name: internet
+      address: 10.77.0.20
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - {name: client-resolver, type: dns, zone: {}}
+        - {name: portal, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.20}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+        - {name: control-target, type: tcp, port: 9999}
+
+    - name: unreachable-proxy
+      address: 10.77.0.30
+      resolver: 10.77.0.30
+      services:
+        - {name: unreachable-resolver, type: dns, zone: {connectivitycheck.gstatic.com: 10.77.0.50}}
+        - {name: unreachable-socks, type: socks5, port: 1080}
+
+    - name: protocol-proxy
+      address: 10.77.0.31
+      resolver: 10.77.0.31
+      services:
+        - {name: protocol-resolver, type: dns, zone: {connectivitycheck.gstatic.com: 10.77.0.50}}
+        - {name: protocol-socks, type: socks5, port: 1080}
+
+    - name: dns-proxy
+      address: 10.77.0.32
+      resolver: 10.77.0.32
+      services:
+        - {name: empty-resolver, type: dns, zone: {}}
+        - {name: dns-socks, type: socks5, port: 1080}
+
+    - name: destination-proxy
+      address: 10.77.0.33
+      resolver: 10.77.0.33
+      services:
+        - {name: destination-resolver, type: dns, zone: {connectivitycheck.gstatic.com: 10.77.0.60}}
+        - {name: destination-socks, type: socks5, port: 1080}
+
+    - name: working-destination
+      address: 10.77.0.50
+      services:
+        - {name: working-tcp, type: tcp, port: 443}
+
+    - name: closed-destination
+      address: 10.77.0.60
+
+faults:
+  - {type: drop, node: client, direction: outbound, to: 10.77.0.30, protocol: tcp, port: 1080}
+  - {type: drop, node: protocol-proxy, direction: outbound, to: 10.77.0.50, protocol: tcp, port: 443}
+
+tests:
+  - name: client cannot reach configured proxy
+    node: client
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5h, node: unreachable-proxy, port: 1080}
+    expect:
+      verdict: degraded
+      checks:
+        - {id: proxy_connect, status: FAIL, cause: proxy_unreachable}
+
+  - name: proxy reports a non-specific CONNECT failure
+    node: client
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5h, node: protocol-proxy, port: 1080}
+    expect:
+      verdict: degraded
+      checks:
+        - {id: proxy_connect, status: FAIL, cause: proxy_protocol_failure}
+
+  - name: proxy cannot resolve destination name
+    node: client
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5h, node: dns-proxy, port: 1080}
+    expect:
+      verdict: degraded
+      checks:
+        - {id: proxy_connect, status: FAIL, cause: proxy_side_dns_failure}
+
+  - name: proxy resolves destination but cannot connect
+    node: client
+    target: 10.77.0.20:9999
+    proxy: {scheme: socks5h, node: destination-proxy, port: 1080}
+    expect:
+      verdict: degraded
+      checks:
+        - {id: proxy_connect, status: FAIL, cause: destination_unreachable_from_proxy}
+
+expect:
+  verdict: degraded

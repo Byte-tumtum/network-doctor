@@ -1,0 +1,85 @@
+name: tls-failure-causes
+description: >-
+  Five TLS targets expose distinct real failures after the initial TCP check:
+  an untrusted private CA, a future-dated certificate, a plain HTTP listener,
+  a resetting peer, and a TCP listener that disappears after one connection.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            untrusted.test: 10.77.0.20
+            future.test: 10.77.0.20
+            plain-http.test: 10.77.0.20
+            closed.test: 10.77.0.20
+            vanished.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {name: portal, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    - name: target
+      address: 10.77.0.20
+      services:
+        - {name: target-http, type: http, port: 80}
+        - {name: untrusted-tls, type: tls, port: 9440, certificate: {mode: valid, dns_names: [untrusted.test]}}
+        - {name: future-tls, type: tls, port: 9441, certificate: {mode: not_yet_valid, dns_names: [future.test]}}
+        - {name: plain-http, type: http, port: 9442}
+        - {name: closed-tcp, type: tcp_reset, port: 9443}
+        - {name: one-connection, type: tcp, port: 9444, max_connections: 1}
+
+tests:
+  - name: target CA is not trusted
+    node: client
+    target: https://untrusted.test:9440
+    expect:
+      verdict: service
+      checks:
+        - {id: tls, status: FAIL, cause: untrusted_issuer}
+
+  - name: trusted certificate is not valid yet
+    node: client
+    target: https://future.test:9441
+    trust: {service: future-tls}
+    expect:
+      verdict: service
+      checks:
+        - {id: tls, status: FAIL, cause: certificate_not_yet_valid}
+
+  - name: reachable peer does not speak TLS
+    node: client
+    target: https://plain-http.test:9442
+    expect:
+      verdict: service
+      checks:
+        - {id: tls, status: FAIL, cause: tls_handshake_failure}
+
+  - name: peer resets during the TLS handshake
+    node: client
+    target: https://closed.test:9443
+    expect:
+      verdict: service
+      checks:
+        - {id: tls, status: FAIL, cause: connection_closed}
+
+  - name: TCP listener disappears after the reachability check
+    node: client
+    target: https://vanished.test:9444
+    expect:
+      verdict: service
+      checks:
+        - {id: tls, status: FAIL, cause: tcp_unreachable}
+
+expect:
+  verdict: service

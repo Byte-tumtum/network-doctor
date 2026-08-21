@@ -384,6 +384,30 @@ func TestTLSServiceDefaultsAndValidatedTrust(t *testing.T) {
 	}
 }
 
+func TestTLSCertificateNotYetValidAccepted(t *testing.T) {
+	cfg := &TLSCertificate{Mode: TLSCertificateNotYetValid, DNSNames: []string{"secure-target.test"}}
+	if err := validateTLSCertificate(cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTCPConnectionLimitValidation(t *testing.T) {
+	valid := strings.Replace(minimalScenario, "address: 10.77.0.1}",
+		"address: 10.77.0.1, services: [{type: tcp, port: 9443, max_connections: 1}]}", 1)
+	if _, err := ParseScenario(strings.NewReader(valid)); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		strings.Replace(valid, "max_connections: 1", "max_connections: -1", 1),
+		strings.Replace(valid, "max_connections: 1", "max_connections: 1025", 1),
+		strings.Replace(valid, "type: tcp", "type: http", 1),
+	} {
+		if _, err := ParseScenario(strings.NewReader(raw)); err == nil {
+			t.Errorf("accepted invalid max_connections scenario: %s", raw)
+		}
+	}
+}
+
 func TestTLSCertificateRejectsExcessiveOrInvalidNames(t *testing.T) {
 	many := make([]string, tlsMaxDNSNames+1)
 	for i := range many {
@@ -415,6 +439,41 @@ func TestLibraryScenariosValidate(t *testing.T) {
 	}
 	if _, err := LibraryScenario("no-such-scenario"); err == nil {
 		t.Error("want an error for an unknown scenario")
+	}
+}
+
+func TestLibraryScenariosCoverKnownCauses(t *testing.T) {
+	covered := make(map[string]bool, len(knownCauses))
+	for _, name := range LibraryNames() {
+		scenario, err := LibraryScenario(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, check := range scenario.Expect.Checks {
+			if check.Cause != "" {
+				covered[check.Cause] = true
+			}
+		}
+		for _, test := range scenario.Tests {
+			if test.Expect == nil {
+				continue
+			}
+			for _, check := range test.Expect.Checks {
+				if check.Cause != "" {
+					covered[check.Cause] = true
+				}
+			}
+		}
+	}
+	var missing []string
+	for _, cause := range knownCauses {
+		if !covered[cause] {
+			missing = append(missing, cause)
+		}
+	}
+	slices.Sort(missing)
+	if len(missing) != 0 {
+		t.Fatalf("stable causes with no scenario assertion: %s", strings.Join(missing, ", "))
 	}
 }
 

@@ -1,0 +1,38 @@
+name: secure-transport-failures
+description: >-
+  TCP egress and plain DNS remain healthy while the fixed QUIC and encrypted
+  DNS endpoints present trusted but expired certificates. Both handshakes fail
+  immediately instead of consuming the probe timeout.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {name: portal, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: expired, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: expired, dns_names: [connectivitycheck.gstatic.com]}}
+
+tests:
+  - name: secure transports reject expired endpoint certificates
+    node: client
+
+expect:
+  verdict: degraded
+  checks:
+    - {id: internet_tcp, status: PASS}
+    - {id: quic_udp_443, status: FAIL, cause: quic_handshake_failure}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    - {id: dns_encrypted, status: FAIL, cause: encrypted_dns_unavailable}

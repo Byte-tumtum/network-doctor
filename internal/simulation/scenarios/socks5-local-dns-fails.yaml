@@ -67,7 +67,7 @@ expect:
   checks:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: PASS}
-    - {id: proxy_connect, status: FAIL}
+    - {id: proxy_connect, status: FAIL, cause: client_dns_failure}
     - {id: dns, status: N/A}
     - {id: dns_public, status: N/A}
     - {id: target_tcp, status: PASS}

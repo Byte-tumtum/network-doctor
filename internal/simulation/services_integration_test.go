@@ -47,6 +47,36 @@ func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
 	}
 }
 
+func TestLimitedTCPServiceStopsListening(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		serveSink(listener, 1)
+		close(done)
+	}()
+
+	first, err := net.Dial("tcp4", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("TCP fixture did not stop after its connection limit")
+	}
+	if second, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second); err == nil {
+		second.Close()
+		t.Fatal("TCP fixture accepted a connection past its limit")
+	}
+	if err := closeServices([]io.Closer{listener}); err != nil {
+		t.Fatalf("cleanup of exhausted TCP fixture: %v", err)
+	}
+}
+
 // The encrypted-DNS fixture has to answer both transports for real, or every
 // scenario's encrypted-DNS row is measuring the fixture rather than netdoc.
 // Loopback listeners on ephemeral ports stand in for the privileged ones the
