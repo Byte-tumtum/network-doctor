@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,13 +79,64 @@ func TestDemoWorkflowRecordsThroughTheOfficialVHSAction(t *testing.T) {
 			t.Errorf("hero.tape sets %s %s, which demo.yml does not check for", set, m[1])
 		}
 	}
+}
 
-	// The action already brings these along, and a hand-rolled install is the
-	// specific regression this migration exists to prevent.
+// demoAptPackages is every package the workflow installs with apt, in the order
+// the workflow names them. Flags are not packages.
+func demoAptPackages(t *testing.T) []string {
+	t.Helper()
+	var pkgs []string
+	for _, line := range strings.Split(demoSteps(t), "\n") {
+		_, args, ok := strings.Cut(line, "apt-get install")
+		if !ok {
+			continue
+		}
+		for _, field := range strings.Fields(args) {
+			if strings.HasPrefix(field, "-") {
+				continue
+			}
+			pkgs = append(pkgs, field)
+		}
+	}
+	return pkgs
+}
+
+// The recorded screen greys out every Dig deeper action whose binary LookPath
+// cannot find, so these two are fixtures of the demo rather than build
+// dependencies. The first hosted recording shipped a hero GIF advertising
+// `trace the path` and `port scan` as unavailable, because the runner image
+// carries neither binary while an ordinary installation does. Pinned as an
+// exact set, so a later cleanup cannot quietly drop one and grey the actions
+// out again, and so the recorder's own dependencies cannot ride along beside
+// them.
+func TestDemoWorkflowInstallsTheToolsTheRecordedScreenOffers(t *testing.T) {
+	want := []string{"nmap", "traceroute"}
+	got := demoAptPackages(t)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("demo.yml apt-installs %q, want exactly %q: the recorded screen offers both and greys out whichever binary is missing", got, want)
+	}
+}
+
+// The recorder belongs to the action, which installs the pinned VHS binary
+// along with ttyd, ffmpeg and the fonts it renders with. A second copy
+// installed here would be unpinned, and whichever one won the PATH would decide
+// what the recording looks like.
+func TestDemoWorkflowLeavesTheRecorderToTheAction(t *testing.T) {
+	for _, pkg := range demoAptPackages(t) {
+		if slices.Contains([]string{"vhs", "ttyd", "ffmpeg", "fontconfig"}, pkg) {
+			t.Errorf("demo.yml apt-installs %q, which charmbracelet/vhs-action already provides", pkg)
+		}
+		if strings.HasPrefix(pkg, "fonts-") {
+			t.Errorf("demo.yml apt-installs the font package %q; the action installs the fonts VHS renders with", pkg)
+		}
+	}
+	// Not every install is an apt install: what this workflow replaced fetched
+	// a release archive and piped an installer into a shell.
 	steps := demoSteps(t)
-	for _, tool := range []string{"apt-get install", "ttyd", "curl -", "install-fonts"} {
-		if strings.Contains(steps, tool) {
-			t.Errorf("demo.yml mentions %q; the action installs VHS, ttyd, ffmpeg and JetBrains Mono itself", tool)
+	for _, vector := range []string{"curl -", "wget ", "install-fonts"} {
+		if strings.Contains(steps, vector) {
+			t.Errorf("demo.yml uses %q; VHS, ttyd, ffmpeg and the fonts are the action's to install", vector)
 		}
 	}
 }

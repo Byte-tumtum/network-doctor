@@ -78,9 +78,28 @@ jobs:
       - run: go build -o netdoc .
         env:
           CGO_ENABLED: "0"
-      # The action supplies JetBrains Mono, which is the first family in VHS's
-      # own default font stack and the one hero.tape records with, so
-      # install-fonts stays off. The VHS version is pinned for the same reason
+      # hero.tape's screen offers a row of Dig deeper actions and greys out
+      # every one whose binary LookPath cannot find. The runner image already
+      # carries mtr, dig, curl, ip and ss, but neither traceroute nor nmap, so
+      # without these two the recording tells every README reader that `trace
+      # the path` and `port scan` are unavailable, which is true of this runner
+      # and false of the program. Nothing else is installed by hand: the
+      # recorder is the action's, and Go is setup-go's.
+      - name: Install the tools the recorded screen offers
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends traceroute nmap
+          # traceroute lands in /usr/sbin. If that ever drops off the PATH the
+          # recording inherits, the chip greys out again and the only symptom
+          # is a wrong GIF, so resolve both the way the program will.
+          command -v traceroute
+          command -v nmap
+      # The action installs its default fonts whatever its install-fonts input
+      # says, JetBrains Mono among them, which is the first family in VHS's own
+      # default font stack and the one hero.tape records with. install-fonts
+      # adds a further set on top that this recording has no use for, so the
+      # input is left alone. The VHS version is pinned for the same reason
       # every other tool in this repository is: a recording that changes because
       # the renderer moved underneath it is not a recording of a change here.
       - uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf # v2.1.1
