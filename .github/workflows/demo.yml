@@ -1,17 +1,15 @@
 name: demo
 
-# Records the README's hero GIF from hero.tape, against the binary built from
-# this commit, using the official VHS action. VHS, ttyd and ffmpeg all come from
-# that action; nothing here installs them.
+# Records the README's hero GIF from hero.tape, against the binaries built from
+# this commit and the rootless dns-nxdomain simulator scenario, using the
+# official VHS action. VHS, ttyd and ffmpeg all come from that action.
 #
 # This job proves the tape still runs. It deliberately does not compare the
 # recording against the committed assets/hero.gif, because that comparison
 # cannot be made to mean anything:
 #
-#   * The screen carries live measurements. Two runs of the same probe chain,
-#     back to back on one machine, disagree on the latency in the detail pane
-#     ("IPv4 egress via 1.1.1.1 in 5ms" against "in 4ms"), and the egress row
-#     names the recording host's own source address and interface.
+#   * The screen carries live measurements. Two runs of the same simulated
+#     probe chain can disagree on the latency in the detail pane.
 #   * The checks panel animates a spinner on its own ticker while VHS samples
 #     frames on a separate 25fps one. The two have no phase relationship, so
 #     which spinner glyph each frame catches is a race even with every
@@ -48,6 +46,7 @@ on:
       - go.mod
       - go.sum
       - hero.tape
+      - internal/simulation/scenarios/dns-nxdomain.yaml
       - .github/workflows/demo.yml
   pull_request:
     paths:
@@ -55,6 +54,7 @@ on:
       - go.mod
       - go.sum
       - hero.tape
+      - internal/simulation/scenarios/dns-nxdomain.yaml
       - .github/workflows/demo.yml
   workflow_dispatch:
 
@@ -75,7 +75,10 @@ jobs:
       # to land in the workspace root, which is also where the action runs VHS
       # from. That is the same build the tape's own header documents, and it is
       # what stops the recording picking up an installed netdoc from elsewhere.
-      - run: go build -o netdoc .
+      - name: Build Network Doctor and its simulator
+        run: |
+          go build -o netdoc .
+          go build -o netdoc-sim ./cmd/netdoc-sim
         env:
           CGO_ENABLED: "0"
       # hero.tape's screen offers a row of Dig deeper actions and greys out
@@ -92,9 +95,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends traceroute nmap
           # traceroute lands in /usr/sbin. If that ever drops off the PATH the
           # recording inherits, the chip greys out again and the only symptom
-          # is a wrong GIF, so resolve both the way the program will.
+          # is a wrong GIF, so resolve both the way the program will. The
+          # namespace tools are part of the same runner image used by CI's
+          # netns integration job; resolve them here so image drift fails early.
           command -v traceroute
           command -v nmap
+          command -v ip
+          command -v nft
+          command -v nsenter
+          command -v tc
+      # Ubuntu runners restrict unprivileged user namespaces with AppArmor.
+      # Clearing the host switch on this throwaway runner lets netdoc-sim create
+      # its rootless private namespaces. The simulator still gains no authority
+      # over the host network and never asks for elevated privileges itself.
+      - name: Allow rootless simulator namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The action installs its default fonts whatever its install-fonts input
       # says, JetBrains Mono among them, which is the first family in VHS's own
       # default font stack and the one hero.tape records with. install-fonts
@@ -106,6 +121,15 @@ jobs:
         with:
           path: hero.tape
           version: v0.11.0
+      # The tape cleans up on success. This catches a recorder or shell failure
+      # after the kept simulation has started; the runner is disposable, but a
+      # failed job should still release its process tree before it exits.
+      - name: Clean up the simulator
+        if: always()
+        run: |
+          if test -x ./netdoc-sim; then
+            XDG_RUNTIME_DIR="$HOME" ./netdoc-sim cleanup -all
+          fi
       # A tape that fails part way still leaves a file behind, so check that the
       # recording is a real one: the dimensions hero.tape declares, and enough
       # frames to be the whole story rather than a truncated screen. ffprobe is

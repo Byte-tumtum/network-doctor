@@ -23,7 +23,7 @@ service?**
 
 </div>
 
-![Network Doctor diagnosing a host that will not resolve: the DNS row fails, every check that depended on it is skipped, and the verdict names the missing DNS record as the fix]({{ '/assets/hero.gif' | relative_url }})
+![Network Doctor diagnosing an office printer hostname that will not resolve: the DNS row fails, every check that depended on it is skipped, and the verdict names the missing DNS record as the fix]({{ '/assets/hero.gif' | relative_url }})
 
 ## Start here
 

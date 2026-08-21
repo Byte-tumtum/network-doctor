@@ -249,7 +249,7 @@ func TestTierOneScenarios(t *testing.T) {
 		testCount int
 		extra     []string
 	}{
-		{name: "dns-nxdomain", testCount: 1},
+		{name: "dns-nxdomain", testCount: 1, extra: []string{"-repeat", "3"}},
 		{name: "tcp-port-blocked", testCount: 1, extra: []string{"-timeout", timedTimeout}},
 		{name: "connection-refused", testCount: 2},
 		{name: "packet-loss", testCount: 1},
@@ -268,8 +268,24 @@ func TestTierOneScenarios(t *testing.T) {
 			out := rep.Tests[0]
 			switch tc.name {
 			case "dns-nxdomain":
-				if !hasDNSEvidence(rep, "internet", "10.77.0.10", "missing.test", "NXDOMAIN") {
+				if !hasDNSEvidence(rep, "internet", "10.77.0.10", "printer.office.test", "NXDOMAIN") {
 					t.Errorf("configured resolver did not return NXDOMAIN: %+v", rep.Evidence.DNS)
+				}
+				for _, id := range []diagnostic.ProbeID{diagnostic.ProbeInternet, diagnostic.ProbeQUIC,
+					diagnostic.ProbeDNSPublic, diagnostic.ProbeDNSEncrypted} {
+					if check := diagnosisCheck(out, string(id)); check.Status != "PASS" {
+						t.Errorf("%s = %+v, want PASS so DNS is the isolated failure", id, check)
+					}
+				}
+				dns := diagnosisCheck(out, string(diagnostic.ProbeDNS))
+				if dns.Status != "FAIL" || dns.Fix != "check the hostname or publish the missing DNS record" {
+					t.Errorf("dns = %+v, want the missing-record failure and fix", dns)
+				}
+				if summary := out.Diagnosis.Summary; summary != "printer.office.test has no A/AAAA records according to either system or public DNS. (The general internet is reachable.)" {
+					t.Errorf("summary = %q, want the isolated missing-name diagnosis", summary)
+				}
+				if !slices.Equal(out.RepeatVerdicts, []string{"dns", "dns", "dns"}) {
+					t.Errorf("repeat verdicts = %v, want three deterministic DNS diagnoses", out.RepeatVerdicts)
 				}
 			case "tcp-port-blocked":
 				check := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP))

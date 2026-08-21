@@ -118,6 +118,18 @@ func TestDemoWorkflowInstallsTheToolsTheRecordedScreenOffers(t *testing.T) {
 	}
 }
 
+func TestHeroRecordingUsesTheSimulator(t *testing.T) {
+	tape, err := os.ReadFile("hero.tape")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"netdoc-sim run ", "nsenter -t ", `$PWD/netdoc "$@"`, "netdoc-sim cleanup "} {
+		if !strings.Contains(string(tape), want) {
+			t.Errorf("hero.tape does not contain %q", want)
+		}
+	}
+}
+
 // The recorder belongs to the action, which installs the pinned VHS binary
 // along with ttyd, ffmpeg and the fonts it renders with. A second copy
 // installed here would be unpinned, and whichever one won the PATH would decide

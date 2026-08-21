@@ -21,14 +21,18 @@ topology:
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
 
 tests:
-  - {name: target name does not exist, node: client, target: missing.test:80}
+  - {name: office printer name does not exist, node: client, target: printer.office.test}
 
 expect:
   verdict: dns
   checks:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: PASS}
+    - {id: quic_udp_443, status: PASS}
     - {id: dns, status: FAIL}
     - {id: dns_public, status: PASS}
+    - {id: dns_encrypted, status: PASS}
     - {id: target_tcp, status: SKIP}
+    - {id: tls, status: SKIP}
     - {id: http, status: SKIP}
+    - {id: https, status: SKIP}

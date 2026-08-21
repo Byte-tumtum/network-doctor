@@ -9,7 +9,7 @@
 cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
 TLS, HTTP, proxy, and path-MTU checks into one plain-English diagnosis.
 
-![Network Doctor diagnosing a host that will not resolve: the DNS row fails, every check that depended on it is skipped, and the verdict names the missing DNS record as the fix](assets/hero.gif)
+![Network Doctor diagnosing an office printer hostname that will not resolve: the DNS row fails, every check that depended on it is skipped, and the verdict names the missing DNS record as the fix](assets/hero.gif)
 
 Instead of handing you a wall of `ping`, `dig`, and `curl` output, Network
 Doctor answers the useful question: **is the problem on my network, along the
