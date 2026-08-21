@@ -40,11 +40,12 @@ tests:
 
 expect:
   verdict: network
+  summary: "No usable network interface: the link is down."
   checks:
     # The whole diagnosis. Everything else hangs off this row in the probe
     # graph, so a dead link is reported once here rather than as a pile of
     # downstream failures.
-    - {id: iface, status: FAIL}
+    - {id: iface, status: FAIL, fix: "bring up an interface (cable/Wi-Fi) or `ip link set <iface> up`"}
     # Pinned as SKIP, not FAIL: egress never ran, so the link is the finding
     # and not a symptom the reader has to rank against others.
     - {id: internet_tcp, status: SKIP}

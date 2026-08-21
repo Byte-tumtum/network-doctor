@@ -122,6 +122,70 @@ func TestCompareExpectedCause(t *testing.T) {
 	}
 }
 
+func TestCompareExpectedWording(t *testing.T) {
+	actual := DiagnosisCheck{ID: "internet_tcp", Name: "Internet", Status: "WARN", Cause: "ipv6_unreachable",
+		Fix: "check IPv6 route", Families: &DiagnosisFamilies{IPv4: "reachable", IPv6: "unreachable"}}
+	for _, tc := range []struct {
+		name        string
+		expect      Expect
+		wantOK      bool
+		wantOutcome string
+	}{
+		{"matching fix", Expect{Checks: []ExpectedCheck{{ID: "internet_tcp", Status: "WARN", Cause: "ipv6_unreachable",
+			IPv4: "reachable", IPv6: "unreachable", Fix: "check IPv6 route"}}}, true, OutcomeMatched},
+		{"mismatching fix", Expect{Checks: []ExpectedCheck{{ID: "internet_tcp", Status: "WARN",
+			Fix: "check the gateway"}}}, false, OutcomeWrongFix},
+		{"omitted fix", Expect{Checks: []ExpectedCheck{{ID: "internet_tcp", Status: "WARN"}}}, true, OutcomeMatched},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := TestOutcome{Name: "wording", Diagnosis: diag("degraded", actual)}
+			o.compare(tc.expect, time.Second)
+			if o.ok() != tc.wantOK || len(o.Checks) != 1 || o.Checks[0].Outcome != tc.wantOutcome {
+				t.Fatalf("comparison = %+v, ok = %t; want outcome %s, ok %t", o.Checks, o.ok(), tc.wantOutcome, tc.wantOK)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		summary string
+		wantOK  bool
+	}{
+		{"matching summary", "summary", true},
+		{"mismatching summary", "different summary", false},
+		{"omitted summary", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := TestOutcome{Name: "wording", Diagnosis: diag("ok")}
+			o.compare(Expect{Summary: tc.summary}, time.Second)
+			if o.ok() != tc.wantOK {
+				t.Fatalf("ok = %t, want %t for expected %q and actual %q", o.ok(), tc.wantOK, tc.summary, o.Diagnosis.Summary)
+			}
+		})
+	}
+}
+
+func TestWordingMismatchReportIsUsefulAndDeterministic(t *testing.T) {
+	o := TestOutcome{Name: "wording", Node: "client", Diagnosis: &Diagnosis{Verdict: "dns", Summary: "actual summary",
+		Checks: []DiagnosisCheck{{ID: "dns", Name: "DNS", Status: "FAIL", Detail: "lookup failed", Fix: "actual fix"}}}}
+	o.compare(Expect{Summary: "expected summary", Checks: []ExpectedCheck{{
+		ID: "dns", Status: "FAIL", Fix: "expected fix",
+	}}}, time.Second)
+
+	var first, second strings.Builder
+	o.writeText(&first)
+	o.writeText(&second)
+	if first.String() != second.String() {
+		t.Fatalf("failure report changed between writes:\nfirst: %q\nsecond: %q", first.String(), second.String())
+	}
+	for _, want := range []string{`expected: "expected summary"`, `actual:   "actual summary"`, "dns",
+		`expected fix "expected fix", actual "actual fix"`} {
+		if !strings.Contains(first.String(), want) {
+			t.Errorf("failure report is missing %q:\n%s", want, first.String())
+		}
+	}
+}
+
 func TestCompareMissingRow(t *testing.T) {
 	o := TestOutcome{Name: "t", Diagnosis: diag("ok", check("iface", "PASS"))}
 	o.compare(Expect{Checks: []ExpectedCheck{{ID: "dns", Status: "FAIL"}}}, 4*time.Second)

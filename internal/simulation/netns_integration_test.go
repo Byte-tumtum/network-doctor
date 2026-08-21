@@ -354,11 +354,20 @@ func TestTierOneScenarios(t *testing.T) {
 					}
 				}
 				dns := diagnosisCheck(out, string(diagnostic.ProbeDNS))
-				if dns.Status != "FAIL" || dns.Fix != "check the hostname or publish the missing DNS record" {
-					t.Errorf("dns = %+v, want the missing-record failure and fix", dns)
+				if dns.Status != "FAIL" {
+					t.Errorf("dns = %+v, want the missing-record failure", dns)
 				}
-				if summary := out.Diagnosis.Summary; summary != "printer.office.test has no A/AAAA records according to either system or public DNS. (The general internet is reachable.)" {
-					t.Errorf("summary = %q, want the isolated missing-name diagnosis", summary)
+				if out.ExpectedSummary == "" || out.ExpectedSummary != out.Diagnosis.Summary {
+					t.Errorf("expected summary = %q, actual = %q", out.ExpectedSummary, out.Diagnosis.Summary)
+				}
+				var dnsComparison CheckComparison
+				for _, comparison := range out.Checks {
+					if comparison.ID == string(diagnostic.ProbeDNS) {
+						dnsComparison = comparison
+					}
+				}
+				if dnsComparison.ExpectedFix == "" || dnsComparison.ExpectedFix != dns.Fix || dnsComparison.Outcome != OutcomeMatched {
+					t.Errorf("DNS wording comparison = %+v, actual fix = %q", dnsComparison, dns.Fix)
 				}
 				if !slices.Equal(out.RepeatVerdicts, []string{"dns", "dns", "dns"}) {
 					t.Errorf("repeat verdicts = %v, want three deterministic DNS diagnoses", out.RepeatVerdicts)

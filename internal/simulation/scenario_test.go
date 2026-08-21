@@ -44,6 +44,18 @@ func TestParseScenarioDefaults(t *testing.T) {
 	}
 }
 
+func TestParseScenarioWordingExpectations(t *testing.T) {
+	raw := strings.Replace(minimalScenario, "  verdict: ok",
+		"  summary: exact diagnosis\n  checks: [{id: dns, status: FAIL, fix: exact remedy}]", 1)
+	s, err := ParseScenario(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Expect.Summary != "exact diagnosis" || len(s.Expect.Checks) != 1 || s.Expect.Checks[0].Fix != "exact remedy" {
+		t.Fatalf("expectation = %+v", s.Expect)
+	}
+}
+
 func TestParseScenarioDocumentBoundaries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -77,6 +89,8 @@ func TestParseScenarioRejects(t *testing.T) {
 	}{
 		{"unknown field", minimalScenario + "\nwidgets: 3\n", "widgets"},
 		{"unknown node field", strings.Replace(minimalScenario, "role: client", "rolle: client", 1), "rolle"},
+		{"unknown expectation field", strings.Replace(minimalScenario, "verdict: ok", "verdict: ok\n  summmary: nope", 1), "summmary"},
+		{"unknown expected check field", strings.Replace(minimalScenario, "verdict: ok", "checks: [{id: dns, status: FAIL, fiz: nope}]", 1), "fiz"},
 		{"empty", "", "empty scenario"},
 		{"two documents", minimalScenario + "\n---\n" + minimalScenario, "exactly one document"},
 		{"no name", strings.Replace(minimalScenario, "name: t", "name: \"\"", 1), "name is required"},

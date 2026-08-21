@@ -33,8 +33,9 @@ tests:
   - {node: client, target: example.test:80}
 expect:
   verdict: dns
+  summary: Cannot resolve example.test: DNS failure.
   checks:
-    - {id: dns, status: FAIL}
+    - {id: dns, status: FAIL, fix: "name resolution failing: check /etc/resolv.conf / DNS"}
 ```
 
 Use
@@ -198,9 +199,11 @@ the detailed ordering, cancellation, and shutdown contract.
 
 Expectations match netdoc's stable machine-readable contract: probe id,
 `PASS`/`WARN`/`FAIL`/`SKIP`/`N/A` status, verdict, and optional structured cause
-or address-family state. They never match English diagnosis text. A test may
-override the scenario-level expectation when several network phases are
-exercised in one file.
+or address-family state. An optional expectation-level `summary` pins the exact
+final user-facing diagnosis, and an optional check-level `fix` pins that row's
+exact user-facing remedy. Omit either field when the scenario does not claim its
+wording. A test may override the scenario-level expectation when several
+network phases are exercised in one file.
 
 Naming `ipv4` or `ipv6` on an expected check asserts that netdoc published that
 family's verdict, so a run that omitted the family fails the expectation rather

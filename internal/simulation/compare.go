@@ -53,6 +53,7 @@ const (
 	OutcomeWrongStatus = "wrong_status"
 	OutcomeWrongCause  = "wrong_cause"
 	OutcomeWrongFamily = "wrong_family"
+	OutcomeWrongFix    = "wrong_fix"
 	OutcomeMissing     = "missing"
 	OutcomeUnexpected  = "unexpected"
 )
@@ -65,6 +66,7 @@ type CheckComparison struct {
 	// ExpectedCause is optional so existing status-only scenarios retain their
 	// comparison contract.
 	ExpectedCause string `json:"expected_cause,omitempty"`
+	ExpectedFix   string `json:"expected_fix,omitempty"`
 	Actual        string `json:"actual,omitempty"`
 	Cause         string `json:"cause,omitempty"`
 	ExpectedIPv4  string `json:"expected_ipv4,omitempty"`
@@ -102,6 +104,7 @@ type TestOutcome struct {
 	Diagnosis *Diagnosis `json:"diagnosis,omitempty"`
 
 	ExpectedVerdict string            `json:"expected_verdict,omitempty"`
+	ExpectedSummary string            `json:"expected_summary,omitempty"`
 	ActualVerdict   string            `json:"actual_verdict,omitempty"`
 	Checks          []CheckComparison `json:"checks"`
 	// TimedOut names probes whose failure was the probe deadline expiring
@@ -153,6 +156,7 @@ const (
 // reported as a timeout rather than an answer.
 func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 	o.ExpectedVerdict = expect.Verdict
+	o.ExpectedSummary = expect.Summary
 	if o.Diagnosis == nil {
 		return
 	}
@@ -166,7 +170,7 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 	for _, e := range expect.Checks {
 		expected[e.ID] = e.Status
 		c, ran := actual[e.ID]
-		cmp := CheckComparison{ID: e.ID, Name: c.Name, Expected: e.Status, ExpectedCause: e.Cause, Actual: c.Status,
+		cmp := CheckComparison{ID: e.ID, Name: c.Name, Expected: e.Status, ExpectedCause: e.Cause, ExpectedFix: e.Fix, Actual: c.Status,
 			ExpectedIPv4: e.IPv4, ExpectedIPv6: e.IPv6,
 			Outcome: OutcomeMatched, Cause: c.Cause, Detail: c.Detail, Fix: c.Fix, Ms: c.Ms}
 		if c.Families != nil {
@@ -181,6 +185,8 @@ func (o *TestOutcome) compare(expect Expect, probeTimeout time.Duration) {
 			cmp.Outcome = OutcomeWrongCause
 		case e.IPv4 != "" && cmp.ActualIPv4 != e.IPv4, e.IPv6 != "" && cmp.ActualIPv6 != e.IPv6:
 			cmp.Outcome = OutcomeWrongFamily
+		case e.Fix != "" && c.Fix != e.Fix:
+			cmp.Outcome = OutcomeWrongFix
 		}
 		o.Checks = append(o.Checks, cmp)
 	}
@@ -234,9 +240,15 @@ func (o *TestOutcome) verdictMatches() bool {
 	return o.ExpectedVerdict == "" || o.ExpectedVerdict == o.ActualVerdict
 }
 
+// summaryMatches reports whether the run produced the expected user-facing
+// diagnosis. An empty expectation matches anything.
+func (o *TestOutcome) summaryMatches() bool {
+	return o.ExpectedSummary == "" || o.Diagnosis != nil && o.ExpectedSummary == o.Diagnosis.Summary
+}
+
 // ok reports whether everything the scenario claimed came true.
 func (o *TestOutcome) ok() bool {
-	if o.Error != "" || o.Diagnosis == nil || !o.verdictMatches() {
+	if o.Error != "" || o.Diagnosis == nil || !o.verdictMatches() || !o.summaryMatches() {
 		return false
 	}
 	for _, c := range o.Checks {

@@ -536,7 +536,13 @@ func (o *TestOutcome) writeText(w io.Writer) {
 		p("")
 		return
 	}
-	p("  Summary: %s", textsafe.Clean(o.Diagnosis.Summary))
+	if o.summaryMatches() {
+		p("  Summary: %s", textsafe.Clean(o.Diagnosis.Summary))
+	} else {
+		p("  Summary: MISMATCH")
+		p("    expected: %q", textsafe.Clean(o.ExpectedSummary))
+		p("    actual:   %q", textsafe.Clean(o.Diagnosis.Summary))
+	}
 	verdict := o.ActualVerdict
 	if !o.verdictMatches() {
 		verdict += fmt.Sprintf("   ✗ expected %s", o.ExpectedVerdict)
@@ -556,6 +562,9 @@ func (o *TestOutcome) writeText(w io.Writer) {
 			mark, note = "✗", "expected "+c.Expected
 		case OutcomeWrongCause:
 			mark, note = "✗", "expected cause "+c.ExpectedCause
+		case OutcomeWrongFix:
+			mark, note = "✗", fmt.Sprintf("expected fix %q, actual %q",
+				textsafe.Clean(c.ExpectedFix), textsafe.Clean(c.Fix))
 		case OutcomeUnexpected:
 			mark, note = "!", "not expected by the scenario"
 		}

@@ -25,11 +25,12 @@ tests:
 
 expect:
   verdict: dns
+  summary: printer.office.test has no A/AAAA records according to either system or public DNS. (The general internet is reachable.)
   checks:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: PASS}
     - {id: quic_udp_443, status: PASS}
-    - {id: dns, status: FAIL}
+    - {id: dns, status: FAIL, fix: "check the hostname or publish the missing DNS record"}
     - {id: dns_public, status: PASS}
     - {id: dns_encrypted, status: PASS}
     - {id: target_tcp, status: SKIP}

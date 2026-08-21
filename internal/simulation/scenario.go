@@ -423,19 +423,22 @@ type TestTrust struct {
 // so an unknown type is rejected rather than silently treated as this one.
 const TestNetdoc = "netdoc"
 
-// Expect is the diagnosis the scenario claims netdoc should reach. Matching is
-// on netdoc's stable machine-readable contract, meaning probe ids, the
-// PASS/WARN/FAIL/SKIP/N/A vocabulary, and the verdict word, never the English prose.
+// Expect is the diagnosis the scenario claims netdoc should reach. Verdict and
+// checks match netdoc's stable machine-readable contract; Summary optionally
+// pins the user-facing diagnosis.
 type Expect struct {
 	Verdict string          `yaml:"verdict"`
+	Summary string          `yaml:"summary"`
 	Checks  []ExpectedCheck `yaml:"checks"`
 }
 
-// ExpectedCheck names one probe row and the status it should carry.
+// ExpectedCheck names one probe row and the result it should carry. Fix
+// optionally pins the user-facing remedy.
 type ExpectedCheck struct {
 	ID     string `yaml:"id"`
 	Status string `yaml:"status"`
 	Cause  string `yaml:"cause"`
+	Fix    string `yaml:"fix"`
 	IPv4   string `yaml:"ipv4"`
 	IPv6   string `yaml:"ipv6"`
 }
@@ -1355,8 +1358,8 @@ func (e *Expect) validate() error {
 			}
 		}
 	}
-	if e.Verdict == "" && len(e.Checks) == 0 {
-		return errors.New("expect: a scenario must expect a verdict, some checks, or both")
+	if e.Verdict == "" && e.Summary == "" && len(e.Checks) == 0 {
+		return errors.New("expect: a scenario must expect a verdict, summary, some checks, or a combination")
 	}
 	return nil
 }
