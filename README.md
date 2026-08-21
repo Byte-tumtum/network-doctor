@@ -320,15 +320,6 @@ All probes, the diagnosis engine, and the TUI are pure Go and identical on Linux
 
 `netdoc-sim` and Challenge Mode are the exception: their backend is Linux namespaces and there is no other one, so macOS and Windows run [the published image](docs/simulation.md#running-it-in-a-container) on a Linux container runtime rather than a port. `netdoc` itself needs no container anywhere.
 
-## Full tour
-
-The rest of it in one recording: the check list against a healthy host, a
-traceroute and an mtr running side by side, the filtered output viewer, a LAN
-scan, the SSH login form, toolbox mode, `--check` selection, headless `--json`,
-and `--watch`.
-
-![Network Doctor against github.com:443: the check list, a traceroute and mtr running concurrently, the filtered output viewer, a LAN scan, the SSH login form, the mtr report, toolbox mode, probe selection with --check, headless --json, and watch mode](assets/demo.gif)
-
 ## Documentation
 
 Everything explanatory is published at

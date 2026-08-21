@@ -3,7 +3,7 @@
 /netdoc
 /netdoc-sim
 
-# Saved reports: recording demo.tape presses 'w', which drops one here
+# Saved reports
 /network-doctor-*.txt
 
 # GoReleaser

@@ -14,12 +14,6 @@ name: demo
 # latencies and spinner phases make byte equality meaningless. Download the
 # artifact, inspect it, and replace the tracked GIF deliberately. Nothing here
 # needs write permission.
-#
-# demo.tape is not recorded here. It sweeps the recording machine's local /24
-# with nmap and shows the device names it finds, which on a hosted runner means
-# port scanning a subnet belonging to someone else, and it fills the SSH form
-# from the current user. It stays a local recording on a network its author is
-# happy to publish, exactly as its header says.
 
 on:
   workflow_dispatch:
