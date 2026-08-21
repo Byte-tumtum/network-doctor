@@ -437,6 +437,23 @@ func TestStableCauseScenarios(t *testing.T) {
 			if len(rep.Tests) != tc.tests {
 				t.Fatalf("tests = %d, want %d", len(rep.Tests), tc.tests)
 			}
+			if tc.name == "tls-failure-causes" {
+				out := rep.Tests[1]
+				tls := diagnosisCheck(out, string(diagnostic.ProbeTLS))
+				if out.Name != "trusted certificate is not valid yet" || tls.Status != "FAIL" ||
+					tls.Cause != diagnostic.TLSCauseCertificateNotYet ||
+					tls.Fix != "this machine's clock is about 3 days slow, so certificates that are already valid look not yet valid: set the clock (enable network time) and retry" {
+					t.Errorf("clock-skew reconciliation = name %q, TLS %+v", out.Name, tls)
+				}
+				if summary := out.Diagnosis.Summary; summary != "TCP reaches future.test:9441 but the TLS handshake fails because this machine's clock is about 3 days slow, so certificates that are already valid look not yet valid." {
+					t.Errorf("summary = %q, want the clock-skew explanation", summary)
+				}
+				if internet := diagnosisCheck(out, string(diagnostic.ProbeInternet)); internet.Status != "PASS" ||
+					!hasServiceReply(rep, "internet", "portal", ServiceHTTP, http.StatusNoContent) ||
+					!hasTLSEvidence(rep, TLSCertificateNotYetValid, "future.test", "future.test", true, "client_rejected_certificate") {
+					t.Errorf("real HTTP/TLS path missing: internet=%+v HTTP=%+v TLS=%+v", internet, rep.Evidence.ServiceReplies, rep.Evidence.TLS)
+				}
+			}
 			assertCleanedUp(t, rep)
 		})
 	}

@@ -328,7 +328,15 @@ func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 		fmt.Fprint(w, body)
 		served(svc.Status)
 	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	var handler http.Handler = mux
+	if svc.DateOffset != "" {
+		offset, _ := time.ParseDuration(svc.DateOffset) // validated before services start
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Date", time.Now().Add(offset).UTC().Format(http.TimeFormat))
+			mux.ServeHTTP(w, r)
+		})
+	}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	// Serve returns when the node holder closes the listener on shutdown.
 	_ = srv.Serve(ln)
 }

@@ -123,6 +123,10 @@ type Service struct {
 	// passes unless Portal says otherwise.
 	Status int    `yaml:"status"`
 	Body   string `yaml:"body"`
+	// DateOffset moves the HTTP Date header relative to the server's wall clock.
+	// It uses Go duration syntax and is empty when the ordinary net/http header
+	// should be left untouched.
+	DateOffset string `yaml:"date_offset"`
 	// Portal makes ServiceHTTP intercept the connectivity check the way a
 	// captive portal does: /generate_204 redirects to a fixed sign-in page
 	// instead of answering 204. Intent only, as every other fixture mode is:
@@ -641,6 +645,9 @@ func (n *Node) validateServices(names map[string]bool) error {
 		if svc.Banner != "" && svc.Type != ServiceTCP {
 			return fmt.Errorf("node %q: banner is only supported by tcp services", n.Name)
 		}
+		if svc.DateOffset != "" && svc.Type != ServiceHTTP {
+			return fmt.Errorf("node %q: date_offset is only supported by http services", n.Name)
+		}
 		if svc.Name != "" {
 			if !isSafeName(svc.Name) {
 				return fmt.Errorf("node %q: service name %q must be letters, digits or dashes", n.Name, svc.Name)
@@ -716,6 +723,11 @@ func (n *Node) validateServices(names map[string]bool) error {
 			}
 			if svc.Status < 100 || svc.Status > 599 {
 				return fmt.Errorf("node %q: http status %d is out of range", n.Name, svc.Status)
+			}
+			if svc.DateOffset != "" {
+				if _, err := time.ParseDuration(svc.DateOffset); err != nil {
+					return fmt.Errorf("node %q: http date_offset: %w", n.Name, err)
+				}
 			}
 			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.DoHResponse != "" {
 				return fmt.Errorf("node %q: http service has unsupported options", n.Name)

@@ -352,3 +352,43 @@ func TestHTTPServicePortalModeInterceptsOnlyTheConnectivityCheck(t *testing.T) {
 		t.Errorf("plain Location = %q, want none", got)
 	}
 }
+
+func TestHTTPServiceDateOffset(t *testing.T) {
+	client := http.Client{Timeout: 5 * time.Second}
+	for _, tc := range []struct {
+		name   string
+		raw    string
+		offset time.Duration
+	}{
+		{name: "omitted"},
+		{name: "future", raw: "2h", offset: 2 * time.Hour},
+		{name: "past", raw: "-2h", offset: -2 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			go serveHTTP(ln, Service{Type: ServiceHTTP, Port: 80, Status: 200, DateOffset: tc.raw}, nil)
+
+			before := time.Now()
+			resp, err := client.Get("http://" + ln.Addr().String() + "/generate_204")
+			after := time.Now()
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+			}
+			date, err := http.ParseTime(resp.Header.Get("Date"))
+			if err != nil {
+				t.Fatalf("Date = %q: %v", resp.Header.Get("Date"), err)
+			}
+			if date.Before(before.Add(tc.offset-2*time.Second)) || date.After(after.Add(tc.offset+2*time.Second)) {
+				t.Errorf("Date offset = %v, want about %v", date.Sub(before), tc.offset)
+			}
+		})
+	}
+}

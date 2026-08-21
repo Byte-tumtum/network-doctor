@@ -145,6 +145,18 @@ func TestParseScenarioRejects(t *testing.T) {
 			"unsupported options",
 		},
 		{
+			"date offset on a non-HTTP service",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{type: tcp, port: 80, date_offset: 1h}]}", 1),
+			"only supported by http services",
+		},
+		{
+			"malformed HTTP date offset",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{type: http, date_offset: tomorrow}]}", 1),
+			"date_offset",
+		},
+		{
 			"TLS missing certificate",
 			strings.Replace(minimalScenario, "address: 10.77.0.1}",
 				"address: 10.77.0.1, services: [{name: tls-target, type: tls, port: 9443}]}", 1),
