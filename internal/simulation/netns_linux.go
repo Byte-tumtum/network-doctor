@@ -50,7 +50,7 @@ import (
 var requiredTools = []string{"ip", "nsenter"}
 
 // optionalTools are needed only by the fault types that use them.
-var optionalTools = map[string]string{"tc": FaultNetem, "nft": FaultDrop + ", " + FaultPMTUBlackhole + " and limited tcp services"}
+var optionalTools = map[string]string{"tc": FaultNetem, "nft": FaultDrop + " and " + FaultPMTUBlackhole}
 
 // DefaultBackend returns the backend for this platform. With dry set, Prepare
 // prints the commands it would run to log instead of running them, and creates
@@ -352,9 +352,6 @@ func (e *netnsEnv) build(ctx context.Context) error {
 		if err := e.startServices(ctx, np); err != nil {
 			return fmt.Errorf("node %s: %w", np.node.Name, err)
 		}
-		if err := e.installConnectionLimits(ctx, np); err != nil {
-			return fmt.Errorf("node %s: %w", np.node.Name, err)
-		}
 	}
 	return nil
 }
@@ -503,43 +500,6 @@ func (e *netnsEnv) startServices(ctx context.Context, np *nodeProc) error {
 		return err
 	}
 	return np.await(ctx, holderServicesReady)
-}
-
-// installConnectionLimits rejects new SYNs in the kernel after a TCP fixture's
-// allowance is spent. Closing a listener after Accept is too late: the client
-// handshake may already have completed and another may be queued before the
-// service goroutine runs.
-func (e *netnsEnv) installConnectionLimits(ctx context.Context, np *nodeProc) error {
-	for _, svc := range np.node.Services {
-		for _, argv := range e.connectionLimitSteps(np, svc) {
-			if err := e.run(ctx, argv...); err != nil {
-				return fmt.Errorf("limit tcp/%d connections: %w", svc.Port, err)
-			}
-		}
-	}
-	return nil
-}
-
-func (e *netnsEnv) connectionLimitSteps(np *nodeProc, svc Service) [][]string {
-	if svc.Type != ServiceTCP || svc.MaxConnections == 0 {
-		return nil
-	}
-	pid := strconv.Itoa(np.pid)
-	in := func(argv ...string) []string {
-		return append([]string{"nsenter", "-t", pid, "-n", "--"}, argv...)
-	}
-	chain := "in"
-	var steps [][]string
-	if key := np.node.Name + "/" + chain; !e.tables[key] {
-		steps = append(steps,
-			in("nft", "add", "table", "inet", nftTable),
-			in("nft", "add", "chain", "inet", nftTable, chain, "{ type filter hook input priority 0; }"))
-		e.tables[key] = true
-	}
-	return append(steps, in("nft", "add", "rule", "inet", nftTable, chain,
-		"tcp", "dport", strconv.Itoa(svc.Port), "ct", "state", "new",
-		"limit", "rate", "over", "1/day", "burst", strconv.Itoa(svc.MaxConnections), "packets",
-		"reject", "with", "tcp", "reset"))
 }
 
 // safeLog collects a holder's stderr. os/exec copies into it from a goroutine

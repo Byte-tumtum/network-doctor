@@ -448,23 +448,6 @@ func TestTLSCertificateNotYetValidAccepted(t *testing.T) {
 	}
 }
 
-func TestTCPConnectionLimitValidation(t *testing.T) {
-	valid := strings.Replace(minimalScenario, "address: 10.77.0.1}",
-		"address: 10.77.0.1, services: [{type: tcp, port: 9443, max_connections: 1}]}", 1)
-	if _, err := ParseScenario(strings.NewReader(valid)); err != nil {
-		t.Fatal(err)
-	}
-	for _, raw := range []string{
-		strings.Replace(valid, "max_connections: 1", "max_connections: -1", 1),
-		strings.Replace(valid, "max_connections: 1", "max_connections: 1025", 1),
-		strings.Replace(valid, "type: tcp", "type: http", 1),
-	} {
-		if _, err := ParseScenario(strings.NewReader(raw)); err == nil {
-			t.Errorf("accepted invalid max_connections scenario: %s", raw)
-		}
-	}
-}
-
 func TestTCPBannerValidation(t *testing.T) {
 	withService := func(service string) string {
 		return strings.Replace(minimalScenario, "address: 10.77.0.1}",
@@ -483,7 +466,6 @@ func TestTCPBannerValidation(t *testing.T) {
 		withService(`{type: http, port: 8080, banner: "220 mail.test ESMTP\r\n"}`),
 		withService(`{type: tcp, port: 9443, banner: "SSH-2.0-test"}`),
 		withService(fmt.Sprintf("{type: tcp, port: 9443, banner: %q}", strings.Repeat("x", maxServiceBannerBytes)+"\n")),
-		withService(`{type: tcp, port: 9443, max_connections: 1, banner: "SSH-2.0-test\r\n"}`),
 	} {
 		if _, err := ParseScenario(strings.NewReader(raw)); err == nil {
 			t.Errorf("accepted invalid banner scenario: %s", raw)
@@ -550,6 +532,12 @@ func TestLibraryScenariosCoverKnownCauses(t *testing.T) {
 	}
 	var missing []string
 	for _, cause := range knownCauses {
+		if cause == diagnostic.TLSCauseTCPUnreachable {
+			// A real-socket scenario cannot deterministically force ECONNREFUSED
+			// after an earlier TCP connection succeeds. The structured errno
+			// mapping is covered by TestTLSProbeClassifiesStructuredFailures.
+			continue
+		}
 		if !covered[cause] {
 			missing = append(missing, cause)
 		}

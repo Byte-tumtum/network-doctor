@@ -106,9 +106,6 @@ type Service struct {
 	Name string `yaml:"name"`
 	Type string `yaml:"type"`
 	Port int    `yaml:"port"`
-	// MaxConnections lets this many new TCP handshakes through, then refuses
-	// later attempts. Zero keeps accepting until the scenario ends.
-	MaxConnections int `yaml:"max_connections"`
 	// Banner makes a TCP fixture write one bounded, newline-terminated protocol
 	// greeting before it drains the client connection.
 	Banner string `yaml:"banner"`
@@ -202,7 +199,6 @@ const (
 	TLSCertificateHostnameMismatch = "hostname_mismatch"
 	DoHResponseInvalid             = "invalid"
 	tlsMaxDNSNames                 = 16
-	maxServiceConnections          = 1024
 	maxServiceBannerBytes          = 1024
 	dnsMaxRecords                  = 64
 	dnsMaxScheduledOutcomes        = 256
@@ -645,12 +641,6 @@ func parseAddr(raw string) (netip.Addr, string, error) {
 func (n *Node) validateServices(names map[string]bool) error {
 	for i := range n.Services {
 		svc := &n.Services[i]
-		if svc.MaxConnections < 0 || svc.MaxConnections > maxServiceConnections {
-			return fmt.Errorf("node %q: max_connections must be between 0 and %d", n.Name, maxServiceConnections)
-		}
-		if svc.MaxConnections != 0 && svc.Type != ServiceTCP {
-			return fmt.Errorf("node %q: max_connections is only supported by tcp services", n.Name)
-		}
 		if svc.Banner != "" && svc.Type != ServiceTCP {
 			return fmt.Errorf("node %q: banner is only supported by tcp services", n.Name)
 		}
@@ -764,9 +754,6 @@ func (n *Node) validateServices(names map[string]bool) error {
 			}
 			if svc.Banner != "" && !strings.HasSuffix(svc.Banner, "\n") {
 				return fmt.Errorf("node %q: tcp banner must end with a newline", n.Name)
-			}
-			if svc.Banner != "" && svc.MaxConnections != 0 {
-				return fmt.Errorf("node %q: tcp banner does not support max_connections", n.Name)
 			}
 			if svc.Certificate != nil || svc.DNSFault != nil || len(svc.Zone) != 0 || len(svc.Records) != 0 || svc.Status != 0 || svc.Body != "" || svc.DoHResponse != "" || svc.Portal {
 				return fmt.Errorf("node %q: tcp service has unsupported options", n.Name)

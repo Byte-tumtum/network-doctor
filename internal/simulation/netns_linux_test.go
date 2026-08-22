@@ -198,27 +198,6 @@ func TestDropFaultArgvCountsWhatItDrops(t *testing.T) {
 	}
 }
 
-func TestTCPConnectionLimitRejectsNewHandshakesInKernel(t *testing.T) {
-	np := &nodeProc{pid: 42, node: &Node{Name: "target"}}
-	env := &netnsEnv{tables: map[string]bool{}}
-	steps := env.connectionLimitSteps(np, Service{Type: ServiceTCP, Port: 9444, MaxConnections: 1})
-	all := ""
-	for _, step := range steps {
-		all += strings.Join(step, " ") + "\n"
-	}
-	for _, want := range []string{
-		"nft add chain inet " + nftTable + " in { type filter hook input priority 0; }",
-		"tcp dport 9444 ct state new limit rate over 1/day burst 1 packets reject with tcp reset",
-	} {
-		if !strings.Contains(all, want) {
-			t.Errorf("steps do not contain %q:\n%s", want, all)
-		}
-	}
-	if steps := env.connectionLimitSteps(np, Service{Type: ServiceTCP, Port: 9445}); len(steps) != 0 {
-		t.Errorf("unlimited TCP service has connection-limit steps: %v", steps)
-	}
-}
-
 // A drop scoped to both a destination and a port has to carry both matches in
 // one rule. Either half missing widens the fault: without the address it takes
 // out every host on that port, and without the port it takes out every service

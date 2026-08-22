@@ -1,8 +1,8 @@
 name: tls-failure-causes
 description: >-
-  Five TLS targets expose distinct real failures after the initial TCP check:
+  Four TLS targets expose distinct real failures after the initial TCP check:
   an untrusted private CA, a future-dated certificate, a plain HTTP listener,
-  a resetting peer, and a TCP listener that disappears after one connection.
+  and a resetting peer.
 
 topology:
   subnet: 10.77.0.0/24
@@ -23,7 +23,6 @@ topology:
             future.test: 10.77.0.20
             plain-http.test: 10.77.0.20
             closed.test: 10.77.0.20
-            vanished.test: 10.77.0.20
             connectivitycheck.gstatic.com: 10.77.0.1
         - {name: portal, type: http, port: 80, date_offset: 72h}
         - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
@@ -37,7 +36,6 @@ topology:
         - {name: future-tls, type: tls, port: 9441, certificate: {mode: not_yet_valid, dns_names: [future.test]}}
         - {name: plain-http, type: http, port: 9442}
         - {name: closed-tcp, type: tcp_reset, port: 9443}
-        - {name: one-connection, type: tcp, port: 9444, max_connections: 1}
 
 tests:
   - name: target CA is not trusted
@@ -72,14 +70,6 @@ tests:
       verdict: service
       checks:
         - {id: tls, status: FAIL, cause: connection_closed}
-
-  - name: TCP listener disappears after the reachability check
-    node: client
-    target: https://vanished.test:9444
-    expect:
-      verdict: service
-      checks:
-        - {id: tls, status: FAIL, cause: tcp_unreachable}
 
 expect:
   verdict: service
