@@ -707,7 +707,7 @@ func reproductionFor(manifest GeneratedCaseManifest) HuntReproduction {
 }
 
 func analyzeHuntCase(manifest GeneratedCaseManifest, report *Report, truth ObservedTruth) []HuntCaseFinding {
-	var findings []HuntCaseFinding
+	findings := []HuntCaseFinding{}
 	add := func(f HuntCaseFinding) {
 		f.Reproduce = reproductionFor(manifest)
 		f.Fingerprint = huntFindingFingerprint(f)

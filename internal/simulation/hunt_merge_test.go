@@ -12,11 +12,13 @@ import (
 
 func TestRunHuntShardsPartitionTheExistingGlobalStream(t *testing.T) {
 	base := loadHuntBase(t, "healthy-routed-network")
-	for _, cases := range []int{1, 2, 7, 13} {
-		for _, shardCount := range []int{1, 2, 3, 8} {
+	for _, cases := range []int{1, 2, 7, 13, 60} {
+		for _, shardCount := range []int{1, 2, 3, 4, 8} {
 			t.Run(strconv.Itoa(cases)+"_cases_"+strconv.Itoa(shardCount)+"_shards", func(t *testing.T) {
-				full := RunHunt(context.Background(), "healthy-routed-network", base, nil,
-					HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, DryRun: true})
+				full := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
+					return &clientRoleBackend{env: &fakeEnv{stdout: blamesTheGatewayReport, evidence: deadRouteEvidence()}}
+				},
+					HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, DryRun: false})
 				want := make(map[int]GeneratedCaseManifest, len(full.Cases))
 				for _, item := range full.Cases {
 					want[item.Manifest.Case] = item.Manifest
@@ -25,8 +27,10 @@ func TestRunHuntShardsPartitionTheExistingGlobalStream(t *testing.T) {
 				shards := make([]*HuntResult, 0, shardCount)
 				for index := 0; index < shardCount; index++ {
 					shard := HuntShard{Index: index, Count: shardCount}
-					result := RunHunt(context.Background(), "healthy-routed-network", base, nil,
-						HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, DryRun: true, Shard: &shard})
+					result := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
+						return &clientRoleBackend{env: &fakeEnv{stdout: blamesTheGatewayReport, evidence: deadRouteEvidence()}}
+					},
+						HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, DryRun: false, Shard: &shard})
 					shards = append(shards, result)
 					for _, item := range result.Cases {
 						caseNumber := item.Manifest.Case
