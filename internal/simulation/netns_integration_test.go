@@ -447,6 +447,22 @@ func TestStableCauseScenarios(t *testing.T) {
 				t.Fatalf("tests = %d, want %d", len(rep.Tests), tc.tests)
 			}
 			if tc.name == "tls-failure-causes" {
+				closed := rep.Tests[3]
+				closedTLS := diagnosisCheck(closed, string(diagnostic.ProbeTLS))
+				if closed.Name != "peer resets during the TLS handshake" || closedTLS.Status != "FAIL" ||
+					closedTLS.Cause != diagnostic.TLSCauseConnectionClosed {
+					t.Errorf("resetting peer = name %q, TLS %+v", closed.Name, closedTLS)
+				}
+				vanished := rep.Tests[4]
+				targetTCP := diagnosisCheck(vanished, string(diagnostic.ProbeTargetTCP))
+				pmtu := diagnosisCheck(vanished, string(diagnostic.ProbePMTU))
+				vanishedTLS := diagnosisCheck(vanished, string(diagnostic.ProbeTLS))
+				if vanished.Name != "TCP listener disappears after the reachability check" || targetTCP.Status != "PASS" ||
+					pmtu.Status != "N/A" || !strings.Contains(pmtu.Detail, "second connection") ||
+					vanishedTLS.Status != "FAIL" || vanishedTLS.Cause != diagnostic.TLSCauseTCPUnreachable {
+					t.Errorf("vanished listener = name %q, target TCP %+v, path MTU %+v, TLS %+v",
+						vanished.Name, targetTCP, pmtu, vanishedTLS)
+				}
 				out := rep.Tests[1]
 				tls := diagnosisCheck(out, string(diagnostic.ProbeTLS))
 				if out.Name != "trusted certificate is not valid yet" || tls.Status != "FAIL" ||

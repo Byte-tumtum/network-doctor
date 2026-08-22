@@ -106,8 +106,8 @@ type Service struct {
 	Name string `yaml:"name"`
 	Type string `yaml:"type"`
 	Port int    `yaml:"port"`
-	// MaxConnections makes a TCP fixture stop listening after this many
-	// accepted connections. Zero keeps accepting until the scenario ends.
+	// MaxConnections lets this many new TCP handshakes through, then refuses
+	// later attempts. Zero keeps accepting until the scenario ends.
 	MaxConnections int `yaml:"max_connections"`
 	// Banner makes a TCP fixture write one bounded, newline-terminated protocol
 	// greeting before it drains the client connection.

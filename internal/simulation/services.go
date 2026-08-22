@@ -161,7 +161,7 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 			return []io.Closer{startBannerServer(ctx, listeners, svc.Banner)}, nil, nil
 		}
 		for _, ln := range listeners {
-			go serveSink(ln, svc.MaxConnections)
+			go serveSink(ln)
 		}
 		return listenersAsClosers(listeners), nil, nil
 	case ServiceTCPReset:
@@ -347,22 +347,16 @@ func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 // netdoc's path-MTU probe writes a few megabytes and times how long the peer
 // takes to take them, and a peer that hangs up immediately would look like a
 // black hole on a healthy link.
-func serveSink(ln net.Listener, maxConnections int) {
-	for accepted := 0; ; accepted++ {
+func serveSink(ln net.Listener) {
+	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
-		}
-		if maxConnections > 0 && accepted+1 == maxConnections {
-			_ = ln.Close()
 		}
 		go func() {
 			defer conn.Close()
 			_, _ = io.Copy(io.Discard, conn)
 		}()
-		if maxConnections > 0 && accepted+1 == maxConnections {
-			return
-		}
 	}
 }
 

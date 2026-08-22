@@ -140,33 +140,19 @@ func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
 	}
 }
 
-func TestLimitedTCPServiceStopsListening(t *testing.T) {
+func TestTCPServiceKeepsAccepting(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() {
-		serveSink(listener, 1)
-		close(done)
-	}()
-
-	first, err := net.Dial("tcp4", listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer first.Close()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("TCP fixture did not stop after its connection limit")
-	}
-	if second, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second); err == nil {
-		second.Close()
-		t.Fatal("TCP fixture accepted a connection past its limit")
-	}
-	if err := closeServices([]io.Closer{listener}); err != nil {
-		t.Fatalf("cleanup of exhausted TCP fixture: %v", err)
+	go serveSink(listener)
+	t.Cleanup(func() { _ = listener.Close() })
+	for i := 0; i < 3; i++ {
+		conn, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i+1, err)
+		}
+		conn.Close()
 	}
 }
 
