@@ -51,8 +51,10 @@ complete -c netdoc-sim -n '__fish_seen_subcommand_from campaign' -o runs -l runs
 complete -c netdoc-sim -n '__fish_seen_subcommand_from campaign' -o iteration -l iteration -r -d 'Run exactly one derived iteration'
 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o case -l case -r -d 'Run exactly one derived case'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o shard -l shard -r -d 'Run zero-based shard i/N of the global cases'
 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o scenarios -l scenarios -r -d 'Comma-separated baselines (default: all)'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o hunt-results -l hunt-results -r -F -d 'Directory of canonical merged hunt reports'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o min-severity -l min-severity -r -d 'Lowest severity worth filing (default medium)' -a 'critical high medium low info'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o create -l create -d 'File reproducible findings as GitHub issues with gh'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o context -l context -r -d 'Debugging context recorded in the issue body'

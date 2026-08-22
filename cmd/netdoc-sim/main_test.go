@@ -549,6 +549,24 @@ func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {
 	}
 }
 
+func TestHuntDirectorReceivesShardSelector(t *testing.T) {
+	abs := fakeNetdoc(t)
+	f := newHuntFlags(io.Discard)
+	base, err := f.parse([]string{"healthy", "--seed", "7", "--cases", "60", "--shard", "2/4", "--netdoc", "./netdoc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := findNetdoc(*f.netdoc, filepath.Join(t.TempDir(), "netdoc-sim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, gotBase := receivedHunt(t, huntDirectorArgv(f, base, path))
+	if gotBase != base || !got.shard.set || got.shard.value != (simulation.HuntShard{Index: 2, Count: 4}) ||
+		*got.cases != 60 || got.seed.v != 7 || *got.netdoc != abs {
+		t.Fatalf("forwarded shard hunt = base %q flags %+v", gotBase, got)
+	}
+}
+
 func TestHuntDryRunNeedsNoNetdocOrNamespaces(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"hunt", "healthy-routed-network", "--dry-run", "--json", "--seed", "12345", "--cases", "6"}, &stdout, &stderr)
@@ -587,11 +605,83 @@ func TestHuntUsageBoundsAndBases(t *testing.T) {
 		{"hunt", "--dry-run", "--seed", "1", "--cases", "501"},
 		{"hunt", "--dry-run", "--seed", "1", "--case", "-2"},
 		{"hunt", "--dry-run", "--seed", "1", "--max-faults", "4"},
+		{"hunt", "--dry-run", "--seed", "1", "--case", "2", "--shard", "0/2"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != exitUsage {
 			t.Errorf("run(%v) = %d, stderr %q", args, code, stderr.String())
 		}
+	}
+}
+
+func TestHuntShardSyntaxIsStrict(t *testing.T) {
+	for _, raw := range []string{"1", "a/2", "1/b", "0/0", "-1/2", "2/2", "1/-2", "1/2/3", "1/501", "1/999999999999999999999"} {
+		t.Run(strings.ReplaceAll(raw, "/", "_"), func(t *testing.T) {
+			f := newHuntFlags(io.Discard)
+			if _, err := f.parse([]string{"healthy", "-shard", raw}); err == nil {
+				t.Fatalf("-shard %q was accepted", raw)
+			}
+		})
+	}
+	f := newHuntFlags(io.Discard)
+	if _, err := f.parse([]string{"healthy", "-shard", "0/1"}); err != nil {
+		t.Fatalf("valid shard rejected: %v", err)
+	}
+}
+
+func TestHuntMergeCommandReadsArbitraryFileOrder(t *testing.T) {
+	base, err := simulation.LibraryScenario("healthy-routed-network")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var paths []string
+	for index := 0; index < 3; index++ {
+		shard := simulation.HuntShard{Index: index, Count: 3}
+		result := simulation.RunHunt(context.Background(), "healthy-routed-network", base, nil,
+			simulation.HuntOptions{Cases: 7, Seed: 12345, MaxFaults: 2, DryRun: true, Shard: &shard})
+		path := filepath.Join(dir, fmt.Sprintf("anything-%d.json", index))
+		// #nosec G304 -- path is inside t.TempDir.
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := result.WriteJSON(file); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	slices.Reverse(paths)
+	args := append([]string{"hunt", "merge"}, paths...)
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	var merged simulation.HuntResult
+	if err := json.Unmarshal(stdout.Bytes(), &merged); err != nil {
+		t.Fatal(err)
+	}
+	if err := simulation.ValidateMergedHuntResult(&merged); err != nil {
+		t.Fatal(err)
+	}
+	if merged.Shard != nil || len(merged.Cases) != 7 {
+		t.Fatalf("merged result = %+v", merged)
+	}
+}
+
+func TestHuntMergeCommandRejectsMalformedJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte(`{"result":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"hunt", "merge", path}, &stdout, &stderr); code != exitUsage ||
+		!strings.Contains(stderr.String(), "read hunt result") || stdout.Len() != 0 {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout.String(), stderr.String())
 	}
 }
 

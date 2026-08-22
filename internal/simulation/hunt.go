@@ -13,13 +13,33 @@ const (
 	HuntResultFindings  = "findings"
 	HuntResultError     = "error"
 	HuntResultCancelled = "cancelled"
+	HuntMaxShards       = 500
 )
+
+// HuntShard selects global case numbers using zero-based modulo partitioning.
+type HuntShard struct {
+	Index int `json:"index"`
+	Count int `json:"count"`
+}
+
+func (s HuntShard) Validate() error {
+	if s.Count < 1 || s.Count > HuntMaxShards {
+		return fmt.Errorf("shard count must be between 1 and %d", HuntMaxShards)
+	}
+	if s.Index < 0 || s.Index >= s.Count {
+		return fmt.Errorf("shard index must be between 0 and %d", s.Count-1)
+	}
+	return nil
+}
+
+func (s HuntShard) Includes(caseNumber int) bool { return caseNumber%s.Count == s.Index }
 
 type HuntOptions struct {
 	Run       Options
 	Cases     int
 	Seed      int64
 	Case      *int
+	Shard     *HuntShard
 	MaxFaults int
 	FailFast  bool
 	DryRun    bool
@@ -50,6 +70,10 @@ type HuntResult struct {
 	BaseScenario        string           `json:"base_scenario"`
 	HuntSeed            int64            `json:"hunt_seed"`
 	RequestedCases      int              `json:"requested_cases"`
+	MaxFaults           int              `json:"max_faults"`
+	FailFast            bool             `json:"fail_fast,omitempty"`
+	DryRun              bool             `json:"dry_run,omitempty"`
+	Shard               *HuntShard       `json:"shard,omitempty"`
 	GeneratedCases      int              `json:"generated_cases"`
 	ExecutedCases       int              `json:"executed_cases"`
 	UniqueCases         int              `json:"unique_cases"`
@@ -82,7 +106,93 @@ func (o *HuntOptions) withDefaults() error {
 	if o.Case != nil && (*o.Case < 0 || *o.Case > HuntMaxCaseNumber) {
 		return fmt.Errorf("case must be between 0 and %d", HuntMaxCaseNumber)
 	}
+	if o.Shard != nil {
+		if err := o.Shard.Validate(); err != nil {
+			return err
+		}
+		if o.Case != nil {
+			return fmt.Errorf("case and shard selectors are mutually exclusive")
+		}
+	}
 	return nil
+}
+
+// huntCaseStream owns the existing global sequence: candidates begin at zero,
+// semantic duplicates do not count toward the requested unique-case total,
+// and every accepted manifest keeps its original global case number.
+type huntCaseStream struct {
+	version, baseID string
+	base            *Scenario
+	seed            int64
+	maxFaults       int
+	candidate       int
+	attempts        int
+	maxCandidates   int
+	target          int
+	accepted        int
+	deduplicate     bool
+	seen            map[string]bool
+	duplicates      int
+}
+
+func newHuntCaseStream(version, baseID string, base *Scenario, seed int64, cases, maxFaults int, only *int) *huntCaseStream {
+	stream := &huntCaseStream{version: version, baseID: baseID, base: base, seed: seed,
+		maxFaults: maxFaults, target: cases, maxCandidates: cases * 20, deduplicate: true,
+		seen: make(map[string]bool, cases)}
+	if only != nil {
+		stream.candidate, stream.target, stream.maxCandidates, stream.deduplicate = *only, 1, 1, false
+	}
+	return stream
+}
+
+func (s *huntCaseStream) next() (*GeneratedCase, error) {
+	for s.attempts < s.maxCandidates && s.accepted < s.target {
+		caseNumber := s.candidate
+		s.candidate++
+		s.attempts++
+		if caseNumber > HuntMaxCaseNumber {
+			break
+		}
+		generated, err := generateHuntCase(s.version, s.baseID, s.base, s.seed, caseNumber, s.maxFaults)
+		if err != nil {
+			return nil, fmt.Errorf("case %d: %w", caseNumber, err)
+		}
+		if s.deduplicate && s.seen[generated.Manifest.CaseFingerprint] {
+			s.duplicates++
+			continue
+		}
+		s.seen[generated.Manifest.CaseFingerprint] = true
+		s.accepted++
+		return generated, nil
+	}
+	if s.accepted < s.target {
+		return nil, fmt.Errorf("generated %d unique cases after %d bounded candidates; requested %d",
+			s.accepted, s.maxCandidates, s.target)
+	}
+	return nil, nil
+}
+
+func canonicalHuntCaseResult(manifest GeneratedCaseManifest, report *Report) HuntCaseResult {
+	item := HuntCaseResult{Manifest: manifest, Status: "generated",
+		Truth: collectObservedTruth(manifest, nil), Findings: []HuntCaseFinding{},
+		DiagnosisFingerprint: DiagnosisFingerprint{Verdicts: []string{}, Probes: []ProbeFingerprint{}}, Report: report}
+	if report == nil {
+		return item
+	}
+	if report.Error != "" || !report.Cleanup.Done {
+		item.Status = "runtime_error"
+		item.Findings = analyzeHuntCase(manifest, report, item.Truth)
+		return item
+	}
+	item.Truth = collectObservedTruth(manifest, report)
+	item.TruthFingerprint = truthFingerprint(item.Truth)
+	item.DiagnosisFingerprint = diagnosisFingerprint(report)
+	item.Findings = analyzeHuntCase(manifest, report, item.Truth)
+	item.Status = "clean"
+	if len(item.Findings) > 0 {
+		item.Status = "findings"
+	}
+	return item
 }
 
 // RunHunt generates cases independently, skips semantic duplicates in batch
@@ -104,7 +214,12 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 		result.finish()
 		return result
 	}
-	result.RequestedCases = opts.Cases
+	result.RequestedCases, result.MaxFaults = opts.Cases, opts.MaxFaults
+	result.FailFast, result.DryRun = opts.FailFast, opts.DryRun
+	if opts.Shard != nil {
+		shard := *opts.Shard
+		result.Shard = &shard
+	}
 	if opts.Case != nil {
 		result.RequestedCases = 1
 	}
@@ -113,55 +228,32 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 		result.finish()
 		return result
 	}
-	seen := make(map[string]bool, result.RequestedCases)
-	candidate := 0
-	maxCandidates := result.RequestedCases * 20
-	if opts.Case != nil {
-		candidate, maxCandidates = *opts.Case, 1
-	}
-	for attempts := 0; attempts < maxCandidates && len(result.Cases) < result.RequestedCases; attempts++ {
+	stream := newHuntCaseStream(HuntGeneratorVersion, baseID, base, opts.Seed, result.RequestedCases, opts.MaxFaults, opts.Case)
+	for stream.accepted < stream.target {
 		if err := ctx.Err(); err != nil {
 			result.Cancelled, result.RuntimeFailure = true, true
 			result.Result, result.ErrorKind, result.Error = HuntResultCancelled, "cancellation", err.Error()
 			break
 		}
-		caseNumber := candidate
-		candidate++
-		if caseNumber > HuntMaxCaseNumber {
-			break
-		}
-		generated, err := GenerateHuntCase(baseID, base, opts.Seed, caseNumber, opts.MaxFaults)
+		generated, err := stream.next()
 		if err != nil {
 			result.Result, result.ErrorKind = HuntResultError, FindingGeneratorDefect
-			result.Error = fmt.Sprintf("case %d: %v", caseNumber, err)
+			result.Error = err.Error()
 			break
 		}
-		if opts.Case == nil && seen[generated.Manifest.CaseFingerprint] {
-			result.DuplicateCandidates++
+		if generated == nil {
+			break
+		}
+		if opts.Shard != nil && !opts.Shard.Includes(generated.Manifest.Case) {
 			continue
 		}
-		seen[generated.Manifest.CaseFingerprint] = true
-		item := HuntCaseResult{Manifest: generated.Manifest, Status: "generated",
-			Truth: collectObservedTruth(generated.Manifest, nil), Findings: []HuntCaseFinding{},
-			DiagnosisFingerprint: DiagnosisFingerprint{Verdicts: []string{}, Probes: []ProbeFingerprint{}}}
+		item := canonicalHuntCaseResult(generated.Manifest, nil)
 		result.GeneratedCases++
 		if !opts.DryRun {
-			report := Run(ctx, generated.Scenario, backend(), opts.Run)
-			item.Report = report
+			item = canonicalHuntCaseResult(generated.Manifest, Run(ctx, generated.Scenario, backend(), opts.Run))
 			result.ExecutedCases++
-			if report.Error != "" || !report.Cleanup.Done {
+			if item.Status == "runtime_error" {
 				result.RuntimeFailure = true
-				item.Status = "runtime_error"
-				item.Findings = analyzeHuntCase(generated.Manifest, report, item.Truth)
-			} else {
-				item.Truth = collectObservedTruth(generated.Manifest, report)
-				item.TruthFingerprint = truthFingerprint(item.Truth)
-				item.DiagnosisFingerprint = diagnosisFingerprint(report)
-				item.Findings = analyzeHuntCase(generated.Manifest, report, item.Truth)
-				item.Status = "clean"
-				if len(item.Findings) > 0 {
-					item.Status = "findings"
-				}
 			}
 		}
 		result.Cases = append(result.Cases, item)
@@ -173,12 +265,8 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 			break
 		}
 	}
-	result.UniqueCases = len(seen)
-	if result.Error == "" && !result.FailFastStopped && len(result.Cases) < result.RequestedCases {
-		result.Result, result.ErrorKind = HuntResultError, FindingGeneratorDefect
-		result.Error = fmt.Sprintf("generated %d unique cases after %d bounded candidates; requested %d",
-			len(result.Cases), maxCandidates, result.RequestedCases)
-	}
+	result.DuplicateCandidates = stream.duplicates
+	result.UniqueCases = len(result.Cases)
 	result.finish()
 	return result
 }

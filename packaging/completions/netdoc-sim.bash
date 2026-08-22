@@ -13,8 +13,8 @@ _netdoc_sim_flags() {
     case $1 in
         run) echo "json keep netdoc timeout repeat dry-run v" ;;
         campaign) echo "json runs seed iteration fail-fast netdoc timeout v" ;;
-        hunt) echo "json cases seed case max-faults fail-fast dry-run netdoc timeout v" ;;
-        triage) echo "json scenarios cases seed max-faults min-severity create context revision netdoc timeout v" ;;
+        hunt) echo "json cases seed case shard max-faults fail-fast dry-run netdoc timeout v" ;;
+        triage) echo "json scenarios cases hunt-results seed max-faults min-severity create context revision netdoc timeout v" ;;
         challenge) echo "id difficulty daily starter authored answer give-up json netdoc timeout v" ;;
         cleanup) echo "all" ;;
     esac
@@ -36,6 +36,10 @@ _netdoc_sim() {
     case $prev in
         -netdoc | --netdoc)
             COMPREPLY=($(compgen -f -- "$cur"))
+            return
+            ;;
+        -hunt-results | --hunt-results)
+            COMPREPLY=($(compgen -d -- "$cur"))
             return
             ;;
         -difficulty | --difficulty)
@@ -60,6 +64,7 @@ _netdoc_sim() {
             ;;
         -id | --id | -timeout | --timeout | -repeat | --repeat | -runs | --runs | \
         -seed | --seed | -iteration | --iteration | -cases | --cases | -case | --case | \
+        -shard | --shard | \
         -max-faults | --max-faults | -scenarios | --scenarios | -context | --context | \
         -revision | --revision)
             # Ids, durations, numbers and free text: nothing to enumerate, so
@@ -84,7 +89,11 @@ _netdoc_sim() {
             COMPREPLY=($(compgen -W "$(netdoc-sim scenarios 2>/dev/null)" -- "$cur"))
             ;;
         hunt)
-            COMPREPLY=($(compgen -W "dual-stack-healthy healthy healthy-routed-network socks5h-remote-dns-succeeds tls-valid two-path-healthy two-path-ipv6-healthy two-router-healthy" -- "$cur"))
+            if [[ ${COMP_WORDS[2]} == merge ]]; then
+                COMPREPLY=($(compgen -f -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "dual-stack-healthy healthy healthy-routed-network socks5h-remote-dns-succeeds tls-valid two-path-healthy two-path-ipv6-healthy two-router-healthy" -- "$cur"))
+            fi
             ;;
         starters)
             COMPREPLY=($(compgen -W "fundamentals dns service tls paths routing" -- "$cur"))

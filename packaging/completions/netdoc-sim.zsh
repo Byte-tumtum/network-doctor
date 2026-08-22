@@ -69,9 +69,10 @@ case $state in
     hunt)
       _arguments \
         '(--json -json)'{--json,-json}'[print the machine-readable hunt report]' \
-        '(--cases -cases)'{--cases,-cases}'[unique generated cases to run (default 50, max 500)]:count:' \
+        '(--cases -cases)'{--cases,-cases}'[logical unique cases before sharding (default 50, max 500)]:count:' \
         '(--seed -seed)'{--seed,-seed}'[hunt seed (generated and printed when omitted)]:int64:' \
         '(--case -case)'{--case,-case}'[run exactly one derived case]:index:' \
+        '(--shard -shard)'{--shard,-shard}'[run zero-based shard i/N of the global cases]:shard:' \
         '(--max-faults -max-faults)'{--max-faults,-max-faults}'[maximum mutations per case (default 2, max 3)]:count:' \
         '(--fail-fast -fail-fast)'{--fail-fast,-fail-fast}'[stop after the first reportable finding]' \
         '(--dry-run -dry-run)'{--dry-run,-dry-run}'[print generated manifests without namespaces]' \
@@ -85,6 +86,7 @@ case $state in
         '(--json -json)'{--json,-json}'[print the machine-readable triage report]' \
         '(--scenarios -scenarios)'{--scenarios,-scenarios}'[comma-separated baselines (default: all)]:baselines:' \
         '(--cases -cases)'{--cases,-cases}'[unique generated cases per baseline (default 20)]:count:' \
+        '(--hunt-results -hunt-results)'{--hunt-results,-hunt-results}'[directory of canonical merged hunt reports]:directory:_directories' \
         '(--seed -seed)'{--seed,-seed}'[override the fixed seed of every baseline]:int64:' \
         '(--max-faults -max-faults)'{--max-faults,-max-faults}'[maximum mutations per case (default 2, max 3)]:count:' \
         '(--min-severity -min-severity)'{--min-severity,-min-severity}'[lowest severity worth filing (default medium)]:level:(critical high medium low info)' \

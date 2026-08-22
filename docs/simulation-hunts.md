@@ -49,6 +49,42 @@ bases and mutation registry live in `internal/simulation/hunt_generate.go`.
 ./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --dry-run --json
 ```
 
+`--cases N` means the first N unique mutation fingerprints in the global
+candidate sequence. Candidate numbers can have gaps when a semantic duplicate
+is skipped. `--shard i/N` is a zero-based filter over those already accepted
+global cases: case C belongs to shard i when `C % N == i`. Every shard walks
+the same cheap deterministic candidate sequence and only creates namespaces
+for its own cases. It does not draw a new stream or renumber cases.
+
+`--case` and `--shard` are mutually exclusive. Exact reproduction remains the
+unsharded `--case C --seed S` command printed in findings, so a case number and
+fingerprint mean the same thing before and after sharding. `--fail-fast` stops
+only the current shard; independent processes do not cancel or coordinate one
+another.
+
+Run and merge all four shards locally like this:
+
+```sh
+for shard in 0 1 2 3; do
+  ./netdoc-sim hunt healthy --seed 20260101 --cases 60 \
+    --shard "$shard/4" --max-faults 2 --json > "shard-$shard.json"
+done
+./netdoc-sim hunt merge shard-3.json shard-1.json shard-0.json shard-2.json > hunt.json
+```
+
+`hunt merge` accepts shard files in any order and writes the ordinary canonical
+hunt JSON shape in global case order. It rejects duplicate or missing shards,
+duplicate or missing global cases, and incompatible base, seed, generator,
+case-count, fault-ceiling, shard-count, dry-run, or fail-fast settings. It
+regenerates the expected manifests, so file names are never treated as
+metadata. An empty shard is valid when no accepted global case belongs to it.
+
+Shard reports add top-level `max_faults`, optional `fail_fast` and `dry_run`,
+and `shard` with `index` and `count`. `requested_cases` remains the logical
+global unique-case total while generated and executed counters describe that
+shard. A merged report omits `shard` because it represents the logical hunt,
+not one execution partition. Existing JSON fields are unchanged.
+
 `--max-faults` belongs in a reproduction command rather than being left to the
 flag default. It is one of the inputs the case is drawn from: the first number
 taken from the case seed is how many mutations to apply, bounded by the ceiling,
@@ -231,7 +267,13 @@ coverage findings are built from.
 ./netdoc-sim triage --scenarios healthy --cases 5
 ./netdoc-sim triage --json
 ./netdoc-sim triage --create                      # create issues through gh
+./netdoc-sim triage --hunt-results merged-hunts   # reuse merged full hunts
 ```
+
+`--hunt-results` requires one canonical merged report for every selected
+baseline and validates its content rather than its file name. It replaces only
+the initial full hunts. Candidate findings are still re-run as exact cases in
+fresh namespaces before they can be filed.
 
 `--create` is the only mode that writes to GitHub. It uses the configured `gh`
 client, suppresses duplicates by stable fingerprint, and treats a failed hunt,
@@ -243,4 +285,7 @@ requires the `NETDOC_HUNT_CREATE` repository variable; manual dispatch requires
 its `create` input. Observation-only runs withhold `GH_TOKEN`, even though the
 job declares the permission needed by an opted-in run. Keep the workflow's
 explicit Bash/`pipefail` behavior and seeded-netem-compatible runner when
-changing it.
+changing it. The nightly runs 60 logical unique cases per baseline over four
+independent shards, then merges the shard JSON and gives the canonical reports
+to triage. Each shard therefore executes about 15 cases per baseline, the old
+nightly workload, while the logical nightly coverage is four times larger.

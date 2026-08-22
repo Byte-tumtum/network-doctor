@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -37,6 +38,7 @@ type ghFunc func(ctx context.Context, args ...string) ([]byte, error)
 type triageOptions struct {
 	baselines   []simulation.TriageBaseline
 	cases       int
+	maxFaults   int
 	minSeverity simulation.HuntSeverity
 	create      bool
 	revision    string
@@ -48,6 +50,7 @@ type triageFlags struct {
 	json        *bool
 	scenarios   *string
 	cases       *int
+	huntResults *string
 	seed        optionalSeed
 	maxFaults   *int
 	minSeverity *string
@@ -65,6 +68,7 @@ func newTriageFlags(out io.Writer) *triageFlags {
 	f.json = f.fs.Bool("json", false, "print the machine-readable triage report")
 	f.scenarios = f.fs.String("scenarios", "", "comma-separated baselines to hunt (default: all)")
 	f.cases = f.fs.Int("cases", 20, "unique generated cases per baseline")
+	f.huntResults = f.fs.String("hunt-results", "", "directory of canonical merged hunt JSON reports")
 	f.fs.Var(&f.seed, "seed", "override the fixed seed of every selected baseline")
 	f.maxFaults = f.fs.Int("max-faults", 2, "maximum mutations per case")
 	f.minSeverity = f.fs.String("min-severity", string(simulation.SeverityMedium),
@@ -113,7 +117,7 @@ func (f *triageFlags) parse(args []string) (*triageOptions, error) {
 	if !ok {
 		return nil, fmt.Errorf("-min-severity must be one of critical, high, medium, low, info")
 	}
-	return &triageOptions{baselines: baselines, cases: *f.cases, minSeverity: severity,
+	return &triageOptions{baselines: baselines, cases: *f.cases, maxFaults: *f.maxFaults, minSeverity: severity,
 		create: *f.create, revision: buildRevision(*f.revision), context: *f.context}, nil
 }
 
@@ -151,7 +155,15 @@ func launchTriage(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "netdoc-sim:", err)
 		return exitUsage
 	}
-	report := triage(ctx, *opts, directorHunt(self, netdoc, *f.timeout, *f.maxFaults, *f.verbose, stderr), realGH)
+	hunt := directorHunt(self, netdoc, *f.timeout, *f.maxFaults, *f.verbose, stderr)
+	if *f.huntResults != "" {
+		hunt, err = precomputedHunts(*f.huntResults, *opts, hunt)
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc-sim: load hunt results:", err)
+			return exitError
+		}
+	}
+	report := triage(ctx, *opts, hunt, realGH)
 	if *f.json {
 		if err := report.WriteJSON(stdout); err != nil {
 			fmt.Fprintln(stderr, "netdoc-sim:", err)
@@ -345,6 +357,64 @@ func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, ver
 		}
 		return &result, nil
 	}
+}
+
+// precomputedHunts replaces only triage's full hunts. Exact-case verification
+// still launches a fresh director, so a merged candidate earns an issue under
+// the same reproduction rule as a locally generated one.
+func precomputedHunts(dir string, opts triageOptions, replay huntFunc) (huntFunc, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	wanted := make(map[string]simulation.TriageBaseline, len(opts.baselines))
+	for _, baseline := range opts.baselines {
+		wanted[baseline.Scenario] = baseline
+	}
+	reports := make(map[string]*simulation.HuntResult, len(wanted))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		result, err := readHuntResult(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
+		}
+		if err := simulation.ValidateMergedHuntResult(result); err != nil {
+			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
+		}
+		baseline, ok := wanted[result.BaseScenario]
+		if !ok {
+			return nil, fmt.Errorf("%s contains unrequested baseline %q", entry.Name(), result.BaseScenario)
+		}
+		if _, exists := reports[result.BaseScenario]; exists {
+			return nil, fmt.Errorf("duplicate hunt result for %s", result.BaseScenario)
+		}
+		if result.GeneratorVersion != simulation.HuntGeneratorVersion {
+			return nil, fmt.Errorf("%s uses generator %s, this build uses %s",
+				result.BaseScenario, result.GeneratorVersion, simulation.HuntGeneratorVersion)
+		}
+		if result.HuntSeed != baseline.Seed || result.RequestedCases != opts.cases ||
+			result.MaxFaults != opts.maxFaults || result.DryRun || result.FailFast {
+			return nil, fmt.Errorf("%s hunt configuration does not match triage", result.BaseScenario)
+		}
+		reports[result.BaseScenario] = result
+	}
+	for _, baseline := range opts.baselines {
+		if reports[baseline.Scenario] == nil {
+			return nil, fmt.Errorf("missing hunt result for %s", baseline.Scenario)
+		}
+	}
+	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int) (*simulation.HuntResult, error) {
+		if caseNumber >= 0 {
+			return replay(ctx, scenario, seed, cases, caseNumber)
+		}
+		result := reports[scenario]
+		if result == nil || result.HuntSeed != seed || result.RequestedCases != cases {
+			return nil, fmt.Errorf("no matching merged hunt for %s seed %d with %d cases", scenario, seed, cases)
+		}
+		return result, nil
+	}, nil
 }
 
 // buildRevision prefers what the caller passed, then the VCS revision the Go

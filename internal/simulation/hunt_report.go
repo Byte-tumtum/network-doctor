@@ -14,6 +14,9 @@ func (r *HuntResult) WriteText(w io.Writer) {
 	fmt.Fprintln(w, "Network Doctor bug hunt")
 	fmt.Fprintf(w, "\nBase:      %s\nSeed:      %d\nCases:     %d\nGenerator: %s\n",
 		textsafe.Clean(r.BaseScenario), r.HuntSeed, r.RequestedCases, r.GeneratorVersion)
+	if r.Shard != nil {
+		fmt.Fprintf(w, "Shard:     %d/%d (zero-based)\n", r.Shard.Index, r.Shard.Count)
+	}
 	if r.ExecutedCases == 0 {
 		fmt.Fprintf(w, "\nGenerated: %d unique case(s); duplicates skipped: %d\n", r.GeneratedCases, r.DuplicateCandidates)
 		for _, item := range r.Cases {

@@ -13,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       cases:
-        description: unique generated cases per baseline
-        default: "15"
+        description: logical unique cases per baseline before sharding
+        default: "60"
       create:
         description: file reproducible findings as GitHub issues
         type: boolean
@@ -22,6 +22,21 @@ on:
 
 permissions:
   contents: read
+
+# Kept in the same order as simulation.TriageBaselines. A test holds the names
+# and seeds to the production list so the workflow cannot silently hunt a
+# different campaign.
+env:
+  HUNT_SHARDS: "4"
+  HUNT_BASELINES: |
+    healthy 20260101
+    healthy-routed-network 20260102
+    dual-stack-healthy 20260103
+    tls-valid 20260104
+    socks5h-remote-dns-succeeds 20260105
+    two-path-healthy 20260106
+    two-path-ipv6-healthy 20260107
+    two-router-healthy 20260108
 
 # The triage report is piped through tee, and the default shell (`bash -e`)
 # reports a pipeline's last command, not its first: without pipefail a hunt that
@@ -44,13 +59,12 @@ jobs:
     # reproduced, and reproduction is what earns a finding an issue.
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     permissions:
       contents: read
-      # Job permissions cannot be decided per run, so an observation-only run
-      # holds this and never uses it: the step below withholds GH_TOKEN unless
-      # this run is deliberately creating issues, and without a token `gh`
-      # cannot act on the permission the job happens to carry.
-      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,6 +81,84 @@ jobs:
       # refuses to escalate.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # One line in the log answering the first question a setup failure raises.
+      - run: tc -V
+      - name: Run shard
+        env:
+          CASES: ${{ inputs.cases || '60' }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mkdir -p hunt-results
+          while read -r base seed; do
+            [ -n "$base" ] || continue
+            output="hunt-results/$base.$SHARD.json"
+            if ./netdoc-sim hunt "$base" \
+              --seed "$seed" \
+              --cases "$CASES" \
+              --shard "$SHARD/$HUNT_SHARDS" \
+              --max-faults 2 \
+              --json > "$output"; then
+              continue
+            else
+              status=$?
+            fi
+            if [ "$status" -ne 1 ]; then
+              exit "$status"
+            fi
+          done <<< "$HUNT_BASELINES"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hunt-shard-${{ matrix.shard }}
+          path: hunt-results
+          if-no-files-found: error
+
+  merge:
+    if: ${{ always() }}
+    needs: hunt
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Job permissions cannot be decided per run, so an observation-only run
+      # holds this and never uses it. The mode step withholds GH_TOKEN unless
+      # this run deliberately creates issues.
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go build -o netdoc . && go build -o netdoc-sim ./cmd/netdoc-sim
+        env:
+          CGO_ENABLED: "0"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hunt-shard-*
+          path: hunt-shards
+          merge-multiple: true
+      - name: Merge shard reports
+        run: |
+          mkdir -p merged-hunts
+          while read -r base seed; do
+            [ -n "$base" ] || continue
+            if ./netdoc-sim hunt merge hunt-shards/"$base".*.json > "merged-hunts/$base.json"; then
+              continue
+            else
+              status=$?
+            fi
+            if [ "$status" -ne 1 ]; then
+              exit "$status"
+            fi
+          done <<< "$HUNT_BASELINES"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hunt-results
+          path: merged-hunts
+          if-no-files-found: error
+      # Reproduction still needs namespaces, but the expensive full hunts have
+      # already run independently in the matrix.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: tc -V
       # One place decides whether this run may file issues, and says so in
       # words the summary can print verbatim.
@@ -93,7 +185,7 @@ jobs:
       - id: triage
         env:
           CREATE: ${{ steps.mode.outputs.create }}
-          CASES: ${{ inputs.cases || '15' }}
+          CASES: ${{ inputs.cases || '60' }}
           # gh reads the token from the environment; it is never an argument,
           # so it cannot reach a log line. An observation-only run gets no
           # token at all.
@@ -105,6 +197,7 @@ jobs:
           fi
           ./netdoc-sim triage \
             --cases "$CASES" \
+            --hunt-results merged-hunts \
             "${args[@]}" \
             --revision "$GITHUB_SHA" \
             --context "GitHub Actions run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \

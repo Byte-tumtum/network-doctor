@@ -54,6 +54,10 @@ Generate deterministic faults on top of a healthy base scenario, run each
 generated case, and rank the cases where the diagnosis looks wrong. The
 default base is
 .BR healthy\-routed\-network .
+With
+.B merge
+in place of the base, read a complete set of shard JSON files and write one
+canonical hunt JSON report in global case order.
 .TP
 .B triage
 Hunt the fixed baselines at their fixed seeds, reproduce every candidate
@@ -221,7 +225,7 @@ Log each privileged command as it runs.
 .SS hunt
 .TP
 .BI \-cases " n"
-Unique generated cases to run, between 1 and 500. The default is
+Logical unique cases before shard filtering, between 1 and 500. The default is
 .BR 50 .
 .TP
 .BI \-seed " int64"
@@ -231,6 +235,21 @@ Hunt seed. Generated and printed when omitted.
 Generate and run exactly one independently derived case, between 0 and 999999.
 This is how a reported finding is reproduced: the same seed and the same case
 number regenerate the same network and the same fault.
+.TP
+.BI \-shard " i/N"
+Run zero-based shard
+.I i
+of
+.I N
+over the existing global case sequence. An accepted global case belongs to
+shard
+.I i
+when its case number modulo
+.I N
+equals
+.IR i .
+Cannot be combined with
+.BR \-case .
 .TP
 .BI \-max\-faults " n"
 Maximum mutations applied to one case, between 1 and 3. The default is
@@ -287,6 +306,11 @@ last one.
 .BI \-cases " n"
 Unique generated cases per baseline, between 1 and 500. The default is
 .BR 20 .
+.TP
+.BI \-hunt\-results " directory"
+Use one canonical merged hunt JSON report per selected baseline from this
+directory instead of running the full hunts again. Exact finding cases are
+still re-run in fresh namespaces before triage can file them.
 .TP
 .BI \-seed " int64"
 Override the fixed seed of every selected baseline. Normally left alone: the
@@ -549,6 +573,8 @@ Hunt for diagnoses that look wrong, then reproduce one exactly:
 .EX
 netdoc\-sim hunt \-\-cases 100 \-\-json > hunt.json
 netdoc\-sim hunt healthy\-routed\-network \-\-seed 1234 \-\-case 42
+netdoc\-sim hunt \-\-seed 1234 \-\-cases 60 \-\-shard 0/4 \-\-json > shard0.json
+netdoc\-sim hunt merge shard3.json shard2.json shard1.json shard0.json > hunt.json
 .EE
 .RE
 .PP

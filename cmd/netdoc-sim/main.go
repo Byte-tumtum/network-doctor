@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -149,6 +150,7 @@ Commands:
   run <scenario> [flags]   build the network, run the tests, print the report
   campaign <scenario>      run a seeded scenario campaign sequentially
   hunt [base] [flags]      generate deterministic faults and rank likely bugs
+  hunt merge <files...>    merge a complete set of hunt shard JSON reports
   triage [flags]           hunt the fixed baselines, reproduce findings, file issues
   challenge [id] [flags]   diagnose a hidden fault yourself, then let netdoc try
   validate <scenario>      parse and check a scenario without building anything
@@ -184,9 +186,10 @@ Flags for campaign:
   -v                       log each privileged command as it runs
 
 Flags for hunt:
-  -cases <n>               unique generated cases to run (default 50, maximum 500)
+  -cases <n>               logical unique cases before sharding (default 50, maximum 500)
   -seed <int64>            hunt seed (generated and printed when omitted)
   -case <n>                generate and run exactly one independently derived case
+  -shard <i/N>             run zero-based shard i of the global case sequence
   -max-faults <n>          maximum mutations per case (default 2, maximum 3)
   -fail-fast               stop after the first case with a reportable finding
   -dry-run                 print generated manifests without creating namespaces
@@ -198,6 +201,7 @@ Flags for hunt:
 Flags for triage:
   -scenarios <list>        comma-separated baselines (default: all)
   -cases <n>               unique generated cases per baseline (default 20)
+  -hunt-results <dir>      use canonical merged hunt JSON from this directory
   -seed <int64>            override the fixed seed of every selected baseline
   -max-faults <n>          maximum mutations per case (default 2, maximum 3)
   -min-severity <level>    lowest severity worth filing (default medium)
@@ -283,6 +287,7 @@ type huntFlags struct {
 	cases     *int
 	seed      optionalSeed
 	caseNum   *int
+	shard     optionalShard
 	maxFaults *int
 	failFast  *bool
 	dry       *bool
@@ -295,9 +300,10 @@ func newHuntFlags(out io.Writer) *huntFlags {
 	f := &huntFlags{fs: flag.NewFlagSet("netdoc-sim hunt", flag.ContinueOnError)}
 	f.fs.SetOutput(out)
 	f.json = f.fs.Bool("json", false, "print the machine-readable hunt report")
-	f.cases = f.fs.Int("cases", 50, "unique generated cases to run")
+	f.cases = f.fs.Int("cases", 50, "logical unique cases before sharding")
 	f.fs.Var(&f.seed, "seed", "hunt seed")
 	f.caseNum = f.fs.Int("case", -1, "run exactly one independently derived case")
+	f.fs.Var(&f.shard, "shard", "zero-based shard i/N of the global case sequence")
 	f.maxFaults = f.fs.Int("max-faults", 2, "maximum mutations per case")
 	f.failFast = f.fs.Bool("fail-fast", false, "stop after the first reportable finding")
 	f.dry = f.fs.Bool("dry-run", false, "print generated manifests without running them")
@@ -321,6 +327,9 @@ func (f *huntFlags) parse(args []string) (string, error) {
 	if *f.caseNum < -1 || *f.caseNum > simulation.HuntMaxCaseNumber {
 		return "", fmt.Errorf("-case must be between 0 and %d", simulation.HuntMaxCaseNumber)
 	}
+	if *f.caseNum >= 0 && f.shard.set {
+		return "", errors.New("-case and -shard are mutually exclusive")
+	}
 	if *f.maxFaults < 1 || *f.maxFaults > simulation.HuntMaxFaults {
 		return "", fmt.Errorf("-max-faults must be between 1 and %d", simulation.HuntMaxFaults)
 	}
@@ -331,6 +340,39 @@ func (f *huntFlags) parse(args []string) (string, error) {
 		return "", fmt.Errorf("unsupported hunt base %q (have: %s)", textsafe.Clean(ref), strings.Join(simulation.HuntBaseNames(), ", "))
 	}
 	return ref, nil
+}
+
+type optionalShard struct {
+	set   bool
+	value simulation.HuntShard
+}
+
+func (s *optionalShard) String() string {
+	if !s.set {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", s.value.Index, s.value.Count)
+}
+
+func (s *optionalShard) Set(raw string) error {
+	parts := strings.Split(raw, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid shard %q: want i/N", textsafe.Clean(raw))
+	}
+	index, err := strconv.ParseInt(parts[0], 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid shard index %q", textsafe.Clean(parts[0]))
+	}
+	count, err := strconv.ParseInt(parts[1], 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid shard count %q", textsafe.Clean(parts[1]))
+	}
+	value := simulation.HuntShard{Index: int(index), Count: int(count)}
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	s.set, s.value = true, value
+	return nil
 }
 
 type optionalSeed struct {
@@ -602,6 +644,9 @@ func directCampaign(ctx context.Context, args []string, stdout, stderr io.Writer
 }
 
 func launchHunt(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "merge" {
+		return mergeHunts(args[1:], stdout, stderr)
+	}
 	f := newHuntFlags(stderr)
 	baseID, err := f.parse(args)
 	if err != nil {
@@ -652,7 +697,7 @@ func launchHunt(ctx context.Context, args []string, stdout, stderr io.Writer) in
 }
 
 func huntDirectorArgv(f *huntFlags, baseID, netdoc string) []string {
-	return []string{huntDirectorCommand,
+	argv := []string{huntDirectorCommand,
 		"-netdoc", netdoc,
 		"-timeout", f.timeout.String(),
 		"-cases", strconv.Itoa(*f.cases),
@@ -662,8 +707,11 @@ func huntDirectorArgv(f *huntFlags, baseID, netdoc string) []string {
 		fmt.Sprintf("-json=%t", *f.json),
 		fmt.Sprintf("-fail-fast=%t", *f.failFast),
 		fmt.Sprintf("-v=%t", *f.verbose),
-		"--", baseID,
 	}
+	if f.shard.set {
+		argv = append(argv, "-shard", f.shard.String())
+	}
+	return append(argv, "--", baseID)
 }
 
 func directHunt(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -698,9 +746,59 @@ func huntOptions(f *huntFlags, log io.Writer, dry bool) simulation.HuntOptions {
 		value := *f.caseNum
 		caseNumber = &value
 	}
+	var shard *simulation.HuntShard
+	if f.shard.set {
+		value := f.shard.value
+		shard = &value
+	}
 	return simulation.HuntOptions{Cases: *f.cases, Seed: f.seed.v, Case: caseNumber,
-		MaxFaults: *f.maxFaults, FailFast: *f.failFast, DryRun: dry,
+		Shard: shard, MaxFaults: *f.maxFaults, FailFast: *f.failFast, DryRun: dry,
 		Run: simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log}}
+}
+
+func mergeHunts(paths []string, stdout, stderr io.Writer) int {
+	if len(paths) == 0 {
+		fmt.Fprintln(stderr, "netdoc-sim: hunt merge needs at least one shard JSON file")
+		return exitUsage
+	}
+	results := make([]*simulation.HuntResult, 0, len(paths))
+	for _, path := range paths {
+		result, err := readHuntResult(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "netdoc-sim: read hunt result %s: %s\n",
+				textsafe.Clean(path), textsafe.Clean(err.Error()))
+			return exitUsage
+		}
+		results = append(results, result)
+	}
+	result, err := simulation.MergeHuntResults(results...)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc-sim: merge hunt results:", err)
+		return exitUsage
+	}
+	return writeHuntResult(result, true, stdout, stderr)
+}
+
+func readHuntResult(path string) (*simulation.HuntResult, error) {
+	// #nosec G304,G703 -- reading the file named by the CLI is this command's purpose.
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var result simulation.HuntResult
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
+		return nil, err
+	}
+	return &result, nil
 }
 
 func writeHuntResult(result *simulation.HuntResult, jsonOutput bool, stdout, stderr io.Writer) int {

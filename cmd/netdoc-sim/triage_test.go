@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -412,6 +414,69 @@ func findArg(args []string, name string) string {
 	return ""
 }
 
+func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) {
+	base, err := simulation.LibraryScenario("healthy-routed-network")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const cases = 4
+	var shards []*simulation.HuntResult
+	for index := 0; index < 2; index++ {
+		shard := simulation.HuntShard{Index: index, Count: 2}
+		shards = append(shards, simulation.RunHunt(context.Background(), "healthy-routed-network", base,
+			func() simulation.Backend { return stubBackend{supported: false} }, simulation.HuntOptions{
+				Cases: cases, Seed: 20260102, MaxFaults: 2, Shard: &shard,
+				Run: simulation.Options{Netdoc: "netdoc"},
+			}))
+	}
+	merged, err := simulation.MergeHuntResults(shards...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	// #nosec G304 -- path is inside t.TempDir.
+	file, err := os.Create(filepath.Join(dir, "name-is-not-metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := merged.WriteJSON(file); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	replays := 0
+	replay := func(_ context.Context, scenario string, seed int64, gotCases, caseNumber int) (*simulation.HuntResult, error) {
+		replays++
+		return &simulation.HuntResult{BaseScenario: scenario, HuntSeed: seed, RequestedCases: gotCases,
+			Result: simulation.HuntResultClean}, nil
+	}
+	opts := triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy-routed-network", Seed: 20260102}},
+		cases: cases, maxFaults: 2}
+	hunt, err := precomputedHunts(dir, opts, replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := hunt(context.Background(), "healthy-routed-network", 20260102, cases, -1)
+	if err != nil || got.BaseScenario != merged.BaseScenario || len(got.Cases) != len(merged.Cases) || replays != 0 {
+		t.Fatalf("full hunt base = %q, cases = %d, err = %v, replays = %d",
+			got.BaseScenario, len(got.Cases), err, replays)
+	}
+	if _, err := hunt(context.Background(), "healthy-routed-network", 20260102, 1, 7); err != nil || replays != 1 {
+		t.Fatalf("exact replay err = %v, calls = %d", err, replays)
+	}
+}
+
+func TestPrecomputedHuntsRejectMissingAndMismatchedReports(t *testing.T) {
+	opts := triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy", Seed: 20260101}},
+		cases: 5, maxFaults: 2}
+	if _, err := precomputedHunts(t.TempDir(), opts, nil); err == nil || !strings.Contains(err.Error(), "missing hunt result") {
+		t.Fatalf("empty directory error = %v", err)
+	}
+}
+
 // The workflow pipes triage through tee. Under bash's default -e that hides a
 // nonzero exit behind tee's zero, which once turned a hunt that never ran into
 // a green nightly. GitHub only enables pipefail when a workflow names its
@@ -454,6 +519,122 @@ func TestHuntWorkflowKeepsTheTriageExitStatus(t *testing.T) {
 	}
 	if !piped {
 		t.Skip("triage is no longer piped, so pipefail no longer decides the step's exit status")
+	}
+}
+
+func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
+	blob, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "hunt.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type step struct {
+		Uses string `yaml:"uses"`
+		Run  string `yaml:"run"`
+	}
+	type job struct {
+		If       string `yaml:"if"`
+		Needs    string `yaml:"needs"`
+		Strategy struct {
+			FailFast bool `yaml:"fail-fast"`
+			Matrix   struct {
+				Shard []int `yaml:"shard"`
+			} `yaml:"matrix"`
+		} `yaml:"strategy"`
+		Steps []step `yaml:"steps"`
+	}
+	var workflow struct {
+		Env struct {
+			Shards    string `yaml:"HUNT_SHARDS"`
+			Baselines string `yaml:"HUNT_BASELINES"`
+		} `yaml:"env"`
+		Jobs map[string]job `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(blob, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	hunt, ok := workflow.Jobs["hunt"]
+	if !ok {
+		t.Fatal("workflow has no hunt matrix job")
+	}
+	shardCount, err := strconv.Atoi(workflow.Env.Shards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hunt.Strategy.FailFast || !reflect.DeepEqual(hunt.Strategy.Matrix.Shard, []int{0, 1, 2, 3}) || shardCount != 4 {
+		t.Fatalf("matrix shards = %v, count = %d, fail-fast = %t",
+			hunt.Strategy.Matrix.Shard, shardCount, hunt.Strategy.FailFast)
+	}
+	var gotBaselines []simulation.TriageBaseline
+	for _, line := range strings.Split(strings.TrimSpace(workflow.Env.Baselines), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("invalid workflow baseline row %q", line)
+		}
+		seed, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotBaselines = append(gotBaselines, simulation.TriageBaseline{Scenario: fields[0], Seed: seed})
+	}
+	want := simulation.TriageBaselines()
+	if !reflect.DeepEqual(gotBaselines, want) {
+		t.Fatalf("workflow baselines = %+v, want %+v", gotBaselines, want)
+	}
+	joinRuns := func(steps []step) string {
+		var runs []string
+		for _, step := range steps {
+			runs = append(runs, step.Run)
+		}
+		return strings.Join(runs, "\n")
+	}
+	huntRuns := joinRuns(hunt.Steps)
+	if !strings.Contains(huntRuns, `--shard "$SHARD/$HUNT_SHARDS"`) ||
+		!strings.Contains(huntRuns, `--cases "$CASES"`) || strings.Contains(huntRuns, "netdoc-sim triage") {
+		t.Fatalf("hunt matrix does not run one independent shard:\n%s", huntRuns)
+	}
+	merge, ok := workflow.Jobs["merge"]
+	if !ok || merge.Needs != "hunt" || !strings.Contains(merge.If, "always") {
+		t.Fatalf("merge job = %+v", merge)
+	}
+	mergeRuns := joinRuns(merge.Steps)
+	if !strings.Contains(mergeRuns, "netdoc-sim hunt merge") ||
+		!strings.Contains(mergeRuns, "--hunt-results merged-hunts") {
+		t.Fatalf("merge job does not merge and triage canonical results:\n%s", mergeRuns)
+	}
+	// `healthy` is a prefix of `healthy-routed-network`, so a shard file name
+	// the merge glob can widen hands one baseline's merge another baseline's
+	// reports, and every nightly merge fails on the mismatch.
+	if !strings.Contains(huntRuns, `output="hunt-results/$base.$SHARD.json"`) ||
+		!strings.Contains(mergeRuns, `hunt merge hunt-shards/"$base".*.json`) {
+		t.Fatalf("shard artifact naming changed:\n%s\n%s", huntRuns, mergeRuns)
+	}
+	var shardFiles []string
+	for _, baseline := range want {
+		for shard := 0; shard < shardCount; shard++ {
+			shardFiles = append(shardFiles, baseline.Scenario+"."+strconv.Itoa(shard)+".json")
+		}
+	}
+	for _, baseline := range want {
+		matched := 0
+		for _, name := range shardFiles {
+			ok, err := filepath.Match(baseline.Scenario+".*.json", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok {
+				matched++
+			}
+		}
+		if matched != shardCount {
+			t.Errorf("merge glob for %s matched %d shard files, want %d", baseline.Scenario, matched, shardCount)
+		}
+	}
+	text := string(blob)
+	for _, want := range []string{`default: "60"`, "hunt-shard-${{ matrix.shard }}", "name: hunt-results",
+		"actions/upload-artifact@", "actions/download-artifact@"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("workflow is missing %q", want)
+		}
 	}
 }
 
