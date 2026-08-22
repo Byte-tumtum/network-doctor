@@ -123,7 +123,9 @@ func startService(ctx context.Context, svc Service, addresses []string, resolver
 		// and is joined after the sockets close, so none outlives the service.
 		delays := newDelayGroup(ctx)
 		// One socket per address rather than one wildcard socket, so every
-		// answer leaves from the address the question arrived at.
+		// answer leaves from the address the question arrived at. Plain DNS is
+		// intentionally UDP-only. A truncated outcome sets TC, then the client's
+		// TCP fallback is refused instead of receiving an ordinary answer.
 		for _, a := range bindAddresses(addresses) {
 			pc, err := net.ListenPacket("udp", net.JoinHostPort(a, port))
 			if err != nil {
@@ -483,6 +485,7 @@ const (
 
 	dnsFlagResponse = 0x8000
 	dnsFlagAA       = 0x0400
+	dnsFlagTC       = 0x0200
 	dnsFlagRD       = 0x0100
 	dnsFlagRA       = 0x0080
 	dnsOpcodeMask   = 0x7800
@@ -492,23 +495,32 @@ const (
 	dnsRcodeServFail = 2
 	dnsRcodeNXDomain = 3
 	dnsRcodeNotImpl  = 4
+	dnsRcodeRefused  = 5
 
 	dnsHeaderLen = 12
 	dnsMaxMsg    = 1500
 )
 
 func dnsErrorReply(msg []byte, rcode uint16) []byte {
+	return dnsErrorReplyWithFlags(msg, 0, rcode)
+}
+
+func dnsErrorReplyWithFlags(msg []byte, extraFlags, rcode uint16) []byte {
 	if len(msg) < dnsHeaderLen || binary.BigEndian.Uint16(msg[2:4])&dnsFlagResponse != 0 {
 		return nil
 	}
 	id := binary.BigEndian.Uint16(msg[0:2])
 	flags := binary.BigEndian.Uint16(msg[2:4])
-	out := flags&(dnsOpcodeMask|dnsFlagRD) | dnsFlagResponse | dnsFlagAA | dnsFlagRA
+	out := flags&(dnsOpcodeMask|dnsFlagRD) | dnsFlagResponse | dnsFlagAA | dnsFlagRA | extraFlags
 	_, qend, ok := dnsParseQuestion(msg)
 	if !ok || binary.BigEndian.Uint16(msg[4:6]) != 1 {
 		return dnsHeader(id, out, dnsRcodeFormErr, 0, 0)
 	}
 	return append(dnsHeader(id, out, rcode, 1, 0), msg[dnsHeaderLen:qend]...)
+}
+
+func dnsTruncatedReply(msg []byte) []byte {
+	return dnsErrorReplyWithFlags(msg, dnsFlagTC, dnsRcodeSuccess)
 }
 
 // serveDNS is a static authoritative resolver: it answers A and AAAA from the
@@ -535,6 +547,12 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, s
 			switch scheduled {
 			case DNSOutcomeSERVFAIL:
 				actual = "SERVFAIL"
+			case DNSOutcomeREFUSED:
+				actual = "REFUSED"
+			case DNSOutcomeTruncated:
+				actual = "TRUNCATED"
+			case DNSOutcomeWrongAnswer:
+				actual = "WRONG_ANSWER"
 			case DNSOutcomeDrop:
 				actual = "DROPPED"
 			}
@@ -551,6 +569,22 @@ func serveDNS(pc net.PacketConn, zone map[string][]netip.Addr, service string, s
 			continue
 		case DNSOutcomeSERVFAIL:
 			if reply := dnsErrorReply(msg, dnsRcodeServFail); reply != nil {
+				_, _ = pc.WriteTo(reply, from)
+			}
+			continue
+		case DNSOutcomeREFUSED:
+			if reply := dnsErrorReply(msg, dnsRcodeRefused); reply != nil {
+				_, _ = pc.WriteTo(reply, from)
+			}
+			continue
+		case DNSOutcomeTruncated:
+			if reply := dnsTruncatedReply(msg); reply != nil {
+				_, _ = pc.WriteTo(reply, from)
+			}
+			continue
+		case DNSOutcomeWrongAnswer:
+			reply := dnsReplyWithAddress(msg, zone, state.wrongAddress(msg))
+			if reply != nil {
 				_, _ = pc.WriteTo(reply, from)
 			}
 			continue
@@ -620,9 +654,11 @@ func (g *delayGroup) Close() error {
 // Nothing here draws a random value. Trusted simulator code decides; the
 // service only reads.
 type dnsState struct {
-	mu   sync.Mutex
-	a    []string
-	aaaa []string
+	mu        sync.Mutex
+	a         []string
+	aaaa      []string
+	wrongA    netip.Addr
+	wrongAAAA netip.Addr
 	// asked counts queries per normalized name and family, so the schedule a
 	// scenario writes for one name is walked by that name alone. A netdoc run
 	// asks this resolver for whatever it likes (the captive-portal host, a
@@ -644,8 +680,25 @@ func newDNSState(fault *DNSFault) *dnsState {
 	if fault != nil {
 		s.a = append([]string(nil), fault.A...)
 		s.aaaa = append([]string(nil), fault.AAAA...)
+		s.wrongA, _ = netip.ParseAddr(fault.WrongA)
+		s.wrongAAAA, _ = netip.ParseAddr(fault.WrongAAAA)
 	}
 	return s
+}
+
+func (s *dnsState) wrongAddress(msg []byte) netip.Addr {
+	_, qend, ok := dnsParseQuestion(msg)
+	if !ok {
+		return netip.Addr{}
+	}
+	switch binary.BigEndian.Uint16(msg[qend-4 : qend-2]) {
+	case dnsTypeA:
+		return s.wrongA
+	case dnsTypeAAAA:
+		return s.wrongAAAA
+	default:
+		return netip.Addr{}
+	}
 }
 
 // set moves the service into a scheduled outcome. Called only from the holder's
@@ -736,6 +789,10 @@ func dnsTypeName(qtype uint16) string {
 // dnsReply builds the response to one query, or nil when the message is not a
 // query worth answering.
 func dnsReply(msg []byte, zone map[string][]netip.Addr) []byte {
+	return dnsReplyWithAddress(msg, zone, netip.Addr{})
+}
+
+func dnsReplyWithAddress(msg []byte, zone map[string][]netip.Addr, address netip.Addr) []byte {
 	if len(msg) < dnsHeaderLen {
 		return nil
 	}
@@ -764,6 +821,9 @@ func dnsReply(msg []byte, zone map[string][]netip.Addr) []byte {
 		return append(dnsHeader(id, out, dnsRcodeNotImpl, 1, 0), question...)
 	}
 	addrs, known := zone[dnsKey(name)]
+	if address.IsValid() {
+		addrs, known = []netip.Addr{address}, true
+	}
 	if !known {
 		return append(dnsHeader(id, out, dnsRcodeNXDomain, 1, 0), question...)
 	}

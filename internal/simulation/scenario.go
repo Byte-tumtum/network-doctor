@@ -297,17 +297,23 @@ type Fault struct {
 }
 
 const (
-	DNSOutcomeAnswer   = "answer"
-	DNSOutcomeSERVFAIL = "servfail"
+	DNSOutcomeAnswer      = "answer"
+	DNSOutcomeSERVFAIL    = "servfail"
+	DNSOutcomeREFUSED     = "refused"
+	DNSOutcomeTruncated   = "truncated"
+	DNSOutcomeWrongAnswer = "wrong_answer"
 )
 
 // DNSFault carries one deterministic response sequence per DNS query family.
 // Every queried name walks that sequence independently, so a query for one name
 // cannot advance another name's schedule. When a sequence is exhausted, the
-// service answers normally.
+// service answers normally. WrongA and WrongAAAA are required only when their
+// family schedule contains wrong_answer.
 type DNSFault struct {
-	A    []string `yaml:"a"`
-	AAAA []string `yaml:"aaaa"`
+	A         []string `yaml:"a"`
+	AAAA      []string `yaml:"aaaa"`
+	WrongA    string   `yaml:"wrong_a"`
+	WrongAAAA string   `yaml:"wrong_aaaa"`
 }
 
 // CampaignSpec declares bounded ranges only. Compilation resolves every range
@@ -717,6 +723,20 @@ func (n *Node) validateServices(names map[string]bool) error {
 			if err := validateDNSFault(svc.DNSFault); err != nil {
 				return fmt.Errorf("node %q: dns service fault: %w", n.Name, err)
 			}
+			if svc.DNSFault != nil {
+				for _, wrong := range []string{svc.DNSFault.WrongA, svc.DNSFault.WrongAAAA} {
+					for name, address := range svc.Zone {
+						if wrong != "" && wrong == address {
+							return fmt.Errorf("node %q: dns service wrong answer %s matches zone address for %q", n.Name, wrong, name)
+						}
+					}
+					for _, record := range svc.Records {
+						if wrong != "" && wrong == record.Address {
+							return fmt.Errorf("node %q: dns service wrong answer %s matches zone address for %q", n.Name, wrong, record.Name)
+						}
+					}
+				}
+			}
 		case ServiceHTTP:
 			if svc.Port == 0 {
 				svc.Port = 80
@@ -1124,12 +1144,42 @@ func validateDNSFault(f *DNSFault) error {
 	if len(f.A)+len(f.AAAA) > dnsMaxScheduledOutcomes {
 		return fmt.Errorf("has %d outcomes, maximum is %d", len(f.A)+len(f.AAAA), dnsMaxScheduledOutcomes)
 	}
-	for family, outcomes := range map[string][]string{"a": f.A, "aaaa": f.AAAA} {
-		for i, outcome := range outcomes {
-			if outcome != DNSOutcomeAnswer && outcome != DNSOutcomeSERVFAIL {
-				return fmt.Errorf("%s[%d]: unknown outcome %q (answer or servfail)", family, i, outcome)
+	for _, family := range []struct {
+		name     string
+		outcomes []string
+		wrong    *string
+		wantIPv4 bool
+	}{{"a", f.A, &f.WrongA, true}, {"aaaa", f.AAAA, &f.WrongAAAA, false}} {
+		usesWrong := false
+		for i, outcome := range family.outcomes {
+			switch outcome {
+			case DNSOutcomeAnswer, DNSOutcomeSERVFAIL, DNSOutcomeREFUSED, DNSOutcomeTruncated:
+			case DNSOutcomeWrongAnswer:
+				usesWrong = true
+			default:
+				return fmt.Errorf("%s[%d]: unknown outcome %q (answer, servfail, refused, truncated or wrong_answer)", family.name, i, outcome)
 			}
 		}
+		if !usesWrong && *family.wrong != "" {
+			return fmt.Errorf("wrong_%s requires a wrong_answer outcome in %s", family.name, family.name)
+		}
+		if usesWrong && *family.wrong == "" {
+			return fmt.Errorf("wrong_%s is required by the wrong_answer outcome in %s", family.name, family.name)
+		}
+		if *family.wrong == "" {
+			continue
+		}
+		addr, canonical, err := parseAddr(*family.wrong)
+		if err != nil {
+			return fmt.Errorf("wrong_%s: %w", family.name, err)
+		}
+		if err := validateInterfaceAddr(addr); err != nil {
+			return fmt.Errorf("wrong_%s: %w", family.name, err)
+		}
+		if addr.Is4() != family.wantIPv4 {
+			return fmt.Errorf("wrong_%s has the wrong address family", family.name)
+		}
+		*family.wrong = canonical
 	}
 	return nil
 }

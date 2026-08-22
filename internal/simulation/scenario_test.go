@@ -147,6 +147,18 @@ func TestParseScenarioRejects(t *testing.T) {
 			"duplicate DNS record",
 		},
 		{
+			"unknown DNS fault field",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{type: dns, dns_fault: {a: [answer], wrong_aa: 192.0.2.1}}]}", 1),
+			"wrong_aa",
+		},
+		{
+			"wrong DNS answer matches the zone",
+			strings.Replace(minimalScenario, "address: 10.77.0.1}",
+				"address: 10.77.0.1, services: [{type: dns, zone: {example.test: 192.0.2.1}, dns_fault: {a: [wrong_answer], wrong_a: 192.0.2.1}}]}", 1),
+			"matches zone address",
+		},
+		{
 			"unsupported SOCKS option",
 			strings.Replace(minimalScenario, "address: 10.77.0.1}",
 				"address: 10.77.0.1, resolver: 10.77.0.1, services: [{type: socks5, body: nope}]}", 1),
@@ -671,17 +683,60 @@ func TestNormalizePercent(t *testing.T) {
 }
 
 func TestDNSFaultValidation(t *testing.T) {
-	for _, fault := range []*DNSFault{
-		{},
-		{A: []string{"random"}},
-		{A: make([]string, dnsMaxScheduledOutcomes+1)},
-	} {
-		if err := validateDNSFault(fault); err == nil {
-			t.Errorf("accepted invalid DNS fault: %+v", fault)
+	valid := []*DNSFault{
+		nil,
+		{A: []string{DNSOutcomeAnswer, DNSOutcomeSERVFAIL, DNSOutcomeREFUSED, DNSOutcomeTruncated}},
+		{A: []string{DNSOutcomeWrongAnswer}, WrongA: "192.0.2.7"},
+		{AAAA: []string{DNSOutcomeWrongAnswer}, WrongAAAA: "2001:db8::7"},
+	}
+	for _, fault := range valid {
+		if err := validateDNSFault(fault); err != nil {
+			t.Errorf("validateDNSFault(%+v): %v", fault, err)
 		}
 	}
-	if err := validateDNSFault(&DNSFault{A: []string{DNSOutcomeAnswer, DNSOutcomeSERVFAIL}}); err != nil {
+
+	invalid := []struct {
+		name  string
+		fault *DNSFault
+	}{
+		{"empty", &DNSFault{}},
+		{"unknown outcome", &DNSFault{A: []string{"random"}}},
+		{"too many outcomes", &DNSFault{A: make([]string, dnsMaxScheduledOutcomes+1)}},
+		{"missing wrong A", &DNSFault{A: []string{DNSOutcomeWrongAnswer}}},
+		{"missing wrong AAAA", &DNSFault{AAAA: []string{DNSOutcomeWrongAnswer}}},
+		{"unused wrong A", &DNSFault{A: []string{DNSOutcomeAnswer}, WrongA: "192.0.2.7"}},
+		{"unused wrong AAAA", &DNSFault{AAAA: []string{DNSOutcomeAnswer}, WrongAAAA: "2001:db8::7"}},
+		{"invalid wrong A", &DNSFault{A: []string{DNSOutcomeWrongAnswer}, WrongA: "999.0.2.7"}},
+		{"invalid wrong AAAA", &DNSFault{AAAA: []string{DNSOutcomeWrongAnswer}, WrongAAAA: "not-an-ip"}},
+		{"unusable wrong A", &DNSFault{A: []string{DNSOutcomeWrongAnswer}, WrongA: "0.0.0.0"}},
+		{"unusable wrong AAAA", &DNSFault{AAAA: []string{DNSOutcomeWrongAnswer}, WrongAAAA: "::"}},
+		{"IPv6 in wrong A", &DNSFault{A: []string{DNSOutcomeWrongAnswer}, WrongA: "2001:db8::7"}},
+		{"IPv4 in wrong AAAA", &DNSFault{AAAA: []string{DNSOutcomeWrongAnswer}, WrongAAAA: "192.0.2.7"}},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateDNSFault(tc.fault); err == nil {
+				t.Errorf("accepted invalid DNS fault: %+v", tc.fault)
+			}
+		})
+	}
+}
+
+func TestExistingDNSFaultScenarioRemainsCompatible(t *testing.T) {
+	s, err := LibraryScenario("intermittent-dns")
+	if err != nil {
 		t.Fatal(err)
+	}
+	fault := s.Topology.node("resolver").Services[0].DNSFault
+	if fault == nil || len(fault.A) == 0 || len(fault.AAAA) == 0 || fault.WrongA != "" || fault.WrongAAAA != "" {
+		t.Fatalf("intermittent DNS fault = %+v", fault)
+	}
+	for _, outcomes := range [][]string{fault.A, fault.AAAA} {
+		for _, outcome := range outcomes {
+			if outcome != DNSOutcomeSERVFAIL {
+				t.Fatalf("existing outcome = %q, want %q", outcome, DNSOutcomeSERVFAIL)
+			}
+		}
 	}
 }
 
@@ -827,6 +882,16 @@ func scenarioAliasConsumers(scenario *Scenario) map[string]bool {
 	for _, node := range scenario.Topology.Nodes {
 		if addr, err := netip.ParseAddr(node.Resolver); err == nil {
 			used[addr.String()] = true
+		}
+		for _, service := range node.Services {
+			if service.DNSFault == nil {
+				continue
+			}
+			for _, raw := range []string{service.DNSFault.WrongA, service.DNSFault.WrongAAAA} {
+				if addr, err := netip.ParseAddr(raw); err == nil {
+					used[addr.String()] = true
+				}
+			}
 		}
 	}
 	for _, test := range scenario.Tests {

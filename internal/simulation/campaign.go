@@ -403,7 +403,8 @@ func cloneScenario(base *Scenario) *Scenario {
 			}
 			if svc.DNSFault != nil {
 				out.Topology.Nodes[i].Services[j].DNSFault = &DNSFault{
-					A: append([]string(nil), svc.DNSFault.A...), AAAA: append([]string(nil), svc.DNSFault.AAAA...)}
+					A: append([]string(nil), svc.DNSFault.A...), AAAA: append([]string(nil), svc.DNSFault.AAAA...),
+					WrongA: svc.DNSFault.WrongA, WrongAAAA: svc.DNSFault.WrongAAAA}
 			}
 		}
 	}

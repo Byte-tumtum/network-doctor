@@ -1,0 +1,60 @@
+name: dns-hijacking
+description: >-
+  The configured resolver redirects names to a reachable interception address,
+  while the public resolver returns the intended target. Network Doctor should
+  expose the disagreement without treating the working hijacked path as healthy DNS.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.53
+
+    - name: system-resolver
+      address: 10.77.0.53
+      services:
+        - name: hijacking-resolver
+          type: dns
+          zone:
+            hijacked-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+          dns_fault:
+            a: [wrong_answer]
+            wrong_a: 192.0.2.20
+
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8, 192.0.2.20]
+      services:
+        - name: public-resolver
+          type: dns
+          zone:
+            hijacked-target.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+        - {name: interception-http, type: http, port: 80}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    - name: intended-target
+      address: 10.77.0.20
+      services:
+        - {name: intended-http, type: http, port: 80}
+
+tests:
+  - name: system resolver redirects the target
+    node: client
+    target: hijacked-target.test:80
+
+expect:
+  verdict: degraded
+  summary: The target works, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows).
+  checks:
+    - {id: iface, status: PASS}
+    - {id: internet_tcp, status: PASS}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: WARN}
+    - {id: target_tcp, status: PASS}
+    - {id: http, status: PASS}

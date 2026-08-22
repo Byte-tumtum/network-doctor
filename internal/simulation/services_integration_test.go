@@ -8,17 +8,109 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
+
+func startDNSFaultServer(t *testing.T, fault *DNSFault) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zone := testZone(t)
+	delays := newDelayGroup(context.Background())
+	delays.wg.Add(1)
+	go func() {
+		defer delays.wg.Done()
+		serveDNS(pc, zone, "test-resolver", newDNSState(fault), delays, nil)
+	}()
+	t.Cleanup(func() {
+		_ = pc.Close()
+		_ = delays.Close()
+	})
+	return pc.LocalAddr().String()
+}
+
+func exchangeDNS(t *testing.T, server string, query []byte) []byte {
+	t.Helper()
+	conn, err := net.DialTimeout("udp4", server, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write(query); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, dnsMaxMsg)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buf[:n]
+}
+
+func TestDNSFaultREFUSEDWireResponse(t *testing.T) {
+	query := dnsQuery("example.test", dnsTypeA)
+	reply := exchangeDNS(t, startDNSFaultServer(t, &DNSFault{A: []string{DNSOutcomeREFUSED}}), query)
+	if !isReply(reply) || msgID(reply) != msgID(query) || questions(reply) != 1 || answers(reply) != 0 || rcode(reply) != dnsRcodeRefused {
+		t.Fatalf("REFUSED reply = %v", reply)
+	}
+}
+
+func TestDNSFaultTruncatedWireResponseHasNoTCPFallback(t *testing.T) {
+	server := startDNSFaultServer(t, &DNSFault{A: []string{DNSOutcomeTruncated}})
+	query := dnsQuery("example.test", dnsTypeA)
+	reply := exchangeDNS(t, server, query)
+	flags := binary.BigEndian.Uint16(reply[2:4])
+	if !isReply(reply) || msgID(reply) != msgID(query) || questions(reply) != 1 || answers(reply) != 0 ||
+		rcode(reply) != dnsRcodeSuccess || flags&dnsFlagTC == 0 {
+		t.Fatalf("truncated reply = %v", reply)
+	}
+	// Plain DNS fixtures intentionally have no TCP listener. The Go resolver's
+	// fallback therefore cannot turn this TC response into a normal answer.
+	if conn, err := net.DialTimeout("tcp4", server, 200*time.Millisecond); err == nil {
+		conn.Close()
+		t.Fatal("truncated DNS fault unexpectedly had a TCP fallback listener")
+	}
+}
+
+func TestDNSFaultWrongAddressWireResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		qtype uint16
+		fault *DNSFault
+		want  netip.Addr
+	}{
+		{"A", dnsTypeA, &DNSFault{A: []string{DNSOutcomeWrongAnswer}, WrongA: "192.0.2.7"}, netip.MustParseAddr("192.0.2.7")},
+		{"AAAA", dnsTypeAAAA, &DNSFault{AAAA: []string{DNSOutcomeWrongAnswer}, WrongAAAA: "2001:db8::7"}, netip.MustParseAddr("2001:db8::7")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := dnsQuery("example.test", tc.qtype)
+			reply := exchangeDNS(t, startDNSFaultServer(t, tc.fault), query)
+			if rcode(reply) != dnsRcodeSuccess || answers(reply) != 1 {
+				t.Fatalf("wrong-address reply = %v", reply)
+			}
+			got, ok := netip.AddrFromSlice(reply[len(reply)-tc.want.BitLen()/8:])
+			if !ok || got != tc.want || got.Is4() != tc.want.Is4() {
+				t.Fatalf("wrong-address RDATA = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestTCPResetServiceAcceptsThenResets(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")

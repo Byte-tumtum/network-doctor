@@ -523,6 +523,58 @@ func TestIntermittentDNSScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+func TestDNSHijackingScenarioReachesSplitDNSDiagnosis(t *testing.T) {
+	requireBackend(t)
+	const (
+		wrongAddress  = "192.0.2.20"
+		publicAddress = "10.77.0.20"
+		targetName    = "hijacked-target.test"
+	)
+	rep := runScenario(t, "dns-hijacking")
+	if rep.Result != ResultPass || len(rep.Tests) != 1 || rep.Tests[0].Diagnosis == nil {
+		t.Fatalf("result = %s (error %q); tests=%+v DNS=%+v", rep.Result, rep.Error, rep.Tests, rep.Evidence.DNSQueries)
+	}
+	out := rep.Tests[0]
+	if out.ProcessOutcome != ProcessExited {
+		t.Fatalf("netdoc process outcome = %q, want %q", out.ProcessOutcome, ProcessExited)
+	}
+
+	system := diagnosisCheck(out, string(diagnostic.ProbeDNS))
+	public := diagnosisCheck(out, string(diagnostic.ProbeDNSPublic))
+	if system.Status != "PASS" || !strings.Contains(system.Detail, wrongAddress) {
+		t.Errorf("system DNS = %+v, want wrong address %s", system, wrongAddress)
+	}
+	if public.Status != "WARN" || public.Cause != "" ||
+		!strings.Contains(public.Detail, "answers point elsewhere; system: "+wrongAddress) ||
+		!strings.Contains(public.Detail, "public "+diagnostic.DefaultPublicDNS+": "+publicAddress) {
+		t.Errorf("public DNS = %+v, want the split-DNS reconciliation detail", public)
+	}
+	if target := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); target.Status != "PASS" || !strings.Contains(target.Detail, wrongAddress) {
+		t.Errorf("target TCP = %+v, want the system answer to carry the real target probe", target)
+	}
+	if out.ActualVerdict != diagnostic.VerdictDegraded ||
+		out.Diagnosis.Summary != "The target works, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows)." {
+		t.Errorf("diagnosis = %q, %q", out.ActualVerdict, out.Diagnosis.Summary)
+	}
+
+	wrongObserved, publicObserved := false, false
+	for _, query := range rep.Evidence.DNSQueries {
+		if query.Source != "10.77.0.10" || query.Name != targetName || query.QueryType != "A" {
+			continue
+		}
+		switch {
+		case query.Service == "hijacking-resolver" && query.ScheduledOutcome == DNSOutcomeWrongAnswer && query.ActualOutcome == "WRONG_ANSWER":
+			wrongObserved = true
+		case query.Service == "public-resolver" && query.ScheduledOutcome == DNSOutcomeAnswer && query.ActualOutcome == "ANSWER":
+			publicObserved = true
+		}
+	}
+	if !wrongObserved || !publicObserved {
+		t.Errorf("resolver-specific A answers were not both observed: %+v", rep.Evidence.DNSQueries)
+	}
+	assertCleanedUp(t, rep)
+}
+
 func TestTCPResetScenario(t *testing.T) {
 	requireBackend(t)
 	rep := runScenario(t, "tcp-reset")
