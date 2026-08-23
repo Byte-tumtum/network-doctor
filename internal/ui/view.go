@@ -814,42 +814,42 @@ func (m model) helpView(deferred bool) string {
 			kv = append(kv, label, desc)
 		}
 	}
-	addAction := func(ctx keyContext, act keyAction) {
-		help, ok := actionHelpFor(ctx, act)
+	addAction := func(act keyAction) {
+		help, ok := actionHelpFor(ctxList, act)
 		if ok {
-			add(m.keys.label(ctx, act), help.bar)
+			add(m.keys.label(ctxList, act), help.bar)
 		}
 	}
-	addPair := func(ctx keyContext, a, b keyAction) {
-		help, ok := actionHelpFor(ctx, a)
+	addPair := func(a, b keyAction) {
+		help, ok := actionHelpFor(ctxList, a)
 		if ok {
-			add(m.keys.pairLabel(ctx, a, b), help.bar)
+			add(m.keys.pairLabel(ctxList, a, b), help.bar)
 		}
 	}
 	switch {
 	case m.networkMap:
 		if hosts > 0 {
 			add(m.keys.pairLabel(ctxList, actUp, actDown), "select device")
-			addPair(ctxList, actTop, actBottom)
+			addPair(actTop, actBottom)
 			add(m.keys.label(ctxList, actOpen), "set target")
 		}
 		add(m.keys.label(ctxList, actNetworkMap), "checks")
 	case deferred:
 		add(m.keys.label(ctxList, actRestart), "run the checks")
-		addAction(ctxList, actNetworkMap)
+		addAction(actNetworkMap)
 		if len(m.tools) > 0 {
 			kv = append(kv, "letter", "runs that tool")
 		}
 	default:
 		add(m.keys.pairLabel(ctxList, actUp, actDown), "scroll")
-		addPair(ctxList, actTop, actBottom)
-		addAction(ctxList, actNetworkMap)
+		addPair(actTop, actBottom)
+		addAction(actNetworkMap)
 		// The way back is only on the help bar: expanding removes the summary
 		// line that advertised the key.
 		if _, hiddenPass, hiddenNA := m.compactRows(); m.expanded && m.allDone() {
 			add(m.keys.label(ctxList, actExpand), "collapse")
 		} else if hiddenPass+hiddenNA > 0 || m.toolsCollapsed() {
-			addAction(ctxList, actExpand)
+			addAction(actExpand)
 		}
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
@@ -859,10 +859,10 @@ func (m model) helpView(deferred bool) string {
 		add(m.keys.label(ctxList, actOpen), "full output")
 	}
 	if !deferred && m.cur.active != nil {
-		addAction(ctxList, actCancelJob)
+		addAction(actCancelJob)
 	}
 	if len(m.otherJobs) > 0 {
-		addAction(ctxList, actSwitchJob)
+		addAction(actSwitchJob)
 	}
 	// Applied to every exit, including the deferred one: a notice raised before
 	// the chain has run has nothing else on screen to explain it.
@@ -876,8 +876,8 @@ func (m model) helpView(deferred bool) string {
 		if m.networkMap {
 			add(m.keys.label(ctxList, actRestart), "run the checks")
 		}
-		addAction(ctxList, actHelp)
-		addAction(ctxList, actQuit)
+		addAction(actHelp)
+		addAction(actQuit)
 		return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 	}
 	if m.selectedPortalURL() != "" {
@@ -886,14 +886,14 @@ func (m model) helpView(deferred bool) string {
 		add(m.keys.label(ctxList, actCopy), "copy report")
 	}
 	if m.reportReady() {
-		addAction(ctxList, actSave)
+		addAction(actSave)
 	}
 	if m.sshDetected() {
-		addAction(ctxList, actSSH)
+		addAction(actSSH)
 	}
-	addAction(ctxList, actRestart)
-	addAction(ctxList, actHelp)
-	addAction(ctxList, actQuit)
+	addAction(actRestart)
+	addAction(actHelp)
+	addAction(actQuit)
 	return withNotice(m.chordHint(helpKeys(m.width, kv...)))
 }
 
