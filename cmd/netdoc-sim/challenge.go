@@ -439,10 +439,7 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 				return simulation.ChallengeSubmission{}, err
 			}
 		}
-		submission, again, err := p.ask()
-		if err != nil {
-			return simulation.ChallengeSubmission{}, err
-		}
+		submission, again := p.ask()
 		if again {
 			continue
 		}
@@ -457,7 +454,7 @@ func (p *challengePlay) run(ctx context.Context, session *simulation.ChallengeSe
 
 // ask runs the menu once. It returns again=true when the player wants back into
 // the shell, which is the only way out of here that is not a submission.
-func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
+func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool) {
 	for {
 		simulation.WriteAnswerMenu(p.out)
 		fmt.Fprint(p.out, "\n> ")
@@ -467,18 +464,18 @@ func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
 			// No terminal left to ask with. Ending the challenge as a give-up is
 			// the honest reading: nobody committed to a diagnosis.
 			fmt.Fprintln(p.out, "\n(no answer given)")
-			return simulation.ChallengeSubmission{GaveUp: true}, false, nil
+			return simulation.ChallengeSubmission{GaveUp: true}, false
 		}
 		switch choice {
 		case "s":
-			return simulation.ChallengeSubmission{}, true, nil
+			return simulation.ChallengeSubmission{}, true
 		case "b", "brief", "briefing":
 			// The same renderer the session opened with, so what is recalled is what
 			// was originally said, and it is still only what netdoc's run is given.
 			p.challenge.WriteBriefing(p.out)
 			continue
 		case "q", "quit", "":
-			return simulation.ChallengeSubmission{GaveUp: true}, false, nil
+			return simulation.ChallengeSubmission{GaveUp: true}, false
 		}
 		picked, ok := pickAnswer(choice)
 		if !ok {
@@ -489,7 +486,7 @@ func (p *challengePlay) ask() (simulation.ChallengeSubmission, bool, error) {
 		}
 		fmt.Fprintf(p.out, "\nYou answered: %s\nWhy? (optional, one line)\n> ", picked.Label)
 		note, _ := p.in.ReadString('\n')
-		return simulation.ChallengeSubmission{Answer: picked.ID, Note: clipNote(note)}, false, nil
+		return simulation.ChallengeSubmission{Answer: picked.ID, Note: clipNote(note)}, false
 	}
 }
 
