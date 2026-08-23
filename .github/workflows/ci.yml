@@ -94,8 +94,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # amd64 only: this job proves the image works, and it can only prove it on
-      # the architecture it can execute. The release builds arm64 as well.
+      # Keep the full artifact suite native. QEMU is configured only after it
+      # finishes, so this build and every container integration test stay amd64.
       - run: docker build --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" -t netdoc-sim:ci .
       # NETDOC_REQUIRE_CONTAINER turns "no image or no engine" from a skip into a
       # failure, so this job cannot go green without having run the container.
@@ -104,6 +104,26 @@ jobs:
           NETDOC_CONTAINER_IMAGE: netdoc-sim:ci
           NETDOC_CONTAINER_ENGINE: docker
           NETDOC_REQUIRE_CONTAINER: "1"
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build and smoke-test the arm64 image
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/arm64 --load \
+            --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" \
+            -t netdoc-sim:ci-arm64 .
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' netdoc-sim:ci-arm64)" = linux/arm64
+          # ELF e_machine 183 is AArch64. Image metadata alone cannot prove the
+          # copied binary matches it.
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh netdoc-sim:ci-arm64 \
+            -c 'test "$(od -An -tu2 -j18 -N2 /usr/bin/netdoc-sim)" -eq 183'
+          test "$(docker run --rm --platform linux/arm64 netdoc-sim:ci-arm64 version)" = "netdoc-sim ci"
+          capabilities=$(docker run --rm --platform linux/arm64 netdoc-sim:ci-arm64 capabilities)
+          printf '%s\n' "$capabilities"
+          grep -Fx 'Backend:   linux-netns' <<< "$capabilities"
+          grep -Fx 'Supported: true' <<< "$capabilities"
 
   lint:
     runs-on: ubuntu-latest

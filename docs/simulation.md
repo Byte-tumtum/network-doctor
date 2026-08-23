@@ -195,13 +195,11 @@ Tags are immutable per release, as in `ghcr.io/heymaikol/netdoc-sim:v1.11.3`, wi
 `latest` following the newest release the way the Homebrew formula and the Scoop
 bucket do. Pin the version tag in anything automated.
 
-The image is published for `linux/amd64` and `linux/arm64`, and those two claims
-are not equally strong. Both are built from the same source by the release
-workflow, but CI runs the container tests on `amd64` only, because that is the
-architecture its runners execute. `arm64` is built and not runtime-verified,
-which includes Apple Silicon, where Docker Desktop runs the `arm64` image
-natively. Nothing about the backend is architecture-specific, and reports of it
-failing there are worth filing.
+The image is published for `linux/amd64` and `linux/arm64`. CI runs the full
+container integration suite on native `amd64`, then builds and executes the
+`arm64` image under QEMU to verify its version and supported `linux-netns`
+capability report. The lightweight smoke leaves the namespace scenarios to the
+native suite, where they already exercise the backend in depth.
 
 ### What the container is allowed to do
 
