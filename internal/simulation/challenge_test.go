@@ -288,7 +288,7 @@ func TestChallengeFaultsSitOnTheTargetThePlayerIsPointedAt(t *testing.T) {
 	}
 	excluded := 0
 	for caseNumber := range 200 {
-		generated, err := GenerateHuntCase("two-path-healthy", base, 1234, caseNumber, 1)
+		generated, err := generateHuntCase(HuntGeneratorVersion, "two-path-healthy", base, 1234, caseNumber, 1)
 		if err != nil || len(generated.Manifest.Mutations) != 1 ||
 			generated.Manifest.Mutations[0].ID != "service.tcp_reset" {
 			continue

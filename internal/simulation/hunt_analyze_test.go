@@ -1186,7 +1186,7 @@ func TestRunHuntFailFastStopsAfterFirstFinding(t *testing.T) {
 	// Keep this lifecycle unit test fast by choosing a first candidate without a
 	// delayed timeline. Cleanup failure itself supplies the finding.
 	for ; seed < 10000; seed++ {
-		generated, err := GenerateHuntCase("healthy-routed-network", base, seed, 0, 1)
+		generated, err := generateHuntCase(HuntGeneratorVersion, "healthy-routed-network", base, seed, 0, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1392,7 +1392,7 @@ func TestWrongDiagnosisOfAnObservedConditionBecomesAReproducibleFinding(t *testi
 	// A case that deletes the client's only default route and leaves the
 	// network otherwise still, so the final state is comparable.
 	const caseNumber = 18
-	generated, err := GenerateHuntCase("healthy", base, 20260101, caseNumber, 2)
+	generated, err := generateHuntCase(HuntGeneratorVersion, "healthy", base, 20260101, caseNumber, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

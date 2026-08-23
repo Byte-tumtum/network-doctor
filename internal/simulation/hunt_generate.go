@@ -216,12 +216,6 @@ func DeriveHuntCaseSeed(seed int64, base string, caseNumber int) int64 {
 	return int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]))
 }
 
-// GenerateHuntCase materializes and validates one immutable case at the current
-// generator version. No random value is drawn after this function returns.
-func GenerateHuntCase(baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {
-	return generateHuntCase(HuntGeneratorVersion, baseID, base, huntSeed, caseNumber, maxFaults)
-}
-
 // generateHuntCase is the same thing at a named version, which is what an
 // artifact minted under an older generator has to be replayed through.
 func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {

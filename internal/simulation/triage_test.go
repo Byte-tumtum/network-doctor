@@ -217,7 +217,7 @@ func TestEveryTriageBaselineHasApplicableOperators(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s does not load: %v", baseline.Scenario, err)
 		}
-		generated, err := GenerateHuntCase(baseline.Scenario, base, baseline.Seed, 0, 2)
+		generated, err := generateHuntCase(HuntGeneratorVersion, baseline.Scenario, base, baseline.Seed, 0, 2)
 		if err != nil {
 			t.Errorf("%s seed %d case 0 does not generate: %v", baseline.Scenario, baseline.Seed, err)
 			continue

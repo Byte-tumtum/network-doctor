@@ -138,7 +138,7 @@ func TestPreferredPathApplicabilityDoesNotMixFamilyPathCounts(t *testing.T) {
 
 func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-healthy")
-	generated, err := GenerateHuntCase("two-path-healthy", base, 20260811, 20, 1)
+	generated, err := generateHuntCase(HuntGeneratorVersion, "two-path-healthy", base, 20260811, 20, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 
 func TestGenerateHuntCaseCanSelectIPv6PreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-ipv6-healthy")
-	generated, err := GenerateHuntCase("two-path-ipv6-healthy", base, 20260811, 0, 1)
+	generated, err := generateHuntCase(HuntGeneratorVersion, "two-path-ipv6-healthy", base, 20260811, 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestGenerateHuntCaseCanSelectPMTUBlackhole(t *testing.T) {
 		{"two-router-healthy", 20260108, 12, "target-gateway", "target-lan"},
 	} {
 		t.Run(tc.base, func(t *testing.T) {
-			generated, err := GenerateHuntCase(tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			generated, err := generateHuntCase(HuntGeneratorVersion, tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -282,7 +282,7 @@ func TestGenerateHuntCaseCanSelectPMTUBlackhole(t *testing.T) {
 				faults[0].MTU != minBlackholeMTU {
 				t.Fatalf("materialized faults = %+v", generated.Scenario.Faults)
 			}
-			replay, err := GenerateHuntCase(tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			replay, err := generateHuntCase(HuntGeneratorVersion, tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -497,13 +497,13 @@ func TestHuntCaseGenerationIsIndependentAndDeterministic(t *testing.T) {
 	const seed int64 = 12345
 	var sequential []GeneratedCaseManifest
 	for caseNumber := 0; caseNumber < 100; caseNumber++ {
-		generated, err := GenerateHuntCase("healthy-routed-network", base, seed, caseNumber, 2)
+		generated, err := generateHuntCase(HuntGeneratorVersion, "healthy-routed-network", base, seed, caseNumber, 2)
 		if err != nil {
 			t.Fatalf("case %d: %v", caseNumber, err)
 		}
 		sequential = append(sequential, generated.Manifest)
 	}
-	direct, err := GenerateHuntCase("healthy-routed-network", base, seed, 17, 2)
+	direct, err := generateHuntCase(HuntGeneratorVersion, "healthy-routed-network", base, seed, 17, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,11 +543,11 @@ func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
 // it. These are the exact coordinates the nightly triage hunts.
 func TestMaxFaultsIsPartOfTheExperimentAndOfItsReproduction(t *testing.T) {
 	base := loadHuntBase(t, "healthy")
-	two, err := GenerateHuntCase("healthy", base, 20260101, 6, 2)
+	two, err := generateHuntCase(HuntGeneratorVersion, "healthy", base, 20260101, 6, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	three, err := GenerateHuntCase("healthy", base, 20260101, 6, 3)
+	three, err := generateHuntCase(HuntGeneratorVersion, "healthy", base, 20260101, 6, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +595,7 @@ func TestGeneratedHuntCasesValidateAndStayBounded(t *testing.T) {
 	for _, baseID := range HuntBaseNames() {
 		base := loadHuntBase(t, baseID)
 		for caseNumber := 0; caseNumber < 1000; caseNumber++ {
-			generated, err := GenerateHuntCase(baseID, base, 8675309, caseNumber, HuntMaxFaults)
+			generated, err := generateHuntCase(HuntGeneratorVersion, baseID, base, 8675309, caseNumber, HuntMaxFaults)
 			if err != nil {
 				t.Fatalf("%s case %d: %v", baseID, caseNumber, err)
 			}
@@ -677,7 +677,7 @@ func TestHuntGenerationDoesNotMutateBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	for caseNumber := 0; caseNumber < 500; caseNumber++ {
-		generated, err := GenerateHuntCase("dual-stack-healthy", base, -9223372036854775807, caseNumber, 3)
+		generated, err := generateHuntCase(HuntGeneratorVersion, "dual-stack-healthy", base, -9223372036854775807, caseNumber, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -719,7 +719,7 @@ func TestGeneratedMutationFieldsAreDisplaySafe(t *testing.T) {
 	for _, baseID := range HuntBaseNames() {
 		base := loadHuntBase(t, baseID)
 		for caseNumber := 0; caseNumber < 500; caseNumber++ {
-			generated, err := GenerateHuntCase(baseID, base, 42, caseNumber, 3)
+			generated, err := generateHuntCase(HuntGeneratorVersion, baseID, base, 42, caseNumber, 3)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -750,7 +750,7 @@ func TestGenerateHuntCaseRejectsBounds(t *testing.T) {
 		{"healthy", -1, 1}, {"healthy", HuntMaxCaseNumber + 1, 1},
 		{"healthy", 0, 0}, {"healthy", 0, HuntMaxFaults + 1}, {"broken-dns", 0, 1},
 	} {
-		if _, err := GenerateHuntCase(tc.base, base, 1, tc.caseNumber, tc.maxFaults); err == nil {
+		if _, err := generateHuntCase(HuntGeneratorVersion, tc.base, base, 1, tc.caseNumber, tc.maxFaults); err == nil {
 			t.Errorf("accepted %+v", tc)
 		}
 	}
@@ -769,7 +769,7 @@ func FuzzGenerateHuntCase(f *testing.F) {
 		// Every input this harness builds is in range, so an error here is a
 		// generator defect (a mutation that cannot apply, a compatibility gap,
 		// an invalid result), never a rejected input.
-		generated, err := GenerateHuntCase(baseID, base, seed, caseNumber, maxFaults)
+		generated, err := generateHuntCase(HuntGeneratorVersion, baseID, base, seed, caseNumber, maxFaults)
 		if err != nil {
 			t.Fatalf("%s seed %d case %d maxFaults %d: %v", baseID, seed, caseNumber, maxFaults, err)
 		}

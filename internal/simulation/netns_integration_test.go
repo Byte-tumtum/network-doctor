@@ -2471,7 +2471,7 @@ func TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe(t *testing.T) {
 	requireBackend(t)
 	netdoc, sim := buildBinaries(t)
 	const base = "healthy-routed-network"
-	generated, err := GenerateHuntCase(base, loadHuntBase(t, base), 20260102, 39, 1)
+	generated, err := generateHuntCase(HuntGeneratorVersion, base, loadHuntBase(t, base), 20260102, 39, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

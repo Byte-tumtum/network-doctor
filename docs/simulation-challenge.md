@@ -273,7 +273,8 @@ filtered UDP port is indistinguishable from a silent one in the shell).
 
 Challenge Mode adds no fault model. A challenge id resolves, deterministically
 and with no state on disk, to a hunt base scenario and a hunt case number, and
-the case is materialized by `GenerateHuntCase` with a maximum of one mutation.
+the case is materialized by the hunt case generator with a maximum of one
+mutation.
 Truth comes from `collectObservedTruth`, so a mutation counts only when the
 executed run left independent evidence for it, the same `observed_faults` rule
 the hunt uses. Recognition of a condition the hunt oracle already grades reuses
