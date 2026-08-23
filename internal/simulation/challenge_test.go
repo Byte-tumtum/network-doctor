@@ -717,9 +717,6 @@ func TestChallengeRecognizesNetdocsOwnVocabulary(t *testing.T) {
 			[]*Diagnosis{healthy}},
 		{"service.tcp_reset",
 			[]*Diagnosis{fail("http", "connection_reset"), fail("ssh_banner", "connection_reset")},
-			// netdoc's own words for this run are "application-layer or proxy
-			// block", which names a different fault with a different fix. The hunt
-			// already tracks the same gap as tcp_reset_not_distinguished.
 			[]*Diagnosis{healthy, fail("http", ""), fail("http", "timeout")}},
 		{"service.tls_expired",
 			[]*Diagnosis{fail("tls", "certificate_expired"), fail("https", "certificate_expired")},
@@ -817,13 +814,11 @@ func lossChallengeReport(t *testing.T, challenge *Challenge) *Report {
 	}
 }
 
-// 1. The TCP reset gap, end to end. The simulator proves the target reset the
-// connection; netdoc's real answer for a reset HTTP target is a bare `http`
-// failure with no cause, because ConnectionCauseReset is only ever reached from
-// the SSH and SMTP banner probes. The challenger takes the round.
-func TestChallengeTCPResetGapIsAChallengerWin(t *testing.T) {
+// 1. The TCP reset diagnosis, end to end. The simulator proves the target
+// reset the connection and netdoc identifies the same condition.
+func TestChallengeTCPResetIsDiagnosed(t *testing.T) {
 	challenge := challengeWithMutation(t, "service.tcp_reset")
-	report := resetChallengeReport(t, challenge, "")
+	report := resetChallengeReport(t, challenge, diagnostic.ConnectionCauseReset)
 	report.Tests[0].Diagnosis.Summary = "No HTTP response from the target: application-layer or proxy block."
 	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: AnswerReset})
 
@@ -833,13 +828,11 @@ func TestChallengeTCPResetGapIsAChallengerWin(t *testing.T) {
 	if !slices.Contains(result.Truth.ObservedFaults, "service.tcp_reset") {
 		t.Fatalf("truth does not rest on the observed reset: %+v", result.Truth.ObservedFaults)
 	}
-	// Incorrect rather than unrecognized: netdoc does have the word, on the
-	// banner probes, and did not reach for it here.
-	if result.NetworkDoctor.Score != ChallengeIncorrect {
-		t.Fatalf("netdoc scored %s on a reset it did not classify", result.NetworkDoctor.Score)
+	if result.NetworkDoctor.Score != ChallengeCorrect {
+		t.Fatalf("netdoc scored %s on a reset it classified", result.NetworkDoctor.Score)
 	}
-	if result.Result != ChallengeHumanWins {
-		t.Fatalf("result = %s, want %s", result.Result, ChallengeHumanWins)
+	if result.Result != ChallengeDraw {
+		t.Fatalf("result = %s, want %s", result.Result, ChallengeDraw)
 	}
 }
 

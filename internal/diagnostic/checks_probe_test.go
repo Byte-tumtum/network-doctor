@@ -40,8 +40,9 @@ func (silentConn) SetReadDeadline(time.Time) error { return nil }
 type resetConn struct{ fakeConn }
 
 func (resetConn) Read([]byte) (int, error) {
-	return 0, fmt.Errorf("wrapped read: %w", syscall.ECONNRESET)
+	return 0, &net.OpError{Op: "read", Net: "tcp", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}
 }
+func (resetConn) Write(p []byte) (int, error)     { return len(p), nil }
 func (resetConn) SetReadDeadline(time.Time) error { return nil }
 
 type deadlineErrorConn struct{ fakeConn }
@@ -54,6 +55,15 @@ func TestBannerProbeClassifiesWrappedReset(t *testing.T) {
 	r := probe.Run(context.Background(), map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}})
 	if r.Status != StatusFail || r.Cause != ConnectionCauseReset {
 		t.Fatalf("reset result = %+v", r)
+	}
+}
+
+func TestHTTPProbeClassifiesWrappedReset(t *testing.T) {
+	ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) { return resetConn{}, nil }}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	r := ops.httpProbe("example.com", 80, "http", ProbeTargetTCP)(context.Background(), deps)
+	if r.Status != StatusFail || r.Cause != ConnectionCauseReset {
+		t.Fatalf("HTTP reset result = %+v", r)
 	}
 }
 

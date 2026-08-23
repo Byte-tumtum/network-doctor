@@ -1119,6 +1119,9 @@ func TestHuntProtocolServiceMutationsAreObserved(t *testing.T) {
 			if http := diagnosisCheck(control.Tests[0], string(diagnostic.ProbeHTTP)); http.Status != "PASS" {
 				t.Errorf("working HTTP control = %+v", http)
 			}
+			if http := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeHTTP)); http.Status != "FAIL" || http.Cause != diagnostic.ConnectionCauseReset {
+				t.Errorf("HTTP reset classification = %+v", http)
+			}
 			accepted, reset := false, false
 			for _, event := range rep.Evidence.TCPResets {
 				accepted = accepted || event.Event == "accepted" && event.Count > 0

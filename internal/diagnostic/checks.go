@@ -1733,6 +1733,9 @@ func (o *netops) httpProbe(host string, port int, scheme string, addressDep Prob
 		if err != nil {
 			r.Status = StatusFail
 			r.timedOut = timeoutError(err)
+			if errors.Is(err, syscall.ECONNRESET) {
+				r.Cause = ConnectionCauseReset
+			}
 			// Name the winner if one address connected and the failure came
 			// later, otherwise everything tried.
 			tried := joinIPs(addrs)
