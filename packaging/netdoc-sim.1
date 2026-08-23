@@ -1,4 +1,4 @@
-.TH NETDOC\-SIM 1 "2026-08-14" "network-doctor" "User Commands"
+.TH NETDOC\-SIM 1 "2026-08-23" "network-doctor" "User Commands"
 .SH NAME
 netdoc\-sim \- build throwaway virtual networks, run netdoc inside them, and score the diagnosis
 .SH SYNOPSIS
@@ -300,8 +300,8 @@ Comma-separated baselines to hunt. The default is every baseline:
 .BR dual\-stack\-healthy ,
 .BR tls\-valid ,
 .BR socks5h\-remote\-dns\-succeeds .
-Each carries a fixed seed, which is what makes a nightly run comparable to the
-last one.
+Each carries a fixed seed for stable regression coverage. Automated
+exploration may override all selected baselines with one recorded seed.
 .TP
 .BI \-cases " n"
 Unique generated cases per baseline, between 1 and 500. The default is
@@ -314,7 +314,7 @@ still re-run in fresh namespaces before triage can file them.
 .TP
 .BI \-seed " int64"
 Override the fixed seed of every selected baseline. Normally left alone: the
-fixed seeds are the point.
+fixed seeds provide the default regression inputs.
 .TP
 .BI \-max\-faults " n"
 Maximum mutations per case, between 1 and 3. The default is

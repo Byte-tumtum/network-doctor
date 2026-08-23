@@ -29,9 +29,9 @@ const (
 	IssueStatusCreated  = "created"
 )
 
-// TriageBaseline is a known-good scenario and the fixed seed it is hunted
-// with. The seeds are part of the contract: a finding filed last night must
-// reproduce tonight from the same two numbers.
+// TriageBaseline is a known-good scenario and its fixed regression seed.
+// Automated exploration may override it, and historical findings reproduce
+// from the numeric seed recorded in their hunt report.
 type TriageBaseline struct {
 	Scenario string `json:"scenario"`
 	Seed     int64  `json:"seed"`
@@ -55,10 +55,10 @@ var triageBaselines = []TriageBaseline{
 	{Scenario: "two-router-healthy", Seed: 20260108},
 }
 
-// TriageBaselines returns the fixed baseline scenarios and seeds.
+// TriageBaselines returns the baseline scenarios and fixed regression seeds.
 func TriageBaselines() []TriageBaseline { return append([]TriageBaseline(nil), triageBaselines...) }
 
-// TriageBaselineFor returns the documented seed for a baseline scenario.
+// TriageBaselineFor returns the fixed regression seed for a baseline scenario.
 func TriageBaselineFor(scenario string) (TriageBaseline, bool) {
 	for _, b := range triageBaselines {
 		if b.Scenario == scenario {

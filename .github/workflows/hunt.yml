@@ -1,11 +1,12 @@
 name: hunt
 
-# Nightly deterministic bug hunt: mutate the known-good baseline scenarios at
-# fixed seeds, reproduce every candidate finding from its own case, and report
-# the survivors. Filing them as issues is opt-in, twice over: a manual run has
-# to ask for it, and a scheduled run files nothing until the repository
-# variable NETDOC_HUNT_CREATE is set to true. Merging this workflow therefore
-# starts the hunting, not the issue writing.
+# Nightly deterministic bug hunt: derive one exploration seed from the UTC
+# calendar date, mutate the known-good baseline scenarios, reproduce every
+# candidate finding from its recorded seed and case, and report the survivors.
+# Filing them as issues is opt-in, twice over: a manual run has to ask for it,
+# and a scheduled run files nothing until the repository variable
+# NETDOC_HUNT_CREATE is set to true. Merging this workflow therefore starts the
+# hunting, not the issue writing.
 
 on:
   schedule:
@@ -23,20 +24,20 @@ on:
 permissions:
   contents: read
 
-# Kept in the same order as simulation.TriageBaselines. A test holds the names
-# and seeds to the production list so the workflow cannot silently hunt a
-# different campaign.
+# Kept in the same order as simulation.TriageBaselines. A test holds these
+# names to the production list so the workflow cannot silently hunt a different
+# campaign.
 env:
   HUNT_SHARDS: "4"
   HUNT_BASELINES: |
-    healthy 20260101
-    healthy-routed-network 20260102
-    dual-stack-healthy 20260103
-    tls-valid 20260104
-    socks5h-remote-dns-succeeds 20260105
-    two-path-healthy 20260106
-    two-path-ipv6-healthy 20260107
-    two-router-healthy 20260108
+    healthy
+    healthy-routed-network
+    dual-stack-healthy
+    tls-valid
+    socks5h-remote-dns-succeeds
+    two-path-healthy
+    two-path-ipv6-healthy
+    two-router-healthy
 
 # The triage report is piped through tee, and the default shell (`bash -e`)
 # reports a pipeline's last command, not its first: without pipefail a hunt that
@@ -51,7 +52,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  seed:
+    name: Resolve UTC exploration seed
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.resolve.outputs.value }}
+    steps:
+      # Resolve once for the whole workflow. Shards may start at different
+      # times, so none of them reads the clock independently.
+      - id: resolve
+        run: |
+          seed=$(LC_ALL=C date -u +%Y%m%d)
+          case "$seed" in
+            [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+            *) echo "invalid UTC date seed: $seed" >&2; exit 1 ;;
+          esac
+          printf 'value=%s\n' "$seed" >> "$GITHUB_OUTPUT"
+          echo "Exploration seed: $seed"
+
   hunt:
+    name: Explore seed ${{ needs.seed.outputs.value }} shard ${{ matrix.shard }}
+    needs: [seed]
     # Not ubuntu-latest. The hunt pins netem randomness with `netem seed`, which
     # iproute2 learned in 6.6; 24.04 ships 6.1 and rejects the keyword, so every
     # generated case that injects loss, latency or jitter fails to set up there.
@@ -85,14 +106,15 @@ jobs:
       - name: Run shard
         env:
           CASES: ${{ inputs.cases || '60' }}
+          HUNT_SEED: ${{ needs.seed.outputs.value }}
           SHARD: ${{ matrix.shard }}
         run: |
           mkdir -p hunt-results
-          while read -r base seed; do
+          while read -r base; do
             [ -n "$base" ] || continue
             output="hunt-results/$base.$SHARD.json"
             if ./netdoc-sim hunt "$base" \
-              --seed "$seed" \
+              --seed "$HUNT_SEED" \
               --cases "$CASES" \
               --shard "$SHARD/$HUNT_SHARDS" \
               --max-faults 2 \
@@ -112,8 +134,9 @@ jobs:
           if-no-files-found: error
 
   merge:
+    name: Merge and triage exploration seed ${{ needs.seed.outputs.value }}
     if: ${{ always() }}
-    needs: hunt
+    needs: [seed, hunt]
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
@@ -140,7 +163,7 @@ jobs:
       - name: Merge shard reports
         run: |
           mkdir -p merged-hunts
-          while read -r base seed; do
+          while read -r base; do
             [ -n "$base" ] || continue
             if ./netdoc-sim hunt merge hunt-shards/"$base".*.json > "merged-hunts/$base.json"; then
               continue
@@ -186,6 +209,7 @@ jobs:
         env:
           CREATE: ${{ steps.mode.outputs.create }}
           CASES: ${{ inputs.cases || '60' }}
+          HUNT_SEED: ${{ needs.seed.outputs.value }}
           # gh reads the token from the environment; it is never an argument,
           # so it cannot reach a log line. An observation-only run gets no
           # token at all.
@@ -198,6 +222,7 @@ jobs:
           ./netdoc-sim triage \
             --cases "$CASES" \
             --hunt-results merged-hunts \
+            --seed "$HUNT_SEED" \
             "${args[@]}" \
             --revision "$GITHUB_SHA" \
             --context "GitHub Actions run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -205,11 +230,13 @@ jobs:
       - if: always()
         env:
           MODE: ${{ steps.mode.outputs.mode }}
+          HUNT_SEED: ${{ needs.seed.outputs.value }}
         run: |
           {
             echo '### netdoc-sim hunt triage'
             echo ''
             echo "Mode: ${MODE:-mode was never decided; the run failed before triage}"
+            echo "Exploration seed: ${HUNT_SEED:-seed was not resolved}"
             echo ''
             echo '```'
             cat triage.txt 2>/dev/null || echo 'the triage step produced no report'

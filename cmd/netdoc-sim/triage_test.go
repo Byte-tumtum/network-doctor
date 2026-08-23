@@ -419,13 +419,16 @@ func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	const cases = 4
+	const (
+		cases = 4
+		seed  = int64(20260823)
+	)
 	var shards []*simulation.HuntResult
 	for index := 0; index < 2; index++ {
 		shard := simulation.HuntShard{Index: index, Count: 2}
 		shards = append(shards, simulation.RunHunt(context.Background(), "healthy-routed-network", base,
 			func() simulation.Backend { return stubBackend{supported: false} }, simulation.HuntOptions{
-				Cases: cases, Seed: 20260102, MaxFaults: 2, Shard: &shard,
+				Cases: cases, Seed: seed, MaxFaults: 2, Shard: &shard,
 				Run: simulation.Options{Netdoc: "netdoc"},
 			}))
 	}
@@ -448,24 +451,26 @@ func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) 
 	}
 
 	replays := 0
+	var replaySeed int64
 	replay := func(_ context.Context, scenario string, seed int64, gotCases, caseNumber int) (*simulation.HuntResult, error) {
 		replays++
+		replaySeed = seed
 		return &simulation.HuntResult{BaseScenario: scenario, HuntSeed: seed, RequestedCases: gotCases,
 			Result: simulation.HuntResultClean}, nil
 	}
-	opts := triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy-routed-network", Seed: 20260102}},
+	opts := triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy-routed-network", Seed: seed}},
 		cases: cases, maxFaults: 2}
 	hunt, err := precomputedHunts(dir, opts, replay)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := hunt(context.Background(), "healthy-routed-network", 20260102, cases, -1)
+	got, err := hunt(context.Background(), "healthy-routed-network", seed, cases, -1)
 	if err != nil || got.BaseScenario != merged.BaseScenario || len(got.Cases) != len(merged.Cases) || replays != 0 {
 		t.Fatalf("full hunt base = %q, cases = %d, err = %v, replays = %d",
 			got.BaseScenario, len(got.Cases), err, replays)
 	}
-	if _, err := hunt(context.Background(), "healthy-routed-network", 20260102, 1, 7); err != nil || replays != 1 {
-		t.Fatalf("exact replay err = %v, calls = %d", err, replays)
+	if _, err := hunt(context.Background(), "healthy-routed-network", seed, 1, 7); err != nil || replays != 1 || replaySeed != seed {
+		t.Fatalf("exact replay seed = %d, err = %v, calls = %d", replaySeed, err, replays)
 	}
 }
 
@@ -528,12 +533,16 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 		t.Fatal(err)
 	}
 	type step struct {
-		Uses string `yaml:"uses"`
-		Run  string `yaml:"run"`
+		ID   string            `yaml:"id"`
+		Name string            `yaml:"name"`
+		Uses string            `yaml:"uses"`
+		Env  map[string]string `yaml:"env"`
+		Run  string            `yaml:"run"`
 	}
 	type job struct {
-		If       string `yaml:"if"`
-		Needs    string `yaml:"needs"`
+		If       string            `yaml:"if"`
+		Needs    []string          `yaml:"needs"`
+		Outputs  map[string]string `yaml:"outputs"`
 		Strategy struct {
 			FailFast bool `yaml:"fail-fast"`
 			Matrix   struct {
@@ -552,6 +561,10 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	if err := yaml.Unmarshal(blob, &workflow); err != nil {
 		t.Fatal(err)
 	}
+	seedJob, ok := workflow.Jobs["seed"]
+	if !ok || seedJob.Outputs["value"] != `${{ steps.resolve.outputs.value }}` {
+		t.Fatalf("workflow seed job = %+v", seedJob)
+	}
 	hunt, ok := workflow.Jobs["hunt"]
 	if !ok {
 		t.Fatal("workflow has no hunt matrix job")
@@ -560,23 +573,24 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hunt.Strategy.FailFast || !reflect.DeepEqual(hunt.Strategy.Matrix.Shard, []int{0, 1, 2, 3}) || shardCount != 4 {
+	if !reflect.DeepEqual(hunt.Needs, []string{"seed"}) || hunt.Strategy.FailFast ||
+		!reflect.DeepEqual(hunt.Strategy.Matrix.Shard, []int{0, 1, 2, 3}) || shardCount != 4 {
 		t.Fatalf("matrix shards = %v, count = %d, fail-fast = %t",
 			hunt.Strategy.Matrix.Shard, shardCount, hunt.Strategy.FailFast)
 	}
-	var gotBaselines []simulation.TriageBaseline
+	var gotBaselines []string
 	for _, line := range strings.Split(strings.TrimSpace(workflow.Env.Baselines), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) != 2 {
+		if len(fields) != 1 {
 			t.Fatalf("invalid workflow baseline row %q", line)
 		}
-		seed, err := strconv.ParseInt(fields[1], 10, 64)
-		if err != nil {
-			t.Fatal(err)
-		}
-		gotBaselines = append(gotBaselines, simulation.TriageBaseline{Scenario: fields[0], Seed: seed})
+		gotBaselines = append(gotBaselines, fields[0])
 	}
-	want := simulation.TriageBaselines()
+	baselines := simulation.TriageBaselines()
+	want := make([]string, len(baselines))
+	for i, baseline := range baselines {
+		want[i] = baseline.Scenario
+	}
 	if !reflect.DeepEqual(gotBaselines, want) {
 		t.Fatalf("workflow baselines = %+v, want %+v", gotBaselines, want)
 	}
@@ -589,17 +603,29 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	}
 	huntRuns := joinRuns(hunt.Steps)
 	if !strings.Contains(huntRuns, `--shard "$SHARD/$HUNT_SHARDS"`) ||
-		!strings.Contains(huntRuns, `--cases "$CASES"`) || strings.Contains(huntRuns, "netdoc-sim triage") {
+		!strings.Contains(huntRuns, `--cases "$CASES"`) || !strings.Contains(huntRuns, `--seed "$HUNT_SEED"`) ||
+		strings.Contains(huntRuns, "date ") || strings.Contains(huntRuns, "netdoc-sim triage") {
 		t.Fatalf("hunt matrix does not run one independent shard:\n%s", huntRuns)
 	}
+	for _, step := range hunt.Steps {
+		if step.Name == "Run shard" && step.Env["HUNT_SEED"] != `${{ needs.seed.outputs.value }}` {
+			t.Fatalf("hunt shard seed = %q", step.Env["HUNT_SEED"])
+		}
+	}
 	merge, ok := workflow.Jobs["merge"]
-	if !ok || merge.Needs != "hunt" || !strings.Contains(merge.If, "always") {
+	if !ok || !reflect.DeepEqual(merge.Needs, []string{"seed", "hunt"}) || !strings.Contains(merge.If, "always") {
 		t.Fatalf("merge job = %+v", merge)
 	}
 	mergeRuns := joinRuns(merge.Steps)
 	if !strings.Contains(mergeRuns, "netdoc-sim hunt merge") ||
-		!strings.Contains(mergeRuns, "--hunt-results merged-hunts") {
+		!strings.Contains(mergeRuns, "--hunt-results merged-hunts") ||
+		!strings.Contains(mergeRuns, `--seed "$HUNT_SEED"`) || strings.Contains(mergeRuns, "date ") {
 		t.Fatalf("merge job does not merge and triage canonical results:\n%s", mergeRuns)
+	}
+	for _, step := range merge.Steps {
+		if step.ID == "triage" && step.Env["HUNT_SEED"] != `${{ needs.seed.outputs.value }}` {
+			t.Fatalf("triage seed = %q", step.Env["HUNT_SEED"])
+		}
 	}
 	// `healthy` is a prefix of `healthy-routed-network`, so a shard file name
 	// the merge glob can widen hands one baseline's merge another baseline's
@@ -611,13 +637,13 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	var shardFiles []string
 	for _, baseline := range want {
 		for shard := 0; shard < shardCount; shard++ {
-			shardFiles = append(shardFiles, baseline.Scenario+"."+strconv.Itoa(shard)+".json")
+			shardFiles = append(shardFiles, baseline+"."+strconv.Itoa(shard)+".json")
 		}
 	}
 	for _, baseline := range want {
 		matched := 0
 		for _, name := range shardFiles {
-			ok, err := filepath.Match(baseline.Scenario+".*.json", name)
+			ok, err := filepath.Match(baseline+".*.json", name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -626,7 +652,7 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 			}
 		}
 		if matched != shardCount {
-			t.Errorf("merge glob for %s matched %d shard files, want %d", baseline.Scenario, matched, shardCount)
+			t.Errorf("merge glob for %s matched %d shard files, want %d", baseline, matched, shardCount)
 		}
 	}
 	text := string(blob)
@@ -634,6 +660,70 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 		"actions/upload-artifact@", "actions/download-artifact@"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("workflow is missing %q", want)
+		}
+	}
+}
+
+func TestHuntWorkflowDerivesExplorationSeedFromUTCDate(t *testing.T) {
+	blob, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "hunt.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				ID  string `yaml:"id"`
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(blob, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	resolve := ""
+	for _, step := range workflow.Jobs["seed"].Steps {
+		if step.ID == "resolve" {
+			resolve = step.Run
+		}
+	}
+	if resolve == "" {
+		t.Fatal("workflow has no exploration seed resolver")
+	}
+	for _, want := range []string{"seed=$(LC_ALL=C date -u +%Y%m%d)", "[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]", `printf 'value=%s\n' "$seed"`} {
+		if !strings.Contains(resolve, want) {
+			t.Errorf("seed resolver is missing %q", want)
+		}
+	}
+	seedFor := func(at time.Time) int64 {
+		t.Helper()
+		value := at.UTC().Format("20060102")
+		seed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			t.Fatalf("seed %q is not an int64: %v", value, err)
+		}
+		return seed
+	}
+	first := seedFor(time.Date(2026, 8, 23, 1, 0, 0, 0, time.UTC))
+	repeat := seedFor(time.Date(2026, 8, 23, 23, 0, 0, 0, time.UTC))
+	next := seedFor(time.Date(2026, 8, 24, 1, 0, 0, 0, time.UTC))
+	if first != 20260823 || repeat != first || next == first || seedFor(time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)) <= 0 {
+		t.Fatalf("derived seeds = %d, %d, %d", first, repeat, next)
+	}
+}
+
+func TestCIKeepsFixedSeedHuntRegressionSeparate(t *testing.T) {
+	blob, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(blob)
+	for _, want := range []string{
+		"name: Run fixed-seed Hunt regression",
+		"-skip '^TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe$'",
+		"-run '^TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe$'",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("CI workflow is missing %q", want)
 		}
 	}
 }

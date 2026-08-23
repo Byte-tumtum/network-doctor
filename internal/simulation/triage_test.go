@@ -17,8 +17,8 @@ func sampleFinding() HuntFinding {
 	}
 }
 
-// The seeds are a published contract: a finding filed last night has to
-// reproduce tonight from the same scenario and seed.
+// The fixed seeds are the stable regression inputs. Exploration can use other
+// recorded seeds without moving this lane.
 func TestTriageBaselineSeedsAreFixed(t *testing.T) {
 	want := map[string]int64{"healthy": 20260101, "healthy-routed-network": 20260102, "dual-stack-healthy": 20260103,
 		"tls-valid": 20260104, "socks5h-remote-dns-succeeds": 20260105, "two-path-healthy": 20260106,

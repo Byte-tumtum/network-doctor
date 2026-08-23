@@ -251,8 +251,8 @@ a dial that merely failed, and a run cannot satisfy both.
 
 `netdoc-sim triage` hunts the fixed baselines, re-runs each candidate's exact
 case, and requires both its case fingerprint and finding fingerprint to match.
-An unreproduced candidate is reported but never filed. The fixed baselines and
-seeds are authoritative in `internal/simulation/triage.go`.
+An unreproduced candidate is reported but never filed. The baseline list and
+fixed regression seeds are authoritative in `internal/simulation/triage.go`.
 
 The baseline set is chosen so that every operator in the registry is applicable
 to at least one of them, which `TestEveryHuntOperatorReachesABaseline` holds it
@@ -285,7 +285,15 @@ requires the `NETDOC_HUNT_CREATE` repository variable; manual dispatch requires
 its `create` input. Observation-only runs withhold `GH_TOKEN`, even though the
 job declares the permission needed by an opted-in run. Keep the workflow's
 explicit Bash/`pipefail` behavior and seeded-netem-compatible runner when
-changing it. The nightly runs 60 logical unique cases per baseline over four
-independent shards, then merges the shard JSON and gives the canonical reports
-to triage. Each shard therefore executes about 15 cases per baseline, the old
-nightly workload, while the logical nightly coverage is four times larger.
+changing it. One job resolves the exploration seed as the UTC date in
+`YYYYMMDD` form, then every baseline and all four shards receive that exact
+numeric value. The nightly runs 60 logical unique cases per baseline, merges
+the shard JSON, and gives the canonical reports and the same seed to triage.
+Each report and case manifest records the resolved seed, so a later replay uses
+the artifact's number rather than deriving a seed from the replay date.
+
+The fixed-seed regression lane remains separate in `.github/workflows/ci.yml`.
+`TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe` runs one routed case
+at seed `20260102`, case `39`, and checks that its known generated path-MTU fault
+still reaches the intended probe. It is small and stable while the larger
+nightly workflow explores a new date seed.
