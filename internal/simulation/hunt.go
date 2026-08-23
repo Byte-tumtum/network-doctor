@@ -35,14 +35,15 @@ func (s HuntShard) Validate() error {
 func (s HuntShard) Includes(caseNumber int) bool { return caseNumber%s.Count == s.Index }
 
 type HuntOptions struct {
-	Run       Options
-	Cases     int
-	Seed      int64
-	Case      *int
-	Shard     *HuntShard
-	MaxFaults int
-	FailFast  bool
-	DryRun    bool
+	Run              Options
+	Cases            int
+	Seed             int64
+	Case             *int
+	Shard            *HuntShard
+	MaxFaults        int
+	GeneratorVersion string
+	FailFast         bool
+	DryRun           bool
 }
 
 type HuntCaseResult struct {
@@ -91,6 +92,12 @@ type HuntResult struct {
 }
 
 func (o *HuntOptions) withDefaults() error {
+	if o.GeneratorVersion == "" {
+		o.GeneratorVersion = HuntGeneratorVersion
+	}
+	if err := validateHuntGeneratorVersion(o.GeneratorVersion); err != nil {
+		return err
+	}
 	if o.Cases == 0 {
 		o.Cases = 50
 	}
@@ -208,8 +215,10 @@ func canonicalHuntCaseResult(manifest GeneratedCaseManifest, report *Report) Hun
 // is campaign mode's question, where `--iteration N --runs K` repeats one
 // schedule through a whole fresh topology each time.
 func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() Backend, opts HuntOptions) *HuntResult {
-	result := &HuntResult{GeneratorVersion: HuntGeneratorVersion, BaseScenario: baseID, HuntSeed: opts.Seed}
-	if err := opts.withDefaults(); err != nil {
+	result := &HuntResult{BaseScenario: baseID, HuntSeed: opts.Seed}
+	err := opts.withDefaults()
+	result.GeneratorVersion = opts.GeneratorVersion
+	if err != nil {
 		result.Result, result.ErrorKind, result.Error = HuntResultError, "configuration", err.Error()
 		result.finish()
 		return result
@@ -228,7 +237,7 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 		result.finish()
 		return result
 	}
-	stream := newHuntCaseStream(HuntGeneratorVersion, baseID, base, opts.Seed, result.RequestedCases, opts.MaxFaults, opts.Case)
+	stream := newHuntCaseStream(opts.GeneratorVersion, baseID, base, opts.Seed, result.RequestedCases, opts.MaxFaults, opts.Case)
 	for stream.accepted < stream.target {
 		if err := ctx.Err(); err != nil {
 			result.Cancelled, result.RuntimeFailure = true, true

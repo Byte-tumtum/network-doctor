@@ -696,8 +696,8 @@ func truthFingerprint(truth ObservedTruth) string {
 // The scenario is a validated base name by the time a hunt runs, but this
 // string is pasted into a shell, so it is sanitized here rather than trusted.
 func (r HuntReproduction) Command() string {
-	return fmt.Sprintf("netdoc-sim hunt %s --seed %d --case %d --max-faults %d --json",
-		textsafe.Clean(r.BaseScenario), r.Seed, r.Case, r.MaxFaults)
+	return fmt.Sprintf("netdoc-sim hunt %s --seed %d --case %d --max-faults %d --generator-version %s --json",
+		textsafe.Clean(r.BaseScenario), r.Seed, r.Case, r.MaxFaults, textsafe.Clean(r.GeneratorVersion))
 }
 
 func reproductionFor(manifest GeneratedCaseManifest) HuntReproduction {

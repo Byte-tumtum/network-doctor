@@ -80,6 +80,32 @@ func TestShardPreservesGlobalCaseReproductionIdentity(t *testing.T) {
 	}
 }
 
+func TestHistoricalGeneratorVersionSurvivesShardsAndMerge(t *testing.T) {
+	base := loadHuntBase(t, "healthy-routed-network")
+	var shards []*HuntResult
+	for index := 0; index < 2; index++ {
+		shard := HuntShard{Index: index, Count: 2}
+		result := RunHunt(context.Background(), "healthy-routed-network", base, nil,
+			HuntOptions{Cases: 7, Seed: 12345, MaxFaults: 2, GeneratorVersion: "v3", DryRun: true, Shard: &shard})
+		if result.GeneratorVersion != "v3" {
+			t.Fatalf("shard %d generator = %q", index, result.GeneratorVersion)
+		}
+		for _, item := range result.Cases {
+			if item.Manifest.GeneratorVersion != "v3" {
+				t.Fatalf("shard %d case %d generator = %q", index, item.Manifest.Case, item.Manifest.GeneratorVersion)
+			}
+		}
+		shards = append(shards, result)
+	}
+	merged, err := MergeHuntResults(shards...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.GeneratorVersion != "v3" {
+		t.Fatalf("merged generator = %q", merged.GeneratorVersion)
+	}
+}
+
 func TestMergedShardsAreSemanticallyEquivalentToARealUnshardedHunt(t *testing.T) {
 	base := loadHuntBase(t, "healthy")
 	backend := func() Backend {
@@ -145,6 +171,7 @@ func TestMergeHuntResultsRejectsIncompleteAndIncompatibleInputs(t *testing.T) {
 		{"case total", func(in []*HuntResult) []*HuntResult { in[1].RequestedCases++; return in }, "requested cases"},
 		{"shard count", func(in []*HuntResult) []*HuntResult { in[1].Shard.Count++; return in }, "shard count"},
 		{"generator", func(in []*HuntResult) []*HuntResult { in[1].GeneratorVersion = "v4"; return in }, "generator version"},
+		{"missing generator", func(in []*HuntResult) []*HuntResult { in[0].GeneratorVersion = ""; return in }, "unknown hunt generator version"},
 		{"baseline", func(in []*HuntResult) []*HuntResult { in[1].BaseScenario = "healthy"; return in }, "base scenario"},
 		{"fault ceiling", func(in []*HuntResult) []*HuntResult { in[1].MaxFaults = 1; return in }, "max faults"},
 		{"dry run", func(in []*HuntResult) []*HuntResult { in[1].DryRun = false; return in }, "dry-run setting"},

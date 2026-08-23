@@ -29,7 +29,8 @@ import (
 
 // huntFunc runs one hunt and returns its parsed report. caseNumber is negative
 // for a full hunt, or the exact case to regenerate and re-run.
-type huntFunc func(ctx context.Context, scenario string, seed int64, cases, caseNumber int) (*simulation.HuntResult, error)
+type huntFunc func(ctx context.Context, scenario string, seed int64, cases, caseNumber int,
+	generatorVersion string) (*simulation.HuntResult, error)
 
 // ghFunc runs the `gh` CLI. The token lives in gh's environment and never
 // appears in an argument, so nothing here can log it.
@@ -199,7 +200,7 @@ func triage(ctx context.Context, opts triageOptions, hunt huntFunc, gh ghFunc) *
 		return report
 	}
 	for _, baseline := range opts.baselines {
-		result, err := hunt(ctx, baseline.Scenario, baseline.Seed, opts.cases, -1)
+		result, err := hunt(ctx, baseline.Scenario, baseline.Seed, opts.cases, -1, simulation.HuntGeneratorVersion)
 		if err != nil {
 			return fail("hunt %s seed %d: %v", baseline.Scenario, baseline.Seed, err)
 		}
@@ -244,7 +245,7 @@ func triage(ctx context.Context, opts triageOptions, hunt huntFunc, gh ghFunc) *
 // means the same case fingerprint produced the same finding fingerprint again.
 func verify(ctx context.Context, hunt huntFunc, candidate simulation.HuntFinding) (simulation.TriageFinding, error) {
 	out := simulation.NewTriageFinding(candidate)
-	result, err := hunt(ctx, out.Scenario, out.Seed, 1, out.Case)
+	result, err := hunt(ctx, out.Scenario, out.Seed, 1, out.Case, out.GeneratorVersion)
 	if err != nil {
 		return out, err
 	}
@@ -327,11 +328,12 @@ func realGH(ctx context.Context, args ...string) ([]byte, error) {
 // directorHunt runs a real hunt exactly as `netdoc-sim hunt -json` does, with the
 // same flag parsing, director argv and namespaces, and captures the report.
 func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, verbose bool, stderr io.Writer) huntFunc {
-	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int) (*simulation.HuntResult, error) {
+	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int,
+		generatorVersion string) (*simulation.HuntResult, error) {
 		f := newHuntFlags(io.Discard)
 		if _, err := f.parse([]string{scenario, "-json", "-seed", strconv.FormatInt(seed, 10),
 			"-cases", strconv.Itoa(cases), "-case", strconv.Itoa(caseNumber),
-			"-max-faults", strconv.Itoa(maxFaults), "-timeout", timeout.String(),
+			"-max-faults", strconv.Itoa(maxFaults), "-generator-version", generatorVersion, "-timeout", timeout.String(),
 			fmt.Sprintf("-v=%t", verbose)}); err != nil {
 			return nil, err
 		}
@@ -390,10 +392,6 @@ func precomputedHunts(dir string, opts triageOptions, replay huntFunc) (huntFunc
 		if _, exists := reports[result.BaseScenario]; exists {
 			return nil, fmt.Errorf("duplicate hunt result for %s", result.BaseScenario)
 		}
-		if result.GeneratorVersion != simulation.HuntGeneratorVersion {
-			return nil, fmt.Errorf("%s uses generator %s, this build uses %s",
-				result.BaseScenario, result.GeneratorVersion, simulation.HuntGeneratorVersion)
-		}
 		if result.HuntSeed != baseline.Seed || result.RequestedCases != opts.cases ||
 			result.MaxFaults != opts.maxFaults || result.DryRun || result.FailFast {
 			return nil, fmt.Errorf("%s hunt configuration does not match triage", result.BaseScenario)
@@ -405,9 +403,10 @@ func precomputedHunts(dir string, opts triageOptions, replay huntFunc) (huntFunc
 			return nil, fmt.Errorf("missing hunt result for %s", baseline.Scenario)
 		}
 	}
-	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int) (*simulation.HuntResult, error) {
+	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int,
+		generatorVersion string) (*simulation.HuntResult, error) {
 		if caseNumber >= 0 {
-			return replay(ctx, scenario, seed, cases, caseNumber)
+			return replay(ctx, scenario, seed, cases, caseNumber, generatorVersion)
 		}
 		result := reports[scenario]
 		if result == nil || result.HuntSeed != seed || result.RequestedCases != cases {

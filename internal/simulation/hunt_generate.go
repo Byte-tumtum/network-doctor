@@ -45,6 +45,9 @@ const (
 // rather than replacing the last one.
 var huntGeneratorVersions = []string{"v3", "v4", "v5"}
 
+// HuntGeneratorVersions returns every generator version this build can replay.
+func HuntGeneratorVersions() []string { return slices.Clone(huntGeneratorVersions) }
+
 // huntGeneratorIndex places a version on that list. An operator with no `since`
 // belongs to the first version, which is where all of them started.
 func huntGeneratorIndex(version string) int {
@@ -52,6 +55,13 @@ func huntGeneratorIndex(version string) int {
 		return 0
 	}
 	return slices.Index(huntGeneratorVersions, version)
+}
+
+func validateHuntGeneratorVersion(version string) error {
+	if version == "" || huntGeneratorIndex(version) < 0 {
+		return fmt.Errorf("unknown hunt generator version %q (have: %s)", version, strings.Join(huntGeneratorVersions, ", "))
+	}
+	return nil
 }
 
 // Sorted: validHuntBase binary-searches this list.
@@ -219,8 +229,8 @@ func DeriveHuntCaseSeed(seed int64, base string, caseNumber int) int64 {
 // generateHuntCase is the same thing at a named version, which is what an
 // artifact minted under an older generator has to be replayed through.
 func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {
-	if huntGeneratorIndex(version) < 0 {
-		return nil, fmt.Errorf("unknown hunt generator version %q (have: %s)", version, strings.Join(huntGeneratorVersions, ", "))
+	if err := validateHuntGeneratorVersion(version); err != nil {
+		return nil, err
 	}
 	if !validHuntBase(baseID) {
 		return nil, fmt.Errorf("unsupported hunt base %q (have: %s)", baseID, strings.Join(huntBaseNames, ", "))

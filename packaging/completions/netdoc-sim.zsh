@@ -74,6 +74,7 @@ case $state in
         '(--case -case)'{--case,-case}'[run exactly one derived case]:index:' \
         '(--shard -shard)'{--shard,-shard}'[run zero-based shard i/N of the global cases]:shard:' \
         '(--max-faults -max-faults)'{--max-faults,-max-faults}'[maximum mutations per case (default 2, max 3)]:count:' \
+        '(--generator-version -generator-version)'{--generator-version,-generator-version}'[Hunt generator version (default v5)]:version:(v3 v4 v5)' \
         '(--fail-fast -fail-fast)'{--fail-fast,-fail-fast}'[stop after the first reportable finding]' \
         '(--dry-run -dry-run)'{--dry-run,-dry-run}'[print generated manifests without namespaces]' \
         '(--netdoc -netdoc)'{--netdoc,-netdoc}'[the netdoc binary to run]:netdoc:_files' \

@@ -28,7 +28,7 @@ func candidate(scenario string, seed int64, caseNumber int, code string) simulat
 		Code: code, Summary: "netdoc disagreed with the simulator.", Occurrences: 1,
 		FirstCase: caseNumber, ExampleCases: []int{caseNumber},
 		Reproduce: simulation.HuntReproduction{BaseScenario: scenario, Seed: seed, Case: caseNumber,
-			CaseSeed: 7, GeneratorVersion: simulation.HuntGeneratorVersion,
+			CaseSeed: 7, MaxFaults: 2, GeneratorVersion: simulation.HuntGeneratorVersion,
 			CaseFingerprint: "case-" + code},
 	}
 }
@@ -45,7 +45,8 @@ func replay(finding simulation.HuntFinding, reproduces bool) *simulation.HuntRes
 		DiagnosisFingerprint: simulation.DiagnosisFingerprint{ID: "d1"},
 		Status:               "clean",
 	}
-	result := &simulation.HuntResult{Result: simulation.HuntResultClean, ExecutedCases: 1,
+	result := &simulation.HuntResult{GeneratorVersion: finding.Reproduce.GeneratorVersion,
+		Result: simulation.HuntResultClean, ExecutedCases: 1,
 		Cases: []simulation.HuntCaseResult{item}}
 	if reproduces {
 		result.Cases[0].Findings = []simulation.HuntCaseFinding{{Fingerprint: finding.Fingerprint,
@@ -59,15 +60,17 @@ func replay(finding simulation.HuntFinding, reproduces bool) *simulation.HuntRes
 
 // hunts serves a scripted full hunt and a scripted answer per re-run case.
 type hunts struct {
-	full    *simulation.HuntResult
-	perCase map[int]*simulation.HuntResult
-	err     error
-	calls   []int
+	full     *simulation.HuntResult
+	perCase  map[int]*simulation.HuntResult
+	err      error
+	calls    []int
+	versions []string
 }
 
 func (h *hunts) fn() huntFunc {
-	return func(_ context.Context, _ string, _ int64, _, caseNumber int) (*simulation.HuntResult, error) {
+	return func(_ context.Context, _ string, _ int64, _, caseNumber int, generatorVersion string) (*simulation.HuntResult, error) {
 		h.calls = append(h.calls, caseNumber)
+		h.versions = append(h.versions, generatorVersion)
 		if h.err != nil {
 			return nil, h.err
 		}
@@ -140,6 +143,7 @@ func baselineOpts(create bool) triageOptions {
 // Only a finding that survives its own re-run becomes an issue.
 func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 	solid, flaky := candidate("healthy", 20260101, 4, "solid"), candidate("healthy", 20260101, 9, "flaky")
+	solid.Reproduce.GeneratorVersion = "v3"
 	h := &hunts{
 		full: &simulation.HuntResult{Result: simulation.HuntResultFindings, ExecutedCases: 20,
 			Findings: []simulation.HuntFinding{solid, flaky}},
@@ -153,6 +157,9 @@ func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 	}
 	if len(h.calls) != 3 || h.calls[0] != -1 || h.calls[1] != 4 || h.calls[2] != 9 {
 		t.Fatalf("hunt calls = %v, want the hunt then each candidate's case", h.calls)
+	}
+	if !reflect.DeepEqual(h.versions, []string{simulation.HuntGeneratorVersion, "v3", simulation.HuntGeneratorVersion}) {
+		t.Fatalf("hunt generator versions = %v", h.versions)
 	}
 	if len(report.Baselines) != 1 || report.Baselines[0].Cases != 20 || report.Baselines[0].Candidates != 2 {
 		t.Fatalf("baselines = %+v", report.Baselines)
@@ -174,6 +181,7 @@ func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 		t.Fatalf("finding = %+v", report.Findings[0])
 	}
 	if len(gh.bodies) != 1 || !strings.Contains(gh.bodies[0], "--seed 20260101 --case 4") ||
+		!strings.Contains(gh.bodies[0], "--generator-version v3") ||
 		!strings.Contains(gh.bodies[0], "workflow run 42") || !strings.Contains(gh.bodies[0], "abc123") {
 		t.Fatalf("issue body = %q", gh.bodies)
 	}
@@ -428,7 +436,7 @@ func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) 
 		shard := simulation.HuntShard{Index: index, Count: 2}
 		shards = append(shards, simulation.RunHunt(context.Background(), "healthy-routed-network", base,
 			func() simulation.Backend { return stubBackend{supported: false} }, simulation.HuntOptions{
-				Cases: cases, Seed: seed, MaxFaults: 2, Shard: &shard,
+				Cases: cases, Seed: seed, MaxFaults: 2, GeneratorVersion: "v3", Shard: &shard,
 				Run: simulation.Options{Netdoc: "netdoc"},
 			}))
 	}
@@ -452,9 +460,12 @@ func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) 
 
 	replays := 0
 	var replaySeed int64
-	replay := func(_ context.Context, scenario string, seed int64, gotCases, caseNumber int) (*simulation.HuntResult, error) {
+	var replayVersion string
+	replay := func(_ context.Context, scenario string, seed int64, gotCases, caseNumber int,
+		generatorVersion string) (*simulation.HuntResult, error) {
 		replays++
 		replaySeed = seed
+		replayVersion = generatorVersion
 		return &simulation.HuntResult{BaseScenario: scenario, HuntSeed: seed, RequestedCases: gotCases,
 			Result: simulation.HuntResultClean}, nil
 	}
@@ -464,13 +475,15 @@ func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := hunt(context.Background(), "healthy-routed-network", seed, cases, -1)
-	if err != nil || got.BaseScenario != merged.BaseScenario || len(got.Cases) != len(merged.Cases) || replays != 0 {
+	got, err := hunt(context.Background(), "healthy-routed-network", seed, cases, -1, simulation.HuntGeneratorVersion)
+	if err != nil || got.BaseScenario != merged.BaseScenario || got.GeneratorVersion != "v3" ||
+		len(got.Cases) != len(merged.Cases) || replays != 0 {
 		t.Fatalf("full hunt base = %q, cases = %d, err = %v, replays = %d",
 			got.BaseScenario, len(got.Cases), err, replays)
 	}
-	if _, err := hunt(context.Background(), "healthy-routed-network", seed, 1, 7); err != nil || replays != 1 || replaySeed != seed {
-		t.Fatalf("exact replay seed = %d, err = %v, calls = %d", replaySeed, err, replays)
+	if _, err := hunt(context.Background(), "healthy-routed-network", seed, 1, 7, got.GeneratorVersion); err != nil ||
+		replays != 1 || replaySeed != seed || replayVersion != "v3" {
+		t.Fatalf("exact replay seed = %d, version = %q, err = %v, calls = %d", replaySeed, replayVersion, err, replays)
 	}
 }
 
@@ -755,7 +768,7 @@ func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
 	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 5)})
 	hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", 9*time.Second, 3, true, io.Discard)
 
-	result, err := hunt(context.Background(), "healthy-routed-network", -7, 5, 2)
+	result, err := hunt(context.Background(), "healthy-routed-network", -7, 5, 2, "v3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +780,7 @@ func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
 	}
 	f, base := receivedHunt(t, directors.calls[0].argv)
 	if base != "healthy-routed-network" || !f.seed.set || f.seed.v != -7 || *f.cases != 5 ||
-		*f.caseNum != 2 || *f.maxFaults != 3 || *f.timeout != 9*time.Second || *f.netdoc != "/opt/netdoc" {
+		*f.caseNum != 2 || *f.maxFaults != 3 || *f.generator != "v3" || *f.timeout != 9*time.Second || *f.netdoc != "/opt/netdoc" {
 		t.Errorf("hunt got base %q seed %+v cases %d case %d max-faults %d timeout %s netdoc %q",
 			base, f.seed, *f.cases, *f.caseNum, *f.maxFaults, *f.timeout, *f.netdoc)
 	}
@@ -783,7 +796,7 @@ func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
 func TestDirectorHuntRejectsImpossibleHuntsWithoutRunning(t *testing.T) {
 	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 1)})
 	hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
-	if _, err := hunt(context.Background(), "healthy-routed-network", 1, 0, -1); err == nil {
+	if _, err := hunt(context.Background(), "healthy-routed-network", 1, 0, -1, simulation.HuntGeneratorVersion); err == nil {
 		t.Fatal("a hunt with -cases 0 was accepted")
 	} else if !strings.Contains(err.Error(), "-cases must be between 1 and") {
 		t.Fatalf("err = %v", err)
@@ -827,7 +840,7 @@ func TestDirectorHuntRefusesAReportItCannotTrust(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stubDirectors(t, &tt.director)
 			hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
-			result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1)
+			result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1, simulation.HuntGeneratorVersion)
 			if err == nil {
 				t.Fatalf("accepted %+v", result)
 			}
@@ -841,7 +854,7 @@ func TestDirectorHuntRefusesAReportItCannotTrust(t *testing.T) {
 	t.Run("failure the report agrees with", func(t *testing.T) {
 		stubDirectors(t, &fakeDirectors{code: exitError, stdout: string(broken)})
 		hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
-		result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1)
+		result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1, simulation.HuntGeneratorVersion)
 		if err != nil {
 			t.Fatalf("err = %v, want the report", err)
 		}

@@ -191,6 +191,7 @@ Flags for hunt:
   -case <n>                generate and run exactly one independently derived case
   -shard <i/N>             run zero-based shard i of the global case sequence
   -max-faults <n>          maximum mutations per case (default 2, maximum 3)
+  -generator-version <v>   Hunt generator version (default: current)
   -fail-fast               stop after the first case with a reportable finding
   -dry-run                 print generated manifests without creating namespaces
   -json                    print the machine-readable hunt report
@@ -289,6 +290,7 @@ type huntFlags struct {
 	caseNum   *int
 	shard     optionalShard
 	maxFaults *int
+	generator *string
 	failFast  *bool
 	dry       *bool
 	netdoc    *string
@@ -305,6 +307,7 @@ func newHuntFlags(out io.Writer) *huntFlags {
 	f.caseNum = f.fs.Int("case", -1, "run exactly one independently derived case")
 	f.fs.Var(&f.shard, "shard", "zero-based shard i/N of the global case sequence")
 	f.maxFaults = f.fs.Int("max-faults", 2, "maximum mutations per case")
+	f.generator = f.fs.String("generator-version", simulation.HuntGeneratorVersion, "Hunt generator version")
 	f.failFast = f.fs.Bool("fail-fast", false, "stop after the first reportable finding")
 	f.dry = f.fs.Bool("dry-run", false, "print generated manifests without running them")
 	f.netdoc = f.fs.String("netdoc", "", "path to the netdoc binary")
@@ -332,6 +335,9 @@ func (f *huntFlags) parse(args []string) (string, error) {
 	}
 	if *f.maxFaults < 1 || *f.maxFaults > simulation.HuntMaxFaults {
 		return "", fmt.Errorf("-max-faults must be between 1 and %d", simulation.HuntMaxFaults)
+	}
+	if !slices.Contains(simulation.HuntGeneratorVersions(), *f.generator) {
+		return "", fmt.Errorf("-generator-version must be one of %s", strings.Join(simulation.HuntGeneratorVersions(), ", "))
 	}
 	if *f.timeout <= 0 {
 		return "", errors.New("-timeout must be positive")
@@ -704,6 +710,7 @@ func huntDirectorArgv(f *huntFlags, baseID, netdoc string) []string {
 		"-seed", strconv.FormatInt(f.seed.v, 10),
 		"-case", strconv.Itoa(*f.caseNum),
 		"-max-faults", strconv.Itoa(*f.maxFaults),
+		"-generator-version", *f.generator,
 		fmt.Sprintf("-json=%t", *f.json),
 		fmt.Sprintf("-fail-fast=%t", *f.failFast),
 		fmt.Sprintf("-v=%t", *f.verbose),
@@ -752,7 +759,7 @@ func huntOptions(f *huntFlags, log io.Writer, dry bool) simulation.HuntOptions {
 		shard = &value
 	}
 	return simulation.HuntOptions{Cases: *f.cases, Seed: f.seed.v, Case: caseNumber,
-		Shard: shard, MaxFaults: *f.maxFaults, FailFast: *f.failFast, DryRun: dry,
+		Shard: shard, MaxFaults: *f.maxFaults, GeneratorVersion: *f.generator, FailFast: *f.failFast, DryRun: dry,
 		Run: simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log}}
 }
 

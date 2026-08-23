@@ -1180,6 +1180,44 @@ func TestRunHuntDryRunReproducesDirectCaseAndSkipsDuplicates(t *testing.T) {
 	}
 }
 
+func TestRunHuntUsesTheSelectedGeneratorVersion(t *testing.T) {
+	base := loadHuntBase(t, "healthy-routed-network")
+	caseNumber := 76
+	opts := HuntOptions{Seed: 12345, Case: &caseNumber, MaxFaults: 2, GeneratorVersion: "v3", DryRun: true}
+	first := RunHunt(context.Background(), "healthy-routed-network", base, nil, opts)
+	second := RunHunt(context.Background(), "healthy-routed-network", base, nil, opts)
+	if first.Result != HuntResultClean || first.GeneratorVersion != "v3" || len(first.Cases) != 1 {
+		t.Fatalf("historical hunt = %+v", first)
+	}
+	if got := first.Cases[0].Manifest; got.GeneratorVersion != "v3" || got.CaseFingerprint != "3b23592ff5c01fd9" {
+		t.Fatalf("historical manifest = %+v", got)
+	}
+	if !reflect.DeepEqual(first.Cases[0].Manifest, second.Cases[0].Manifest) {
+		t.Fatal("the historical generator did not reproduce the same case")
+	}
+
+	defaults := RunHunt(context.Background(), "healthy-routed-network", base, nil,
+		HuntOptions{Seed: 12345, Case: &caseNumber, MaxFaults: 2, DryRun: true})
+	if defaults.GeneratorVersion != HuntGeneratorVersion ||
+		defaults.Cases[0].Manifest.GeneratorVersion != HuntGeneratorVersion {
+		t.Fatalf("default generator = result %q manifest %q, want %q", defaults.GeneratorVersion,
+			defaults.Cases[0].Manifest.GeneratorVersion, HuntGeneratorVersion)
+	}
+	if HuntGeneratorVersion != "v3" &&
+		defaults.Cases[0].Manifest.CaseFingerprint == first.Cases[0].Manifest.CaseFingerprint {
+		t.Fatal("different generator versions produced the same case identity")
+	}
+}
+
+func TestRunHuntRejectsUnknownGeneratorVersion(t *testing.T) {
+	result := RunHunt(context.Background(), "healthy", loadHuntBase(t, "healthy"), nil,
+		HuntOptions{Cases: 1, GeneratorVersion: "v999", DryRun: true})
+	if result.Result != HuntResultError || result.ErrorKind != "configuration" ||
+		!strings.Contains(result.Error, "unknown hunt generator version") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestRunHuntFailFastStopsAfterFirstFinding(t *testing.T) {
 	base := loadHuntBase(t, "healthy-routed-network")
 	seed := int64(0)

@@ -47,7 +47,7 @@ func (r *HuntResult) WriteText(w io.Writer) {
 			fmt.Fprintf(w, "\n%d. %s\n", i+1, textsafe.Clean(suggestion.Description))
 			fmt.Fprintf(w, "   code: %s  evidence: %d case(s)  highest severity: %s\n",
 				suggestion.Code, suggestion.Evidence, suggestion.HighestSeverity)
-			fmt.Fprintf(w, "   first reproduction: seed %d case %d\n", suggestion.Reproduce.Seed, suggestion.Reproduce.Case)
+			fmt.Fprintf(w, "   first reproduction: %s\n", suggestion.Reproduce.Command())
 		}
 	}
 	if r.FailFastStopped {

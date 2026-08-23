@@ -13,7 +13,7 @@ _netdoc_sim_flags() {
     case $1 in
         run) echo "json keep netdoc timeout repeat dry-run v" ;;
         campaign) echo "json runs seed iteration fail-fast netdoc timeout v" ;;
-        hunt) echo "json cases seed case shard max-faults fail-fast dry-run netdoc timeout v" ;;
+        hunt) echo "json cases seed case shard max-faults generator-version fail-fast dry-run netdoc timeout v" ;;
         triage) echo "json scenarios cases hunt-results seed max-faults min-severity create context revision netdoc timeout v" ;;
         challenge) echo "id difficulty daily starter authored answer give-up json netdoc timeout v" ;;
         cleanup) echo "all" ;;
@@ -48,6 +48,10 @@ _netdoc_sim() {
             ;;
         -min-severity | --min-severity)
             COMPREPLY=($(compgen -W "critical high medium low info" -- "$cur"))
+            return
+            ;;
+        -generator-version | --generator-version)
+            COMPREPLY=($(compgen -W "v3 v4 v5" -- "$cur"))
             return
             ;;
         -starter | --starter)

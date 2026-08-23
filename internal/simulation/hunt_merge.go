@@ -122,8 +122,8 @@ func ValidateMergedHuntResult(result *HuntResult) error {
 }
 
 func validateHuntMetadata(result *HuntResult) error {
-	if huntGeneratorIndex(result.GeneratorVersion) < 0 {
-		return fmt.Errorf("unknown generator version %q", result.GeneratorVersion)
+	if err := validateHuntGeneratorVersion(result.GeneratorVersion); err != nil {
+		return err
 	}
 	if !validHuntBase(result.BaseScenario) {
 		return fmt.Errorf("unsupported base scenario %q", result.BaseScenario)

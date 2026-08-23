@@ -22,7 +22,7 @@ const (
 	// triageFingerprintDomain separates issue fingerprints from every other
 	// hash in the simulator. Changing it re-files every open issue, so it
 	// must stay fixed unless the identity of a finding genuinely changes.
-	triageFingerprintDomain = "netdoc-sim-triage-v1"
+	triageFingerprintDomain = "netdoc-sim-triage-v2"
 
 	IssueStatusNotFiled = "not_filed"
 	IssueStatusExisting = "existing"
@@ -125,12 +125,13 @@ type TriageReport struct {
 }
 
 // NewTriageFinding derives the stable issue identity for one hunt finding.
-// Scenario, seed and case pin the generated network; the hunt fingerprint pins
-// what disagreed. The same bug in the same case therefore keeps one issue.
+// Scenario, seed, case and case fingerprint pin the generated network; the
+// hunt fingerprint pins what disagreed. The same bug in the same case therefore
+// keeps one issue.
 func NewTriageFinding(finding HuntFinding) TriageFinding {
 	repro := finding.Reproduce
 	return TriageFinding{
-		Fingerprint:      triageFingerprint(repro.BaseScenario, repro.Seed, repro.Case, finding.Fingerprint),
+		Fingerprint:      triageFingerprint(repro.BaseScenario, repro.Seed, repro.Case, repro.CaseFingerprint, finding.Fingerprint),
 		Scenario:         repro.BaseScenario,
 		Seed:             repro.Seed,
 		Case:             repro.Case,
@@ -143,12 +144,12 @@ func NewTriageFinding(finding HuntFinding) TriageFinding {
 	}
 }
 
-func triageFingerprint(scenario string, seed int64, caseNumber int, findingFingerprint string) string {
+func triageFingerprint(scenario string, seed int64, caseNumber int, caseFingerprint, findingFingerprint string) string {
 	h := sha256.New()
 	// NUL-separated: no field can contain one, so no two different findings
 	// can hash the same bytes by running into each other.
-	fmt.Fprintf(h, "%s\x00%s\x00%d\x00%d\x00%s",
-		triageFingerprintDomain, scenario, seed, caseNumber, findingFingerprint)
+	fmt.Fprintf(h, "%s\x00%s\x00%d\x00%d\x00%s\x00%s",
+		triageFingerprintDomain, scenario, seed, caseNumber, caseFingerprint, findingFingerprint)
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
@@ -157,7 +158,8 @@ func triageFingerprint(scenario string, seed int64, caseNumber int, findingFinge
 // the command's shape, so the hunt report and a filed issue cannot drift into
 // printing two different commands for one case.
 func (f *TriageFinding) ReproduceCommand() string {
-	return HuntReproduction{BaseScenario: f.Scenario, Seed: f.Seed, Case: f.Case, MaxFaults: f.MaxFaults}.Command()
+	return HuntReproduction{BaseScenario: f.Scenario, Seed: f.Seed, Case: f.Case, MaxFaults: f.MaxFaults,
+		GeneratorVersion: f.GeneratorVersion}.Command()
 }
 
 // IssueTitle carries the fingerprint as a bare hex word, which is what the

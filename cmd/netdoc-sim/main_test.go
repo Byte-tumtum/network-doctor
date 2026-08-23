@@ -528,7 +528,7 @@ func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {
 	abs := fakeNetdoc(t)
 	f := newHuntFlags(io.Discard)
 	base, err := f.parse([]string{"dual-stack-healthy", "--seed", "-44", "--cases", "6", "--case", "17",
-		"--max-faults", "3", "--fail-fast", "--json", "--netdoc", "./netdoc", "--timeout", "7s"})
+		"--max-faults", "3", "--generator-version", "v3", "--fail-fast", "--json", "--netdoc", "./netdoc", "--timeout", "7s"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +543,7 @@ func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if argv[0] != huntDirectorCommand || gotBase != base || !got.seed.set || got.seed.v != -44 ||
-		*got.cases != 6 || *got.caseNum != 17 || *got.maxFaults != 3 || !*got.failFast || !*got.json ||
+		*got.cases != 6 || *got.caseNum != 17 || *got.maxFaults != 3 || *got.generator != "v3" || !*got.failFast || !*got.json ||
 		*got.netdoc != abs || *got.timeout != 7*time.Second {
 		t.Fatalf("forwarded hunt = argv %v base %q seed %+v", argv, gotBase, got.seed)
 	}
@@ -552,7 +552,8 @@ func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {
 func TestHuntDirectorReceivesShardSelector(t *testing.T) {
 	abs := fakeNetdoc(t)
 	f := newHuntFlags(io.Discard)
-	base, err := f.parse([]string{"healthy", "--seed", "7", "--cases", "60", "--shard", "2/4", "--netdoc", "./netdoc"})
+	base, err := f.parse([]string{"healthy", "--seed", "7", "--cases", "60", "--shard", "2/4",
+		"--generator-version", "v3", "--netdoc", "./netdoc"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +563,7 @@ func TestHuntDirectorReceivesShardSelector(t *testing.T) {
 	}
 	got, gotBase := receivedHunt(t, huntDirectorArgv(f, base, path))
 	if gotBase != base || !got.shard.set || got.shard.value != (simulation.HuntShard{Index: 2, Count: 4}) ||
-		*got.cases != 60 || got.seed.v != 7 || *got.netdoc != abs {
+		*got.cases != 60 || got.seed.v != 7 || *got.generator != "v3" || *got.netdoc != abs {
 		t.Fatalf("forwarded shard hunt = base %q flags %+v", gotBase, got)
 	}
 }
@@ -579,6 +580,9 @@ func TestHuntDryRunNeedsNoNetdocOrNamespaces(t *testing.T) {
 	}
 	if result.GeneratedCases != 6 || result.ExecutedCases != 0 || len(result.Cases) != 6 {
 		t.Fatalf("result = %+v", result)
+	}
+	if result.GeneratorVersion != simulation.HuntGeneratorVersion {
+		t.Fatalf("default generator = %q, want %q", result.GeneratorVersion, simulation.HuntGeneratorVersion)
 	}
 	selected := result.Cases[3].Manifest
 	stdout.Reset()
@@ -597,6 +601,24 @@ func TestHuntDryRunNeedsNoNetdocOrNamespaces(t *testing.T) {
 	}
 }
 
+func TestHuntDryRunReplaysAHistoricalGenerator(t *testing.T) {
+	args := []string{"hunt", "healthy-routed-network", "--dry-run", "--json", "--seed", "12345",
+		"--case", "76", "--max-faults", "2", "--generator-version", "v3"}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	var result simulation.HuntResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.GeneratorVersion != "v3" || len(result.Cases) != 1 ||
+		result.Cases[0].Manifest.GeneratorVersion != "v3" ||
+		result.Cases[0].Manifest.CaseFingerprint != "3b23592ff5c01fd9" {
+		t.Fatalf("historical result = %+v", result)
+	}
+}
+
 func stringInt(value int) string { return strconv.Itoa(value) }
 
 func TestHuntUsageBoundsAndBases(t *testing.T) {
@@ -605,6 +627,7 @@ func TestHuntUsageBoundsAndBases(t *testing.T) {
 		{"hunt", "--dry-run", "--seed", "1", "--cases", "501"},
 		{"hunt", "--dry-run", "--seed", "1", "--case", "-2"},
 		{"hunt", "--dry-run", "--seed", "1", "--max-faults", "4"},
+		{"hunt", "--dry-run", "--seed", "1", "--generator-version", "v999"},
 		{"hunt", "--dry-run", "--seed", "1", "--case", "2", "--shard", "0/2"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -1459,7 +1482,8 @@ func TestHuntLaunchChoosesTheSeedTheDirectorRunsWith(t *testing.T) {
 			t.Fatalf("re-executed %q, want %q", call.self, self(t))
 		}
 		f, base := receivedHunt(t, call.argv)
-		if base != "dual-stack-healthy" || *f.netdoc != abs || *f.cases != 6 || *f.maxFaults != 3 {
+		if base != "dual-stack-healthy" || *f.netdoc != abs || *f.cases != 6 || *f.maxFaults != 3 ||
+			*f.generator != simulation.HuntGeneratorVersion {
 			t.Errorf("hunt got base %q netdoc %q cases %d max-faults %d", base, *f.netdoc, *f.cases, *f.maxFaults)
 		}
 		if !f.seed.set {
@@ -1500,6 +1524,8 @@ func TestHuntLaunchStopsBeforeTheDirector(t *testing.T) {
 			stdoutHas: "Usage: netdoc-sim <command> [arguments]"},
 		{name: "unsupported base", supported: true, args: []string{"hunt", "broken-dns"}, code: exitUsage,
 			stderrHas: "unsupported hunt base"},
+		{name: "unsupported generator", supported: true, args: []string{"hunt", "--generator-version", "v999"}, code: exitUsage,
+			stderrHas: "-generator-version must be one of"},
 		{name: "host cannot simulate", supported: false, args: []string{"hunt", "-netdoc", "./netdoc"},
 			code: exitError, stderrHas: "stub backend: this host cannot simulate"},
 		{name: "no netdoc anywhere", supported: true, args: []string{"hunt"}, code: exitUsage,
@@ -1513,7 +1539,7 @@ func TestHuntDirectorRunsTheCasesItWasGiven(t *testing.T) {
 	backends := stubBackends(t, false)
 	directors := stubDirectors(t, &fakeDirectors{})
 	var stdout, stderr bytes.Buffer
-	code := run([]string{huntDirectorCommand, "-json", "-v", "-seed", "99", "-cases", "2", "-max-faults", "1",
+	code := run([]string{huntDirectorCommand, "-json", "-v", "-seed", "99", "-cases", "2", "-max-faults", "1", "-generator-version", "v3",
 		"--", "healthy-routed-network"}, &stdout, &stderr)
 
 	if len(directors.calls) != 0 {
@@ -1534,7 +1560,8 @@ func TestHuntDirectorRunsTheCasesItWasGiven(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("stdout is not a hunt result: %v (%q)", err, stdout.String())
 	}
-	if result.HuntSeed != 99 || result.BaseScenario != "healthy-routed-network" || result.RequestedCases != 2 {
+	if result.HuntSeed != 99 || result.BaseScenario != "healthy-routed-network" || result.RequestedCases != 2 ||
+		result.GeneratorVersion != "v3" {
 		t.Fatalf("result = %+v", result)
 	}
 	// The director is the executing half: unlike the launcher's -dry-run, it
@@ -1576,5 +1603,8 @@ func TestHuntDirectorRejectsBadArguments(t *testing.T) {
 		{name: "cases out of range",
 			args: []string{huntDirectorCommand, "-seed", "1", "-cases", "0", "--", "healthy-routed-network"},
 			code: exitUsage, stderrHas: "-cases must be between 1 and"},
+		{name: "unknown generator",
+			args: []string{huntDirectorCommand, "-seed", "1", "-generator-version", "v999", "--", "healthy-routed-network"},
+			code: exitUsage, stderrHas: "-generator-version must be one of"},
 	})
 }

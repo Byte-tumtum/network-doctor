@@ -39,14 +39,15 @@ failure.
 ## Deterministic bug hunts
 
 `netdoc-sim hunt` mutates a known-good control scenario. Case N is derived from
-the hunt seed, base scenario, and case number, so `--case N --seed S`
-regenerates the case without first running cases 0 through N-1. The accepted
-bases and mutation registry live in `internal/simulation/hunt_generate.go`.
+the hunt seed, base scenario, case number, fault ceiling, and generator version,
+so an exact reproduction names all five without first running cases 0 through
+N-1. The accepted bases and mutation registry live in
+`internal/simulation/hunt_generate.go`.
 
 ```sh
 ./netdoc-sim hunt healthy --seed 20260101 --cases 20
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --json
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --dry-run --json
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json
+./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --dry-run --json
 ```
 
 `--cases N` means the first N unique mutation fingerprints in the global
@@ -57,17 +58,17 @@ the same cheap deterministic candidate sequence and only creates namespaces
 for its own cases. It does not draw a new stream or renumber cases.
 
 `--case` and `--shard` are mutually exclusive. Exact reproduction remains the
-unsharded `--case C --seed S` command printed in findings, so a case number and
-fingerprint mean the same thing before and after sharding. `--fail-fast` stops
-only the current shard; independent processes do not cancel or coordinate one
-another.
+unsharded command printed in findings, including `--case`, `--seed`,
+`--max-faults`, and `--generator-version`, so a case number and fingerprint mean
+the same thing before and after sharding. `--fail-fast` stops only the current
+shard; independent processes do not cancel or coordinate one another.
 
 Run and merge all four shards locally like this:
 
 ```sh
 for shard in 0 1 2 3; do
   ./netdoc-sim hunt healthy --seed 20260101 --cases 60 \
-    --shard "$shard/4" --max-faults 2 --json > "shard-$shard.json"
+    --shard "$shard/4" --max-faults 2 --generator-version v5 --json > "shard-$shard.json"
 done
 ./netdoc-sim hunt merge shard-3.json shard-1.json shard-0.json shard-2.json > hunt.json
 ```
@@ -91,6 +92,11 @@ taken from the case seed is how many mutations to apply, bounded by the ceiling,
 so the same base, seed and case under a different ceiling is a different
 network. The manifest records it, every finding's reproduction carries it, and
 the command a filed issue prints names it.
+
+`--generator-version` selects one retained generator from the registry. It
+defaults to `HuntGeneratorVersion` for a new hunt, but every printed single-case
+reproduction names the resolved version. A saved artifact is replayed with its
+recorded version and never with the replaying binary's default.
 
 Every case report includes generator version, root and case seeds, the fault
 ceiling, materialized mutations, and a case fingerprint. Findings use semantic
@@ -220,7 +226,8 @@ an older generator is simply the registry truncated there, which is why new
 operators are appended and never interleaved. Case seeds are not versioned:
 every version draws the same numbers and they differ exactly where the operator
 list does. `TestHuntGeneratorVersion3Reproduction` pins the older generator
-against a fixed manifest.
+against a fixed manifest. New hunts default to `HuntGeneratorVersion`; use
+`--generator-version` to select any retained version explicitly.
 
 ### Route tables, and telling absences apart
 
@@ -273,11 +280,15 @@ coverage findings are built from.
 `--hunt-results` requires one canonical merged report for every selected
 baseline and validates its content rather than its file name. It replaces only
 the initial full hunts. Candidate findings are still re-run as exact cases in
-fresh namespaces before they can be filed.
+fresh namespaces before they can be filed, using the generator version recorded
+in each candidate's reproduction metadata. Artifacts with a missing or unknown
+generator version are rejected instead of being assigned the current default.
 
 `--create` is the only mode that writes to GitHub. It uses the configured `gh`
-client, suppresses duplicates by stable fingerprint, and treats a failed hunt,
-reproduction, parse, or `gh` call as an error rather than as a clean result.
+client and suppresses duplicates by a stable identity derived from the
+reproduction coordinates, exact case fingerprint, and finding fingerprint. It
+treats a failed hunt, reproduction, parse, or `gh` call as an error rather than
+as a clean result.
 
 `.github/workflows/hunt.yml` is authoritative for the nightly schedule, runner,
 permissions, case count, and issue-creation opt-in. Scheduled issue creation
