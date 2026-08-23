@@ -930,122 +930,75 @@ func TestScheduledFaultThatReachedNobodyIsNotObserved(t *testing.T) {
 	}
 }
 
-// huntFamilyPath records the deliberate decision made for every mutation family
-// about how its hunt analysis works. It exists so that adding an operator to the
-// registry forces the same decision to be made again rather than defaulting to
-// silence.
-var huntFamilyPath = map[string]string{
-	// Generic: independently observed truth reconciled against one diagnosis by
-	// the condition oracle, with no protocol code in the comparison itself.
-	"family.ipv4_drop": "generic",
-	"family.ipv6_drop": "generic",
-	// An absent default route is a fact about one node's own kernel table, and
-	// the table is read back in full, so the absence is statable without ever
-	// consulting the mutation: a family with no default left and no reachability
-	// left is the condition, whatever removed the route.
-	"routing.no_default_route":      "generic",
-	"service.tls_expired":           "generic",
-	"service.tls_hostname_mismatch": "generic",
-	"proxy.connect_refused":         "generic",
-	"quic.udp_443_block":            "generic",
-	// Bespoke: the finding depends on meaning a state comparison cannot carry.
-	// DNS needs the last query per service rather than any query, and a reset
-	// is a coverage gap about classification rather than a missed fault.
-	"dns.servfail":        "bespoke",
-	"dns.drop":            "bespoke",
-	"timeline.dns_outage": "bespoke",
-	"service.tcp_reset":   "bespoke",
-	// No direct finding: the fault exists to move conditions the timeline,
-	// instability and route analyses read, or netdoc makes no claim about it.
-	"netem.loss":                     "no_finding",
-	"netem.latency":                  "no_finding",
-	"netem.jitter":                   "no_finding",
-	"timeline.netem_spike":           "no_finding",
-	"link.transient_down":            "no_finding",
-	"routing.preferred_path_failure": "no_finding",
-	"encrypted_dns.doh_invalid":      "no_finding",
-	"http.status_503":                "no_finding",
-	// Refusal is asserted directly by its scenario and Challenge recognition,
-	// so Hunt does not need a duplicate finding for it.
-	"service.connection_refused": "no_finding",
-	// These two families still have no netdoc vocabulary. Its target row fails
-	// the same way with no cause for a filtered port and a target with no route,
-	// so there is nothing for a finding to accuse it of missing. Challenge Mode
-	// scores them unrecognized instead, which is where that gap is reported.
-	"service.tcp_port_blocked":     "no_finding",
-	"routing.missing_subnet_route": "no_finding",
-	// A repointed default stays out of the oracle: a client whose one default
-	// goes nowhere and a client whose network died downstream look identical
-	// from the client, and only the mutation's own control endpoint can tell
-	// them apart, which is knowledge a rule is not allowed to have. Challenge
-	// Mode is where that distinction is graded, against netdoc's own route
-	// causes.
-	"routing.wrong_default_route": "no_finding",
-	// netdoc's Path MTU row is a Warn that states its evidence and carries no
-	// cause, by design: a peer that stops reading stalls a bulk write the same
-	// way, so only an independent protocol timeout promotes the evidence into a
-	// path verdict. There is no cause for recognition to be expressed over, so
-	// there is nothing here for a finding to accuse it of missing. What the
-	// hunt does establish is the condition itself, from the two link MTUs read
-	// back off the kernel.
-	"pmtu.blackhole": "no_finding",
-}
-
-// TestEveryMutationFamilyDeclaresItsHuntPath keeps the classification honest in
-// both directions: no operator may exist without a decision, and no decision may
-// name an operator that no longer exists. The generic entries are checked against
-// the condition oracle rather than trusted, so moving a family in or out of the
-// table has to be a deliberate edit here too.
+// TestEveryMutationFamilyDeclaresItsHuntPath checks the production registry,
+// which is the authoritative classification. A missing decision is invalid, a
+// bug-oracle decision must name analyzer code that exists, and every generic
+// condition must remain reachable from at least one operator.
 func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
-	generic := map[string]bool{}
-	for _, operator := range huntMutationRegistry {
-		path, declared := huntFamilyPath[operator.id]
-		if !declared {
-			t.Errorf("mutation %q declares no hunt analysis path", operator.id)
-			continue
-		}
-		if path == "generic" {
-			generic[operator.id] = true
-		}
+	contracts := map[huntFindingContract]bool{
+		huntDNSFailureContract: true,
+		huntTCPResetContract:   true,
 	}
-	for id := range huntFamilyPath {
-		if !slices.ContainsFunc(huntMutationRegistry, func(o mutationOperator) bool { return o.id == id }) {
-			t.Errorf("hunt analysis path declared for unknown mutation %q", id)
-		}
+	wantContracts := map[string]huntFindingContract{
+		"dns.servfail":                  huntDNSFailureContract,
+		"dns.drop":                      huntDNSFailureContract,
+		"timeline.dns_outage":           huntDNSFailureContract,
+		"service.tcp_reset":             huntTCPResetContract,
+		"service.tls_expired":           huntFindingContract(ConditionTLSCertificateExpired),
+		"service.tls_hostname_mismatch": huntFindingContract(ConditionTLSHostnameMismatch),
+		"proxy.connect_refused":         huntFindingContract(ConditionProxyDestinationRefused),
+		"quic.udp_443_block":            huntFindingContract(ConditionQUICUDP443Blocked),
+		"family.ipv4_drop":              huntFindingContract(ConditionIPv4InternetUnreachable),
+		"family.ipv6_drop":              huntFindingContract(ConditionIPv6InternetUnreachable),
+		"routing.no_default_route":      huntFindingContract(ConditionNoDefaultRoute),
 	}
-	// Every family called generic must really be one of the oracle's conditions,
-	// and the oracle must hold no condition that no family claims.
-	conditions := map[NetworkCondition]bool{}
 	for _, rule := range conditionOracle {
-		if conditions[rule.condition] {
+		contract := huntFindingContract(rule.condition)
+		if contracts[contract] {
 			t.Errorf("oracle condition %q is defined more than once", rule.condition)
 		}
-		conditions[rule.condition] = true
+		contracts[contract] = true
 	}
-	for _, pair := range []struct {
-		id        string
-		condition NetworkCondition
-	}{
-		{"family.ipv4_drop", ConditionIPv4InternetUnreachable},
-		{"family.ipv6_drop", ConditionIPv6InternetUnreachable},
-		{"service.tls_expired", ConditionTLSCertificateExpired},
-		{"service.tls_hostname_mismatch", ConditionTLSHostnameMismatch},
-		{"proxy.connect_refused", ConditionProxyDestinationRefused},
-		{"quic.udp_443_block", ConditionQUICUDP443Blocked},
-		{"routing.no_default_route", ConditionNoDefaultRoute},
-	} {
-		if !generic[pair.id] {
-			t.Errorf("%q is not declared generic but claims condition %q", pair.id, pair.condition)
+	claimed := map[huntFindingContract]bool{}
+	var bug, stress []string
+	for _, operator := range huntMutationRegistry {
+		if operator.findingContract == "" {
+			t.Errorf("mutation %q has no explicit finding-contract decision", operator.id)
+			continue
 		}
-		if !conditions[pair.condition] {
-			t.Errorf("%q claims condition %q, which the oracle does not define", pair.id, pair.condition)
+		want, oracleBacked := wantContracts[operator.id]
+		if oracleBacked && operator.findingContract != want {
+			t.Errorf("mutation %q contract = %q, want %q", operator.id, operator.findingContract, want)
 		}
-		delete(conditions, pair.condition)
+		if !oracleBacked && operator.findingContract != huntNoFindingContract {
+			t.Errorf("stress mutation %q unexpectedly claims contract %q", operator.id, operator.findingContract)
+		}
+		if operator.lane() == HuntLaneStress {
+			stress = append(stress, operator.id)
+			continue
+		}
+		bug = append(bug, operator.id)
+		if !contracts[operator.findingContract] {
+			t.Errorf("bug-oracle mutation %q names unknown contract %q", operator.id, operator.findingContract)
+		}
+		claimed[operator.findingContract] = true
 	}
-	for condition := range conditions {
-		t.Errorf("oracle condition %q is claimed by no mutation family", condition)
+	for contract := range contracts {
+		if !claimed[contract] {
+			t.Errorf("finding contract %q is claimed by no mutation family", contract)
+		}
 	}
-	if len(generic) != 7 {
-		t.Errorf("generic families = %v, want the seven the oracle defines conditions for", generic)
+	wantBug := []string{"dns.servfail", "dns.drop", "timeline.dns_outage", "service.tcp_reset",
+		"service.tls_expired", "proxy.connect_refused", "quic.udp_443_block", "family.ipv4_drop",
+		"family.ipv6_drop", "service.tls_hostname_mismatch", "routing.no_default_route"}
+	wantStress := []string{"netem.loss", "netem.latency", "netem.jitter", "timeline.netem_spike",
+		"encrypted_dns.doh_invalid", "http.status_503", "link.transient_down", "routing.preferred_path_failure",
+		"service.connection_refused", "service.tcp_port_blocked", "routing.wrong_default_route",
+		"routing.missing_subnet_route", "pmtu.blackhole"}
+	if !slices.Equal(bug, wantBug) {
+		t.Errorf("bug-oracle operators = %v, want %v", bug, wantBug)
+	}
+	if !slices.Equal(stress, wantStress) {
+		t.Errorf("stress operators = %v, want %v", stress, wantStress)
 	}
 }

@@ -39,36 +39,48 @@ failure.
 ## Deterministic bug hunts
 
 `netdoc-sim hunt` mutates a known-good control scenario. Case N is derived from
-the hunt seed, base scenario, case number, fault ceiling, and generator version,
-so an exact reproduction names all five without first running cases 0 through
-N-1. The accepted bases and mutation registry live in
+the hunt seed, base scenario, case number, fault ceiling, generator version,
+and lane, so an exact reproduction names all six without first running cases 0
+through N-1. The accepted bases and mutation registry live in
 `internal/simulation/hunt_generate.go`.
 
 ```sh
-./netdoc-sim hunt healthy --seed 20260101 --cases 20
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json
-./netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --dry-run --json
+./netdoc-sim hunt healthy --lane bug-oracle --seed 20260101 --cases 20
+./netdoc-sim hunt healthy --lane stress --seed 20260101 --cases 20
+./netdoc-sim hunt healthy --lane all --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json
+./netdoc-sim hunt healthy --lane all --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --dry-run --json
 ```
 
-`--cases N` means the first N unique mutation fingerprints in the global
-candidate sequence. Candidate numbers can have gaps when a semantic duplicate
-is skipped. `--shard i/N` is a zero-based filter over those already accepted
-global cases: case C belongs to shard i when `C % N == i`. Every shard walks
-the same cheap deterministic candidate sequence and only creates namespaces
-for its own cases. It does not draw a new stream or renumber cases.
+The current generator has two explicit lanes. `bug-oracle` is the default and
+contains only operators whose expected diagnosis is checked against independent
+simulator evidence. `stress` contains useful robustness, unusual topology,
+interaction, parser, and execution mutations that currently lack a direct
+diagnosis-defect oracle. Stress cases can still expose bugs; the distinction is
+whether Hunt can automatically decide that Network Doctor's diagnosis is wrong.
+
+`--cases N` means the first N accepted case identities in the global candidate
+sequence. Generator v6 includes the lane and case coordinate in that identity,
+so a lane with only a few parameterless mutation combinations can still use the
+requested execution budget. Generators v3 through v5 retain semantic duplicate
+suppression exactly as published, and their accepted case numbers can have
+gaps. `--shard i/N` is a zero-based filter over the accepted global cases: case
+C belongs to shard i when `C % N == i`. Every shard walks the same cheap
+deterministic candidate sequence and only creates namespaces for its own cases.
+It does not draw a new stream or renumber cases.
 
 `--case` and `--shard` are mutually exclusive. Exact reproduction remains the
 unsharded command printed in findings, including `--case`, `--seed`,
-`--max-faults`, and `--generator-version`, so a case number and fingerprint mean
-the same thing before and after sharding. `--fail-fast` stops only the current
-shard; independent processes do not cancel or coordinate one another.
+`--max-faults`, `--generator-version`, and `--lane`, so a case number and
+fingerprint mean the same thing before and after sharding. `--fail-fast` stops
+only the current shard; independent processes do not cancel or coordinate one
+another.
 
 Run and merge all four shards locally like this:
 
 ```sh
 for shard in 0 1 2 3; do
   ./netdoc-sim hunt healthy --seed 20260101 --cases 60 \
-    --shard "$shard/4" --max-faults 2 --generator-version v5 --json > "shard-$shard.json"
+    --lane bug-oracle --shard "$shard/4" --max-faults 2 --generator-version v6 --json > "shard-$shard.json"
 done
 ./netdoc-sim hunt merge shard-3.json shard-1.json shard-0.json shard-2.json > hunt.json
 ```
@@ -76,15 +88,15 @@ done
 `hunt merge` accepts shard files in any order and writes the ordinary canonical
 hunt JSON shape in global case order. It rejects duplicate or missing shards,
 duplicate or missing global cases, and incompatible base, seed, generator,
-case-count, fault-ceiling, shard-count, dry-run, or fail-fast settings. It
+lane, case-count, fault-ceiling, shard-count, dry-run, or fail-fast settings. It
 regenerates the expected manifests, so file names are never treated as
 metadata. An empty shard is valid when no accepted global case belongs to it.
 
-Shard reports add top-level `max_faults`, optional `fail_fast` and `dry_run`,
-and `shard` with `index` and `count`. `requested_cases` remains the logical
-global unique-case total while generated and executed counters describe that
-shard. A merged report omits `shard` because it represents the logical hunt,
-not one execution partition. Existing JSON fields are unchanged.
+Shard reports record top-level `generator_version`, `lane`, `max_faults`,
+optional `fail_fast` and `dry_run`, and `shard` with `index` and `count`.
+`requested_cases` remains the logical global case total while generated and
+executed counters describe that shard. A merged report omits `shard` because it
+represents the logical hunt, not one execution partition.
 
 `--max-faults` belongs in a reproduction command rather than being left to the
 flag default. It is one of the inputs the case is drawn from: the first number
@@ -98,11 +110,17 @@ defaults to `HuntGeneratorVersion` for a new hunt, but every printed single-case
 reproduction names the resolved version. A saved artifact is replayed with its
 recorded version and never with the replaying binary's default.
 
-Every case report includes generator version, root and case seeds, the fault
-ceiling, materialized mutations, and a case fingerprint. Findings use semantic
-diagnosis fingerprints, excluding prose and incidental timing, paths, process
-ids, and kernel names. Keep the seed, case, fault ceiling, generator version,
-and reproduction command with any failure report.
+Every current case report includes generator version, lane, root and case seeds,
+the fault ceiling, materialized mutations, and a case fingerprint. Findings use
+semantic diagnosis fingerprints, excluding prose and incidental timing, paths,
+process ids, and kernel names. Keep the lane, seed, case, fault ceiling,
+generator version, and reproduction command with any failure report.
+
+Artifacts from generators v3 through v5 predate lane metadata. A missing lane
+on those artifacts is deliberately interpreted as their original `all`
+operator universe, and reproduction commands print `--lane all`. Generator v6
+artifacts must record `bug-oracle` or `stress`; a missing lane is rejected rather
+than inheriting the current default.
 
 ### A hunt makes no reproducibility claim
 
@@ -129,8 +147,10 @@ this one cannot make, and it already reports divergence as `nondeterministic`.
 
 ### Route findings need routing evidence
 
-`alternate_route_available` and `wrong_default_route_evidence` are the two
-findings about a path the diagnosis did not describe, and both are gated twice.
+`alternate_route_available` and `wrong_default_route_evidence` are coverage-gap
+findings about a path the diagnosis did not describe. They are not direct
+diagnosis-defect contracts, so their operators remain in the stress lane. Both
+findings are gated twice.
 A warning on the egress row is not a routing fact, so the client's own dial has
 to have found an address family with nothing answering; latency, a cold first
 packet, or one address of several failing all raise that row while the path is
@@ -153,6 +173,41 @@ successfully; initialization, restoration, failed, and skipped events do not
 qualify. These timed entries
 prove successful simulator state changes, not that netdoc sampled the affected
 window or observed an end-to-end consequence.
+
+### Bug-oracle and stress operators
+
+The mutation registry carries one `findingContract` decision per operator and
+derives lane membership from it. An operator qualifies for `bug-oracle` only
+when the mutation establishes a scoped network truth, independent simulator
+evidence records that truth, the expected diagnostic meaning is defined, and
+an analyzer comparison can emit a concrete diagnosis finding when the report
+disagrees. A crash, timeout, setup failure, generic invariant, or Challenge Mode
+answer does not satisfy that diagnosis contract.
+
+The current bug-oracle operators are:
+
+- `dns.servfail`, `dns.drop`, and `timeline.dns_outage`
+- `service.tcp_reset`, `service.tls_expired`, and
+  `service.tls_hostname_mismatch`
+- `proxy.connect_refused` and `quic.udp_443_block`
+- `family.ipv4_drop`, `family.ipv6_drop`, and
+  `routing.no_default_route`
+
+The current stress operators are:
+
+- `netem.loss`, `netem.latency`, `netem.jitter`, and
+  `timeline.netem_spike`
+- `encrypted_dns.doh_invalid`, `http.status_503`, and
+  `link.transient_down`
+- `routing.preferred_path_failure`, `routing.wrong_default_route`, and
+  `routing.missing_subnet_route`
+- `service.connection_refused`, `service.tcp_port_blocked`, and
+  `pmtu.blackhole`
+
+The registry test checks that every operator makes an explicit decision, every
+bug-oracle contract maps to analyzer code, and both exact lane memberships stay
+intentional. Adding a safe diagnosis oracle for a stress operator is separate
+work from this classification.
 
 ### What a hunt false negative means
 
@@ -193,11 +248,12 @@ direction, where the simulator reached a family the diagnosis calls unreachable,
 reported as `family_reachability_mismatch` with category
 `diagnostic_contradiction` rather than as a false negative.
 
-Two observed faults deliberately imply no condition, because netdoc reports no
-failure for either by design and the `http-error` control pins that down: an
-HTTP error status is a working service answering, and an invalid DoH response
-while DoT still resolves is encrypted DNS working. Adding an expectation there
-would invent a contract the probes never made.
+Two stress operators deliberately imply no failure condition because netdoc
+reports no failure for either by design and the `http-error` control pins that
+down: an HTTP error status is a working service answering, and an invalid DoH
+response while DoT still resolves is encrypted DNS working. Other stress
+operators establish useful topology or execution facts but do not yet have an
+unambiguous analyzer comparison from those facts to an expected diagnosis.
 
 `pmtu.blackhole` narrows the forwarding hop the client's own route to the
 briefed endpoint leads to, and only that hop: the path-MTU probe writes to that
@@ -216,18 +272,28 @@ link-down application alone is insufficient.
 
 ### Generator versions
 
-The mutation registry is versioned, because adding an operator to it changes
-which mutation every existing case number lands on: selection draws from a
-permutation of the applicable operators, so a longer or reordered list repoints
-cases that published artifacts already name. `HuntGeneratorVersion` is the
-current one and `huntGeneratorVersions` lists every version this build can
-still materialize. Each operator carries the version it first appeared in, and
-an older generator is simply the registry truncated there, which is why new
-operators are appended and never interleaved. Case seeds are not versioned:
-every version draws the same numbers and they differ exactly where the operator
-list does. `TestHuntGeneratorVersion3Reproduction` pins the older generator
-against a fixed manifest. New hunts default to `HuntGeneratorVersion`; use
-`--generator-version` to select any retained version explicitly.
+The mutation registry is versioned because changing an operator universe, lane
+rule, or case identity changes which network an existing case number names.
+`HuntGeneratorVersion` is the current one and `huntGeneratorVersions` lists
+every version this build can still materialize. Each operator carries the
+version it first appeared in, and new operators are appended rather than
+interleaved.
+
+Generator v6 introduced the lane split. It filters the authoritative registry
+by `findingContract` before applicability and random permutation, and records
+the resolved lane in every current manifest and result. That changes selection,
+so reusing v5 would have silently repointed published case coordinates. V6 also
+includes lane and case number in case identity so a small oracle-backed operator
+universe can consume the requested case budget without a generator defect.
+
+Generators v3 through v5 remain the unchanged all-operator selection path and
+retain their original semantic case fingerprints. Their manifests omit lane,
+as they always did. Case seeds are not versioned: every version derives the
+same seed from the hunt seed, base, and case number, then differs only under its
+recorded generator rules. `TestHuntGeneratorVersion3Reproduction` pins an older
+generator against a fixed manifest. New hunts default to v6 and `bug-oracle`;
+use `--generator-version` and `--lane` to select retained historical behavior
+explicitly.
 
 ### Route tables, and telling absences apart
 
@@ -270,19 +336,22 @@ however good its oracle is. Their second test is also the control that the route
 coverage findings are built from.
 
 ```sh
-./netdoc-sim triage                               # observe; file nothing
-./netdoc-sim triage --scenarios healthy --cases 5
+./netdoc-sim triage --lane bug-oracle             # observe; file nothing
+./netdoc-sim triage --lane bug-oracle --scenarios healthy --cases 5
 ./netdoc-sim triage --json
 ./netdoc-sim triage --create                      # create issues through gh
-./netdoc-sim triage --hunt-results merged-hunts   # reuse merged full hunts
+./netdoc-sim triage --lane bug-oracle --hunt-results merged-hunts/bug-oracle
 ```
 
 `--hunt-results` requires one canonical merged report for every selected
 baseline and validates its content rather than its file name. It replaces only
 the initial full hunts. Candidate findings are still re-run as exact cases in
 fresh namespaces before they can be filed, using the generator version recorded
-in each candidate's reproduction metadata. Artifacts with a missing or unknown
-generator version are rejected instead of being assigned the current default.
+in each candidate's reproduction metadata. Triage also requires reports to
+match the selected lane and replays each candidate with its recorded lane.
+Artifacts with a missing or unknown generator version are rejected instead of
+being assigned the current default. Missing lane metadata is accepted only for
+generators v3 through v5 and resolves explicitly to `all`.
 
 `--create` is the only mode that writes to GitHub. It uses the configured `gh`
 client and suppresses duplicates by a stable identity derived from the
@@ -297,14 +366,19 @@ its `create` input. Observation-only runs withhold `GH_TOKEN`, even though the
 job declares the permission needed by an opted-in run. Keep the workflow's
 explicit Bash/`pipefail` behavior and seeded-netem-compatible runner when
 changing it. One job resolves the exploration seed as the UTC date in
-`YYYYMMDD` form, then every baseline and all four shards receive that exact
-numeric value. The nightly runs 60 logical unique cases per baseline, merges
-the shard JSON, and gives the canonical reports and the same seed to triage.
-Each report and case manifest records the resolved seed, so a later replay uses
-the artifact's number rather than deriving a seed from the replay date.
+`YYYYMMDD` form, then every baseline and every shard in both lanes receives that
+exact numeric value. The nightly bug-oracle lane runs 60 cases per baseline over
+four shards. The stress lane retains 20 cases per baseline over two shards.
+Both lanes are merged and uploaded separately, while automated finding triage
+consumes only the bug-oracle reports. This assigns 75 percent of requested
+nightly case capacity to oracle-backed mutation selection without deleting
+stress exploration. Each report and case manifest records the lane and seed, so
+a later replay uses artifact metadata rather than current defaults or the
+replay date.
 
-The fixed-seed regression lane remains separate in `.github/workflows/ci.yml`.
-`TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe` runs one routed case
-at seed `20260102`, case `39`, and checks that its known generated path-MTU fault
-still reaches the intended probe. It is small and stable while the larger
-nightly workflow explores a new date seed.
+The fixed-seed stress regression remains separate in
+`.github/workflows/ci.yml`.
+`TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe` runs one routed
+stress case at seed `20260102`, case `20`, and checks that its known generated
+path-MTU fault still reaches the intended probe. It is small and stable while
+the larger nightly workflow explores a new date seed.

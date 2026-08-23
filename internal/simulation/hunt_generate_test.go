@@ -61,6 +61,38 @@ func TestHuntMutationRegistryOrder(t *testing.T) {
 	}
 }
 
+func TestHuntLanesPartitionTheCurrentRegistry(t *testing.T) {
+	seen := make(map[string]HuntLane, len(huntMutationRegistry))
+	for _, lane := range []HuntLane{HuntLaneBugOracle, HuntLaneStress} {
+		operators, err := huntOperatorsForLane(HuntGeneratorVersion, lane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, operator := range operators {
+			if operator.lane() != lane {
+				t.Errorf("%s lane selected %s operator %q", lane, operator.lane(), operator.id)
+			}
+			if previous, exists := seen[operator.id]; exists {
+				t.Errorf("operator %q appears in both %s and %s", operator.id, previous, lane)
+			}
+			seen[operator.id] = lane
+		}
+	}
+	if len(seen) != len(huntMutationRegistry) {
+		t.Fatalf("lanes contain %d operators, registry contains %d", len(seen), len(huntMutationRegistry))
+	}
+	if _, err := huntOperatorsForLane(HuntGeneratorVersion, HuntLaneAllOperators); err == nil {
+		t.Error("current generator accepted the historical all-operator lane")
+	}
+	legacy, err := huntOperatorsForLane("v5", HuntLaneAllOperators)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy) != len(huntMutationRegistry) {
+		t.Fatalf("v5 all-operator lane has %d operators, want %d", len(legacy), len(huntMutationRegistry))
+	}
+}
+
 func TestPreferredPathFailureGeneratorTargetsPreferredRouterUpstream(t *testing.T) {
 	base := loadHuntBase(t, "two-path-healthy")
 	op := huntOperator(t, "routing.preferred_path_failure")
@@ -138,7 +170,7 @@ func TestPreferredPathApplicabilityDoesNotMixFamilyPathCounts(t *testing.T) {
 
 func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-healthy")
-	generated, err := generateHuntCase(HuntGeneratorVersion, "two-path-healthy", base, 20260811, 20, 1)
+	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, "two-path-healthy", base, 20260811, 3, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +181,7 @@ func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 
 func TestGenerateHuntCaseCanSelectIPv6PreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-ipv6-healthy")
-	generated, err := generateHuntCase(HuntGeneratorVersion, "two-path-ipv6-healthy", base, 20260811, 0, 1)
+	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, "two-path-ipv6-healthy", base, 20260811, 5, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,11 +286,11 @@ func TestGenerateHuntCaseCanSelectPMTUBlackhole(t *testing.T) {
 		caseNumber    int
 		node, segment string
 	}{
-		{"healthy-routed-network", 20260102, 39, "gateway", "upstream"},
-		{"two-router-healthy", 20260108, 12, "target-gateway", "target-lan"},
+		{"healthy-routed-network", 20260102, 20, "gateway", "upstream"},
+		{"two-router-healthy", 20260108, 42, "target-gateway", "target-lan"},
 	} {
 		t.Run(tc.base, func(t *testing.T) {
-			generated, err := generateHuntCase(HuntGeneratorVersion, tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -282,7 +314,7 @@ func TestGenerateHuntCaseCanSelectPMTUBlackhole(t *testing.T) {
 				faults[0].MTU != minBlackholeMTU {
 				t.Fatalf("materialized faults = %+v", generated.Scenario.Faults)
 			}
-			replay, err := generateHuntCase(HuntGeneratorVersion, tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
+			replay, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, tc.base, loadHuntBase(t, tc.base), tc.seed, tc.caseNumber, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -495,23 +527,46 @@ func assertUnrelatedTopology(t testing.TB, before, after *Scenario) {
 func TestHuntCaseGenerationIsIndependentAndDeterministic(t *testing.T) {
 	base := loadHuntBase(t, "healthy-routed-network")
 	const seed int64 = 12345
-	var sequential []GeneratedCaseManifest
-	for caseNumber := 0; caseNumber < 100; caseNumber++ {
-		generated, err := generateHuntCase(HuntGeneratorVersion, "healthy-routed-network", base, seed, caseNumber, 2)
-		if err != nil {
-			t.Fatalf("case %d: %v", caseNumber, err)
-		}
-		sequential = append(sequential, generated.Manifest)
+	for _, lane := range []HuntLane{HuntLaneBugOracle, HuntLaneStress} {
+		t.Run(string(lane), func(t *testing.T) {
+			var sequential []GeneratedCaseManifest
+			for caseNumber := 0; caseNumber < 100; caseNumber++ {
+				generated, err := generateHuntCaseInLane(HuntGeneratorVersion, lane, "healthy-routed-network", base, seed, caseNumber, 2)
+				if err != nil {
+					t.Fatalf("case %d: %v", caseNumber, err)
+				}
+				sequential = append(sequential, generated.Manifest)
+			}
+			direct, err := generateHuntCaseInLane(HuntGeneratorVersion, lane, "healthy-routed-network", base, seed, 17, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(direct.Manifest, sequential[17]) {
+				t.Fatalf("direct case 17 differs:\n direct %+v\n batch  %+v", direct.Manifest, sequential[17])
+			}
+			if direct.Manifest.CaseSeed != DeriveHuntCaseSeed(seed, "healthy-routed-network", 17) {
+				t.Error("manifest did not carry the independently derived seed")
+			}
+			if direct.Manifest.Lane != lane {
+				t.Errorf("manifest lane = %q, want %q", direct.Manifest.Lane, lane)
+			}
+		})
 	}
-	direct, err := generateHuntCase(HuntGeneratorVersion, "healthy-routed-network", base, seed, 17, 2)
+	bug, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneBugOracle, "healthy-routed-network", base, seed, 17, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(direct.Manifest, sequential[17]) {
-		t.Fatalf("direct case 17 differs:\n direct %+v\n batch  %+v", direct.Manifest, sequential[17])
+	stress, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, "healthy-routed-network", base, seed, 17, 2)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if direct.Manifest.CaseSeed != DeriveHuntCaseSeed(seed, "healthy-routed-network", 17) {
-		t.Error("manifest did not carry the independently derived seed")
+	if reflect.DeepEqual(bug.Manifest.Mutations, stress.Manifest.Mutations) || bug.Manifest.CaseSeed != stress.Manifest.CaseSeed {
+		t.Fatalf("lane selection changed the wrong state:\n bug   %+v\n stress %+v", bug.Manifest, stress.Manifest)
+	}
+	for _, mutation := range bug.Manifest.Mutations {
+		if huntOperator(t, mutation.ID).lane() != HuntLaneBugOracle {
+			t.Fatalf("bug-oracle case selected stress mutation %q", mutation.ID)
+		}
 	}
 }
 
@@ -533,6 +588,24 @@ func TestHuntGeneratorVersion3Reproduction(t *testing.T) {
 	}
 	if !reflect.DeepEqual(generated.Manifest, want) {
 		t.Fatalf("v3 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
+	}
+}
+
+func TestHuntGeneratorVersion5Reproduction(t *testing.T) {
+	generated, err := generateHuntCase("v5", "healthy-routed-network", loadHuntBase(t, "healthy-routed-network"), 20260102, 39, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := GeneratedCaseManifest{
+		GeneratorVersion: "v5", BaseScenario: "healthy-routed-network", HuntSeed: 20260102, Case: 39,
+		CaseSeed: 4665254450817751033, MaxFaults: 1,
+		Mutations: []GeneratedMutation{{ID: "pmtu.blackhole",
+			Description: "narrow gateway/upstream to 576 bytes and swallow the fragmentation-needed replies about it, leaving client offering packets that hop cannot carry",
+			Node:        "gateway", TargetNode: "client", Segment: "upstream", MTU: minBlackholeMTU}},
+		CaseFingerprint: "6014c13608bfac69",
+	}
+	if !reflect.DeepEqual(generated.Manifest, want) {
+		t.Fatalf("v5 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
 	}
 }
 
@@ -564,8 +637,9 @@ func TestMaxFaultsIsPartOfTheExperimentAndOfItsReproduction(t *testing.T) {
 	// The command a reader pastes has to name it too, or it reproduces this
 	// case only for as long as the CLI default happens to agree.
 	finding := NewTriageFinding(HuntFinding{Reproduce: reproductionFor(two.Manifest)})
-	if !strings.Contains(finding.ReproduceCommand(), "--max-faults 2") {
-		t.Errorf("reproduce command = %q, want it to name the ceiling", finding.ReproduceCommand())
+	if command := finding.ReproduceCommand(); !strings.Contains(command, "--max-faults 2") ||
+		!strings.Contains(command, "--lane bug-oracle") {
+		t.Errorf("reproduce command = %q, want it to name the ceiling and lane", command)
 	}
 }
 
@@ -592,25 +666,31 @@ func TestPublishedHuntGeneratorVersionsStayResolvable(t *testing.T) {
 
 func TestGeneratedHuntCasesValidateAndStayBounded(t *testing.T) {
 	seen := make(map[string]bool)
-	for _, baseID := range HuntBaseNames() {
-		base := loadHuntBase(t, baseID)
-		for caseNumber := 0; caseNumber < 1000; caseNumber++ {
-			generated, err := generateHuntCase(HuntGeneratorVersion, baseID, base, 8675309, caseNumber, HuntMaxFaults)
-			if err != nil {
-				t.Fatalf("%s case %d: %v", baseID, caseNumber, err)
-			}
-			revalidated := cloneScenario(generated.Scenario)
-			canonicalScenarioInput(revalidated)
-			if err := revalidated.Validate(); err != nil {
-				t.Fatalf("%s case %d failed repeat validation: %v", baseID, caseNumber, err)
-			}
-			if generated.Manifest.CaseFingerprint == "" || len(generated.Manifest.Mutations) < 1 || len(generated.Manifest.Mutations) > HuntMaxFaults {
-				t.Fatalf("%s case %d manifest = %+v", baseID, caseNumber, generated.Manifest)
-			}
-			assertCompatibleManifest(t, generated.Manifest)
-			assertMutationBounds(t, generated.Manifest)
-			for _, mutation := range generated.Manifest.Mutations {
-				seen[mutation.ID] = true
+	for _, lane := range []HuntLane{HuntLaneBugOracle, HuntLaneStress} {
+		for _, baseID := range HuntBaseNames() {
+			base := loadHuntBase(t, baseID)
+			for caseNumber := 0; caseNumber < 1000; caseNumber++ {
+				generated, err := generateHuntCaseInLane(HuntGeneratorVersion, lane, baseID, base, 8675309, caseNumber, HuntMaxFaults)
+				if err != nil {
+					t.Fatalf("%s %s case %d: %v", lane, baseID, caseNumber, err)
+				}
+				revalidated := cloneScenario(generated.Scenario)
+				canonicalScenarioInput(revalidated)
+				if err := revalidated.Validate(); err != nil {
+					t.Fatalf("%s %s case %d failed repeat validation: %v", lane, baseID, caseNumber, err)
+				}
+				if generated.Manifest.CaseFingerprint == "" || generated.Manifest.Lane != lane || len(generated.Manifest.Mutations) < 1 || len(generated.Manifest.Mutations) > HuntMaxFaults {
+					t.Fatalf("%s %s case %d manifest = %+v", lane, baseID, caseNumber, generated.Manifest)
+				}
+				assertCompatibleManifest(t, generated.Manifest)
+				assertMutationBounds(t, generated.Manifest)
+				for _, mutation := range generated.Manifest.Mutations {
+					op := huntOperator(t, mutation.ID)
+					if op.lane() != lane {
+						t.Errorf("%s case selected %s operator %q", lane, op.lane(), op.id)
+					}
+					seen[mutation.ID] = true
+				}
 			}
 		}
 	}
@@ -699,18 +779,33 @@ func TestHuntGenerationDoesNotMutateBase(t *testing.T) {
 	}
 }
 
-func TestHuntCaseFingerprintUsesSemanticContent(t *testing.T) {
+func TestCurrentHuntCaseFingerprintIncludesReproductionIdentity(t *testing.T) {
 	manifest := GeneratedCaseManifest{GeneratorVersion: HuntGeneratorVersion, BaseScenario: "healthy",
-		HuntSeed: 1, Case: 2, CaseSeed: 3,
+		Lane: HuntLaneStress, HuntSeed: 1, Case: 2, CaseSeed: 3,
+		Mutations: []GeneratedMutation{{ID: "netem.loss", Node: "client", Segment: "lan", LossPercent: 10, NetemSeed: 4}}}
+	first := huntCaseFingerprint(manifest)
+	manifest.HuntSeed, manifest.CaseSeed = 90, 92
+	if second := huntCaseFingerprint(manifest); second != first {
+		t.Errorf("redundant seed metadata changed case fingerprint: %s != %s", first, second)
+	}
+	manifest.Case = 91
+	if changed := huntCaseFingerprint(manifest); changed == first {
+		t.Error("case coordinate did not alter current case fingerprint")
+	}
+	manifest.Case = 2
+	manifest.Mutations[0].LossPercent = 11
+	if changed := huntCaseFingerprint(manifest); changed == first {
+		t.Error("semantic mutation change did not alter case fingerprint")
+	}
+}
+
+func TestHistoricalHuntCaseFingerprintRetainsSemanticIdentity(t *testing.T) {
+	manifest := GeneratedCaseManifest{GeneratorVersion: "v5", BaseScenario: "healthy", HuntSeed: 1, Case: 2, CaseSeed: 3,
 		Mutations: []GeneratedMutation{{ID: "netem.loss", Node: "client", Segment: "lan", LossPercent: 10, NetemSeed: 4}}}
 	first := huntCaseFingerprint(manifest)
 	manifest.HuntSeed, manifest.Case, manifest.CaseSeed = 90, 91, 92
 	if second := huntCaseFingerprint(manifest); second != first {
-		t.Errorf("reproduction metadata changed semantic fingerprint: %s != %s", first, second)
-	}
-	manifest.Mutations[0].LossPercent = 11
-	if changed := huntCaseFingerprint(manifest); changed == first {
-		t.Error("semantic mutation change did not alter case fingerprint")
+		t.Errorf("historical reproduction metadata changed semantic fingerprint: %s != %s", first, second)
 	}
 }
 
@@ -769,7 +864,11 @@ func FuzzGenerateHuntCase(f *testing.F) {
 		// Every input this harness builds is in range, so an error here is a
 		// generator defect (a mutation that cannot apply, a compatibility gap,
 		// an invalid result), never a rejected input.
-		generated, err := generateHuntCase(HuntGeneratorVersion, baseID, base, seed, caseNumber, maxFaults)
+		lane := HuntLaneBugOracle
+		if rawBase%2 == 1 {
+			lane = HuntLaneStress
+		}
+		generated, err := generateHuntCaseInLane(HuntGeneratorVersion, lane, baseID, base, seed, caseNumber, maxFaults)
 		if err != nil {
 			t.Fatalf("%s seed %d case %d maxFaults %d: %v", baseID, seed, caseNumber, maxFaults, err)
 		}

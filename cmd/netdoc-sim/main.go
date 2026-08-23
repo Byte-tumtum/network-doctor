@@ -149,7 +149,7 @@ Commands:
   help                     print this help
   run <scenario> [flags]   build the network, run the tests, print the report
   campaign <scenario>      run a seeded scenario campaign sequentially
-  hunt [base] [flags]      generate deterministic faults and rank likely bugs
+  hunt [base] [flags]      run deterministic bug-oracle or stress mutations
   hunt merge <files...>    merge a complete set of hunt shard JSON reports
   triage [flags]           hunt the fixed baselines, reproduce findings, file issues
   challenge [id] [flags]   diagnose a hidden fault yourself, then let netdoc try
@@ -192,6 +192,7 @@ Flags for hunt:
   -shard <i/N>             run zero-based shard i of the global case sequence
   -max-faults <n>          maximum mutations per case (default 2, maximum 3)
   -generator-version <v>   Hunt generator version (default: current)
+  -lane <name>             bug-oracle (direct diagnosis check) or stress (no direct oracle)
   -fail-fast               stop after the first case with a reportable finding
   -dry-run                 print generated manifests without creating namespaces
   -json                    print the machine-readable hunt report
@@ -205,6 +206,7 @@ Flags for triage:
   -hunt-results <dir>      use canonical merged hunt JSON from this directory
   -seed <int64>            override the fixed seed of every selected baseline
   -max-faults <n>          maximum mutations per case (default 2, maximum 3)
+  -lane <name>             Hunt lane to triage (default bug-oracle; historical: all)
   -min-severity <level>    lowest severity worth filing (default medium)
   -create                  file reproducible findings as GitHub issues with gh
   -context <text>          debugging context recorded in the issue body
@@ -291,6 +293,7 @@ type huntFlags struct {
 	shard     optionalShard
 	maxFaults *int
 	generator *string
+	lane      *string
 	failFast  *bool
 	dry       *bool
 	netdoc    *string
@@ -308,6 +311,7 @@ func newHuntFlags(out io.Writer) *huntFlags {
 	f.fs.Var(&f.shard, "shard", "zero-based shard i/N of the global case sequence")
 	f.maxFaults = f.fs.Int("max-faults", 2, "maximum mutations per case")
 	f.generator = f.fs.String("generator-version", simulation.HuntGeneratorVersion, "Hunt generator version")
+	f.lane = f.fs.String("lane", "", "Hunt lane: bug-oracle (direct diagnosis check) or stress; historical generators use all")
 	f.failFast = f.fs.Bool("fail-fast", false, "stop after the first reportable finding")
 	f.dry = f.fs.Bool("dry-run", false, "print generated manifests without running them")
 	f.netdoc = f.fs.String("netdoc", "", "path to the netdoc binary")
@@ -339,6 +343,11 @@ func (f *huntFlags) parse(args []string) (string, error) {
 	if !slices.Contains(simulation.HuntGeneratorVersions(), *f.generator) {
 		return "", fmt.Errorf("-generator-version must be one of %s", strings.Join(simulation.HuntGeneratorVersions(), ", "))
 	}
+	lane, err := simulation.ResolveHuntLane(*f.generator, simulation.HuntLane(*f.lane))
+	if err != nil {
+		return "", err
+	}
+	*f.lane = string(lane)
 	if *f.timeout <= 0 {
 		return "", errors.New("-timeout must be positive")
 	}
@@ -711,6 +720,7 @@ func huntDirectorArgv(f *huntFlags, baseID, netdoc string) []string {
 		"-case", strconv.Itoa(*f.caseNum),
 		"-max-faults", strconv.Itoa(*f.maxFaults),
 		"-generator-version", *f.generator,
+		"-lane", *f.lane,
 		fmt.Sprintf("-json=%t", *f.json),
 		fmt.Sprintf("-fail-fast=%t", *f.failFast),
 		fmt.Sprintf("-v=%t", *f.verbose),
@@ -759,7 +769,7 @@ func huntOptions(f *huntFlags, log io.Writer, dry bool) simulation.HuntOptions {
 		shard = &value
 	}
 	return simulation.HuntOptions{Cases: *f.cases, Seed: f.seed.v, Case: caseNumber,
-		Shard: shard, MaxFaults: *f.maxFaults, GeneratorVersion: *f.generator, FailFast: *f.failFast, DryRun: dry,
+		Shard: shard, MaxFaults: *f.maxFaults, GeneratorVersion: *f.generator, Lane: simulation.HuntLane(*f.lane), FailFast: *f.failFast, DryRun: dry,
 		Run: simulation.Options{Netdoc: *f.netdoc, ProbeTimeout: *f.timeout, Log: log}}
 }
 

@@ -41,6 +41,7 @@ complete -c netdoc-sim -n '__fish_seen_subcommand_from run campaign hunt triage 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from campaign hunt triage' -o seed -l seed -r -d 'Seed (generated and printed when omitted)'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt triage' -o cases -l cases -r -d 'Unique generated cases to run'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt triage' -o max-faults -l max-faults -r -d 'Maximum mutations per case (default 2, max 3)'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt triage' -o lane -l lane -r -d 'Hunt lane (default bug-oracle)' -a 'bug-oracle stress all'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from campaign hunt' -o fail-fast -l fail-fast -d 'Stop after the first failure'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from run hunt' -o dry-run -l dry-run -d 'Print what would run, without creating namespaces'
 
@@ -52,7 +53,7 @@ complete -c netdoc-sim -n '__fish_seen_subcommand_from campaign' -o iteration -l
 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o case -l case -r -d 'Run exactly one derived case'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o shard -l shard -r -d 'Run zero-based shard i/N of the global cases'
-complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o generator-version -l generator-version -r -d 'Hunt generator version (default v5)' -a 'v3 v4 v5'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o generator-version -l generator-version -r -d 'Hunt generator version (default v6)' -a 'v3 v4 v5 v6'
 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o scenarios -l scenarios -r -d 'Comma-separated baselines (default: all)'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o hunt-results -l hunt-results -r -F -d 'Directory of canonical merged hunt reports'

@@ -74,7 +74,8 @@ case $state in
         '(--case -case)'{--case,-case}'[run exactly one derived case]:index:' \
         '(--shard -shard)'{--shard,-shard}'[run zero-based shard i/N of the global cases]:shard:' \
         '(--max-faults -max-faults)'{--max-faults,-max-faults}'[maximum mutations per case (default 2, max 3)]:count:' \
-        '(--generator-version -generator-version)'{--generator-version,-generator-version}'[Hunt generator version (default v5)]:version:(v3 v4 v5)' \
+        '(--generator-version -generator-version)'{--generator-version,-generator-version}'[Hunt generator version (default v6)]:version:(v3 v4 v5 v6)' \
+        '(--lane -lane)'{--lane,-lane}'[Hunt lane (default bug-oracle)]:lane:(bug-oracle stress all)' \
         '(--fail-fast -fail-fast)'{--fail-fast,-fail-fast}'[stop after the first reportable finding]' \
         '(--dry-run -dry-run)'{--dry-run,-dry-run}'[print generated manifests without namespaces]' \
         '(--netdoc -netdoc)'{--netdoc,-netdoc}'[the netdoc binary to run]:netdoc:_files' \
@@ -90,6 +91,7 @@ case $state in
         '(--hunt-results -hunt-results)'{--hunt-results,-hunt-results}'[directory of canonical merged hunt reports]:directory:_directories' \
         '(--seed -seed)'{--seed,-seed}'[override the fixed seed of every baseline]:int64:' \
         '(--max-faults -max-faults)'{--max-faults,-max-faults}'[maximum mutations per case (default 2, max 3)]:count:' \
+        '(--lane -lane)'{--lane,-lane}'[Hunt lane to triage (default bug-oracle)]:lane:(bug-oracle stress all)' \
         '(--min-severity -min-severity)'{--min-severity,-min-severity}'[lowest severity worth filing (default medium)]:level:(critical high medium low info)' \
         '(--create -create)'{--create,-create}'[file reproducible findings as GitHub issues with gh]' \
         '(--context -context)'{--context,-context}'[debugging context recorded in the issue body]:text:' \

@@ -11,9 +11,9 @@ import (
 func (r *HuntResult) WriteJSON(w io.Writer) error { return writeJSON(w, r) }
 
 func (r *HuntResult) WriteText(w io.Writer) {
-	fmt.Fprintln(w, "Network Doctor bug hunt")
-	fmt.Fprintf(w, "\nBase:      %s\nSeed:      %d\nCases:     %d\nGenerator: %s\n",
-		textsafe.Clean(r.BaseScenario), r.HuntSeed, r.RequestedCases, r.GeneratorVersion)
+	fmt.Fprintln(w, "Network Doctor Hunt")
+	fmt.Fprintf(w, "\nBase:      %s\nLane:      %s\nSeed:      %d\nCases:     %d\nGenerator: %s\n",
+		textsafe.Clean(r.BaseScenario), r.Lane, r.HuntSeed, r.RequestedCases, r.GeneratorVersion)
 	if r.Shard != nil {
 		fmt.Fprintf(w, "Shard:     %d/%d (zero-based)\n", r.Shard.Index, r.Shard.Count)
 	}

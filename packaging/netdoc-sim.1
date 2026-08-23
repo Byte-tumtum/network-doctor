@@ -52,7 +52,13 @@ and
 .BI hunt " [base]"
 Generate deterministic faults on top of a healthy base scenario, run each
 generated case, and rank the cases where the diagnosis looks wrong. The
-default base is
+default
+.B bug\-oracle
+lane selects only mutations whose expected diagnosis can be checked against
+independent simulator evidence. The
+.B stress
+lane retains useful robustness and topology mutations that do not currently
+have a direct diagnosis-defect oracle. The default base is
 .BR healthy\-routed\-network .
 With
 .B merge
@@ -234,7 +240,8 @@ Hunt seed. Generated and printed when omitted.
 .BI \-case " n"
 Generate and run exactly one independently derived case, between 0 and 999999.
 This is how a reported finding is reproduced: the same seed, case number,
-fault ceiling, and generator version regenerate the same network and fault.
+fault ceiling, generator version, and lane regenerate the same network and
+fault.
 .TP
 .BI \-shard " i/N"
 Run zero-based shard
@@ -259,11 +266,27 @@ Maximum mutations applied to one case, between 1 and 3. The default is
 Select the generator used to materialize Hunt cases. Supported versions are
 .BR v3 ,
 .BR v4 ,
+.BR v5 ,
 and
-.BR v5 .
+.BR v6 .
 The default is the current generator,
-.BR v5 .
+.BR v6 .
 Historical reproduction commands record and pass this value explicitly.
+.TP
+.BI \-lane " name"
+Select
+.B bug\-oracle
+or
+.BR stress .
+Bug-oracle mutations have a direct analyzer contract comparing independent
+simulator evidence with Network Doctor's diagnosis. Stress mutations remain
+useful for robustness, unusual topology, interaction, parser, and execution
+exploration, but currently lack that direct diagnosis-defect contract. The
+default for the current generator is
+.BR bug\-oracle .
+Generators v3 through v5 predate the split and use
+.B all
+for exact historical replay.
 .TP
 .B \-fail\-fast
 Stop after the first case with a reportable finding.
@@ -329,6 +352,15 @@ fixed seeds provide the default regression inputs.
 .BI \-max\-faults " n"
 Maximum mutations per case, between 1 and 3. The default is
 .BR 2 .
+.TP
+.BI \-lane " name"
+Select the Hunt lane to run or to match in
+.BR \-hunt\-results .
+The default is
+.BR bug\-oracle .
+Use
+.B all
+only when triaging reports from a historical generator.
 .TP
 .BI \-min\-severity " level"
 Lowest finding severity worth reproducing and filing, one of
@@ -581,9 +613,10 @@ Hunt for diagnoses that look wrong, then reproduce one exactly:
 .PP
 .RS 4
 .EX
-netdoc\-sim hunt \-\-cases 100 \-\-json > hunt.json
-netdoc\-sim hunt healthy\-routed\-network \-\-seed 1234 \-\-case 42 \-\-max\-faults 2 \-\-generator\-version v3
-netdoc\-sim hunt \-\-seed 1234 \-\-cases 60 \-\-shard 0/4 \-\-json > shard0.json
+netdoc\-sim hunt \-\-lane bug\-oracle \-\-cases 100 \-\-json > hunt.json
+netdoc\-sim hunt \-\-lane stress \-\-cases 20 \-\-json > stress.json
+netdoc\-sim hunt healthy\-routed\-network \-\-lane all \-\-seed 1234 \-\-case 42 \-\-max\-faults 2 \-\-generator\-version v3
+netdoc\-sim hunt \-\-lane bug\-oracle \-\-seed 1234 \-\-cases 60 \-\-shard 0/4 \-\-json > shard0.json
 netdoc\-sim hunt merge shard3.json shard2.json shard1.json shard0.json > hunt.json
 .EE
 .RE

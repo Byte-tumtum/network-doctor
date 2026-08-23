@@ -13,7 +13,7 @@ func sampleFinding() HuntFinding {
 		Summary:  "The resolver service observed failed queries while netdoc reported DNS healthy.",
 		Evidence: "System DNS answered", Occurrences: 2, FirstCase: 4, ExampleCases: []int{4, 9},
 		Reproduce: HuntReproduction{BaseScenario: "healthy", Seed: 20260101, Case: 4, CaseSeed: -8811,
-			MaxFaults: 2, GeneratorVersion: "v3", CaseFingerprint: "0f0f0f0f0f0f0f0f"},
+			MaxFaults: 2, GeneratorVersion: "v3", Lane: HuntLaneAllOperators, CaseFingerprint: "0f0f0f0f0f0f0f0f"},
 	}
 }
 
@@ -91,10 +91,10 @@ func TestTriageFindingCarriesScenarioSeedAndCase(t *testing.T) {
 	finding := NewTriageFinding(sampleFinding())
 	if finding.Scenario != "healthy" || finding.Seed != 20260101 || finding.Case != 4 ||
 		finding.CaseSeed != -8811 || finding.CaseFingerprint != "0f0f0f0f0f0f0f0f" ||
-		finding.GeneratorVersion != "v3" || finding.Issue.Status != IssueStatusNotFiled {
+		finding.GeneratorVersion != "v3" || finding.Lane != HuntLaneAllOperators || finding.Issue.Status != IssueStatusNotFiled {
 		t.Fatalf("finding = %+v", finding)
 	}
-	if want := "netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json"; finding.ReproduceCommand() != want {
+	if want := "netdoc-sim hunt healthy --lane all --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json"; finding.ReproduceCommand() != want {
 		t.Errorf("reproduce = %q, want %q", finding.ReproduceCommand(), want)
 	}
 	if title := finding.IssueTitle(); !strings.Contains(title, finding.Fingerprint) ||
@@ -127,7 +127,7 @@ func TestTriageIssueBodyHasEverythingNeededToDebug(t *testing.T) {
 		"simulator expected: `FAIL or WARN`",
 		"netdoc reported: `PASS`",
 		"resolver service observed failed queries", // why they disagree
-		"netdoc-sim hunt healthy --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json", // reproduction
+		"netdoc-sim hunt healthy --lane all --seed 20260101 --case 4 --max-faults 2 --generator-version v3 --json", // reproduction
 		"aabbccdd11223344", // hunt finding fingerprint
 		"abc123",           // revision
 		"workflow run 42",  // debugging context

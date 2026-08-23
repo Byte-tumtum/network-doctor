@@ -88,10 +88,11 @@ type ObservedTruth struct {
 }
 
 type HuntReproduction struct {
-	BaseScenario string `json:"base_scenario"`
-	Seed         int64  `json:"seed"`
-	Case         int    `json:"case"`
-	CaseSeed     int64  `json:"case_seed"`
+	BaseScenario string   `json:"base_scenario"`
+	Lane         HuntLane `json:"lane,omitempty"`
+	Seed         int64    `json:"seed"`
+	Case         int      `json:"case"`
+	CaseSeed     int64    `json:"case_seed"`
 	// MaxFaults is the ceiling the case was drawn under. Without it the visible
 	// coordinates below name a different experiment under a different ceiling,
 	// so it is part of the reproduction rather than a run preference.
@@ -696,12 +697,17 @@ func truthFingerprint(truth ObservedTruth) string {
 // The scenario is a validated base name by the time a hunt runs, but this
 // string is pasted into a shell, so it is sanitized here rather than trusted.
 func (r HuntReproduction) Command() string {
-	return fmt.Sprintf("netdoc-sim hunt %s --seed %d --case %d --max-faults %d --generator-version %s --json",
-		textsafe.Clean(r.BaseScenario), r.Seed, r.Case, r.MaxFaults, textsafe.Clean(r.GeneratorVersion))
+	lane, err := resolveRecordedHuntLane(r.GeneratorVersion, r.Lane)
+	if err != nil {
+		lane = "missing"
+	}
+	return fmt.Sprintf("netdoc-sim hunt %s --lane %s --seed %d --case %d --max-faults %d --generator-version %s --json",
+		textsafe.Clean(r.BaseScenario), textsafe.Clean(string(lane)), r.Seed, r.Case, r.MaxFaults,
+		textsafe.Clean(r.GeneratorVersion))
 }
 
 func reproductionFor(manifest GeneratedCaseManifest) HuntReproduction {
-	return HuntReproduction{BaseScenario: manifest.BaseScenario, Seed: manifest.HuntSeed, Case: manifest.Case,
+	return HuntReproduction{BaseScenario: manifest.BaseScenario, Lane: manifest.Lane, Seed: manifest.HuntSeed, Case: manifest.Case,
 		CaseSeed: manifest.CaseSeed, MaxFaults: manifest.MaxFaults, GeneratorVersion: manifest.GeneratorVersion,
 		CaseFingerprint: manifest.CaseFingerprint}
 }

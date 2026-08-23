@@ -12,48 +12,50 @@ import (
 
 func TestRunHuntShardsPartitionTheExistingGlobalStream(t *testing.T) {
 	base := loadHuntBase(t, "healthy-routed-network")
-	for _, cases := range []int{1, 2, 7, 13, 60} {
-		for _, shardCount := range []int{1, 2, 3, 4, 8} {
-			t.Run(strconv.Itoa(cases)+"_cases_"+strconv.Itoa(shardCount)+"_shards", func(t *testing.T) {
-				full := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
-					return &clientRoleBackend{env: &fakeEnv{stdout: blamesTheGatewayReport, evidence: deadRouteEvidence()}}
-				},
-					HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, DryRun: false})
-				want := make(map[int]GeneratedCaseManifest, len(full.Cases))
-				for _, item := range full.Cases {
-					want[item.Manifest.Case] = item.Manifest
-				}
-				got := make(map[int]GeneratedCaseManifest, len(full.Cases))
-				shards := make([]*HuntResult, 0, shardCount)
-				for index := 0; index < shardCount; index++ {
-					shard := HuntShard{Index: index, Count: shardCount}
-					result := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
+	for _, lane := range []HuntLane{HuntLaneBugOracle, HuntLaneStress} {
+		for _, cases := range []int{1, 2, 7, 13, 60} {
+			for _, shardCount := range []int{1, 2, 3, 4, 8} {
+				t.Run(string(lane)+"_"+strconv.Itoa(cases)+"_cases_"+strconv.Itoa(shardCount)+"_shards", func(t *testing.T) {
+					full := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
 						return &clientRoleBackend{env: &fakeEnv{stdout: blamesTheGatewayReport, evidence: deadRouteEvidence()}}
 					},
-						HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, DryRun: false, Shard: &shard})
-					shards = append(shards, result)
-					for _, item := range result.Cases {
-						caseNumber := item.Manifest.Case
-						if !shard.Includes(caseNumber) {
-							t.Errorf("shard %d/%d executed global case %d", index, shardCount, caseNumber)
-						}
-						if _, exists := got[caseNumber]; exists {
-							t.Errorf("global case %d appeared in more than one shard", caseNumber)
-						}
-						got[caseNumber] = item.Manifest
+						HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, Lane: lane, DryRun: false})
+					want := make(map[int]GeneratedCaseManifest, len(full.Cases))
+					for _, item := range full.Cases {
+						want[item.Manifest.Case] = item.Manifest
 					}
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("shard union differs from unsharded stream:\ngot  %+v\nwant %+v", got, want)
-				}
-				merged, err := MergeHuntResults(shards...)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if merged.Shard != nil || !reflect.DeepEqual(caseManifests(merged), caseManifests(full)) {
-					t.Fatalf("merged cases differ:\ngot  %+v\nwant %+v", caseManifests(merged), caseManifests(full))
-				}
-			})
+					got := make(map[int]GeneratedCaseManifest, len(full.Cases))
+					shards := make([]*HuntResult, 0, shardCount)
+					for index := 0; index < shardCount; index++ {
+						shard := HuntShard{Index: index, Count: shardCount}
+						result := RunHunt(context.Background(), "healthy-routed-network", base, func() Backend {
+							return &clientRoleBackend{env: &fakeEnv{stdout: blamesTheGatewayReport, evidence: deadRouteEvidence()}}
+						},
+							HuntOptions{Cases: cases, Seed: 12345, MaxFaults: 2, Lane: lane, DryRun: false, Shard: &shard})
+						shards = append(shards, result)
+						for _, item := range result.Cases {
+							caseNumber := item.Manifest.Case
+							if !shard.Includes(caseNumber) {
+								t.Errorf("shard %d/%d executed global case %d", index, shardCount, caseNumber)
+							}
+							if _, exists := got[caseNumber]; exists {
+								t.Errorf("global case %d appeared in more than one shard", caseNumber)
+							}
+							got[caseNumber] = item.Manifest
+						}
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("shard union differs from unsharded stream:\ngot  %+v\nwant %+v", got, want)
+					}
+					merged, err := MergeHuntResults(shards...)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if merged.Shard != nil || !reflect.DeepEqual(caseManifests(merged), caseManifests(full)) {
+						t.Fatalf("merged cases differ:\ngot  %+v\nwant %+v", caseManifests(merged), caseManifests(full))
+					}
+				})
+			}
 		}
 	}
 }
@@ -61,7 +63,7 @@ func TestRunHuntShardsPartitionTheExistingGlobalStream(t *testing.T) {
 func TestShardPreservesGlobalCaseReproductionIdentity(t *testing.T) {
 	base := loadHuntBase(t, "healthy")
 	const caseNumber = 18
-	const wantFingerprint = "589fb926b62d84a2"
+	const wantFingerprint = "306edad66d6aff47"
 	direct := RunHunt(context.Background(), "healthy", base, nil,
 		HuntOptions{Seed: 20260101, Case: intPointer(caseNumber), MaxFaults: 2, DryRun: true})
 	shard := HuntShard{Index: caseNumber % 4, Count: 4}
@@ -103,6 +105,14 @@ func TestHistoricalGeneratorVersionSurvivesShardsAndMerge(t *testing.T) {
 	}
 	if merged.GeneratorVersion != "v3" {
 		t.Fatalf("merged generator = %q", merged.GeneratorVersion)
+	}
+	historical := cloneHuntResult(t, merged)
+	historical.Lane = ""
+	if err := ValidateMergedHuntResult(historical); err != nil {
+		t.Fatalf("historical result with missing lane metadata no longer validates: %v", err)
+	}
+	if got := reproductionFor(historical.Cases[0].Manifest).Command(); !strings.Contains(got, "--lane all") {
+		t.Errorf("historical reproduction = %q, want explicit all-operator lane", got)
 	}
 }
 
@@ -170,7 +180,12 @@ func TestMergeHuntResultsRejectsIncompleteAndIncompatibleInputs(t *testing.T) {
 		{"seed", func(in []*HuntResult) []*HuntResult { in[1].HuntSeed++; return in }, "hunt seed"},
 		{"case total", func(in []*HuntResult) []*HuntResult { in[1].RequestedCases++; return in }, "requested cases"},
 		{"shard count", func(in []*HuntResult) []*HuntResult { in[1].Shard.Count++; return in }, "shard count"},
-		{"generator", func(in []*HuntResult) []*HuntResult { in[1].GeneratorVersion = "v4"; return in }, "generator version"},
+		{"generator", func(in []*HuntResult) []*HuntResult {
+			in[1].GeneratorVersion, in[1].Lane = "v4", HuntLaneAllOperators
+			return in
+		}, "generator version"},
+		{"lane", func(in []*HuntResult) []*HuntResult { in[1].Lane = HuntLaneStress; return in }, "hunt lane"},
+		{"missing current lane", func(in []*HuntResult) []*HuntResult { in[0].Lane = ""; return in }, "no lane metadata"},
 		{"missing generator", func(in []*HuntResult) []*HuntResult { in[0].GeneratorVersion = ""; return in }, "unknown hunt generator version"},
 		{"baseline", func(in []*HuntResult) []*HuntResult { in[1].BaseScenario = "healthy"; return in }, "base scenario"},
 		{"fault ceiling", func(in []*HuntResult) []*HuntResult { in[1].MaxFaults = 1; return in }, "max faults"},

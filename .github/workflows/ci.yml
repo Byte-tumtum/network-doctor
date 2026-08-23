@@ -77,15 +77,15 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - if: runner.os == 'Linux'
         name: Run namespace integration tests
-        run: go test -tags netns_integration -count=1 -skip '^TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
+        run: go test -tags netns_integration -count=1 -skip '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
         env:
           NETDOC_SIM_REQUIRE_NETNS: "1"
-      # Keep one small fixed-seed Hunt lane separate from the rotating nightly
-      # exploration. This test runs seed 20260102 case 39 and checks that its
-      # known generated path-MTU fault still reaches the intended probe.
+      # Keep one small fixed-seed stress Hunt regression separate from the
+      # rotating nightly lanes. This test runs seed 20260102 case 20 and checks
+      # that its known generated path-MTU fault still reaches the intended probe.
       - if: runner.os == 'Linux'
-        name: Run fixed-seed Hunt regression
-        run: go test -tags netns_integration -count=1 -run '^TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
+        name: Run fixed-seed stress Hunt regression
+        run: go test -tags netns_integration -count=1 -run '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
         env:
           NETDOC_SIM_REQUIRE_NETNS: "1"
   # The container is how macOS and Windows reach Challenge Mode, so the artifact

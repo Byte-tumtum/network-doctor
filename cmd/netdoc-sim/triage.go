@@ -30,7 +30,7 @@ import (
 // huntFunc runs one hunt and returns its parsed report. caseNumber is negative
 // for a full hunt, or the exact case to regenerate and re-run.
 type huntFunc func(ctx context.Context, scenario string, seed int64, cases, caseNumber int,
-	generatorVersion string) (*simulation.HuntResult, error)
+	generatorVersion string, lane simulation.HuntLane) (*simulation.HuntResult, error)
 
 // ghFunc runs the `gh` CLI. The token lives in gh's environment and never
 // appears in an argument, so nothing here can log it.
@@ -40,6 +40,7 @@ type triageOptions struct {
 	baselines   []simulation.TriageBaseline
 	cases       int
 	maxFaults   int
+	lane        simulation.HuntLane
 	minSeverity simulation.HuntSeverity
 	create      bool
 	revision    string
@@ -54,6 +55,7 @@ type triageFlags struct {
 	huntResults *string
 	seed        optionalSeed
 	maxFaults   *int
+	lane        *string
 	minSeverity *string
 	create      *bool
 	context     *string
@@ -72,6 +74,7 @@ func newTriageFlags(out io.Writer) *triageFlags {
 	f.huntResults = f.fs.String("hunt-results", "", "directory of canonical merged hunt JSON reports")
 	f.fs.Var(&f.seed, "seed", "override the fixed seed of every selected baseline")
 	f.maxFaults = f.fs.Int("max-faults", 2, "maximum mutations per case")
+	f.lane = f.fs.String("lane", string(simulation.HuntLaneBugOracle), "Hunt lane: bug-oracle, stress, or all for historical reports")
 	f.minSeverity = f.fs.String("min-severity", string(simulation.SeverityMedium),
 		"lowest finding severity worth reproducing and filing")
 	f.create = f.fs.Bool("create", false, "file reproducible findings as GitHub issues with gh")
@@ -92,6 +95,9 @@ func (f *triageFlags) parse(args []string) (*triageOptions, error) {
 	}
 	if *f.maxFaults < 1 || *f.maxFaults > simulation.HuntMaxFaults {
 		return nil, fmt.Errorf("-max-faults must be between 1 and %d", simulation.HuntMaxFaults)
+	}
+	if !slices.Contains(simulation.HuntLaneNames(), *f.lane) {
+		return nil, fmt.Errorf("-lane must be one of %s", strings.Join(simulation.HuntLaneNames(), ", "))
 	}
 	if *f.timeout <= 0 {
 		return nil, errors.New("-timeout must be positive")
@@ -118,7 +124,7 @@ func (f *triageFlags) parse(args []string) (*triageOptions, error) {
 	if !ok {
 		return nil, fmt.Errorf("-min-severity must be one of critical, high, medium, low, info")
 	}
-	return &triageOptions{baselines: baselines, cases: *f.cases, maxFaults: *f.maxFaults, minSeverity: severity,
+	return &triageOptions{baselines: baselines, cases: *f.cases, maxFaults: *f.maxFaults, lane: simulation.HuntLane(*f.lane), minSeverity: severity,
 		create: *f.create, revision: buildRevision(*f.revision), context: *f.context}, nil
 }
 
@@ -192,7 +198,7 @@ func triageExit(report *simulation.TriageReport) int {
 }
 
 func triage(ctx context.Context, opts triageOptions, hunt huntFunc, gh ghFunc) *simulation.TriageReport {
-	report := &simulation.TriageReport{Revision: opts.revision, Context: opts.context,
+	report := &simulation.TriageReport{Revision: opts.revision, Context: opts.context, Lane: opts.lane,
 		Baselines: []simulation.TriageScenarioResult{}, Findings: []simulation.TriageFinding{},
 		Result: simulation.TriageResultClean}
 	fail := func(format string, args ...any) *simulation.TriageReport {
@@ -200,7 +206,7 @@ func triage(ctx context.Context, opts triageOptions, hunt huntFunc, gh ghFunc) *
 		return report
 	}
 	for _, baseline := range opts.baselines {
-		result, err := hunt(ctx, baseline.Scenario, baseline.Seed, opts.cases, -1, simulation.HuntGeneratorVersion)
+		result, err := hunt(ctx, baseline.Scenario, baseline.Seed, opts.cases, -1, simulation.HuntGeneratorVersion, opts.lane)
 		if err != nil {
 			return fail("hunt %s seed %d: %v", baseline.Scenario, baseline.Seed, err)
 		}
@@ -245,7 +251,7 @@ func triage(ctx context.Context, opts triageOptions, hunt huntFunc, gh ghFunc) *
 // means the same case fingerprint produced the same finding fingerprint again.
 func verify(ctx context.Context, hunt huntFunc, candidate simulation.HuntFinding) (simulation.TriageFinding, error) {
 	out := simulation.NewTriageFinding(candidate)
-	result, err := hunt(ctx, out.Scenario, out.Seed, 1, out.Case, out.GeneratorVersion)
+	result, err := hunt(ctx, out.Scenario, out.Seed, 1, out.Case, out.GeneratorVersion, out.Lane)
 	if err != nil {
 		return out, err
 	}
@@ -329,11 +335,11 @@ func realGH(ctx context.Context, args ...string) ([]byte, error) {
 // same flag parsing, director argv and namespaces, and captures the report.
 func directorHunt(self, netdoc string, timeout time.Duration, maxFaults int, verbose bool, stderr io.Writer) huntFunc {
 	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int,
-		generatorVersion string) (*simulation.HuntResult, error) {
+		generatorVersion string, lane simulation.HuntLane) (*simulation.HuntResult, error) {
 		f := newHuntFlags(io.Discard)
 		if _, err := f.parse([]string{scenario, "-json", "-seed", strconv.FormatInt(seed, 10),
 			"-cases", strconv.Itoa(cases), "-case", strconv.Itoa(caseNumber),
-			"-max-faults", strconv.Itoa(maxFaults), "-generator-version", generatorVersion, "-timeout", timeout.String(),
+			"-max-faults", strconv.Itoa(maxFaults), "-generator-version", generatorVersion, "-lane", string(lane), "-timeout", timeout.String(),
 			fmt.Sprintf("-v=%t", verbose)}); err != nil {
 			return nil, err
 		}
@@ -396,6 +402,10 @@ func precomputedHunts(dir string, opts triageOptions, replay huntFunc) (huntFunc
 			result.MaxFaults != opts.maxFaults || result.DryRun || result.FailFast {
 			return nil, fmt.Errorf("%s hunt configuration does not match triage", result.BaseScenario)
 		}
+		resolvedLane, err := simulation.ResolveHuntLane(result.GeneratorVersion, result.Lane)
+		if err != nil || resolvedLane != opts.lane {
+			return nil, fmt.Errorf("%s hunt lane does not match triage", result.BaseScenario)
+		}
 		reports[result.BaseScenario] = result
 	}
 	for _, baseline := range opts.baselines {
@@ -404,13 +414,17 @@ func precomputedHunts(dir string, opts triageOptions, replay huntFunc) (huntFunc
 		}
 	}
 	return func(ctx context.Context, scenario string, seed int64, cases, caseNumber int,
-		generatorVersion string) (*simulation.HuntResult, error) {
+		generatorVersion string, lane simulation.HuntLane) (*simulation.HuntResult, error) {
 		if caseNumber >= 0 {
-			return replay(ctx, scenario, seed, cases, caseNumber, generatorVersion)
+			return replay(ctx, scenario, seed, cases, caseNumber, generatorVersion, lane)
 		}
 		result := reports[scenario]
 		if result == nil || result.HuntSeed != seed || result.RequestedCases != cases {
 			return nil, fmt.Errorf("no matching merged hunt for %s seed %d with %d cases", scenario, seed, cases)
+		}
+		resolvedLane, _ := simulation.ResolveHuntLane(result.GeneratorVersion, result.Lane)
+		if resolvedLane != lane {
+			return nil, fmt.Errorf("no matching merged %s hunt for %s", lane, scenario)
 		}
 		return result, nil
 	}, nil

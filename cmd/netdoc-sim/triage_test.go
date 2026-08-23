@@ -28,7 +28,7 @@ func candidate(scenario string, seed int64, caseNumber int, code string) simulat
 		Code: code, Summary: "netdoc disagreed with the simulator.", Occurrences: 1,
 		FirstCase: caseNumber, ExampleCases: []int{caseNumber},
 		Reproduce: simulation.HuntReproduction{BaseScenario: scenario, Seed: seed, Case: caseNumber,
-			CaseSeed: 7, MaxFaults: 2, GeneratorVersion: simulation.HuntGeneratorVersion,
+			CaseSeed: 7, MaxFaults: 2, GeneratorVersion: simulation.HuntGeneratorVersion, Lane: simulation.HuntLaneBugOracle,
 			CaseFingerprint: "case-" + code},
 	}
 }
@@ -37,7 +37,7 @@ func candidate(scenario string, seed int64, caseNumber int, code string) simulat
 func replay(finding simulation.HuntFinding, reproduces bool) *simulation.HuntResult {
 	item := simulation.HuntCaseResult{
 		Manifest: simulation.GeneratedCaseManifest{GeneratorVersion: finding.Reproduce.GeneratorVersion,
-			BaseScenario: finding.Reproduce.BaseScenario, HuntSeed: finding.Reproduce.Seed,
+			Lane: finding.Reproduce.Lane, BaseScenario: finding.Reproduce.BaseScenario, HuntSeed: finding.Reproduce.Seed,
 			Case: finding.Reproduce.Case, CaseSeed: finding.Reproduce.CaseSeed,
 			CaseFingerprint: finding.Reproduce.CaseFingerprint,
 			Mutations:       []simulation.GeneratedMutation{{ID: "dns.drop", Description: "resolver drops responses"}}},
@@ -45,7 +45,7 @@ func replay(finding simulation.HuntFinding, reproduces bool) *simulation.HuntRes
 		DiagnosisFingerprint: simulation.DiagnosisFingerprint{ID: "d1"},
 		Status:               "clean",
 	}
-	result := &simulation.HuntResult{GeneratorVersion: finding.Reproduce.GeneratorVersion,
+	result := &simulation.HuntResult{GeneratorVersion: finding.Reproduce.GeneratorVersion, Lane: finding.Reproduce.Lane,
 		Result: simulation.HuntResultClean, ExecutedCases: 1,
 		Cases: []simulation.HuntCaseResult{item}}
 	if reproduces {
@@ -65,12 +65,14 @@ type hunts struct {
 	err      error
 	calls    []int
 	versions []string
+	lanes    []simulation.HuntLane
 }
 
 func (h *hunts) fn() huntFunc {
-	return func(_ context.Context, _ string, _ int64, _, caseNumber int, generatorVersion string) (*simulation.HuntResult, error) {
+	return func(_ context.Context, _ string, _ int64, _, caseNumber int, generatorVersion string, lane simulation.HuntLane) (*simulation.HuntResult, error) {
 		h.calls = append(h.calls, caseNumber)
 		h.versions = append(h.versions, generatorVersion)
+		h.lanes = append(h.lanes, lane)
 		if h.err != nil {
 			return nil, h.err
 		}
@@ -136,7 +138,7 @@ func (g *ghCalls) subcommands() []string {
 
 func baselineOpts(create bool) triageOptions {
 	return triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy", Seed: 20260101}},
-		cases: 20, minSeverity: simulation.SeverityMedium, create: create,
+		cases: 20, maxFaults: 2, lane: simulation.HuntLaneBugOracle, minSeverity: simulation.SeverityMedium, create: create,
 		revision: "abc123", context: "workflow run 42"}
 }
 
@@ -144,6 +146,7 @@ func baselineOpts(create bool) triageOptions {
 func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 	solid, flaky := candidate("healthy", 20260101, 4, "solid"), candidate("healthy", 20260101, 9, "flaky")
 	solid.Reproduce.GeneratorVersion = "v3"
+	solid.Reproduce.Lane = simulation.HuntLaneAllOperators
 	h := &hunts{
 		full: &simulation.HuntResult{Result: simulation.HuntResultFindings, ExecutedCases: 20,
 			Findings: []simulation.HuntFinding{solid, flaky}},
@@ -160,6 +163,9 @@ func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(h.versions, []string{simulation.HuntGeneratorVersion, "v3", simulation.HuntGeneratorVersion}) {
 		t.Fatalf("hunt generator versions = %v", h.versions)
+	}
+	if !reflect.DeepEqual(h.lanes, []simulation.HuntLane{simulation.HuntLaneBugOracle, simulation.HuntLaneAllOperators, simulation.HuntLaneBugOracle}) {
+		t.Fatalf("hunt lanes = %v", h.lanes)
 	}
 	if len(report.Baselines) != 1 || report.Baselines[0].Cases != 20 || report.Baselines[0].Candidates != 2 {
 		t.Fatalf("baselines = %+v", report.Baselines)
@@ -182,6 +188,7 @@ func TestTriageFilesOnlyReproducibleFindings(t *testing.T) {
 	}
 	if len(gh.bodies) != 1 || !strings.Contains(gh.bodies[0], "--seed 20260101 --case 4") ||
 		!strings.Contains(gh.bodies[0], "--generator-version v3") ||
+		!strings.Contains(gh.bodies[0], "--lane all") ||
 		!strings.Contains(gh.bodies[0], "workflow run 42") || !strings.Contains(gh.bodies[0], "abc123") {
 		t.Fatalf("issue body = %q", gh.bodies)
 	}
@@ -461,35 +468,42 @@ func TestPrecomputedHuntsUseMergedReportsAndStillReplayExactCases(t *testing.T) 
 	replays := 0
 	var replaySeed int64
 	var replayVersion string
+	var replayLane simulation.HuntLane
 	replay := func(_ context.Context, scenario string, seed int64, gotCases, caseNumber int,
-		generatorVersion string) (*simulation.HuntResult, error) {
+		generatorVersion string, lane simulation.HuntLane) (*simulation.HuntResult, error) {
 		replays++
 		replaySeed = seed
 		replayVersion = generatorVersion
+		replayLane = lane
 		return &simulation.HuntResult{BaseScenario: scenario, HuntSeed: seed, RequestedCases: gotCases,
-			Result: simulation.HuntResultClean}, nil
+			GeneratorVersion: generatorVersion, Lane: lane, Result: simulation.HuntResultClean}, nil
 	}
 	opts := triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy-routed-network", Seed: seed}},
-		cases: cases, maxFaults: 2}
+		cases: cases, maxFaults: 2, lane: simulation.HuntLaneAllOperators}
 	hunt, err := precomputedHunts(dir, opts, replay)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := hunt(context.Background(), "healthy-routed-network", seed, cases, -1, simulation.HuntGeneratorVersion)
+	wrongLane := opts
+	wrongLane.lane = simulation.HuntLaneBugOracle
+	if _, err := precomputedHunts(dir, wrongLane, replay); err == nil || !strings.Contains(err.Error(), "hunt lane does not match triage") {
+		t.Fatalf("mismatched precomputed lane error = %v", err)
+	}
+	got, err := hunt(context.Background(), "healthy-routed-network", seed, cases, -1, "v3", simulation.HuntLaneAllOperators)
 	if err != nil || got.BaseScenario != merged.BaseScenario || got.GeneratorVersion != "v3" ||
 		len(got.Cases) != len(merged.Cases) || replays != 0 {
 		t.Fatalf("full hunt base = %q, cases = %d, err = %v, replays = %d",
 			got.BaseScenario, len(got.Cases), err, replays)
 	}
-	if _, err := hunt(context.Background(), "healthy-routed-network", seed, 1, 7, got.GeneratorVersion); err != nil ||
-		replays != 1 || replaySeed != seed || replayVersion != "v3" {
-		t.Fatalf("exact replay seed = %d, version = %q, err = %v, calls = %d", replaySeed, replayVersion, err, replays)
+	if _, err := hunt(context.Background(), "healthy-routed-network", seed, 1, 7, got.GeneratorVersion, simulation.HuntLaneAllOperators); err != nil ||
+		replays != 1 || replaySeed != seed || replayVersion != "v3" || replayLane != simulation.HuntLaneAllOperators {
+		t.Fatalf("exact replay seed = %d, version = %q, lane = %q, err = %v, calls = %d", replaySeed, replayVersion, replayLane, err, replays)
 	}
 }
 
 func TestPrecomputedHuntsRejectMissingAndMismatchedReports(t *testing.T) {
 	opts := triageOptions{baselines: []simulation.TriageBaseline{{Scenario: "healthy", Seed: 20260101}},
-		cases: 5, maxFaults: 2}
+		cases: 5, maxFaults: 2, lane: simulation.HuntLaneBugOracle}
 	if _, err := precomputedHunts(t.TempDir(), opts, nil); err == nil || !strings.Contains(err.Error(), "missing hunt result") {
 		t.Fatalf("empty directory error = %v", err)
 	}
@@ -559,14 +573,17 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 		Strategy struct {
 			FailFast bool `yaml:"fail-fast"`
 			Matrix   struct {
-				Shard []int `yaml:"shard"`
+				Include []struct {
+					Lane   string `yaml:"lane"`
+					Shard  int    `yaml:"shard"`
+					Shards int    `yaml:"shards"`
+				} `yaml:"include"`
 			} `yaml:"matrix"`
 		} `yaml:"strategy"`
 		Steps []step `yaml:"steps"`
 	}
 	var workflow struct {
 		Env struct {
-			Shards    string `yaml:"HUNT_SHARDS"`
 			Baselines string `yaml:"HUNT_BASELINES"`
 		} `yaml:"env"`
 		Jobs map[string]job `yaml:"jobs"`
@@ -582,14 +599,19 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	if !ok {
 		t.Fatal("workflow has no hunt matrix job")
 	}
-	shardCount, err := strconv.Atoi(workflow.Env.Shards)
-	if err != nil {
-		t.Fatal(err)
+	wantMatrix := []struct {
+		Lane   string `yaml:"lane"`
+		Shard  int    `yaml:"shard"`
+		Shards int    `yaml:"shards"`
+	}{
+		{string(simulation.HuntLaneBugOracle), 0, 4}, {string(simulation.HuntLaneBugOracle), 1, 4},
+		{string(simulation.HuntLaneBugOracle), 2, 4}, {string(simulation.HuntLaneBugOracle), 3, 4},
+		{string(simulation.HuntLaneStress), 0, 2}, {string(simulation.HuntLaneStress), 1, 2},
 	}
 	if !reflect.DeepEqual(hunt.Needs, []string{"seed"}) || hunt.Strategy.FailFast ||
-		!reflect.DeepEqual(hunt.Strategy.Matrix.Shard, []int{0, 1, 2, 3}) || shardCount != 4 {
-		t.Fatalf("matrix shards = %v, count = %d, fail-fast = %t",
-			hunt.Strategy.Matrix.Shard, shardCount, hunt.Strategy.FailFast)
+		!reflect.DeepEqual(hunt.Strategy.Matrix.Include, wantMatrix) {
+		t.Fatalf("matrix = %+v, fail-fast = %t, want %+v",
+			hunt.Strategy.Matrix.Include, hunt.Strategy.FailFast, wantMatrix)
 	}
 	var gotBaselines []string
 	for _, line := range strings.Split(strings.TrimSpace(workflow.Env.Baselines), "\n") {
@@ -615,14 +637,17 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 		return strings.Join(runs, "\n")
 	}
 	huntRuns := joinRuns(hunt.Steps)
-	if !strings.Contains(huntRuns, `--shard "$SHARD/$HUNT_SHARDS"`) ||
+	if !strings.Contains(huntRuns, `--lane "$LANE"`) || !strings.Contains(huntRuns, `--shard "$SHARD/$SHARDS"`) ||
 		!strings.Contains(huntRuns, `--cases "$CASES"`) || !strings.Contains(huntRuns, `--seed "$HUNT_SEED"`) ||
 		strings.Contains(huntRuns, "date ") || strings.Contains(huntRuns, "netdoc-sim triage") {
 		t.Fatalf("hunt matrix does not run one independent shard:\n%s", huntRuns)
 	}
 	for _, step := range hunt.Steps {
-		if step.Name == "Run shard" && step.Env["HUNT_SEED"] != `${{ needs.seed.outputs.value }}` {
-			t.Fatalf("hunt shard seed = %q", step.Env["HUNT_SEED"])
+		if strings.Contains(step.Name, "Run ${{ matrix.lane }} shard") {
+			if step.Env["HUNT_SEED"] != `${{ needs.seed.outputs.value }}` || step.Env["LANE"] != `${{ matrix.lane }}` ||
+				step.Env["SHARDS"] != `${{ matrix.shards }}` {
+				t.Fatalf("hunt shard environment = %+v", step.Env)
+			}
 		}
 	}
 	merge, ok := workflow.Jobs["merge"]
@@ -631,7 +656,9 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	}
 	mergeRuns := joinRuns(merge.Steps)
 	if !strings.Contains(mergeRuns, "netdoc-sim hunt merge") ||
-		!strings.Contains(mergeRuns, "--hunt-results merged-hunts") ||
+		!strings.Contains(mergeRuns, "for lane in bug-oracle stress") ||
+		!strings.Contains(mergeRuns, "--lane bug-oracle") ||
+		!strings.Contains(mergeRuns, "--hunt-results merged-hunts/bug-oracle") ||
 		!strings.Contains(mergeRuns, `--seed "$HUNT_SEED"`) || strings.Contains(mergeRuns, "date ") {
 		t.Fatalf("merge job does not merge and triage canonical results:\n%s", mergeRuns)
 	}
@@ -643,33 +670,12 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 	// `healthy` is a prefix of `healthy-routed-network`, so a shard file name
 	// the merge glob can widen hands one baseline's merge another baseline's
 	// reports, and every nightly merge fails on the mismatch.
-	if !strings.Contains(huntRuns, `output="hunt-results/$base.$SHARD.json"`) ||
-		!strings.Contains(mergeRuns, `hunt merge hunt-shards/"$base".*.json`) {
+	if !strings.Contains(huntRuns, `output="hunt-results/$LANE/$base.$SHARD.json"`) ||
+		!strings.Contains(mergeRuns, `hunt merge hunt-shards/"$lane"/"$base".*.json`) {
 		t.Fatalf("shard artifact naming changed:\n%s\n%s", huntRuns, mergeRuns)
 	}
-	var shardFiles []string
-	for _, baseline := range want {
-		for shard := 0; shard < shardCount; shard++ {
-			shardFiles = append(shardFiles, baseline+"."+strconv.Itoa(shard)+".json")
-		}
-	}
-	for _, baseline := range want {
-		matched := 0
-		for _, name := range shardFiles {
-			ok, err := filepath.Match(baseline+".*.json", name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ok {
-				matched++
-			}
-		}
-		if matched != shardCount {
-			t.Errorf("merge glob for %s matched %d shard files, want %d", baseline, matched, shardCount)
-		}
-	}
 	text := string(blob)
-	for _, want := range []string{`default: "60"`, "hunt-shard-${{ matrix.shard }}", "name: hunt-results",
+	for _, want := range []string{`default: "60"`, `default: "20"`, "hunt-${{ matrix.lane }}-shard-${{ matrix.shard }}", "name: hunt-results",
 		"actions/upload-artifact@", "actions/download-artifact@"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("workflow is missing %q", want)
@@ -731,9 +737,9 @@ func TestCIKeepsFixedSeedHuntRegressionSeparate(t *testing.T) {
 	}
 	text := string(blob)
 	for _, want := range []string{
-		"name: Run fixed-seed Hunt regression",
-		"-skip '^TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe$'",
-		"-run '^TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe$'",
+		"name: Run fixed-seed stress Hunt regression",
+		"-skip '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$'",
+		"-run '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$'",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("CI workflow is missing %q", want)
@@ -768,7 +774,7 @@ func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
 	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 5)})
 	hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", 9*time.Second, 3, true, io.Discard)
 
-	result, err := hunt(context.Background(), "healthy-routed-network", -7, 5, 2, "v3")
+	result, err := hunt(context.Background(), "healthy-routed-network", -7, 5, 2, "v3", simulation.HuntLaneAllOperators)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -780,7 +786,7 @@ func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
 	}
 	f, base := receivedHunt(t, directors.calls[0].argv)
 	if base != "healthy-routed-network" || !f.seed.set || f.seed.v != -7 || *f.cases != 5 ||
-		*f.caseNum != 2 || *f.maxFaults != 3 || *f.generator != "v3" || *f.timeout != 9*time.Second || *f.netdoc != "/opt/netdoc" {
+		*f.caseNum != 2 || *f.maxFaults != 3 || *f.generator != "v3" || *f.lane != string(simulation.HuntLaneAllOperators) || *f.timeout != 9*time.Second || *f.netdoc != "/opt/netdoc" {
 		t.Errorf("hunt got base %q seed %+v cases %d case %d max-faults %d timeout %s netdoc %q",
 			base, f.seed, *f.cases, *f.caseNum, *f.maxFaults, *f.timeout, *f.netdoc)
 	}
@@ -796,7 +802,7 @@ func TestDirectorHuntBuildsTheHuntItWasAskedFor(t *testing.T) {
 func TestDirectorHuntRejectsImpossibleHuntsWithoutRunning(t *testing.T) {
 	directors := stubDirectors(t, &fakeDirectors{code: exitOK, stdout: cleanHunt(t, 1)})
 	hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
-	if _, err := hunt(context.Background(), "healthy-routed-network", 1, 0, -1, simulation.HuntGeneratorVersion); err == nil {
+	if _, err := hunt(context.Background(), "healthy-routed-network", 1, 0, -1, simulation.HuntGeneratorVersion, simulation.HuntLaneBugOracle); err == nil {
 		t.Fatal("a hunt with -cases 0 was accepted")
 	} else if !strings.Contains(err.Error(), "-cases must be between 1 and") {
 		t.Fatalf("err = %v", err)
@@ -840,7 +846,7 @@ func TestDirectorHuntRefusesAReportItCannotTrust(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stubDirectors(t, &tt.director)
 			hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
-			result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1, simulation.HuntGeneratorVersion)
+			result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1, simulation.HuntGeneratorVersion, simulation.HuntLaneBugOracle)
 			if err == nil {
 				t.Fatalf("accepted %+v", result)
 			}
@@ -854,7 +860,7 @@ func TestDirectorHuntRefusesAReportItCannotTrust(t *testing.T) {
 	t.Run("failure the report agrees with", func(t *testing.T) {
 		stubDirectors(t, &fakeDirectors{code: exitError, stdout: string(broken)})
 		hunt := directorHunt("/opt/netdoc-sim", "/opt/netdoc", time.Second, 2, false, io.Discard)
-		result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1, simulation.HuntGeneratorVersion)
+		result, err := hunt(context.Background(), "healthy-routed-network", 1, 1, -1, simulation.HuntGeneratorVersion, simulation.HuntLaneBugOracle)
 		if err != nil {
 			t.Fatalf("err = %v, want the report", err)
 		}

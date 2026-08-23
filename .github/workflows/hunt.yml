@@ -1,8 +1,9 @@
 name: hunt
 
-# Nightly deterministic bug hunt: derive one exploration seed from the UTC
-# calendar date, mutate the known-good baseline scenarios, reproduce every
-# candidate finding from its recorded seed and case, and report the survivors.
+# Nightly deterministic Hunt: derive one exploration seed from the UTC calendar
+# date, run oracle-backed diagnosis mutations separately from stress mutations,
+# reproduce bug-oracle findings from their recorded lane, seed and case, and
+# report the survivors.
 # Filing them as issues is opt-in, twice over: a manual run has to ask for it,
 # and a scheduled run files nothing until the repository variable
 # NETDOC_HUNT_CREATE is set to true. Merging this workflow therefore starts the
@@ -14,8 +15,11 @@ on:
   workflow_dispatch:
     inputs:
       cases:
-        description: logical unique cases per baseline before sharding
+        description: bug-oracle cases per baseline before sharding
         default: "60"
+      stress_cases:
+        description: stress cases per baseline before sharding
+        default: "20"
       create:
         description: file reproducible findings as GitHub issues
         type: boolean
@@ -28,7 +32,6 @@ permissions:
 # names to the production list so the workflow cannot silently hunt a different
 # campaign.
 env:
-  HUNT_SHARDS: "4"
   HUNT_BASELINES: |
     healthy
     healthy-routed-network
@@ -71,7 +74,7 @@ jobs:
           echo "Exploration seed: $seed"
 
   hunt:
-    name: Explore seed ${{ needs.seed.outputs.value }} shard ${{ matrix.shard }}
+    name: ${{ matrix.lane }} Hunt seed ${{ needs.seed.outputs.value }} shard ${{ matrix.shard }}/${{ matrix.shards }}
     needs: [seed]
     # Not ubuntu-latest. The hunt pins netem randomness with `netem seed`, which
     # iproute2 learned in 6.6; 24.04 ships 6.1 and rejects the keyword, so every
@@ -83,7 +86,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        include:
+          - {lane: bug-oracle, shard: 0, shards: 4}
+          - {lane: bug-oracle, shard: 1, shards: 4}
+          - {lane: bug-oracle, shard: 2, shards: 4}
+          - {lane: bug-oracle, shard: 3, shards: 4}
+          - {lane: stress, shard: 0, shards: 2}
+          - {lane: stress, shard: 1, shards: 2}
     permissions:
       contents: read
     steps:
@@ -103,20 +112,23 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # One line in the log answering the first question a setup failure raises.
       - run: tc -V
-      - name: Run shard
+      - name: Run ${{ matrix.lane }} shard
         env:
-          CASES: ${{ inputs.cases || '60' }}
+          CASES: ${{ matrix.lane == 'bug-oracle' && (inputs.cases || '60') || (inputs.stress_cases || '20') }}
           HUNT_SEED: ${{ needs.seed.outputs.value }}
+          LANE: ${{ matrix.lane }}
           SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ matrix.shards }}
         run: |
-          mkdir -p hunt-results
+          mkdir -p "hunt-results/$LANE"
           while read -r base; do
             [ -n "$base" ] || continue
-            output="hunt-results/$base.$SHARD.json"
+            output="hunt-results/$LANE/$base.$SHARD.json"
             if ./netdoc-sim hunt "$base" \
+              --lane "$LANE" \
               --seed "$HUNT_SEED" \
               --cases "$CASES" \
-              --shard "$SHARD/$HUNT_SHARDS" \
+              --shard "$SHARD/$SHARDS" \
               --max-faults 2 \
               --json > "$output"; then
               continue
@@ -129,12 +141,12 @@ jobs:
           done <<< "$HUNT_BASELINES"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: hunt-shard-${{ matrix.shard }}
+          name: hunt-${{ matrix.lane }}-shard-${{ matrix.shard }}
           path: hunt-results
           if-no-files-found: error
 
   merge:
-    name: Merge and triage exploration seed ${{ needs.seed.outputs.value }}
+    name: Merge both Hunt lanes and triage bug-oracle seed ${{ needs.seed.outputs.value }}
     if: ${{ always() }}
     needs: [seed, hunt]
     runs-on: ubuntu-26.04
@@ -157,23 +169,26 @@ jobs:
           CGO_ENABLED: "0"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: hunt-shard-*
+          pattern: hunt-*-shard-*
           path: hunt-shards
           merge-multiple: true
       - name: Merge shard reports
         run: |
           mkdir -p merged-hunts
-          while read -r base; do
-            [ -n "$base" ] || continue
-            if ./netdoc-sim hunt merge hunt-shards/"$base".*.json > "merged-hunts/$base.json"; then
-              continue
-            else
-              status=$?
-            fi
-            if [ "$status" -ne 1 ]; then
-              exit "$status"
-            fi
-          done <<< "$HUNT_BASELINES"
+          for lane in bug-oracle stress; do
+            mkdir -p "merged-hunts/$lane"
+            while read -r base; do
+              [ -n "$base" ] || continue
+              if ./netdoc-sim hunt merge hunt-shards/"$lane"/"$base".*.json > "merged-hunts/$lane/$base.json"; then
+                continue
+              else
+                status=$?
+              fi
+              if [ "$status" -ne 1 ]; then
+                exit "$status"
+              fi
+            done <<< "$HUNT_BASELINES"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hunt-results
@@ -220,8 +235,9 @@ jobs:
             args+=(--create)
           fi
           ./netdoc-sim triage \
+            --lane bug-oracle \
             --cases "$CASES" \
-            --hunt-results merged-hunts \
+            --hunt-results merged-hunts/bug-oracle \
             --seed "$HUNT_SEED" \
             "${args[@]}" \
             --revision "$GITHUB_SHA" \
@@ -233,7 +249,7 @@ jobs:
           HUNT_SEED: ${{ needs.seed.outputs.value }}
         run: |
           {
-            echo '### netdoc-sim hunt triage'
+            echo '### netdoc-sim bug-oracle Hunt triage'
             echo ''
             echo "Mode: ${MODE:-mode was never decided; the run failed before triage}"
             echo "Exploration seed: ${HUNT_SEED:-seed was not resolved}"

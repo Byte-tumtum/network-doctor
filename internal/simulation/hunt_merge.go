@@ -60,7 +60,8 @@ func MergeHuntResults(inputs ...*HuntResult) (*HuntResult, error) {
 		}
 	}
 
-	merged := &HuntResult{GeneratorVersion: first.GeneratorVersion, BaseScenario: first.BaseScenario,
+	lane, _ := resolveRecordedHuntLane(first.GeneratorVersion, first.Lane)
+	merged := &HuntResult{GeneratorVersion: first.GeneratorVersion, Lane: lane, BaseScenario: first.BaseScenario,
 		HuntSeed: first.HuntSeed, RequestedCases: first.RequestedCases, MaxFaults: first.MaxFaults,
 		FailFast: first.FailFast, DryRun: first.DryRun, Cases: []HuntCaseResult{}}
 	complete := true
@@ -125,6 +126,9 @@ func validateHuntMetadata(result *HuntResult) error {
 	if err := validateHuntGeneratorVersion(result.GeneratorVersion); err != nil {
 		return err
 	}
+	if _, err := resolveRecordedHuntLane(result.GeneratorVersion, result.Lane); err != nil {
+		return err
+	}
 	if !validHuntBase(result.BaseScenario) {
 		return fmt.Errorf("unsupported base scenario %q", result.BaseScenario)
 	}
@@ -153,6 +157,11 @@ func validateHuntMetadata(result *HuntResult) error {
 func compatibleHuntResults(want, got *HuntResult) error {
 	if got.GeneratorVersion != want.GeneratorVersion {
 		return fmt.Errorf("generator version %q does not match %q", got.GeneratorVersion, want.GeneratorVersion)
+	}
+	wantLane, _ := resolveRecordedHuntLane(want.GeneratorVersion, want.Lane)
+	gotLane, _ := resolveRecordedHuntLane(got.GeneratorVersion, got.Lane)
+	if gotLane != wantLane {
+		return fmt.Errorf("hunt lane %q does not match %q", gotLane, wantLane)
 	}
 	if got.BaseScenario != want.BaseScenario {
 		return fmt.Errorf("base scenario %q does not match %q", got.BaseScenario, want.BaseScenario)
@@ -183,7 +192,11 @@ func expectedHuntManifests(result *HuntResult) ([]GeneratedCaseManifest, int, er
 	if err != nil {
 		return nil, 0, err
 	}
-	stream := newHuntCaseStream(result.GeneratorVersion, result.BaseScenario, base, result.HuntSeed,
+	lane, err := resolveRecordedHuntLane(result.GeneratorVersion, result.Lane)
+	if err != nil {
+		return nil, 0, err
+	}
+	stream := newHuntCaseStream(result.GeneratorVersion, lane, result.BaseScenario, base, result.HuntSeed,
 		result.RequestedCases, result.MaxFaults, nil)
 	manifests := make([]GeneratedCaseManifest, 0, result.RequestedCases)
 	for stream.accepted < stream.target {

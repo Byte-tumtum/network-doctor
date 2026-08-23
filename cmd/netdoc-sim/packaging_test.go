@@ -548,6 +548,7 @@ func TestShippedSurfacesOfferTheRealFixedVocabularies(t *testing.T) {
 	}{
 		{"hunt base scenarios", simulation.HuntBaseNames()},
 		{"hunt generator versions", simulation.HuntGeneratorVersions()},
+		{"Hunt lanes", simulation.HuntLaneNames()},
 		{"starter packs", simulation.StarterPackNames()},
 		{"authored challenge slugs", simulation.AuthoredChallengeSlugs()},
 		{"challenge answers", simulation.ChallengeAnswerNames()},

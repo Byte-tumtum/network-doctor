@@ -12,7 +12,7 @@ import (
 )
 
 func huntManifest(mutations ...GeneratedMutation) GeneratedCaseManifest {
-	manifest := GeneratedCaseManifest{GeneratorVersion: HuntGeneratorVersion, BaseScenario: "healthy-routed-network",
+	manifest := GeneratedCaseManifest{GeneratorVersion: HuntGeneratorVersion, Lane: HuntLaneBugOracle, BaseScenario: "healthy-routed-network",
 		HuntSeed: 12345, Case: 17, CaseSeed: -99, Mutations: mutations}
 	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
 	return manifest
@@ -1159,7 +1159,8 @@ func TestHuntAggregatesFindingsAndSuggestions(t *testing.T) {
 
 func TestRunHuntDryRunReproducesDirectCaseAndSkipsDuplicates(t *testing.T) {
 	base := loadHuntBase(t, "healthy-routed-network")
-	batch := RunHunt(context.Background(), "healthy-routed-network", base, nil, HuntOptions{Cases: 50, Seed: 12345, MaxFaults: 2, DryRun: true})
+	batch := RunHunt(context.Background(), "healthy-routed-network", base, nil, HuntOptions{
+		Cases: 50, Seed: 12345, MaxFaults: 2, GeneratorVersion: "v5", Lane: HuntLaneAllOperators, DryRun: true})
 	if batch.Result != HuntResultClean || batch.ExecutedCases != 0 || batch.GeneratedCases != 50 {
 		t.Fatalf("batch = %+v", batch)
 	}
@@ -1169,7 +1170,7 @@ func TestRunHuntDryRunReproducesDirectCaseAndSkipsDuplicates(t *testing.T) {
 	selected := batch.Cases[17]
 	caseNumber := selected.Manifest.Case
 	direct := RunHunt(context.Background(), "healthy-routed-network", base, nil,
-		HuntOptions{Seed: 12345, Case: &caseNumber, MaxFaults: 2, DryRun: true})
+		HuntOptions{Seed: 12345, Case: &caseNumber, MaxFaults: 2, GeneratorVersion: "v5", Lane: HuntLaneAllOperators, DryRun: true})
 	if len(direct.Cases) != 1 || !reflect.DeepEqual(direct.Cases[0].Manifest, selected.Manifest) {
 		t.Fatalf("direct manifest differs:\n%+v\n%+v", direct.Cases, selected.Manifest)
 	}

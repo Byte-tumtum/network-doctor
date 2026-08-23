@@ -42,6 +42,7 @@ type HuntOptions struct {
 	Shard            *HuntShard
 	MaxFaults        int
 	GeneratorVersion string
+	Lane             HuntLane
 	FailFast         bool
 	DryRun           bool
 }
@@ -68,6 +69,7 @@ type HuntSuggestion struct {
 
 type HuntResult struct {
 	GeneratorVersion    string           `json:"generator_version"`
+	Lane                HuntLane         `json:"lane,omitempty"`
 	BaseScenario        string           `json:"base_scenario"`
 	HuntSeed            int64            `json:"hunt_seed"`
 	RequestedCases      int              `json:"requested_cases"`
@@ -98,6 +100,11 @@ func (o *HuntOptions) withDefaults() error {
 	if err := validateHuntGeneratorVersion(o.GeneratorVersion); err != nil {
 		return err
 	}
+	lane, err := ResolveHuntLane(o.GeneratorVersion, o.Lane)
+	if err != nil {
+		return err
+	}
+	o.Lane = lane
 	if o.Cases == 0 {
 		o.Cases = 50
 	}
@@ -125,10 +132,12 @@ func (o *HuntOptions) withDefaults() error {
 }
 
 // huntCaseStream owns the existing global sequence: candidates begin at zero,
-// semantic duplicates do not count toward the requested unique-case total,
-// and every accepted manifest keeps its original global case number.
+// duplicate identities under the selected generator do not count toward the
+// requested case total, and every accepted manifest keeps its original global
+// case number.
 type huntCaseStream struct {
 	version, baseID string
+	lane            HuntLane
 	base            *Scenario
 	seed            int64
 	maxFaults       int
@@ -142,8 +151,8 @@ type huntCaseStream struct {
 	duplicates      int
 }
 
-func newHuntCaseStream(version, baseID string, base *Scenario, seed int64, cases, maxFaults int, only *int) *huntCaseStream {
-	stream := &huntCaseStream{version: version, baseID: baseID, base: base, seed: seed,
+func newHuntCaseStream(version string, lane HuntLane, baseID string, base *Scenario, seed int64, cases, maxFaults int, only *int) *huntCaseStream {
+	stream := &huntCaseStream{version: version, lane: lane, baseID: baseID, base: base, seed: seed,
 		maxFaults: maxFaults, target: cases, maxCandidates: cases * 20, deduplicate: true,
 		seen: make(map[string]bool, cases)}
 	if only != nil {
@@ -160,7 +169,7 @@ func (s *huntCaseStream) next() (*GeneratedCase, error) {
 		if caseNumber > HuntMaxCaseNumber {
 			break
 		}
-		generated, err := generateHuntCase(s.version, s.baseID, s.base, s.seed, caseNumber, s.maxFaults)
+		generated, err := generateHuntCaseInLane(s.version, s.lane, s.baseID, s.base, s.seed, caseNumber, s.maxFaults)
 		if err != nil {
 			return nil, fmt.Errorf("case %d: %w", caseNumber, err)
 		}
@@ -202,8 +211,9 @@ func canonicalHuntCaseResult(manifest GeneratedCaseManifest, report *Report) Hun
 	return item
 }
 
-// RunHunt generates cases independently, skips semantic duplicates in batch
-// mode, and runs each accepted case sequentially through the normal simulator.
+// RunHunt generates cases independently, skips generator-defined duplicate
+// identities in batch mode, and runs each accepted case sequentially through
+// the normal simulator.
 //
 // Each case runs netdoc exactly once, and the hunt therefore makes no claim
 // about whether a diagnosis is reproducible. It cannot: a second run inside the
@@ -217,7 +227,7 @@ func canonicalHuntCaseResult(manifest GeneratedCaseManifest, report *Report) Hun
 func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() Backend, opts HuntOptions) *HuntResult {
 	result := &HuntResult{BaseScenario: baseID, HuntSeed: opts.Seed}
 	err := opts.withDefaults()
-	result.GeneratorVersion = opts.GeneratorVersion
+	result.GeneratorVersion, result.Lane = opts.GeneratorVersion, opts.Lane
 	if err != nil {
 		result.Result, result.ErrorKind, result.Error = HuntResultError, "configuration", err.Error()
 		result.finish()
@@ -237,7 +247,7 @@ func RunHunt(ctx context.Context, baseID string, base *Scenario, backend func() 
 		result.finish()
 		return result
 	}
-	stream := newHuntCaseStream(opts.GeneratorVersion, baseID, base, opts.Seed, result.RequestedCases, opts.MaxFaults, opts.Case)
+	stream := newHuntCaseStream(opts.GeneratorVersion, opts.Lane, baseID, base, opts.Seed, result.RequestedCases, opts.MaxFaults, opts.Case)
 	for stream.accepted < stream.target {
 		if err := ctx.Err(); err != nil {
 			result.Cancelled, result.RuntimeFailure = true, true

@@ -543,7 +543,7 @@ func TestHuntDirectorReceivesExactGenerationInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if argv[0] != huntDirectorCommand || gotBase != base || !got.seed.set || got.seed.v != -44 ||
-		*got.cases != 6 || *got.caseNum != 17 || *got.maxFaults != 3 || *got.generator != "v3" || !*got.failFast || !*got.json ||
+		*got.cases != 6 || *got.caseNum != 17 || *got.maxFaults != 3 || *got.generator != "v3" || *got.lane != string(simulation.HuntLaneAllOperators) || !*got.failFast || !*got.json ||
 		*got.netdoc != abs || *got.timeout != 7*time.Second {
 		t.Fatalf("forwarded hunt = argv %v base %q seed %+v", argv, gotBase, got.seed)
 	}
@@ -563,7 +563,7 @@ func TestHuntDirectorReceivesShardSelector(t *testing.T) {
 	}
 	got, gotBase := receivedHunt(t, huntDirectorArgv(f, base, path))
 	if gotBase != base || !got.shard.set || got.shard.value != (simulation.HuntShard{Index: 2, Count: 4}) ||
-		*got.cases != 60 || got.seed.v != 7 || *got.generator != "v3" || *got.netdoc != abs {
+		*got.cases != 60 || got.seed.v != 7 || *got.generator != "v3" || *got.lane != string(simulation.HuntLaneAllOperators) || *got.netdoc != abs {
 		t.Fatalf("forwarded shard hunt = base %q flags %+v", gotBase, got)
 	}
 }
@@ -581,8 +581,9 @@ func TestHuntDryRunNeedsNoNetdocOrNamespaces(t *testing.T) {
 	if result.GeneratedCases != 6 || result.ExecutedCases != 0 || len(result.Cases) != 6 {
 		t.Fatalf("result = %+v", result)
 	}
-	if result.GeneratorVersion != simulation.HuntGeneratorVersion {
-		t.Fatalf("default generator = %q, want %q", result.GeneratorVersion, simulation.HuntGeneratorVersion)
+	if result.GeneratorVersion != simulation.HuntGeneratorVersion || result.Lane != simulation.HuntLaneBugOracle {
+		t.Fatalf("default generator/lane = %q/%q, want %q/%q", result.GeneratorVersion, result.Lane,
+			simulation.HuntGeneratorVersion, simulation.HuntLaneBugOracle)
 	}
 	selected := result.Cases[3].Manifest
 	stdout.Reset()
@@ -612,10 +613,30 @@ func TestHuntDryRunReplaysAHistoricalGenerator(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.GeneratorVersion != "v3" || len(result.Cases) != 1 ||
+	if result.GeneratorVersion != "v3" || result.Lane != simulation.HuntLaneAllOperators || len(result.Cases) != 1 ||
 		result.Cases[0].Manifest.GeneratorVersion != "v3" ||
 		result.Cases[0].Manifest.CaseFingerprint != "3b23592ff5c01fd9" {
 		t.Fatalf("historical result = %+v", result)
+	}
+}
+
+func TestHuntDryRunRecordsTheRequestedStressLane(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"hunt", "healthy-routed-network", "--lane", "stress", "--dry-run", "--json",
+		"--seed", "12345", "--cases", "8"}, &stdout, &stderr); code != exitOK {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	var result simulation.HuntResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Lane != simulation.HuntLaneStress || len(result.Cases) != 8 {
+		t.Fatalf("stress result = %+v", result)
+	}
+	for _, item := range result.Cases {
+		if item.Manifest.Lane != simulation.HuntLaneStress {
+			t.Errorf("case %d lane = %q", item.Manifest.Case, item.Manifest.Lane)
+		}
 	}
 }
 
@@ -628,6 +649,9 @@ func TestHuntUsageBoundsAndBases(t *testing.T) {
 		{"hunt", "--dry-run", "--seed", "1", "--case", "-2"},
 		{"hunt", "--dry-run", "--seed", "1", "--max-faults", "4"},
 		{"hunt", "--dry-run", "--seed", "1", "--generator-version", "v999"},
+		{"hunt", "--dry-run", "--seed", "1", "--lane", "all"},
+		{"hunt", "--dry-run", "--seed", "1", "--lane", "invalid"},
+		{"hunt", "--dry-run", "--seed", "1", "--generator-version", "v3", "--lane", "stress"},
 		{"hunt", "--dry-run", "--seed", "1", "--case", "2", "--shard", "0/2"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -1483,7 +1507,7 @@ func TestHuntLaunchChoosesTheSeedTheDirectorRunsWith(t *testing.T) {
 		}
 		f, base := receivedHunt(t, call.argv)
 		if base != "dual-stack-healthy" || *f.netdoc != abs || *f.cases != 6 || *f.maxFaults != 3 ||
-			*f.generator != simulation.HuntGeneratorVersion {
+			*f.generator != simulation.HuntGeneratorVersion || *f.lane != string(simulation.HuntLaneBugOracle) {
 			t.Errorf("hunt got base %q netdoc %q cases %d max-faults %d", base, *f.netdoc, *f.cases, *f.maxFaults)
 		}
 		if !f.seed.set {
@@ -1561,7 +1585,7 @@ func TestHuntDirectorRunsTheCasesItWasGiven(t *testing.T) {
 		t.Fatalf("stdout is not a hunt result: %v (%q)", err, stdout.String())
 	}
 	if result.HuntSeed != 99 || result.BaseScenario != "healthy-routed-network" || result.RequestedCases != 2 ||
-		result.GeneratorVersion != "v3" {
+		result.GeneratorVersion != "v3" || result.Lane != simulation.HuntLaneAllOperators {
 		t.Fatalf("result = %+v", result)
 	}
 	// The director is the executing half: unlike the launcher's -dry-run, it

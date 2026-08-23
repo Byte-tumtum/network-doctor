@@ -21,7 +21,7 @@ import (
 const (
 	// HuntGeneratorVersion is part of every manifest and seed domain. A future
 	// algorithm change must increment it instead of silently changing old cases.
-	HuntGeneratorVersion = "v5"
+	HuntGeneratorVersion = "v6"
 	huntSeedDomain       = "netdoc-sim-hunt-v3"
 	HuntMaxFaults        = 3
 	HuntMaxCases         = 500
@@ -29,11 +29,10 @@ const (
 )
 
 // huntGeneratorVersions is every generator this build can still materialize a
-// case for, oldest first. A version is the set of mutation operators that were
-// available when it was published: adding an operator changes which mutation
-// every case number lands on, so it adds a version here rather than editing
-// one, and anything holding an old case, whether a shared challenge id or a filed
-// triage finding, keeps resolving through the rules it was minted under.
+// case for, oldest first. A version pins the operator universe, lane rules and
+// case identity algorithm. Changing any of them adds a version here rather
+// than editing one, so a shared challenge id or filed triage finding keeps
+// resolving through the rules it was minted under.
 //
 // The seed domain is deliberately not versioned. A case seed depends on the
 // base and the case number only, so every version draws the same numbers and
@@ -43,7 +42,7 @@ const (
 // Literals, not HuntGeneratorVersion. A published version has to stay
 // resolvable after the constant moves on, so a bump appends an entry here
 // rather than replacing the last one.
-var huntGeneratorVersions = []string{"v3", "v4", "v5"}
+var huntGeneratorVersions = []string{"v3", "v4", "v5", "v6"}
 
 // HuntGeneratorVersions returns every generator version this build can replay.
 func HuntGeneratorVersions() []string { return slices.Clone(huntGeneratorVersions) }
@@ -62,6 +61,60 @@ func validateHuntGeneratorVersion(version string) error {
 		return fmt.Errorf("unknown hunt generator version %q (have: %s)", version, strings.Join(huntGeneratorVersions, ", "))
 	}
 	return nil
+}
+
+type HuntLane string
+
+const (
+	HuntLaneBugOracle    HuntLane = "bug-oracle"
+	HuntLaneStress       HuntLane = "stress"
+	HuntLaneAllOperators HuntLane = "all"
+	huntLaneFirstVersion          = "v6"
+)
+
+// HuntLaneNames returns the CLI vocabulary. The all-operator lane exists only
+// for exact replay of generators published before the lane split.
+func HuntLaneNames() []string {
+	return []string{string(HuntLaneBugOracle), string(HuntLaneStress), string(HuntLaneAllOperators)}
+}
+
+func splitHuntGenerator(version string) bool {
+	return huntGeneratorIndex(version) >= huntGeneratorIndex(huntLaneFirstVersion)
+}
+
+// ResolveHuntLane applies the deliberate command/API default. Current
+// generators default to bug-oracle; historical generators default to their
+// original all-operator universe.
+func ResolveHuntLane(version string, lane HuntLane) (HuntLane, error) {
+	if err := validateHuntGeneratorVersion(version); err != nil {
+		return "", err
+	}
+	if lane == "" {
+		if splitHuntGenerator(version) {
+			lane = HuntLaneBugOracle
+		} else {
+			lane = HuntLaneAllOperators
+		}
+	}
+	if splitHuntGenerator(version) {
+		if lane != HuntLaneBugOracle && lane != HuntLaneStress {
+			return "", fmt.Errorf("hunt generator %s requires lane %q or %q", version, HuntLaneBugOracle, HuntLaneStress)
+		}
+		return lane, nil
+	}
+	if lane != HuntLaneAllOperators {
+		return "", fmt.Errorf("historical hunt generator %s requires lane %q", version, HuntLaneAllOperators)
+	}
+	return lane, nil
+}
+
+// resolveRecordedHuntLane accepts missing lane metadata only for artifacts from
+// generators that predate lanes. A current artifact must name its lane.
+func resolveRecordedHuntLane(version string, lane HuntLane) (HuntLane, error) {
+	if lane == "" && splitHuntGenerator(version) {
+		return "", fmt.Errorf("hunt generator %s artifact has no lane metadata", version)
+	}
+	return ResolveHuntLane(version, lane)
 }
 
 // Sorted: validHuntBase binary-searches this list.
@@ -122,11 +175,12 @@ type GeneratedMutation struct {
 
 // GeneratedCaseManifest is the stable, display-safe reproduction artifact.
 type GeneratedCaseManifest struct {
-	GeneratorVersion string `json:"generator_version"`
-	BaseScenario     string `json:"base_scenario"`
-	HuntSeed         int64  `json:"hunt_seed"`
-	Case             int    `json:"case"`
-	CaseSeed         int64  `json:"case_seed"`
+	GeneratorVersion string   `json:"generator_version"`
+	Lane             HuntLane `json:"lane,omitempty"`
+	BaseScenario     string   `json:"base_scenario"`
+	HuntSeed         int64    `json:"hunt_seed"`
+	Case             int      `json:"case"`
+	CaseSeed         int64    `json:"case_seed"`
 	// MaxFaults is the fault ceiling this case was drawn under. It is part of
 	// the experiment, not a preference: the first number drawn from the case
 	// seed is how many mutations to take, and it is drawn modulo this ceiling,
@@ -152,44 +206,63 @@ type mutationOperator struct {
 	// means the first one. An older generator does not see it at all, which is
 	// what lets a new family be added without moving any case a published
 	// artifact already names.
-	since        string
-	description  string
-	conflictTags []string
-	applicable   func(*Scenario) bool
-	generate     func(*mathrand.Rand, *Scenario) (GeneratedMutation, error)
+	since string
+	// findingContract is the direct diagnosis comparison this operator can
+	// reach. huntNoFindingContract puts it in the stress lane. It is required
+	// metadata, so a new operator cannot enter the bug-oracle lane by default.
+	findingContract huntFindingContract
+	description     string
+	conflictTags    []string
+	applicable      func(*Scenario) bool
+	generate        func(*mathrand.Rand, *Scenario) (GeneratedMutation, error)
+}
+
+type huntFindingContract string
+
+const (
+	huntNoFindingContract  huntFindingContract = "none"
+	huntDNSFailureContract huntFindingContract = "observed_dns_failure_reported_healthy"
+	huntTCPResetContract   huntFindingContract = "tcp_reset_not_distinguished"
+)
+
+func (o mutationOperator) lane() HuntLane {
+	if o.findingContract == "" || o.findingContract == huntNoFindingContract {
+		return HuntLaneStress
+	}
+	return HuntLaneBugOracle
 }
 
 // huntMutationRegistry is ordered API. Selection may shuffle indices, never a
 // map, and generated manifests are sorted back into this stable ID vocabulary.
 var huntMutationRegistry = []mutationOperator{
-	{id: "netem.loss", description: "bounded packet loss", conflictTags: []string{"link-shaping"}, applicable: hasDataPath, generate: generateLoss},
-	{id: "netem.latency", description: "bounded path latency", conflictTags: []string{"link-shaping"}, applicable: hasDataPath, generate: generateLatency},
-	{id: "netem.jitter", description: "bounded path jitter", conflictTags: []string{"link-shaping"}, applicable: hasDataPath, generate: generateJitter},
-	{id: "timeline.netem_spike", description: "temporary latency and loss spike", conflictTags: []string{"link-shaping", "resolver-state", "timeline"}, applicable: hasTimedDataPath, generate: generateNetemSpike},
-	{id: "dns.servfail", description: "resolver returns SERVFAIL", conflictTags: []string{"resolver-state"}, applicable: hasNamedResolver, generate: generateDNSSERVFAIL},
-	{id: "dns.drop", description: "resolver drops responses", conflictTags: []string{"resolver-state"}, applicable: hasNamedResolver, generate: generateDNSDrop},
-	{id: "timeline.dns_outage", description: "temporary resolver outage", conflictTags: []string{"resolver-state", "timeline"}, applicable: hasNamedResolver, generate: generateDNSOutage},
-	{id: "service.tcp_reset", description: "target accepts then resets TCP", conflictTags: []string{"target-service"}, applicable: hasHTTPTestTarget, generate: generateTCPReset},
-	{id: "service.tls_expired", description: "target presents an expired TLS certificate", conflictTags: []string{"target-service"}, applicable: hasValidTLSTestTarget, generate: generateTLSExpired},
-	{id: "proxy.connect_refused", description: "proxy refuses its CONNECT destination", conflictTags: []string{"proxy-state"}, applicable: hasSOCKS5TestProxy, generate: generateProxyCONNECTRefused},
-	{id: "quic.udp_443_block", description: "QUIC UDP/443 is blocked while TCP/443 remains reachable", conflictTags: []string{"quic-state"}, applicable: hasWorkingQUICFixture, generate: generateQUICUDP443Block},
-	{id: "encrypted_dns.doh_invalid", description: "DoH returns a protocol-invalid DNS message", conflictTags: []string{"encrypted-dns-state"}, applicable: hasWorkingDoHFixture, generate: generateInvalidDoHResponse},
-	{id: "http.status_503", description: "HTTP target returns status 503", conflictTags: []string{"target-service"}, applicable: hasSuccessfulHTTPTestTarget, generate: generateHTTP503},
-	{id: "family.ipv4_drop", description: "IPv4 path fails while IPv6 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv4Drop},
-	{id: "family.ipv6_drop", description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
-	{id: "link.transient_down", description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
-	{id: "routing.preferred_path_failure", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasPreferredPathFailureCandidate, generate: generatePreferredPathFailure},
+	{id: "netem.loss", findingContract: huntNoFindingContract, description: "bounded packet loss", conflictTags: []string{"link-shaping"}, applicable: hasDataPath, generate: generateLoss},
+	{id: "netem.latency", findingContract: huntNoFindingContract, description: "bounded path latency", conflictTags: []string{"link-shaping"}, applicable: hasDataPath, generate: generateLatency},
+	{id: "netem.jitter", findingContract: huntNoFindingContract, description: "bounded path jitter", conflictTags: []string{"link-shaping"}, applicable: hasDataPath, generate: generateJitter},
+	{id: "timeline.netem_spike", findingContract: huntNoFindingContract, description: "temporary latency and loss spike", conflictTags: []string{"link-shaping", "resolver-state", "timeline"}, applicable: hasTimedDataPath, generate: generateNetemSpike},
+	{id: "dns.servfail", findingContract: huntDNSFailureContract, description: "resolver returns SERVFAIL", conflictTags: []string{"resolver-state"}, applicable: hasNamedResolver, generate: generateDNSSERVFAIL},
+	{id: "dns.drop", findingContract: huntDNSFailureContract, description: "resolver drops responses", conflictTags: []string{"resolver-state"}, applicable: hasNamedResolver, generate: generateDNSDrop},
+	{id: "timeline.dns_outage", findingContract: huntDNSFailureContract, description: "temporary resolver outage", conflictTags: []string{"resolver-state", "timeline"}, applicable: hasNamedResolver, generate: generateDNSOutage},
+	{id: "service.tcp_reset", findingContract: huntTCPResetContract, description: "target accepts then resets TCP", conflictTags: []string{"target-service"}, applicable: hasHTTPTestTarget, generate: generateTCPReset},
+	{id: "service.tls_expired", findingContract: huntFindingContract(ConditionTLSCertificateExpired), description: "target presents an expired TLS certificate", conflictTags: []string{"target-service"}, applicable: hasValidTLSTestTarget, generate: generateTLSExpired},
+	{id: "proxy.connect_refused", findingContract: huntFindingContract(ConditionProxyDestinationRefused), description: "proxy refuses its CONNECT destination", conflictTags: []string{"proxy-state"}, applicable: hasSOCKS5TestProxy, generate: generateProxyCONNECTRefused},
+	{id: "quic.udp_443_block", findingContract: huntFindingContract(ConditionQUICUDP443Blocked), description: "QUIC UDP/443 is blocked while TCP/443 remains reachable", conflictTags: []string{"quic-state"}, applicable: hasWorkingQUICFixture, generate: generateQUICUDP443Block},
+	{id: "encrypted_dns.doh_invalid", findingContract: huntNoFindingContract, description: "DoH returns a protocol-invalid DNS message", conflictTags: []string{"encrypted-dns-state"}, applicable: hasWorkingDoHFixture, generate: generateInvalidDoHResponse},
+	{id: "http.status_503", findingContract: huntNoFindingContract, description: "HTTP target returns status 503", conflictTags: []string{"target-service"}, applicable: hasSuccessfulHTTPTestTarget, generate: generateHTTP503},
+	{id: "family.ipv4_drop", findingContract: huntFindingContract(ConditionIPv4InternetUnreachable), description: "IPv4 path fails while IPv6 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv4Drop},
+	{id: "family.ipv6_drop", findingContract: huntFindingContract(ConditionIPv6InternetUnreachable), description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
+	{id: "link.transient_down", findingContract: huntNoFindingContract, description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
+	{id: "routing.preferred_path_failure", findingContract: huntNoFindingContract, description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasPreferredPathFailureCandidate, generate: generatePreferredPathFailure},
 	// v4. Appended, never interleaved: an older generator is exactly this list
 	// truncated at its own version, so where a v3 case landed cannot move.
-	{id: "service.connection_refused", since: "v4", description: "nothing listens on the target port", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateConnectionRefused},
-	{id: "service.tcp_port_blocked", since: "v4", description: "the target port silently discards inbound connections", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateTCPPortBlocked},
-	{id: "service.tls_hostname_mismatch", since: "v4", description: "target presents a certificate for a different name", conflictTags: []string{"target-service"}, applicable: hasValidTLSTestTarget, generate: generateTLSHostnameMismatch},
-	{id: "routing.no_default_route", since: "v4", description: "the client's only default route is deleted", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasSoleDefaultRoute, generate: generateNoDefaultRoute},
-	{id: "routing.wrong_default_route", since: "v4", description: "the default route is repointed at an on-link router that goes nowhere", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWrongDefaultRouteCandidate, generate: generateWrongDefaultRoute},
-	{id: "routing.missing_subnet_route", since: "v4", description: "the specific route to the target's subnet is removed", conflictTags: []string{"route-choice"}, applicable: hasMissingSubnetRouteCandidate, generate: generateMissingSubnetRoute},
+	{id: "service.connection_refused", since: "v4", findingContract: huntNoFindingContract, description: "nothing listens on the target port", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateConnectionRefused},
+	{id: "service.tcp_port_blocked", since: "v4", findingContract: huntNoFindingContract, description: "the target port silently discards inbound connections", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateTCPPortBlocked},
+	{id: "service.tls_hostname_mismatch", since: "v4", findingContract: huntFindingContract(ConditionTLSHostnameMismatch), description: "target presents a certificate for a different name", conflictTags: []string{"target-service"}, applicable: hasValidTLSTestTarget, generate: generateTLSHostnameMismatch},
+	{id: "routing.no_default_route", since: "v4", findingContract: huntFindingContract(ConditionNoDefaultRoute), description: "the client's only default route is deleted", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasSoleDefaultRoute, generate: generateNoDefaultRoute},
+	{id: "routing.wrong_default_route", since: "v4", findingContract: huntNoFindingContract, description: "the default route is repointed at an on-link router that goes nowhere", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasWrongDefaultRouteCandidate, generate: generateWrongDefaultRoute},
+	{id: "routing.missing_subnet_route", since: "v4", findingContract: huntNoFindingContract, description: "the specific route to the target's subnet is removed", conflictTags: []string{"route-choice"}, applicable: hasMissingSubnetRouteCandidate, generate: generateMissingSubnetRoute},
 	// v5. The condition the path-MTU probe exists for, and the one major fault
 	// the hunt could not invent.
-	{id: "pmtu.blackhole", since: "v5", description: "a forwarding hop carries less than the endpoints offer and stays silent about it", conflictTags: []string{"link-shaping", "path-outage"}, applicable: hasPMTUBlackholeHop, generate: generatePMTUBlackhole},
+	{id: "pmtu.blackhole", since: "v5", findingContract: huntNoFindingContract, description: "a forwarding hop carries less than the endpoints offer and stays silent about it", conflictTags: []string{"link-shaping", "path-outage"}, applicable: hasPMTUBlackholeHop, generate: generatePMTUBlackhole},
 }
 
 // huntOperators is the operator list one generator version sees: this registry
@@ -205,6 +278,18 @@ func huntOperators(version string) []mutationOperator {
 		}
 	}
 	return out
+}
+
+func huntOperatorsForLane(version string, lane HuntLane) ([]mutationOperator, error) {
+	lane, err := ResolveHuntLane(version, lane)
+	if err != nil {
+		return nil, err
+	}
+	operators := huntOperators(version)
+	if lane == HuntLaneAllOperators {
+		return operators, nil
+	}
+	return slices.DeleteFunc(operators, func(op mutationOperator) bool { return op.lane() != lane }), nil
 }
 
 // DeriveHuntCaseSeed makes case N independent of every earlier PRNG stream.
@@ -229,7 +314,15 @@ func DeriveHuntCaseSeed(seed int64, base string, caseNumber int) int64 {
 // generateHuntCase is the same thing at a named version, which is what an
 // artifact minted under an older generator has to be replayed through.
 func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {
+	return generateHuntCaseInLane(version, "", baseID, base, huntSeed, caseNumber, maxFaults)
+}
+
+func generateHuntCaseInLane(version string, lane HuntLane, baseID string, base *Scenario, huntSeed int64, caseNumber, maxFaults int) (*GeneratedCase, error) {
 	if err := validateHuntGeneratorVersion(version); err != nil {
+		return nil, err
+	}
+	lane, err := ResolveHuntLane(version, lane)
+	if err != nil {
 		return nil, err
 	}
 	if !validHuntBase(baseID) {
@@ -253,13 +346,17 @@ func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, ca
 	// #nosec G404 -- hunt cases must reproduce exactly from their published seed.
 	rng := mathrand.New(mathrand.NewSource(caseSeed))
 	var applicable []mutationOperator
-	for _, op := range huntOperators(version) {
+	operators, err := huntOperatorsForLane(version, lane)
+	if err != nil {
+		return nil, err
+	}
+	for _, op := range operators {
 		if op.applicable(validatedBase) {
 			applicable = append(applicable, op)
 		}
 	}
 	if len(applicable) == 0 {
-		return nil, fmt.Errorf("base scenario %q has no applicable hunt mutations", baseID)
+		return nil, fmt.Errorf("base scenario %q has no applicable %s hunt mutations", baseID, lane)
 	}
 	want := 1 + rng.Intn(min(maxFaults, len(applicable)))
 	perm := rng.Perm(len(applicable))
@@ -302,7 +399,13 @@ func generateHuntCase(version, baseID string, base *Scenario, huntSeed int64, ca
 	if err := generated.Validate(); err != nil {
 		return nil, fmt.Errorf("generated scenario validation: %w", err)
 	}
-	manifest := GeneratedCaseManifest{GeneratorVersion: version, BaseScenario: baseID,
+	manifestLane := lane
+	if lane == HuntLaneAllOperators {
+		// Published v3-v5 manifests had no lane field. Keep them byte-for-byte
+		// compatible; their generator version resolves the missing value to all.
+		manifestLane = ""
+	}
+	manifest := GeneratedCaseManifest{GeneratorVersion: version, Lane: manifestLane, BaseScenario: baseID,
 		HuntSeed: huntSeed, Case: caseNumber, CaseSeed: caseSeed, MaxFaults: maxFaults, Mutations: mutations}
 	manifest.CaseFingerprint = huntCaseFingerprint(manifest)
 	return &GeneratedCase{Manifest: manifest, Scenario: generated}, nil
@@ -350,6 +453,19 @@ func operatorsCompatible(selected []mutationOperator, candidate mutationOperator
 }
 
 func huntCaseFingerprint(manifest GeneratedCaseManifest) string {
+	if splitHuntGenerator(manifest.GeneratorVersion) {
+		semantic := struct {
+			Version   string              `json:"version"`
+			Lane      HuntLane            `json:"lane"`
+			Base      string              `json:"base"`
+			Case      int                 `json:"case"`
+			Mutations []GeneratedMutation `json:"mutations"`
+		}{manifest.GeneratorVersion, manifest.Lane, manifest.BaseScenario, manifest.Case, manifest.Mutations}
+		blob, _ := json.Marshal(semantic)
+		sum := sha256.Sum256(blob)
+		return hex.EncodeToString(sum[:8])
+	}
+	// Keep the exact pre-lane fingerprint input for v3-v5 artifacts.
 	semantic := struct {
 		Version   string              `json:"version"`
 		Base      string              `json:"base"`

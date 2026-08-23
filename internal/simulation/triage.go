@@ -107,6 +107,7 @@ type TriageFinding struct {
 	MaxFaults        int                  `json:"max_faults"`
 	CaseFingerprint  string               `json:"case_fingerprint"`
 	GeneratorVersion string               `json:"generator_version"`
+	Lane             HuntLane             `json:"lane,omitempty"`
 	Finding          HuntFinding          `json:"finding"`
 	Reproducible     bool                 `json:"reproducible"`
 	Truth            ObservedTruth        `json:"simulator_truth"`
@@ -117,6 +118,7 @@ type TriageFinding struct {
 
 type TriageReport struct {
 	Revision  string                 `json:"revision"`
+	Lane      HuntLane               `json:"lane,omitempty"`
 	Context   string                 `json:"context,omitempty"`
 	Baselines []TriageScenarioResult `json:"baselines"`
 	Findings  []TriageFinding        `json:"findings"`
@@ -139,6 +141,7 @@ func NewTriageFinding(finding HuntFinding) TriageFinding {
 		MaxFaults:        repro.MaxFaults,
 		CaseFingerprint:  repro.CaseFingerprint,
 		GeneratorVersion: repro.GeneratorVersion,
+		Lane:             repro.Lane,
 		Finding:          finding,
 		Issue:            TriageIssue{Status: IssueStatusNotFiled},
 	}
@@ -159,7 +162,7 @@ func triageFingerprint(scenario string, seed int64, caseNumber int, caseFingerpr
 // printing two different commands for one case.
 func (f *TriageFinding) ReproduceCommand() string {
 	return HuntReproduction{BaseScenario: f.Scenario, Seed: f.Seed, Case: f.Case, MaxFaults: f.MaxFaults,
-		GeneratorVersion: f.GeneratorVersion}.Command()
+		GeneratorVersion: f.GeneratorVersion, Lane: f.Lane}.Command()
 }
 
 // IssueTitle carries the fingerprint as a bare hex word, which is what the
@@ -192,6 +195,8 @@ func (f *TriageFinding) IssueBody(revision, runContext string) string {
 		fmt.Fprintf(&b, "| probe | `%s` |\n", textsafe.Clean(finding.Probe))
 	}
 	fmt.Fprintf(&b, "| generator | `%s` |\n", textsafe.Clean(f.GeneratorVersion))
+	lane, _ := ResolveHuntLane(f.GeneratorVersion, f.Lane)
+	fmt.Fprintf(&b, "| Hunt lane | `%s` |\n", lane)
 	fmt.Fprintf(&b, "| revision | `%s` |\n", textsafe.Clean(revision))
 
 	fmt.Fprintf(&b, "\n## Why they disagree\n\n%s\n", textsafe.Clean(finding.Summary))
@@ -303,7 +308,7 @@ func (r *TriageReport) WriteJSON(w io.Writer) error { return writeJSON(w, r) }
 
 func (r *TriageReport) WriteText(w io.Writer) {
 	fmt.Fprintln(w, "Network Doctor hunt triage")
-	fmt.Fprintf(w, "\nRevision: %s\n", textsafe.Clean(orNone(r.Revision)))
+	fmt.Fprintf(w, "\nLane:     %s\nRevision: %s\n", r.Lane, textsafe.Clean(orNone(r.Revision)))
 	if r.Context != "" {
 		fmt.Fprintf(w, "Context:  %s\n", textsafe.Clean(r.Context))
 	}

@@ -2471,16 +2471,16 @@ func TestPMTUBlackholeScenario(t *testing.T) {
 // generator draws on its own has to reach the path-MTU probe, not merely carry
 // a fault declaration nothing exercises. The authored pmtu-blackhole scenario
 // proves the condition is modelable; this proves the generator can invent it.
-func TestGeneratedHuntPMTUBlackholeCaseReachesThePathMTUProbe(t *testing.T) {
+func TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe(t *testing.T) {
 	requireBackend(t)
 	netdoc, sim := buildBinaries(t)
 	const base = "healthy-routed-network"
-	generated, err := generateHuntCase(HuntGeneratorVersion, base, loadHuntBase(t, base), 20260102, 39, 1)
+	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, base, loadHuntBase(t, base), 20260102, 20, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(generated.Manifest.Mutations) != 1 || generated.Manifest.Mutations[0].ID != "pmtu.blackhole" {
-		t.Fatalf("case 39 is no longer the black hole case: %+v", generated.Manifest.Mutations)
+		t.Fatalf("stress case 20 is no longer the black hole case: %+v", generated.Manifest.Mutations)
 	}
 	rep := runScenarioDefinition(t, sim, netdoc, generated.Scenario)
 	if rep.Error != "" {
