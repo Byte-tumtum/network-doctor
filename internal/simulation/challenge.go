@@ -430,6 +430,7 @@ var challengeConditions = []challengeCondition{
 var challengeRecognition = map[ChallengeAnswer]func(*Diagnosis) bool{
 	AnswerHealthy:        func(d *Diagnosis) bool { return d.Verdict == diagnostic.VerdictOK },
 	AnswerDNSFailure:     flaggedRow(diagnostic.ProbeDNS),
+	AnswerRefused:        causeRecognizer(diagnostic.ConnectionCauseRefused),
 	AnswerReset:          causeRecognizer(diagnostic.ConnectionCauseReset),
 	AnswerTLSCertificate: conditionRecognizer(ConditionTLSCertificateExpired),
 	AnswerIPv4Failure:    conditionRecognizer(ConditionIPv4InternetUnreachable),
@@ -445,12 +446,11 @@ var challengeRecognition = map[ChallengeAnswer]func(*Diagnosis) bool{
 	// the only one that says the single route in place has a live gateway and
 	// still goes nowhere.
 	AnswerWrongDefaultRoute: causeRecognizer(diagnostic.RouteCauseSelectedPathFailed),
-	// AnswerRefused, AnswerPortBlocked and AnswerMissingRoute have no entries,
-	// for the same reason AnswerPacketLoss does not. netdoc's target row fails
-	// all three the same way and carries no cause: a refused port, a filtered
-	// one and a target with no route to it are one sentence to it, and there is
-	// no report it could produce that would name any of them. Three challenges
-	// it is going to lose, stated as the vocabulary gap it is.
+	// AnswerPortBlocked and AnswerMissingRoute have no entries. netdoc's target
+	// row fails both the same way and carries no cause: a filtered port and a
+	// target with no route to it are one sentence to it, and there is no report
+	// it could produce that would name either one. Two challenges it is going to
+	// lose, stated as the vocabulary gap it is.
 	//
 	// AnswerPacketLoss has no entry on purpose. netdoc's cause vocabulary
 	// carries no impairment verdict at all, so there is no report it could

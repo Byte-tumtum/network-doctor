@@ -484,6 +484,7 @@ var knownCauses = []string{
 	diagnostic.FamilyCauseIPv6Unreachable,
 	diagnostic.DNSCauseTimeout,
 	diagnostic.DNSCauseTemporaryFailure,
+	diagnostic.ConnectionCauseRefused,
 	diagnostic.ConnectionCauseReset,
 }
 

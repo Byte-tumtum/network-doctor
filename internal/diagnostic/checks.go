@@ -58,6 +58,7 @@ const (
 	FamilyCauseIPv6Unreachable    = "ipv6_unreachable"
 	DNSCauseTimeout               = "dns_timeout"
 	DNSCauseTemporaryFailure      = "dns_temporary_failure"
+	ConnectionCauseRefused        = "connection_refused"
 	ConnectionCauseReset          = "connection_reset"
 )
 
@@ -1605,12 +1606,25 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			r.Attempts = append(same, other...)
 			return r
 		}
+		refused := len(attempts) > 0 && ctx.Err() == nil
+		for _, attempt := range attempts {
+			if !isConnectionRefused(attempt.Err) {
+				refused = false
+				break
+			}
+		}
 		// All addresses failed: deterministic fallback path = first address.
 		src, iface, ambiguous := o.pathIdentity(ctx, nil, addrs[0], port)
 		r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, src, iface, ambiguous
 		tried := make([]net.IP, len(attempts))
 		for i, a := range attempts {
 			tried[i] = a.IP
+		}
+		if refused {
+			r.Cause = ConnectionCauseRefused
+			r.Detail = fmt.Sprintf("connection to port %d was refused on all %d attempted address(es): %s", port, len(attempts), joinIPs(tried))
+			r.Fix = fmt.Sprintf("connection refused: check that a service is listening on port %d and that no firewall is actively rejecting it", port)
+			return r
 		}
 		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(attempts), joinIPs(tried))
 		r.Fix = fmt.Sprintf("port %d blocked/refused: firewall, wrong network, or VPN routing?", port)

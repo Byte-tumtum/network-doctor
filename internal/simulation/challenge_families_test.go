@@ -444,17 +444,16 @@ func TestHumanAnswersRejectTheNeighbouringFault(t *testing.T) {
 }
 
 // TestFamiliesNetdocCannotStateScoreUnrecognized pins the other half of the
-// contract for the three families netdoc has no words for. It must not be
+// contract for the two families netdoc has no words for. It must not be
 // scored correct for the generic failure it does emit, and the loss has to say
 // which kind of loss it is.
 func TestFamiliesNetdocCannotStateScoreUnrecognized(t *testing.T) {
-	// The row netdoc really produces for all three: a failed target with no
+	// The row netdoc really produces for both: a failed target with no
 	// cause at all.
 	generic := &Diagnosis{Verdict: "service", Summary: "the target is unreachable",
 		Checks: []DiagnosisCheck{{ID: "internet_tcp", Status: "PASS"}, {ID: "dns", Status: "PASS"},
 			{ID: "target_tcp", Status: "FAIL"}}}
-	for _, mutation := range []string{"service.connection_refused", "service.tcp_port_blocked",
-		"routing.missing_subnet_route"} {
+	for _, mutation := range []string{"service.tcp_port_blocked", "routing.missing_subnet_route"} {
 		t.Run(mutation, func(t *testing.T) {
 			condition, _ := challengeConditionFor(mutation)
 			if _, known := challengeRecognition[condition.answer]; known {
@@ -472,6 +471,21 @@ func TestFamiliesNetdocCannotStateScoreUnrecognized(t *testing.T) {
 				t.Fatalf("a correct human against an unrecognized condition = %s", result.Result)
 			}
 		})
+	}
+}
+
+func TestConnectionRefusedScoresRecognized(t *testing.T) {
+	condition, _ := challengeConditionFor("service.connection_refused")
+	challenge := &Challenge{ID: "V3-000002", Node: "client", condition: condition,
+		Manifest: GeneratedCaseManifest{Mutations: []GeneratedMutation{familyMutation(condition.mutation)}}}
+	report := familyObservedReport(condition.mutation)
+	report.Tests[0].Diagnosis.Checks[0].Cause = diagnostic.ConnectionCauseRefused
+	result := ScoreChallenge(challenge, report, ChallengeSubmission{Answer: condition.answer})
+	if !result.Truth.Scoreable || result.Truth.Answer != AnswerRefused {
+		t.Fatalf("observed refusal truth = %+v", result.Truth)
+	}
+	if result.NetworkDoctor.Score != ChallengeCorrect || result.Result != ChallengeDraw {
+		t.Fatalf("classified refusal scored %s with result %s", result.NetworkDoctor.Score, result.Result)
 	}
 }
 

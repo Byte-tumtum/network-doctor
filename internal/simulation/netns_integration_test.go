@@ -382,7 +382,8 @@ func TestTierOneScenarios(t *testing.T) {
 				}
 			case "connection-refused":
 				check := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP))
-				if len(check.Attempts) != 1 || !strings.Contains(strings.ToLower(check.Attempts[0].Error), "connection refused") {
+				if check.Cause != diagnostic.ConnectionCauseRefused || len(check.Attempts) != 1 ||
+					!strings.Contains(strings.ToLower(check.Attempts[0].Error), "connection refused") {
 					t.Errorf("active refusal evidence: %+v", check)
 				}
 				if control := rep.Tests[1]; diagnosisCheck(control, string(diagnostic.ProbeTargetTCP)).Status != "PASS" ||

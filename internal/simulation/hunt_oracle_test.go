@@ -965,12 +965,13 @@ var huntFamilyPath = map[string]string{
 	"routing.preferred_path_failure": "no_finding",
 	"encrypted_dns.doh_invalid":      "no_finding",
 	"http.status_503":                "no_finding",
-	// The three families netdoc has no vocabulary for. Its target row fails the
-	// same way with no cause for a refused port, a filtered one and a target
-	// with no route, so there is nothing for a finding to accuse it of missing;
-	// Challenge Mode scores them unrecognized instead, which is where that gap
-	// is reported.
-	"service.connection_refused":   "no_finding",
+	// Refusal is asserted directly by its scenario and Challenge recognition,
+	// so Hunt does not need a duplicate finding for it.
+	"service.connection_refused": "no_finding",
+	// These two families still have no netdoc vocabulary. Its target row fails
+	// the same way with no cause for a filtered port and a target with no route,
+	// so there is nothing for a finding to accuse it of missing. Challenge Mode
+	// scores them unrecognized instead, which is where that gap is reported.
 	"service.tcp_port_blocked":     "no_finding",
 	"routing.missing_subnet_route": "no_finding",
 	// A repointed default stays out of the oracle: a client whose one default

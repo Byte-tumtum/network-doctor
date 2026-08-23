@@ -13,6 +13,7 @@ package diagnostic
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"strconv"
 	"sync"
@@ -69,9 +70,9 @@ func TestDialFromSourceLoopback(t *testing.T) {
 	}
 }
 
-// A refused loopback port fails fast and deterministically: no conn, the failed
-// attempt is recorded with its error.
-func TestDialIPsRefusedLoopback(t *testing.T) {
+// A refused loopback port reaches targetTCPProbe through the real wrapped
+// socket error chain and receives the structured refusal cause.
+func TestTargetTCPProbeRefusedLoopback(t *testing.T) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -81,13 +82,14 @@ func TestDialIPsRefusedLoopback(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	conn, _, attempts, _ := defaultOps.dialIPs(ctx, []net.IP{net.ParseIP("127.0.0.1")}, port)
-	if conn != nil {
-		conn.Close()
-		t.Fatal("expected no connection to a closed port")
+	r := defaultOps.targetTCPProbe(port)(ctx, map[ProbeID]ProbeResult{
+		ProbeDNS: {Addrs: []net.IP{net.ParseIP("127.0.0.1")}},
+	})
+	if r.Status != StatusFail || r.Cause != ConnectionCauseRefused {
+		t.Fatalf("closed loopback result = %+v, want FAIL cause %q", r, ConnectionCauseRefused)
 	}
-	if len(attempts) != 1 || attempts[0].Err == nil {
-		t.Errorf("want one failed attempt with an error, got %+v", attempts)
+	if len(r.Attempts) != 1 || !errors.Is(r.Attempts[0].Err, connectionRefusedErrno) {
+		t.Errorf("want one attempt with wrapped refusal errno, got %+v", r.Attempts)
 	}
 }
 

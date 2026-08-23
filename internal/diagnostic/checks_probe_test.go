@@ -119,6 +119,66 @@ func TestTargetTCPProbeAttemptCap(t *testing.T) {
 	}
 }
 
+func TestTargetTCPProbeClassifiesOnlyWrappedSocketRefusal(t *testing.T) {
+	wrappedConnectError := func(err error) error {
+		return &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: err}}
+	}
+	tests := []struct {
+		name      string
+		err       error
+		wantCause string
+	}{
+		{"connection refused", wrappedConnectError(connectionRefusedErrno), ConnectionCauseRefused},
+		{"timeout", wrappedConnectError(os.ErrDeadlineExceeded), ""},
+		{"connection reset", wrappedConnectError(syscall.ECONNRESET), ""},
+		{"EOF", io.EOF, ""},
+		{"closed connection", net.ErrClosed, ""},
+		{"network unreachable", wrappedConnectError(syscall.ENETUNREACH), ""},
+		{"TLS failure", tls.RecordHeaderError{Msg: "not a TLS record"}, ""},
+		{"proxy refusal", socks5ReplyError{code: 5}, ""},
+		{"matching error text without errno", errors.New("connection refused"), ""},
+		{"generic failure", errors.New("dial failed"), ""},
+	}
+	deps := map[ProbeID]ProbeResult{ProbeDNS: {Addrs: []net.IP{net.ParseIP("192.0.2.1")}}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ops := &netops{dialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, tt.err
+			}}
+			r := ops.targetTCPProbe(443)(context.Background(), deps)
+			if r.Status != StatusFail || r.Cause != tt.wantCause {
+				t.Fatalf("result = %+v, want FAIL cause %q", r, tt.wantCause)
+			}
+			if tt.wantCause == ConnectionCauseRefused {
+				if !strings.Contains(r.Detail, "was refused") || !strings.Contains(r.Fix, "actively rejecting") {
+					t.Errorf("refusal wording = detail %q, fix %q", r.Detail, r.Fix)
+				}
+			} else if !strings.Contains(r.Detail, "unreachable") {
+				t.Errorf("non-refusal detail = %q, want the broader unreachable result", r.Detail)
+			}
+		})
+	}
+}
+
+func TestTargetTCPProbeDoesNotClassifyMixedFailuresAsRefusal(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: connectionRefusedErrno}}
+	ops := &netops{dialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+		if network == "udp" {
+			return nil, errors.New("path identity unavailable")
+		}
+		host, _, _ := net.SplitHostPort(addr)
+		if host == "192.0.2.1" {
+			return nil, refused
+		}
+		return nil, os.ErrDeadlineExceeded
+	}}
+	addrs := []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")}
+	r := ops.targetTCPProbe(443)(context.Background(), map[ProbeID]ProbeResult{ProbeDNS: {Addrs: addrs}})
+	if r.Status != StatusFail || r.Cause != "" || len(r.Attempts) != 2 || !strings.Contains(r.Detail, "unreachable") {
+		t.Fatalf("mixed refusal and timeout = %+v, want the broader failure", r)
+	}
+}
+
 // A cancelled context dials nothing instead of grinding through addresses.
 func TestDialIPsCancelledStopsEarly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

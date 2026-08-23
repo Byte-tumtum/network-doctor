@@ -120,6 +120,39 @@ func TestDiagnoseTargetBranches(t *testing.T) {
 	}
 }
 
+func TestDiagnoseNamesRefusalOnlyWithWorkingEgressControl(t *testing.T) {
+	tg := mustTarget(t, "example.com:443")
+	base := map[ProbeID]ProbeResult{
+		ProbeIface:     {Status: StatusPass},
+		ProbeDNS:       {Status: StatusPass},
+		ProbeTargetTCP: {Status: StatusFail, Cause: ConnectionCauseRefused},
+		ProbeTLS:       {Status: StatusSkip},
+		ProbeHTTP:      {Status: StatusSkip},
+		ProbeHTTPS:     {Status: StatusSkip},
+	}
+	for _, tt := range []struct {
+		name        string
+		internet    Status
+		wantSummary string
+		wantVerdict string
+	}{
+		{"working egress isolates refusal", StatusPass, "explicitly refused", VerdictService},
+		{"failed egress keeps broader diagnosis", StatusFail, "local egress problem", VerdictNetwork},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res := make(map[ProbeID]ProbeResult, len(base)+1)
+			for id, result := range base {
+				res[id] = result
+			}
+			res[ProbeInternet] = ProbeResult{Status: tt.internet}
+			summary, verdict := Diagnose(tg, targetOrder, res)
+			if !strings.Contains(summary, tt.wantSummary) || verdict != tt.wantVerdict {
+				t.Errorf("diagnosis = %q (%s), want %q (%s)", summary, verdict, tt.wantSummary, tt.wantVerdict)
+			}
+		})
+	}
+}
+
 // The banner-check verdict covers the SSH/SMTP protocol path.
 func TestDiagnoseBannerFail(t *testing.T) {
 	tg := mustTarget(t, "host:22")

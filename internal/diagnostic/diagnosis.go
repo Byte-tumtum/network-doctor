@@ -196,6 +196,9 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		// A working proxy proves the box is online but says nothing about the
 		// direct route this target needs.
 		if directOK() {
+			if res[ProbeTargetTCP].Cause == ConnectionCauseRefused {
+				return "Every TCP connection attempt to " + hp + " was explicitly refused: the service may not be listening, or a firewall may be actively rejecting it.", VerdictService
+			}
 			return hp + " is unreachable though DNS and the general internet work: remote port closed, firewall, or VPN routing.", VerdictService
 		}
 		if prx {
