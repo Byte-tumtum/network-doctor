@@ -1085,7 +1085,7 @@ func TestGeneratedHuntCasesAreReproducible(t *testing.T) {
 
 	// A generated timed resolver case must rediscover the existing structured
 	// resampling opportunity; assert the code, never the human wording.
-	known := run("--case", "114")
+	known := run("--case", "116")
 	if len(known.Cases) != 1 || !hasHuntSuggestion(known.Suggestions, SuggestTransientNotResampled) {
 		t.Fatalf("known hunt gap not rediscovered: %+v", known.Suggestions)
 	}
