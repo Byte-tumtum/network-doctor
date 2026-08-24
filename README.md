@@ -99,7 +99,7 @@ netdoc-sim help
 
 ### Everywhere else
 
-Grab a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as a `.zip`, the rest as bare binaries), or install with Go 1.25+:
+Grab a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as a `.zip`, the rest as bare binaries), or install with Go 1.27+:
 
 ```sh
 go install github.com/heymaikol/network-doctor@latest
@@ -374,7 +374,7 @@ go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
 go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic
 go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic
 go test -fuzz=FuzzGenerateHuntCase -fuzztime=10s ./internal/simulation
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/goreleaser/goreleaser/v2@v2.17.1 check
 ```
