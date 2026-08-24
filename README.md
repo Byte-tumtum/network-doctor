@@ -76,7 +76,13 @@ sudo dnf copr enable heymaikol/network-doctor
 sudo dnf install network-doctor
 ```
 
-Covers Fedora 43, 44, and rawhide on `x86_64` and `aarch64`. COPR signs with its own per-project key (a separate trust root from the GitHub attestation below), which `dnf copr enable` installs for you.
+COPR currently publishes only for Fedora Rawhide on `x86_64` and `aarch64`.
+Fedora 43, 44, and 45 cannot build the source package in COPR because their
+standard repositories do not provide the Go version the project requires. This
+is a COPR build limitation, not a limitation of the prebuilt release artifacts.
+A new COPR package appears after its Rawhide builds finish, so it may trail the
+GitHub release. COPR signs with its own per-project key (a separate trust root
+from the GitHub attestation below), which `dnf copr enable` installs for you.
 
 Everything else: `.deb`, `.rpm`, and `.apk` packages are on the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), for `amd64` and `arm64`. Download one and install it locally:
 

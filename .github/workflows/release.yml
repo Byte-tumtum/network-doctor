@@ -156,6 +156,9 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
           done
           rpmbuild -bs packaging/network-doctor.spec
+          # Keep the project on chroots whose Fedora repositories satisfy the
+          # spec's Go requirement. Branching can add a chroot before Go lands.
+          copr-cli modify heymaikol/network-doctor --follow-fedora-branching off --chroot fedora-rawhide-x86_64 --chroot fedora-rawhide-aarch64
           copr-cli build heymaikol/network-doctor ~/rpmbuild/SRPMS/*.src.rpm
 
   attest:

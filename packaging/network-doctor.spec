@@ -16,7 +16,7 @@ URL:            https://github.com/heymaikol/network-doctor
 Source0:        %{url}/releases/download/v%{version}/%{name}-%{version}.tar.gz
 Source1:        %{url}/releases/download/v%{version}/%{name}-%{version}-vendor.tar.gz
 
-BuildRequires:  golang >= 1.25
+BuildRequires:  golang >= 1.27.0
 
 %description
 Network Doctor diagnoses network connectivity and tells you where the

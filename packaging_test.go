@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	goversion "go/version"
 	"io"
 	"os"
 	"regexp"
@@ -162,6 +163,85 @@ func TestDockerfileShipsTheSameBinariesAsTheLinuxPackages(t *testing.T) {
 	// anything would be a second CLI to keep in step with this one.
 	if !strings.Contains(dockerfile, `ENTRYPOINT ["/usr/bin/netdoc-sim"]`) {
 		t.Error("the image entrypoint is not netdoc-sim")
+	}
+}
+
+func TestPackagingToolchainsMeetGoModRequirement(t *testing.T) {
+	moduleVersion := goModVersion(t)
+
+	t.Run("RPM spec", func(t *testing.T) {
+		data, err := os.ReadFile("packaging/network-doctor.spec")
+		if err != nil {
+			t.Fatal(err)
+		}
+		match := regexp.MustCompile(`(?m)^BuildRequires:\s+golang\s+(>=)\s+([0-9]+(?:\.[0-9]+){1,2})\s*$`).FindStringSubmatch(string(data))
+		if match == nil {
+			t.Fatal("RPM spec must declare BuildRequires: golang >= <Go version>")
+		}
+		if !goversion.IsValid("go" + match[2]) {
+			t.Fatalf("RPM spec has invalid Go version %q", match[2])
+		}
+		if goversion.Compare("go"+match[2], "go"+moduleVersion) < 0 {
+			t.Errorf("RPM requires Go %s, below go.mod's Go %s", match[2], moduleVersion)
+		}
+	})
+
+	t.Run("Docker builder", func(t *testing.T) {
+		data, err := os.ReadFile("Dockerfile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		match := regexp.MustCompile(`(?m)^FROM\s+.*golang:([0-9]+(?:\.[0-9]+){1,2})(?:-|@)`).FindStringSubmatch(string(data))
+		if match == nil {
+			t.Fatal("Dockerfile has no versioned golang builder image")
+		}
+		builderVersion := match[1]
+		if strings.Count(builderVersion, ".") == 1 {
+			builderVersion += ".0"
+		}
+		if !goversion.IsValid("go" + builderVersion) {
+			t.Fatalf("Docker builder has invalid Go version %q", match[1])
+		}
+		if goversion.Compare("go"+builderVersion, "go"+moduleVersion) < 0 {
+			t.Errorf("Docker builder uses Go %s, below go.mod's Go %s", match[1], moduleVersion)
+		}
+	})
+}
+
+func goModVersion(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line, _, _ = strings.Cut(line, "//")
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "go" {
+			if !goversion.IsValid("go" + fields[1]) {
+				t.Fatalf("go.mod has invalid Go version %q", fields[1])
+			}
+			return fields[1]
+		}
+	}
+	t.Fatal("go.mod has no go directive")
+	return ""
+}
+
+func TestReleaseWorkflowRestrictsCOPRTargets(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const configure = "copr-cli modify heymaikol/network-doctor --follow-fedora-branching off --chroot fedora-rawhide-x86_64 --chroot fedora-rawhide-aarch64"
+	workflow := string(data)
+	configuredAt := strings.Index(workflow, configure)
+	buildAt := strings.Index(workflow, "copr-cli build heymaikol/network-doctor")
+	if configuredAt < 0 {
+		t.Fatalf("release workflow must restrict COPR to Rawhide x86_64 and aarch64 with %q", configure)
+	}
+	if buildAt < 0 || configuredAt > buildAt {
+		t.Error("release workflow must restrict COPR chroots before submitting the build")
 	}
 }
 
