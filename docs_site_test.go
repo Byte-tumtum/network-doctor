@@ -132,6 +132,85 @@ func TestREADMEKeepsDownloadLinksOnTheReleasesPage(t *testing.T) {
 	}
 }
 
+// The README's complete contributor gate promises to use the same tool
+// versions as CI. Keep that promise tied to the commands and action inputs that
+// actually run them, rather than to version strings copied into this test.
+func TestREADMEValidationToolVersionsMatchCI(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, gate, ok := strings.Cut(string(readme), "\n## Tests\n")
+	if !ok {
+		t.Fatal("README.md has no `## Tests` section")
+	}
+	gate, _, ok = strings.Cut(gate, "\n## ")
+	if !ok {
+		t.Fatal("README.md's `## Tests` section never ends; the heading structure changed")
+	}
+
+	data, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Uses string            `yaml:"uses"`
+				Run  string            `yaml:"run"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatalf("ci.yml is not valid YAML: %v", err)
+	}
+	lint, ok := workflow.Jobs["lint"]
+	if !ok {
+		t.Fatal("ci.yml has no lint job")
+	}
+
+	ciVersions := map[string][]string{}
+	govulncheck := regexp.MustCompile(`(?m)^\s*go run golang\.org/x/vuln/cmd/govulncheck@(\S+)\s`)
+	for _, step := range lint.Steps {
+		switch {
+		case strings.HasPrefix(step.Uses, "golangci/golangci-lint-action@"):
+			ciVersions["golangci-lint"] = append(ciVersions["golangci-lint"], step.With["version"])
+		case step.Uses == "":
+			for _, match := range govulncheck.FindAllStringSubmatch(step.Run+"\n", -1) {
+				ciVersions["govulncheck"] = append(ciVersions["govulncheck"], match[1])
+			}
+		case strings.HasPrefix(step.Uses, "goreleaser/goreleaser-action@"):
+			args := strings.Fields(step.With["args"])
+			if len(args) == 1 && args[0] == "check" {
+				ciVersions["goreleaser"] = append(ciVersions["goreleaser"], step.With["version"])
+			}
+		}
+	}
+
+	for _, tool := range []struct {
+		name, module string
+	}{
+		{"golangci-lint", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint"},
+		{"govulncheck", "golang.org/x/vuln/cmd/govulncheck"},
+		{"goreleaser", "github.com/goreleaser/goreleaser/v2"},
+	} {
+		matches := regexp.MustCompile(`(?m)^\s*go run `+regexp.QuoteMeta(tool.module)+`@(\S+)\s`).FindAllStringSubmatch(gate+"\n", -1)
+		if len(matches) != 1 {
+			t.Errorf("README Tests gate has %d go run commands for %s, want exactly one", len(matches), tool.name)
+			continue
+		}
+		versions := ciVersions[tool.name]
+		if len(versions) != 1 {
+			t.Errorf("CI lint job has %d matching %s invocations, want exactly one", len(versions), tool.name)
+			continue
+		}
+		if matches[0][1] != versions[0] {
+			t.Errorf("README Tests gate runs %s %s, but CI lint runs %s; keep the contributor gate and CI tool versions in sync", tool.name, matches[0][1], versions[0])
+		}
+	}
+}
+
 // The site only exists if the workflow builds and deploys it, from both of its
 // sources, with the supply-chain practice the rest of this repository uses.
 func TestPagesWorkflowBuildsBothSourcesAndPinsItsActions(t *testing.T) {
