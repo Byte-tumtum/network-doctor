@@ -1,6 +1,6 @@
 # Network Doctor
 
-[![CI](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml)
+[![CI](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/heymaikol/network-doctor/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/heymaikol/network-doctor)](https://github.com/heymaikol/network-doctor/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/github/license/heymaikol/network-doctor)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-heymaikol.github.io-1f6feb)](https://heymaikol.github.io/network-doctor/)
