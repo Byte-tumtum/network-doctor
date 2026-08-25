@@ -377,6 +377,7 @@ go vet ./...
 CGO_ENABLED=0 go build ./...
 go test ./...
 go test -tags integration ./internal/diagnostic ./internal/simulation
+go test -tags acceptance -run '^TestNative' . ./internal/ui
 go test -tags netns_integration -count=1 -v ./internal/simulation
 go test -race ./...
 go test -race -tags integration ./internal/diagnostic ./internal/simulation
@@ -426,6 +427,10 @@ Race, fuzz, and network-namespace checks run only on Linux in CI. The
 namespaces; they never need root. That gate keeps `-v` because a skipped run and
 a real one both print just `ok` otherwise, and `-count=1` because a cached
 result would not have exercised any namespace at all.
+
+The `acceptance` command has tests only on macOS and Windows. CI runs it on both
+native hosts to exercise the built `netdoc` binary against loopback and to run
+the platform's built-in route, socket, and ping drill-down commands.
 
 ## Testing Network Doctor against broken networks
 

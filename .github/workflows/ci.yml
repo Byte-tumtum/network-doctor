@@ -46,6 +46,9 @@ jobs:
           go test -covermode=set -coverprofile=coverage/unit.out ./...
       - if: runner.os != 'Linux'
         run: go test -tags integration ./internal/diagnostic ./internal/simulation
+      - if: runner.os != 'Linux'
+        name: Run native OS acceptance tests
+        run: go test -tags acceptance -run '^TestNative' . ./internal/ui
       - if: runner.os == 'Linux'
         name: Run loopback integration tests with coverage
         run: go test -covermode=set -coverprofile=coverage/integration.out -tags integration ./internal/diagnostic ./internal/simulation
