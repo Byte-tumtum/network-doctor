@@ -948,6 +948,12 @@ func (m model) helpView(deferred bool) string {
 	if m.reportReady() {
 		addAction(actSave)
 	}
+	// Retest is offered once there is a finished run to rerun. Before that the
+	// chain is either already running or waiting on the restart key, and a
+	// second way to start it would only be a second name for r.
+	if m.allDone() && m.chainRan() {
+		addAction(actRetest)
+	}
 	if m.sshDetected() {
 		addAction(actSSH)
 	}

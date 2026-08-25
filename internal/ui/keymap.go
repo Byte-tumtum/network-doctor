@@ -30,6 +30,7 @@ const (
 	actSave
 	actFilter
 	actRestart
+	actRetest
 	actSSH
 	actNetworkMap
 	actExpand
@@ -96,6 +97,7 @@ var actionDefs = []actionDef{
 	{actNetworkMap, "network-map", map[keyContext]actionHelp{ctxList: {"network map", "find a device on the local network, and back to the checks"}}},
 	{actExpand, "expand", map[keyContext]actionHelp{ctxList: {"expand", "show the collapsed passing checks and the whole toolbox"}}},
 	{actRestart, "restart", map[keyContext]actionHelp{ctxList: {"restart", "restart with a new target"}}},
+	{actRetest, "retest", map[keyContext]actionHelp{ctxList: {"retest", "rerun the same checks on the same target, after acting on the remediation"}}},
 	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "log in to a host, handing the terminal to ssh"}}},
 	{actClearFilter, "clear-filter", map[keyContext]actionHelp{ctxViewer: {"clear filter", "clear the filter, or back when none is set"}}},
 	{actBack, "back", map[keyContext]actionHelp{ctxViewer: {"back", "back"}}},
@@ -127,6 +129,7 @@ var defaultPreset = keyPreset{
 		actCopy:       {"y"},
 		actSave:       {"w"},
 		actRestart:    {"r"},
+		actRetest:     {"R"},
 		actSSH:        {"S"},
 		actNetworkMap: {"v"},
 		actExpand:     {"a"},

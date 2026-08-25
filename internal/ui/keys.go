@@ -97,6 +97,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ti.CursorEnd()
 		m.input = ti
 		return m, textinput.Blink
+	case actRetest:
+		return m.retest()
 	case actSSH:
 		// The SSH login form is offered for every target, unlike the 'c'
 		// handshake check, which only fits an SSH one. It logs in to the
@@ -482,6 +484,32 @@ func (m model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	m.inputErr = ""
 	return m, cmd
+}
+
+// retest reruns the diagnosis the user is already looking at, which is the
+// other half of remediation: act on the advice, then ask the same question
+// again. It is deliberately the same restart path a new target takes, so a
+// retest inherits the whole of it: the generation bump that makes the previous
+// run's in-flight probe and job messages bounce, the cancellation of the
+// generation context, the cleared results, and the deferral until a running
+// tool's terminal event lands. What it does not do is ask for a target, so
+// every part of the run configuration stays exactly as it was.
+//
+// The notice is set after the restart, since doRestart clears the last one on
+// its way out, and it is the only thing on screen that says a second run
+// started: the checks it reruns are the same ones that were already listed.
+func (m model) retest() (tea.Model, tea.Cmd) {
+	next, cmd := m.restartWithTarget(m.target)
+	restarted, ok := next.(model)
+	if !ok {
+		return next, cmd
+	}
+	what := "the general checks"
+	if restarted.target != nil {
+		what = restarted.targetHP()
+	}
+	notice := restarted.setNotice("retesting "+what, true)
+	return restarted, tea.Batch(cmd, notice)
 }
 
 func (m model) restartWithTarget(t *diagnostic.Target) (tea.Model, tea.Cmd) {

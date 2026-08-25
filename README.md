@@ -233,6 +233,7 @@ netdoc --no-history host          # don't read or save the target history file
 | `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart with a new target |
+| `R` | retest: rerun the same checks on the same target |
 | `S` | SSH login: a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
 | `tab` | switch between running tool jobs |
 | `esc` | cancel the focused job only (`tab` picks which), or leave an opened device on the map; `q` is the stop-everything path |
