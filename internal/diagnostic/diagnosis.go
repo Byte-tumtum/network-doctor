@@ -219,6 +219,29 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		}
 		return blame(ProbeDNS, v, VerdictDNS)
 	case fail(ProbeTargetTCP):
+		// A device on the same network is not reached through the internet, so
+		// the egress rung is not evidence about it either way and none of the
+		// sentences below fit: they explain a failure by a route this target
+		// never takes. What is left is what the connect itself said.
+		if localTarget(t, res) {
+			switch {
+			case res[ProbeTargetTCP].Cause == ConnectionCauseRefused:
+				// Something answered for that address, so the device is on the
+				// network and the port is the whole of the problem.
+				return blame(ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the device is on the network, but nothing is listening on that port.", VerdictService)
+			case directOK():
+				// This machine's own networking demonstrably works, so the
+				// silence is the device's. Which of the reasons it is cannot be
+				// told from here, and the sentence must not pick one.
+				return blame(ProbeTargetTCP, hp+" did not answer, though this machine's network is working: the device may be powered off or asleep, may have a different address now, or may be dropping the connection.", VerdictService)
+			case !has(ProbeInternet):
+				return blame(ProbeTargetTCP, hp+" did not answer, and this machine's own network was not checked, so a problem here cannot be told apart from one on the device.", VerdictNetwork)
+			default:
+				// Nothing this machine sends is arriving anywhere, so the
+				// device has not been given a fair test yet.
+				return blame(ProbeInternet, hp+" did not answer, and this machine has no working network egress either: fix this machine's own connection first.", VerdictNetwork)
+			}
+		}
 		// Without working direct egress we can't tell a closed port from a dead
 		// path, so we don't guess: that's a network answer, not a service one.
 		// A working proxy proves the box is online but says nothing about the
@@ -326,6 +349,40 @@ func bannerRow(res map[ProbeID]ProbeResult, match func(ProbeID) bool) ProbeID {
 // operator's intent is not observable from a client, and neither is whatever a
 // browser did next about it.
 const encryptedDNSSummary = "Plain DNS works, but encrypted DNS could not complete a verified exchange. The resolver may be unavailable, or the network may be blocking or interfering with DoH/DoT."
+
+// localTarget reports whether the endpoint under test sits on a local network
+// rather than out on the internet. That distinction is what decides whether
+// the direct-egress rung is evidence about reaching it at all: a printer down
+// the hall is reached over the same link whether or not anything past the
+// router is answering.
+//
+// A literal settles it on its own. A name settles it only when every address
+// it resolved to is local, so a name that also has a public address keeps the
+// ordinary internet-facing reading.
+func localTarget(t *Target, res map[ProbeID]ProbeResult) bool {
+	if t == nil {
+		return false
+	}
+	if t.IP != nil {
+		return localIP(t.IP)
+	}
+	addrs := res[ProbeDNS].Addrs
+	if len(addrs) == 0 {
+		return false
+	}
+	for _, ip := range addrs {
+		if !localIP(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// localIP is the address ranges that are reachable without leaving the local
+// network: RFC1918 and its IPv6 equivalent, link-local, and this machine.
+func localIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLoopback()
+}
 
 // directEgressOK means direct egress genuinely worked: a Pass, or a Warn the
 // probe produced itself. A Warn planted by downgradeEgress doesn't count:

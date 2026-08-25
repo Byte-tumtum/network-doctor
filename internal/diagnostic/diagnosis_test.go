@@ -5,6 +5,7 @@ package diagnostic
 
 import (
 	"net"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -650,6 +651,121 @@ func TestDiagnoseSecondOpinionDNS(t *testing.T) {
 			summary, verdict := Diagnose(tg, order, res)
 			if verdict != tc.verdict || !strings.Contains(summary, tc.want) {
 				t.Fatalf("Diagnose = (%q, %q), want %q and %q", summary, verdict, tc.want, tc.verdict)
+			}
+		})
+	}
+}
+
+// A device on the same network is not reached through the internet, so the
+// egress rung must not be what explains a failure to reach it. Each case is a
+// state a person hits with a printer or a NAS that stopped answering.
+func TestDiagnoseLocalDeviceTargetTCPFailure(t *testing.T) {
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP}
+	cases := []struct {
+		name        string
+		target      string
+		internet    Status
+		cause       string
+		omit        []ProbeID
+		want        string
+		wantVerdict string
+	}{
+		{
+			// The device answered with a reset, so it is demonstrably there.
+			name: "refused with the internet up", target: "192.168.1.23:631",
+			internet: StatusPass, cause: ConnectionCauseRefused,
+			want: "the device is on the network, but nothing is listening on that port", wantVerdict: VerdictService,
+		},
+		{
+			// Still a complete answer with no internet at all: reaching the
+			// device never needed egress in the first place.
+			name: "refused with the internet down", target: "192.168.1.23:631",
+			internet: StatusFail, cause: ConnectionCauseRefused,
+			want: "the device is on the network, but nothing is listening on that port", wantVerdict: VerdictService,
+		},
+		{
+			name: "silent with the internet up", target: "192.168.1.23:9100",
+			internet: StatusPass,
+			want:     "did not answer, though this machine's network is working", wantVerdict: VerdictService,
+		},
+		{
+			// Nothing this machine sends is arriving anywhere, so the device
+			// has not been given a fair test yet.
+			name: "silent with the internet down", target: "192.168.1.23:9100",
+			internet: StatusFail,
+			want:     "no working network egress either", wantVerdict: VerdictNetwork,
+		},
+		{
+			name: "silent with egress unchecked", target: "192.168.1.23:9100",
+			omit: []ProbeID{ProbeInternet},
+			want: "this machine's own network was not checked", wantVerdict: VerdictNetwork,
+		},
+		{
+			name: "loopback counts as local", target: "127.0.0.1:8080",
+			internet: StatusFail, cause: ConnectionCauseRefused,
+			want: "the device is on the network, but nothing is listening on that port", wantVerdict: VerdictService,
+		},
+		{
+			// A public literal keeps the internet-facing reading it always had.
+			name: "a public address is not a local device", target: "93.184.216.34:443",
+			internet: StatusPass, cause: ConnectionCauseRefused,
+			want: "the service may not be listening", wantVerdict: VerdictService,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tg := mustTarget(t, c.target)
+			res := map[ProbeID]ProbeResult{
+				ProbeIface:     {Status: StatusPass},
+				ProbeInternet:  {Status: c.internet},
+				ProbeProxy:     {Status: StatusNA},
+				ProbeDNS:       {Status: StatusNA, Addrs: []net.IP{tg.IP}},
+				ProbeTargetTCP: {Status: StatusFail, Cause: c.cause},
+			}
+			ids := order
+			for _, drop := range c.omit {
+				delete(res, drop)
+				ids = slices.DeleteFunc(slices.Clone(ids), func(id ProbeID) bool { return id == drop })
+			}
+			summary, verdict := Diagnose(tg, ids, res)
+			if !strings.Contains(summary, c.want) {
+				t.Errorf("summary = %q, want substring %q", summary, c.want)
+			}
+			if verdict != c.wantVerdict {
+				t.Errorf("verdict = %q, want %q", verdict, c.wantVerdict)
+			}
+			// Whatever else it says, a local device's failure is never
+			// explained by the state of the route to the internet.
+			if strings.Contains(summary, "general internet") || strings.Contains(summary, "proxy-only") {
+				t.Errorf("summary = %q, which explains a local device by the internet path", summary)
+			}
+		})
+	}
+}
+
+// A name resolves the question the same way a literal does, so the CLI target
+// nas.lan:445 gets the local reading its address earns.
+func TestDiagnoseLocalTargetFollowsResolvedAddresses(t *testing.T) {
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP}
+	cases := []struct {
+		name  string
+		addrs []net.IP
+		want  string
+	}{
+		{"every address is local", []net.IP{net.ParseIP("192.168.1.9")}, "did not answer, though this machine's network is working"},
+		{"a public address among them keeps the internet reading", []net.IP{net.ParseIP("192.168.1.9"), net.ParseIP("93.184.216.34")}, "unreachable though DNS and the general internet work"},
+		{"no addresses at all", nil, "unreachable though DNS and the general internet work"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := map[ProbeID]ProbeResult{
+				ProbeIface:     {Status: StatusPass},
+				ProbeInternet:  {Status: StatusPass},
+				ProbeDNS:       {Status: StatusPass, Addrs: c.addrs},
+				ProbeTargetTCP: {Status: StatusFail},
+			}
+			if v, _ := Diagnose(mustTarget(t, "nas.lan:445"), order, res); !strings.Contains(v, c.want) {
+				t.Errorf("summary = %q, want substring %q", v, c.want)
 			}
 		})
 	}
