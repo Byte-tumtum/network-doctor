@@ -43,6 +43,16 @@ func TestCombinedDiagnosisTruthTable(t *testing.T) {
 			wantID:       DiagnosisDirectionalFailure, ambiguous: true, contains: "toward the listener",
 		},
 		{
+			name: "directional failure outranks one unverified reverse family",
+			observations: []Observation{
+				pass(DirectionListenerToConnector, FamilyIPv4),
+				{Direction: DirectionListenerToConnector, Family: FamilyIPv6, Status: "N/A", Cause: CausePeerAddressUnverified},
+				fail(DirectionConnectorToListener, FamilyIPv4, CauseConnectionTimeout),
+				fail(DirectionConnectorToListener, FamilyIPv6, CauseConnectionTimeout),
+			},
+			wantID: DiagnosisDirectionalFailure, ambiguous: true, contains: "toward the listener",
+		},
+		{
 			name:         "asymmetric reachability toward connector",
 			observations: []Observation{fail(DirectionListenerToConnector, FamilyIPv4, CauseConnectionUnreachable), pass(DirectionConnectorToListener, FamilyIPv4)},
 			wantID:       DiagnosisDirectionalFailure, ambiguous: true, contains: "toward the connector",
@@ -70,6 +80,16 @@ func TestCombinedDiagnosisTruthTable(t *testing.T) {
 			observations: []Observation{
 				pass(DirectionListenerToConnector, FamilyIPv4), fail(DirectionConnectorToListener, FamilyIPv4, CauseConnectionTimeout),
 				fail(DirectionListenerToConnector, FamilyIPv6, CauseConnectionTimeout), pass(DirectionConnectorToListener, FamilyIPv6),
+			},
+			wantID: DiagnosisFamilyAsymmetry, ambiguous: true, contains: "differs by address family and direction",
+		},
+		{
+			name: "crossed asymmetry with one unverified reverse family",
+			observations: []Observation{
+				fail(DirectionListenerToConnector, FamilyIPv4, CauseConnectionTimeout),
+				{Direction: DirectionListenerToConnector, Family: FamilyIPv6, Status: "N/A", Cause: CausePeerAddressUnverified},
+				pass(DirectionConnectorToListener, FamilyIPv4),
+				fail(DirectionConnectorToListener, FamilyIPv6, CauseConnectionTimeout),
 			},
 			wantID: DiagnosisFamilyAsymmetry, ambiguous: true, contains: "differs by address family and direction",
 		},
@@ -106,6 +126,18 @@ func TestCombinedDiagnosisProvesLoopbackOnlyBinding(t *testing.T) {
 	})
 	if got.ID != DiagnosisLocalOnlyListener || got.Ambiguous {
 		t.Fatalf("diagnosis = %+v, want proven local-only listener", got)
+	}
+}
+
+func TestCombinedDiagnosisProvesOneFamilyIsBoundToLoopback(t *testing.T) {
+	listener := EndpointIdentity{Role: RoleListener, ListenAddresses: []string{"192.0.2.1:1", "[::1]:1"}}
+	connector := EndpointIdentity{Role: RoleConnector, ListenAddresses: []string{"192.0.2.2:2", "[2001:db8::2]:2"}}
+	got := Analyze(listener, connector, []Observation{
+		pass(DirectionListenerToConnector, FamilyIPv4), pass(DirectionConnectorToListener, FamilyIPv4),
+		pass(DirectionListenerToConnector, FamilyIPv6), fail(DirectionConnectorToListener, FamilyIPv6, diagnostic.ConnectionCauseRefused),
+	})
+	if got.ID != DiagnosisLocalOnlyListener || got.Ambiguous || !strings.Contains(got.Summary, "IPV6") {
+		t.Fatalf("diagnosis = %+v, want proven IPv6 loopback-only listener", got)
 	}
 }
 

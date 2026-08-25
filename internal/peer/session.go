@@ -132,7 +132,7 @@ func (listener *Listener) runControl(parent context.Context, control acceptedCon
 		return Result{}, safeSessionError("answer peer hello", err)
 	}
 	control.ms = sessionMs(control.started)
-	clientEvidence, err := readMessage(ctx, control.conn, listener.options.Timeout)
+	clientEvidence, err := readMessage(ctx, control.conn, evidenceWait(listener.options.Timeout))
 	if err != nil || clientEvidence.Type != "evidence" {
 		return Result{}, safeSessionError("read connector evidence", err)
 	}
@@ -146,7 +146,7 @@ func (listener *Listener) runControl(parent context.Context, control acceptedCon
 		return Result{}, err
 	}
 	listenerToConnector := probeOffer(ctx, hello.Offer.Endpoints, pin, token, listener.server.sourceIPs(),
-		control.remoteIP(), listener.options.Timeout, DirectionListenerToConnector)
+		listener.server.observedRemoteIPs(control.remoteIP()), listener.options.Timeout, DirectionListenerToConnector)
 	if err := writeMessage(ctx, control.conn, listener.options.Timeout, wireMessage{
 		Version: ProtocolVersion, Type: "evidence", Observations: listenerToConnector,
 	}); err != nil {
@@ -196,21 +196,28 @@ func Connect(parent context.Context, code string, options Options) (Result, erro
 	}
 	defer control.close()
 
-	observations := make([]Observation, 0, len(p.Endpoints))
+	type request struct {
+		endpoint wireEndpoint
+		source   net.IP
+	}
+	requests := make([]request, 0, len(p.Endpoints))
 	for _, endpoint := range p.Endpoints {
 		source, available := reverseSources[endpoint.Family]
 		if options.Sources != nil && !available {
 			continue
 		}
-		observation := probeEndpoint(ctx, endpoint, p.Pin, p.Token, source, options.Timeout, DirectionConnectorToListener)
-		observations = append(observations, observation)
+		requests = append(requests, request{endpoint: endpoint, source: source})
 	}
+	observations := parallelObservations(len(requests), func(i int) Observation {
+		request := requests[i]
+		return probeEndpoint(ctx, request.endpoint, p.Pin, p.Token, request.source, options.Timeout, DirectionConnectorToListener)
+	})
 	if err := writeMessage(ctx, control.conn, options.Timeout, wireMessage{
 		Version: ProtocolVersion, Type: "evidence", Observations: observations,
 	}); err != nil {
 		return Result{}, safeSessionError("send connector evidence", err)
 	}
-	serverEvidence, err := readMessage(ctx, control.conn, options.Timeout)
+	serverEvidence, err := readMessage(ctx, control.conn, evidenceWait(options.Timeout))
 	if err != nil || serverEvidence.Type != "evidence" {
 		return Result{}, safeSessionError("read listener evidence", err)
 	}
@@ -304,6 +311,10 @@ func connectControl(ctx context.Context, p pairing, offer wireOffer, sources map
 			continue
 		}
 		response, err := readMessage(ctx, conn, options.Timeout)
+		if errors.Is(err, errVersionMismatch) {
+			_ = conn.Close()
+			return nil, errVersionMismatch
+		}
 		if err != nil || response.Type != "hello_ok" || response.Nonce != nonce || response.Challenge != challenge {
 			markApplicationFailure(&observation, err)
 			_ = conn.Close()
@@ -316,17 +327,34 @@ func connectControl(ctx context.Context, p pairing, offer wireOffer, sources map
 	return nil, errors.New("could not establish the authenticated peer channel")
 }
 
-func probeOffer(ctx context.Context, endpoints []wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, sources map[string]net.IP, observed net.IP, timeout time.Duration, direction string) []Observation {
-	observations := make([]Observation, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		destination := endpoint
-		if observed != nil && familyForIP(observed) == endpoint.Family {
-			_, port, _ := net.SplitHostPort(endpoint.Address)
-			destination.Address = net.JoinHostPort(observed.String(), port)
+func probeOffer(ctx context.Context, endpoints []wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, sources, observed map[string]net.IP, timeout time.Duration, direction string) []Observation {
+	return parallelObservations(len(endpoints), func(i int) Observation {
+		endpoint := endpoints[i]
+		remote := observed[endpoint.Family]
+		if remote == nil {
+			return Observation{
+				Direction: direction, Family: endpoint.Family,
+				Status: diagnostic.StatusNA.String(), Cause: CausePeerAddressUnverified,
+			}
 		}
-		observations = append(observations, probeEndpoint(ctx, destination, pin, token, sources[endpoint.Family], timeout, direction))
+		_, port, _ := net.SplitHostPort(endpoint.Address)
+		endpoint.Address = net.JoinHostPort(remote.String(), port)
+		return probeEndpoint(ctx, endpoint, pin, token, sources[endpoint.Family], timeout, direction)
+	})
+}
+
+func parallelObservations(count int, probe func(int) Observation) []Observation {
+	observations := make([]Observation, count)
+	var group sync.WaitGroup
+	for i := range count {
+		group.Go(func() { observations[i] = probe(i) })
 	}
+	group.Wait()
 	return observations
+}
+
+func evidenceWait(timeout time.Duration) time.Duration {
+	return min(3*timeout, SessionLifetime)
 }
 
 func probeEndpoint(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, source net.IP, timeout time.Duration, direction string) Observation {
@@ -439,7 +467,6 @@ type endpointServer struct {
 	mu          sync.Mutex
 	connections map[net.Conn]struct{}
 	inbound     map[string]Observation
-	accepted    int
 	controlUsed bool
 	closed      bool
 	wg          sync.WaitGroup
@@ -501,17 +528,14 @@ func (server *endpointServer) accept(listener net.Listener) {
 			return
 		}
 		server.mu.Lock()
-		server.accepted++
-		tooMany := server.accepted > maxConnections
+		tooMany := len(server.connections) >= maxConnections
 		if !tooMany {
 			server.connections[conn] = struct{}{}
 		}
 		server.mu.Unlock()
 		if tooMany {
 			_ = conn.Close()
-			server.fail(errTooManyExchanges)
-			server.cancel()
-			return
+			continue
 		}
 		server.wg.Add(1)
 		go server.handle(conn)
@@ -609,10 +633,19 @@ func (server *endpointServer) verifyReported(reported []Observation, direction s
 	seen := map[string]bool{}
 	for i := range reported {
 		observation := &reported[i]
-		if observation.Direction != direction || seen[observation.Family] || observation.Status == diagnostic.StatusNA.String() {
+		if observation.Direction != direction || seen[observation.Family] {
 			return nil, errInvalidMessage
 		}
 		seen[observation.Family] = true
+		if observation.Status == diagnostic.StatusNA.String() {
+			if observation.Cause != CausePeerAddressUnverified {
+				return nil, errInvalidMessage
+			}
+			if _, connected := actual[observation.Family]; connected {
+				return nil, errInvalidMessage
+			}
+			continue
+		}
 		if observation.Status == diagnostic.StatusPass.String() {
 			local, ok := actual[observation.Family]
 			if !ok || !observation.TCPConnected || !observation.TLSAuthenticated || !observation.ApplicationTraffic || observation.PayloadBytes != payloadSize {
@@ -631,6 +664,22 @@ func (server *endpointServer) sourceIPs() map[string]net.IP {
 		out[endpoint.Family] = net.ParseIP(host)
 	}
 	return out
+}
+
+func (server *endpointServer) observedRemoteIPs(control net.IP) map[string]net.IP {
+	observed := make(map[string]net.IP, maxEndpointCount)
+	if control != nil {
+		observed[familyForIP(control)] = append(net.IP(nil), control...)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	for family, observation := range server.inbound {
+		host, _, err := net.SplitHostPort(observation.Source)
+		if ip := net.ParseIP(host); err == nil && familyForIP(ip) == family {
+			observed[family] = append(net.IP(nil), ip...)
+		}
+	}
+	return observed
 }
 
 func (server *endpointServer) identity(role, observed string) EndpointIdentity {

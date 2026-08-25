@@ -23,6 +23,7 @@ const (
 	FamilyIPv6 = "ipv6"
 
 	CauseFamilyUnavailable        = "family_unavailable"
+	CausePeerAddressUnverified    = "peer_address_unverified"
 	CauseConnectionTimeout        = diagnostic.ConnectionCauseTimeout
 	CauseConnectionUnreachable    = diagnostic.ConnectionCauseUnreachable
 	CauseTLSAuthenticationFailed  = "tls_authentication_failed"
@@ -159,17 +160,65 @@ func Analyze(listener, connector EndpointIdentity, observations []Observation) C
 		direction string
 		label     string
 	}{{listener, DirectionConnectorToListener, "listener"}, {connector, DirectionListenerToConnector, "connector"}} {
-		if !onlyLoopback(candidate.identity.ListenAddresses) {
-			continue
-		}
-		if rows := evidence(func(observation Observation) bool {
-			return observation.Direction == candidate.direction && failed(observation)
-		}); len(rows) > 0 {
+		loopbackFamily := ""
+		rows := evidence(func(observation Observation) bool {
+			if observation.Direction != candidate.direction || !failed(observation) ||
+				!onlyLoopbackForFamily(candidate.identity.ListenAddresses, observation.Family) {
+				return false
+			}
+			loopbackFamily = observation.Family
+			return true
+		})
+		if len(rows) > 0 {
+			summary := "The " + candidate.label + " endpoint is listening only on loopback, so another machine cannot reach it."
+			if !onlyLoopback(candidate.identity.ListenAddresses) {
+				summary = "The " + candidate.label + " endpoint for " + strings.ToUpper(loopbackFamily) + " is bound only to loopback, so another machine cannot reach it."
+			}
 			return CombinedDiagnosis{
 				ID: DiagnosisLocalOnlyListener, Verdict: diagnostic.VerdictNetwork,
-				Summary:  "The " + candidate.label + " endpoint is listening only on loopback, so another machine cannot reach it.",
+				Summary:  summary,
 				Evidence: rows, Ambiguous: false,
 			}
+		}
+	}
+
+	directionState := func(direction string) (hasPass, hasFail, tested bool, allRefused bool) {
+		allRefused = true
+		for _, observation := range observations {
+			if observation.Direction != direction || observation.Status == diagnostic.StatusNA.String() {
+				continue
+			}
+			tested = true
+			hasPass = hasPass || passed(observation)
+			if failed(observation) {
+				hasFail = true
+				allRefused = allRefused && observation.Cause == diagnostic.ConnectionCauseRefused
+			}
+		}
+		return
+	}
+	lcPass, lcFail, lcTested, lcRefused := directionState(DirectionListenerToConnector)
+	clPass, clFail, clTested, clRefused := directionState(DirectionConnectorToListener)
+	if lcPass && !lcFail && clFail && !clPass || clPass && !clFail && lcFail && !lcPass {
+		failedDirection, destination := DirectionConnectorToListener, "listener"
+		refused := clRefused
+		if clPass {
+			failedDirection, destination, refused = DirectionListenerToConnector, "connector", lcRefused
+		}
+		summary := "Connections toward the " + destination + " fail, while connections in the other direction succeed."
+		alternatives := []string{"inbound filtering at the destination", "routing or reachability on the failing path", "address translation that does not admit the reverse connection"}
+		verdict := diagnostic.VerdictNetwork
+		if refused {
+			summary = "Connections toward the " + destination + " are explicitly refused, while connections in the other direction succeed."
+			alternatives = []string{"nothing is listening on the tested address and port", "a filter is actively rejecting the connection"}
+			verdict = diagnostic.VerdictService
+		}
+		return CombinedDiagnosis{
+			ID: DiagnosisDirectionalFailure, Verdict: verdict, Summary: summary,
+			Evidence: evidence(func(observation Observation) bool {
+				return observation.Direction == failedDirection && failed(observation) || observation.Direction != failedDirection && passed(observation)
+			}),
+			Ambiguous: true, Alternatives: alternatives,
 		}
 	}
 
@@ -212,45 +261,6 @@ func Analyze(listener, connector EndpointIdentity, observations []Observation) C
 		}
 	}
 
-	directionState := func(direction string) (hasPass, hasFail, tested bool, allRefused bool) {
-		allRefused = true
-		for _, observation := range observations {
-			if observation.Direction != direction || observation.Status == diagnostic.StatusNA.String() {
-				continue
-			}
-			tested = true
-			hasPass = hasPass || passed(observation)
-			if failed(observation) {
-				hasFail = true
-				allRefused = allRefused && observation.Cause == diagnostic.ConnectionCauseRefused
-			}
-		}
-		return
-	}
-	lcPass, lcFail, lcTested, lcRefused := directionState(DirectionListenerToConnector)
-	clPass, clFail, clTested, clRefused := directionState(DirectionConnectorToListener)
-	if lcPass && clFail && !clPass || clPass && lcFail && !lcPass {
-		failedDirection, destination := DirectionConnectorToListener, "listener"
-		refused := clRefused
-		if clPass {
-			failedDirection, destination, refused = DirectionListenerToConnector, "connector", lcRefused
-		}
-		summary := "Connections toward the " + destination + " fail, while connections in the other direction succeed."
-		alternatives := []string{"inbound filtering at the destination", "routing or reachability on the failing path", "address translation that does not admit the reverse connection"}
-		verdict := diagnostic.VerdictNetwork
-		if refused {
-			summary = "Connections toward the " + destination + " are explicitly refused, while connections in the other direction succeed."
-			alternatives = []string{"nothing is listening on the tested address and port", "a filter is actively rejecting the connection"}
-			verdict = diagnostic.VerdictService
-		}
-		return CombinedDiagnosis{
-			ID: DiagnosisDirectionalFailure, Verdict: verdict, Summary: summary,
-			Evidence: evidence(func(observation Observation) bool {
-				return observation.Direction == failedDirection && failed(observation) || observation.Direction != failedDirection && passed(observation)
-			}),
-			Ambiguous: true, Alternatives: alternatives,
-		}
-	}
 	if lcTested && clTested && lcFail && clFail && !lcPass && !clPass {
 		verdict := diagnostic.VerdictNetwork
 		if lcRefused && clRefused {
@@ -307,4 +317,20 @@ func onlyLoopback(addresses []string) bool {
 		host, _, err := net.SplitHostPort(address)
 		return err != nil || !net.ParseIP(strings.Trim(host, "[]")).IsLoopback()
 	})
+}
+
+func onlyLoopbackForFamily(addresses []string, family string) bool {
+	found := false
+	for _, address := range addresses {
+		host, _, err := net.SplitHostPort(address)
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if err != nil || ip == nil || familyForIP(ip) != family {
+			continue
+		}
+		found = true
+		if !ip.IsLoopback() {
+			return false
+		}
+	}
+	return found
 }

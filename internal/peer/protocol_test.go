@@ -133,6 +133,60 @@ func TestProtocolReadObeysExpiredDeadline(t *testing.T) {
 	}
 }
 
+func TestParallelObservationsStartsEveryBoundedProbe(t *testing.T) {
+	started := make(chan int, maxEndpointCount)
+	release := make(chan struct{})
+	done := make(chan []Observation, 1)
+	go func() {
+		done <- parallelObservations(maxEndpointCount, func(i int) Observation {
+			started <- i
+			<-release
+			return Observation{Ms: int64(i)}
+		})
+	}()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	seen := map[int]bool{}
+	for range maxEndpointCount {
+		select {
+		case i := <-started:
+			seen[i] = true
+		case <-timer.C:
+			close(release)
+			t.Fatal("bounded family probes did not start concurrently")
+		}
+	}
+	close(release)
+	got := <-done
+	if len(seen) != maxEndpointCount || len(got) != maxEndpointCount || got[0].Ms != 0 || got[1].Ms != 1 {
+		t.Fatalf("parallel observations = %+v; started = %v", got, seen)
+	}
+}
+
+func TestEvidenceWaitLeavesRoomForTheBoundedPeerProbe(t *testing.T) {
+	if got := evidenceWait(time.Second); got != 3*time.Second {
+		t.Fatalf("evidence wait = %s, want 3s", got)
+	}
+	if got := evidenceWait(MaxOperationTimeout); got != SessionLifetime {
+		t.Fatalf("maximum evidence wait = %s, want %s", got, SessionLifetime)
+	}
+}
+
+func TestEvidenceVerifierAcceptsOnlyUnobservedPeerAddresses(t *testing.T) {
+	server := &endpointServer{inbound: map[string]Observation{}}
+	reported := []Observation{{
+		Direction: DirectionListenerToConnector, Family: FamilyIPv6,
+		Status: "N/A", Cause: CausePeerAddressUnverified,
+	}}
+	if _, err := server.verifyReported(reported, DirectionListenerToConnector); err != nil {
+		t.Fatalf("unverified address: %v", err)
+	}
+	server.inbound[FamilyIPv6] = pass(DirectionListenerToConnector, FamilyIPv6)
+	if _, err := server.verifyReported(reported, DirectionListenerToConnector); !errors.Is(err, errInvalidMessage) {
+		t.Fatalf("unverified address with an observed connection = %v, want invalid message", err)
+	}
+}
+
 func TestPairingRoundTripAndVersionHandling(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	want := pairing{
@@ -155,8 +209,8 @@ func TestPairingRoundTripAndVersionHandling(t *testing.T) {
 	if got.Expires != want.Expires || !bytes.Equal(got.Pin[:], want.Pin[:]) || !bytes.Equal(got.Token[:], want.Token[:]) || len(got.Endpoints) != 2 {
 		t.Fatalf("decoded pairing = %+v", got)
 	}
-	if _, err := decodePairing(strings.Replace(code, pairingPrefix, "ndp2.", 1), now); !errors.Is(err, errInvalidPairing) {
-		t.Fatalf("new protocol prefix error = %v, want invalid pairing", err)
+	if _, err := decodePairing(strings.Replace(code, pairingPrefix, "ndp2.", 1), now); !errors.Is(err, errVersionMismatch) {
+		t.Fatalf("new protocol prefix error = %v, want version mismatch", err)
 	}
 	if _, err := decodePairing(code, want.Expires); !errors.Is(err, errExpiredPairing) {
 		t.Fatalf("stale pairing error = %v, want expired", err)
@@ -214,6 +268,23 @@ func TestCertificatePinAuthenticatesTheExpectedPeerOnly(t *testing.T) {
 	wrong := sha256.Sum256([]byte("another certificate"))
 	if err := clientTLSConfig(wrong).VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}}); !errors.Is(err, errAuthentication) {
 		t.Fatalf("wrong pin error = %v", err)
+	}
+}
+
+func TestSessionCredentialsAreFreshAndRequireTLS13(t *testing.T) {
+	first, err := newCredential(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newCredential(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first.pin[:], second.pin[:]) || bytes.Equal(first.token[:], second.token[:]) {
+		t.Fatal("two sessions reused certificate or token material")
+	}
+	if serverTLSConfig(first).MinVersion != tls.VersionTLS13 || clientTLSConfig(first.pin).MinVersion != tls.VersionTLS13 {
+		t.Fatal("peer TLS minimum is not TLS 1.3")
 	}
 }
 

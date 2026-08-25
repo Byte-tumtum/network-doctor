@@ -132,10 +132,13 @@ form already names exact bind addresses, so combining `--iface` with
 
 The listener waits at most five minutes for one authenticated control session.
 After connection, the complete exchange is bounded to one minute. `--timeout`
-sets each dial, TLS handshake, read, and write budget as it does for an ordinary
-probe, but peer mode caps it at 30 seconds. Ctrl+C and SIGTERM cancel pending
-accepts, dials, handshakes, reads, and writes and close all listeners and
-connections.
+sets each dial, TLS handshake, frame read, and write budget as it does for an
+ordinary probe, but peer mode caps it at 30 seconds. The two control reads that
+wait for peer evidence allow three times that budget because the peer must
+finish its bounded connection, TLS, and application phases first; the one-minute
+session limit remains the hard cap.
+Ctrl+C and SIGTERM cancel pending accepts, dials, handshakes, reads, and writes
+and close all listeners and connections.
 
 ### Authentication and encryption
 
@@ -154,11 +157,16 @@ TLS 1.3 encrypts every control and probe connection. The connector accepts only
 the exact pinned certificate, and the listener compares the decoded token in
 constant time before accepting a control or probe request. Each authenticated
 request needs a fresh 128-bit nonce; repeats are rejected. One listener accepts
-one control connection and no more than eight total connections, then closes
-and discards the certificate, token, and nonce set. A wrong token does not
-consume the one valid session, though repeated bad connections eventually hit
-the connection cap and end it. A stopped or expired listener makes an old
-pairing string useless.
+one control connection, no more than eight concurrent connections, and no more
+than eight authenticated nonces. Excess sockets are closed without ending the
+pending session. A wrong token does not consume the one valid session. A
+stopped or expired listener makes an old pairing string useless.
+
+An unauthenticated client can temporarily occupy all eight TLS handshake slots
+until the per-operation timeout. A legitimate connection is rejected while all
+slots are occupied, but the listener remains alive and accepts it after a slot
+expires or closes. This availability limit prevents unbounded socket and
+goroutine growth; authentication and diagnostic state remain unaffected.
 
 The token and certificate pin never appear in the peer result, ordinary report,
 or returned error. Listener readiness and the pairing string go to stderr in
@@ -191,13 +199,12 @@ rejected. Reads allocate only after checking the frame length. Peer strings are
 sanitized before display. There is no message for a filename, command, target
 port range, shell input, configuration change, or arbitrary diagnostic action.
 
-The listener does make at most one bounded TLS probe per address family to the
-reverse endpoints offered by the authenticated connector. This is the minimum
-operation needed to test the other direction. A deliberately malicious holder
-of the pairing token could point those two attempts elsewhere, but cannot vary
-the operation, exceed the family/connection limits, bypass the certificate pin
-it supplied, or make Network Doctor send anything except the fixed protocol
-exchange.
+The listener makes at most one bounded TLS probe per address family to the port
+offered by the authenticated connector. It replaces the offered IP with the
+source IP actually observed on an authenticated connection in that family. If
+it has not observed that family, it records `peer_address_unverified` and does
+not dial the offered address. A peer therefore cannot select another host as a
+probe target.
 
 Version 1 is intended to remain compatible across releases. A release may add
 optional result fields without changing the wire. Any incompatible message or
@@ -230,7 +237,7 @@ This supports the following combined diagnosis IDs:
 | `peer_directional_failure` | at least one direction passed and the other failed; wording names the traffic direction, not a device firewall |
 | `peer_symmetric_failure` | the independent bounded attempts failed in both directions while the control channel remained available |
 | `peer_address_family_asymmetry` | one tested family carried peer traffic while the other tested family did not |
-| `peer_listener_local_only` | the failed destination was definitively bound only to loopback |
+| `peer_listener_local_only` | the failed destination for the tested family was definitively bound only to loopback |
 | `peer_application_failure` | TCP and pinned TLS succeeded but the fixed application payload did not |
 | `peer_security_failure` | TCP connected but the endpoint did not authenticate as the paired TLS peer |
 | `peer_incomplete_evidence` | too little independent evidence exists to distinguish a directional or endpoint failure |
@@ -257,15 +264,18 @@ telemetry, UPnP, NAT-PMP, or automatic firewall change. The connector must
 reach at least one address printed by `--peer-listen`. If the listener is behind
 NAT, its operator must already have a directly reachable address and port; peer
 mode does not create one. The reverse test uses the connector's temporary
-listener and, for the control family, the source address the listener actually
-observed. A NAT or stateful filter may still prevent that new reverse
-connection. The result says so without pretending to know which device or rule
-caused it. A relay could later carry the same evidence messages without
-changing their semantics, but version 1 implements no relay transport.
+listener and the source address the listener actually observed for that family.
+An unobserved family is not dialed. A NAT or stateful filter may still prevent
+that new reverse connection. The result says so without pretending to know
+which device or rule caused it. A relay could later carry the same evidence
+messages without changing their semantics, but version 1 implements no relay
+transport.
 
 The peers exchange their sanitized host names, the temporary listener
 addresses they offer, the actual local and remote socket addresses seen during
-the session, address families, phase outcomes, and timing. This can reveal
+the session, address families, phase outcomes, and timing. A reverse address
+that could not be verified is recorded as `N/A` with cause
+`peer_address_unverified`. This can reveal
 private addresses, public NAT addresses, interface choices, and host names.
 Nothing is sent anywhere except the paired direct endpoints, and no telemetry
 exists, but review a saved result before sharing it.

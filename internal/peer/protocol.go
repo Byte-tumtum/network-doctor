@@ -183,7 +183,15 @@ func encodePairing(p pairing) (string, error) {
 }
 
 func decodePairing(code string, now time.Time) (pairing, error) {
-	if len(code) > MaxPairingCodeSize || !strings.HasPrefix(code, pairingPrefix) {
+	if len(code) > MaxPairingCodeSize {
+		return pairing{}, errInvalidPairing
+	}
+	if !strings.HasPrefix(code, pairingPrefix) {
+		prefix, _, found := strings.Cut(code, ".")
+		_, versionErr := strconv.Atoi(strings.TrimPrefix(prefix, "ndp"))
+		if found && strings.HasPrefix(prefix, "ndp") && versionErr == nil {
+			return pairing{}, errVersionMismatch
+		}
 		return pairing{}, errInvalidPairing
 	}
 	raw, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimPrefix(code, pairingPrefix))
@@ -393,7 +401,7 @@ func readMessage(ctx context.Context, conn net.Conn, timeout time.Duration) (wir
 }
 
 func setDeadline(ctx context.Context, conn net.Conn, timeout time.Duration) error {
-	deadline := time.Now().Add(min(timeout, MaxOperationTimeout))
+	deadline := time.Now().Add(min(timeout, SessionLifetime))
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
 	}
@@ -498,7 +506,7 @@ func validateObservation(observation Observation) error {
 			return errInvalidMessage
 		}
 	case "N/A":
-		if observation.Cause != CauseFamilyUnavailable || observation.Source != "" || observation.Destination != "" || observation.TCPConnected || observation.TLSAuthenticated || observation.ApplicationTraffic || observation.PayloadBytes != 0 || observation.Ms != 0 {
+		if (observation.Cause != CauseFamilyUnavailable && observation.Cause != CausePeerAddressUnverified) || observation.Source != "" || observation.Destination != "" || observation.TCPConnected || observation.TLSAuthenticated || observation.ApplicationTraffic || observation.PayloadBytes != 0 || observation.Ms != 0 {
 			return errInvalidMessage
 		}
 	default:
