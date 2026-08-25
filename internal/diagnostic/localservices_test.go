@@ -9,7 +9,6 @@ import (
 	"net"
 	"slices"
 	"strconv"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -59,7 +58,9 @@ func TestDiscoverServices(t *testing.T) {
 		{Port: 443, Name: "HTTPS", Scheme: "https"},
 		{Port: 631, Name: "IPP"},
 	}
-	refused := &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}
+	// The platform's own refusal errno: Windows refuses with WSAECONNREFUSED,
+	// which syscall.ECONNREFUSED does not match there.
+	refused := &net.OpError{Op: "dial", Err: connectionRefusedErrno}
 	cases := []struct {
 		name         string
 		byPort       map[int]error
