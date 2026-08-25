@@ -11,11 +11,25 @@ import (
 // embedded in simulator JSON output, so decodeDiagnosis projects the canonical
 // report contract into this type instead of exposing unrelated report fields.
 type Diagnosis struct {
-	Checks      []DiagnosisCheck `json:"checks"`
-	Summary     string           `json:"summary"`
-	Verdict     string           `json:"verdict"`
-	FailedStage string           `json:"failed_stage"`
-	OK          bool             `json:"ok"`
+	Checks []DiagnosisCheck `json:"checks"`
+	// Findings are netdoc's own structured conclusions about the network it
+	// looked at, carried through verbatim so a captured diagnosis is complete
+	// and so an oracle rule can eventually recognize a condition by netdoc's
+	// stable identity instead of by its prose. Deliberately not the same thing
+	// as a HuntCaseFinding, which is a defect found in netdoc itself.
+	Findings    []DiagnosisFinding `json:"findings,omitempty"`
+	Summary     string             `json:"summary"`
+	Verdict     string             `json:"verdict"`
+	FailedStage string             `json:"failed_stage"`
+	OK          bool               `json:"ok"`
+}
+
+// DiagnosisFinding is one conclusion from netdoc's report: the stable id, the
+// check row it blames, and the rows it rests on.
+type DiagnosisFinding struct {
+	ID       string   `json:"id"`
+	Focus    string   `json:"focus,omitempty"`
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 // DiagnosisCheck is one probe row.

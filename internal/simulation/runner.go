@@ -441,6 +441,9 @@ func decodeDiagnosis(res ExecResult) (*Diagnosis, error) {
 	}
 	d := Diagnosis{Checks: make([]DiagnosisCheck, len(wire.Checks)), Summary: wire.Summary,
 		Verdict: wire.Verdict, FailedStage: wire.FailedStage, OK: wire.OK}
+	for _, finding := range wire.Findings {
+		d.Findings = append(d.Findings, DiagnosisFinding{ID: finding.ID, Focus: finding.Focus, Evidence: finding.Evidence})
+	}
 	for i, check := range wire.Checks {
 		d.Checks[i] = DiagnosisCheck{ID: check.ID, Name: check.Name, Status: check.Status, Cause: check.Cause,
 			Ms: check.Ms, Detail: check.Detail, Fix: check.Fix}

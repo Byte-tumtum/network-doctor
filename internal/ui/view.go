@@ -1146,10 +1146,16 @@ func verdictStatus(verdict string) diagnostic.Status {
 }
 
 // focusRow is the probe row a finished run should put the cursor on and take
-// its drill-down from: the row the verdict blames when it names one, and
-// otherwise the first failing row. -1 when the run blames no row at all.
+// its drill-down from: the row the diagnosis blames, which is the row the
+// verdict names when it names one and otherwise the first failing row. -1 when
+// the run blames no row at all.
+//
+// The choice is the diagnosis's, not this function's: it asks for the blamed
+// row and only maps it to a list index. The first-failure scan that remains is
+// about the list rather than the diagnosis, for the case where the blamed probe
+// has no row to put a cursor on.
 func (m model) focusRow() int {
-	focus := diagnostic.FocusProbe(m.target, m.probeOrder(), m.results)
+	blamed := m.diagnosis().Blamed
 	first := -1
 	for i, probe := range m.probes {
 		// A probe with no row cannot be the row to send the reader to, and
@@ -1158,7 +1164,7 @@ func (m model) focusRow() int {
 		if !hasCheckRow(probe.ID) {
 			continue
 		}
-		if probe.ID == focus {
+		if probe.ID == blamed {
 			return i
 		}
 		if first < 0 && m.results[probe.ID].Status == diagnostic.StatusFail {

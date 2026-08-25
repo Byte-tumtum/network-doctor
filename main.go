@@ -449,6 +449,17 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		}
 		rep.Checks = append(rep.Checks, c)
 	}
-	rep.Summary, rep.Verdict = diagnostic.Diagnose(t, order, results)
+	// One interpretation, read for every diagnostic field the report carries,
+	// so the summary, the verdict and the findings cannot describe different
+	// runs.
+	d := diagnostic.Interpret(t, order, results)
+	rep.Summary, rep.Verdict = d.Summary, d.Verdict
+	for _, f := range d.Findings {
+		finding := report.Finding{ID: string(f.ID), Focus: string(f.Focus)}
+		for _, id := range f.Evidence {
+			finding.Evidence = append(finding.Evidence, string(id))
+		}
+		rep.Findings = append(rep.Findings, finding)
+	}
 	return rep
 }

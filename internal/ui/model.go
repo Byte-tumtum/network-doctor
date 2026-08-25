@@ -331,8 +331,18 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 	return m
 }
 
+// diagnosis is this model's one reading of the current results. Everything the
+// app says about what the run means, the banner sentence, the verdict colour,
+// the row the cursor lands on, and which failures are collateral, comes out of
+// this single structure, so two panels can never diagnose the same run
+// differently.
+func (m model) diagnosis() diagnostic.Diagnosis {
+	return diagnostic.Interpret(m.target, m.probeOrder(), m.results)
+}
+
 func (m model) diagnose(order []diagnostic.ProbeID) (string, string) {
-	return diagnostic.Diagnose(m.target, order, m.results)
+	d := diagnostic.Interpret(m.target, order, m.results)
+	return d.Summary, d.Verdict
 }
 
 // Target history persists as one line per target, oldest first. Everything

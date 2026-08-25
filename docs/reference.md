@@ -206,3 +206,61 @@ Those lines add a `ts` field (RFC 3339, UTC) saying when the pass ran; nothing e
 | `incomplete` | A check has no result (the chain did not finish) |
 
 The `network`/`service` split is decided by evidence, not guesswork: an unreachable target is only blamed on the service when direct egress independently succeeded. With no working egress to compare against, netdoc says `network` rather than accusing a host it never reached.
+
+### Diagnosis findings
+
+`verdict` says what kind of problem this is. `findings` says which problem it is.
+
+Every run is interpreted once, and that one interpretation produces the summary, the verdict, the row the app puts your cursor on, and this array. They cannot disagree with each other, because nothing reconstructs the diagnosis a second time.
+
+```json
+"findings": [
+  {"id": "tls_certificate_expired", "focus": "tls", "evidence": ["tls", "target_tcp"]}
+]
+```
+
+`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the remedy stays on the row that wrote it rather than being restated here. `evidence` names the checks the conclusion was drawn from, `focus` first, and only checks the run actually made.
+
+The array is omitted when the run reached no specific conclusion: everything passed, the run is still going, nothing was selected, or the only impairment is on a row no diagnosis is about. Those runs answer with `summary` and `verdict` alone rather than being given an identity the probes did not support. Today a run reports at most one finding, the most specific one it reaches; the field is an array because that is the shape a run with several independent conclusions needs, and consumers should read it as one.
+
+| `id` | What netdoc concluded |
+|---|---|
+| `no_usable_interface` | No interface is up, so the link is down |
+| `captive_portal` | Traffic is intercepted by a sign-in portal |
+| `offline` | Neither direct egress nor DNS is working |
+| `direct_egress_blocked` | Direct TCP egress is dead while something else still works |
+| `direct_egress_degraded` | Direct egress carries traffic but is impaired |
+| `proxy_only_network` | Only the environment proxy has egress |
+| `local_egress_failure` | This machine's own path is broken, so nothing beyond it was fairly tested |
+| `probable_path_mtu_problem` | A protocol exchange and a bulk write both stall, which is what a path MTU black hole looks like |
+| `system_dns_failure` | The configured resolver fails on a name public DNS resolves |
+| `dns_name_not_found` | Neither resolver has A/AAAA records for the name |
+| `dns_failure` | Name resolution is failing, with no second opinion separating the two above |
+| `dns_disagreement` | System and public DNS answer with different networks |
+| `encrypted_dns_unavailable` | DoH/DoT cannot complete a verified exchange while plain DNS works |
+| `quic_unavailable` | UDP/443 fails while TCP/443 works, so applications fall back |
+| `proxy_failure` | The configured environment proxy check failed |
+| `tcp_connection_refused` | Every connection attempt was explicitly refused |
+| `target_unreachable` | The target does not answer though DNS and the internet work |
+| `local_device_unreachable` | A device on the local network is silent while this machine's network works |
+| `reachability_untested` | The target is silent and direct egress was not checked, so neither end can be blamed |
+| `tls_certificate_expired` | The certificate is outside its validity window |
+| `tls_certificate_not_yet_valid` | The certificate's start date has not arrived |
+| `tls_hostname_mismatch` | The certificate is for a different name |
+| `tls_untrusted_issuer` | The certificate is signed by a CA this machine does not trust |
+| `tls_clock_skew` | A measured clock offset explains the certificate rejection |
+| `tls_timeout` | The handshake spent its whole budget without answering |
+| `tls_connection_closed` | The peer closed or reset during the handshake |
+| `tls_tcp_unreachable` | The TLS dial itself could not reach the port |
+| `tls_handshake_failure` | The handshake failed with no cause the client could classify |
+| `https_no_response` | TLS completes but no HTTPS response arrives |
+| `http_no_response` | No HTTP response arrives |
+| `service_banner_failure` | The port accepts TCP but the banner check failed |
+| `service_banner_missing` | The port accepts TCP and sent no banner |
+| `selected_dns_check_failed` | A `--check`/`--skip` selection left a failed DNS row no other case explains |
+| `selected_service_check_failed` | The same, for a service row |
+| `selected_network_check_failed` | The same, for a network row |
+
+The TLS identities are drawn from the same classification the `cause` field publishes, so a finding stays as precise as the handshake was. The sentence in `summary` is deliberately more hedged than the identity for the failures a client genuinely cannot tell apart, and `tls_handshake_failure` is what an unclassifiable handshake gets rather than a specific accusation.
+
+Nothing here claims a wrong default route, a missing subnet route, or an operator's intent, because no probe proves those. `id` values are added over time; treat an unrecognized one as "some specific problem" and fall back to `verdict`.

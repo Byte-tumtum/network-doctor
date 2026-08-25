@@ -16,7 +16,27 @@ type Report struct {
 	// FailedStage is the id of the first check that failed, omitted when none
 	// did, the one field a CI job needs to route a bug report.
 	FailedStage string `json:"failed_stage,omitempty"`
-	OK          bool   `json:"ok"`
+	// Findings are the specific conclusions the diagnosis drew, most important
+	// first. Omitted when the run reached none, which is the healthy case and
+	// also the run that is impaired in no way worth naming: summary and verdict
+	// answer for those, and inventing an identity for them would be a claim the
+	// probes did not support.
+	Findings []Finding `json:"findings,omitempty"`
+	OK       bool      `json:"ok"`
+}
+
+// Finding is one thing the run proved wrong, in the report's own vocabulary.
+// It is netdoc's conclusion about a network, not to be confused with the
+// simulator's hunt findings, which are defects found in netdoc itself.
+//
+// ID is the stable identity to branch on; Focus is the check id whose detail
+// and fix belong to this conclusion, so the remedy stays where it was written
+// instead of being copied into a second catalogue; Evidence names the checks
+// the conclusion was drawn from, Focus first.
+type Finding struct {
+	ID       string   `json:"id"`
+	Focus    string   `json:"focus,omitempty"`
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 type Target struct {

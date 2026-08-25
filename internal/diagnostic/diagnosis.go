@@ -13,39 +13,72 @@ import (
 // never feeds in). First-fail ordering + combination rules. Returns
 // "Running diagnostics…" until every probe in order has a result. A completed
 // run always returns a verdict.
+//
+// It is a view onto Interpret, which is the one place any of this is decided.
 func Diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) (string, string) {
-	// new(), not a var: the probe-ID inventory test reads every ProbeID
-	// declaration in this package as a stable ID.
-	return diagnose(t, order, res, new(ProbeID))
+	d := Interpret(t, order, res)
+	return d.Summary, d.Verdict
 }
 
 // FocusProbe names the probe row a finished diagnosis is about: the row a
 // caller should put the cursor on, take remediation from, and quote evidence
-// from. It runs the same pass Diagnose does, so the row and the prose cannot
-// disagree, which is the whole reason it exists rather than being guessed at
-// from the first failed row. Those two are not the same row nearly as often as
-// they look: an outage fails the sibling probes (QUIC, the proxy, encrypted
-// DNS) early in probe order while the prose blames a rung further down.
+// from. It reads the same interpretation Diagnose reads, so the row and the
+// prose cannot disagree, which is the whole reason it exists rather than being
+// guessed at from the first failed row. Those two are not the same row nearly
+// as often as they look: an outage fails the sibling probes (QUIC, the proxy,
+// encrypted DNS) early in probe order while the prose blames a rung further
+// down.
 //
 // Empty when the verdict is about no single row: a healthy run, a run that is
 // merely degraded in several places at once, or one still in progress.
 func FocusProbe(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) ProbeID {
-	focus := new(ProbeID)
-	diagnose(t, order, res, focus)
-	return *focus
+	return Interpret(t, order, res).Focus()
 }
 
-// diagnose is Diagnose plus the row the verdict blames: every case whose
-// sentence is about one rung writes that rung to focus (see blame below).
-func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *ProbeID) (string, string) {
+// Interpret is the diagnostic interpretation pass, and the only one there is.
+// Everything a caller can ask about what a run means comes from the Diagnosis
+// it returns: the summary, the verdict, the stable diagnosis ID, the blamed
+// row, and the rows that support the conclusion. They are produced together by
+// one walk of the truth table below, which is what makes it impossible for two
+// callers to reconstruct the diagnosis differently and end up contradicting
+// each other.
+func Interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosis {
+	d := interpret(t, order, res)
+	// The row a caller should point at, which is the row the diagnosis names
+	// when it names one and otherwise the first failure. A verdict about no
+	// single row still leaves a reader wanting somewhere to look.
+	d.Blamed = d.Focus()
+	if d.Blamed == "" {
+		for _, id := range order {
+			if r, ok := res[id]; ok && r.Status == StatusFail {
+				d.Blamed = id
+				break
+			}
+		}
+	}
+	return d
+}
+
+// interpret walks the truth table. Every case whose sentence is about one rung
+// returns a finding naming that rung (see blame below); the handful whose
+// sentence is about the run as a whole return a verdict with no finding under
+// it.
+func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosis {
+	// plain is a run-level answer with nothing specific to name: nothing was
+	// selected, nothing has finished, everything works, or several unrelated
+	// rungs are impaired at once. Deliberately not a finding, because there is
+	// no single thing here that was proven wrong.
+	plain := func(summary, verdict string) Diagnosis {
+		return Diagnosis{Summary: summary, Verdict: verdict}
+	}
 	if len(order) == 0 {
-		return "No checks selected.", VerdictOK
+		return plain("No checks selected.", VerdictOK)
 	}
 	degraded := false
 	for _, id := range order {
 		r, ok := res[id]
 		if !ok {
-			return "Running diagnostics…", VerdictIncomplete
+			return plain("Running diagnostics…", VerdictIncomplete)
 		}
 		degraded = degraded || r.Status == StatusWarn
 	}
@@ -66,42 +99,48 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		return ok && (r.timedOut || r.Cause == TLSCauseTimeout)
 	}
 	directOK := func() bool { return directEgressOK(res) }
-	// blame records the row the sentence being returned is about, and hands
-	// that sentence straight back so a case still reads as one return. The
-	// caller uses it to put the cursor, the remediation and the evidence on
-	// the row the prose names, instead of guessing at the first failed row:
-	// those two are the same row far less often than they look, because the
-	// sibling probes (QUIC, the proxy, encrypted DNS) fail early in probe
+	// blame records the finding the sentence being returned carries: its
+	// stable identity, the row it is about, and the other rows it was drawn
+	// from. The caller uses the row to put the cursor, the remediation and the
+	// evidence where the prose points, instead of guessing at the first failed
+	// row: those two are the same row far less often than they look, because
+	// the sibling probes (QUIC, the proxy, encrypted DNS) fail early in probe
 	// order in exactly the outages the prose blames on something else.
 	//
-	// A sentence with no single subject deliberately blames nothing: a
-	// caller with no row to point at is honest, and one pointed at an
-	// arbitrary row is not.
-	blame := func(id ProbeID, summary, verdict string) (string, string) {
-		*focus = id
-		return summary, verdict
+	// A sentence with no single subject deliberately blames nothing and
+	// carries no identity: a caller with no row to point at is honest, and one
+	// pointed at an arbitrary row is not. Those cases return plain instead.
+	blame := func(id DiagnosisID, focus ProbeID, summary, verdict string, from ...ProbeID) Diagnosis {
+		finding := DiagnosisFinding{
+			ID:       id,
+			Verdict:  verdict,
+			Summary:  summary,
+			Focus:    focus,
+			Evidence: evidenceRows(res, append([]ProbeID{focus}, from...)),
+		}
+		return Diagnosis{Summary: summary, Verdict: verdict, Findings: []DiagnosisFinding{finding}}
 	}
-	fallback := func() (string, string) {
+	fallback := func() Diagnosis {
 		for _, id := range order {
 			switch {
 			case !fail(id):
 				continue
 			case id == ProbeDNS:
-				return blame(id, "A selected DNS check failed.", VerdictDNS)
+				return blame(DiagnosisSelectedDNSCheckFailed, id, "A selected DNS check failed.", VerdictDNS)
 			case id == ProbeTLS || id == ProbeHTTP || id == ProbeHTTPS || id == ProbeSSH || id == ProbeSMTP:
-				return blame(id, "A selected service check failed.", VerdictService)
+				return blame(DiagnosisSelectedServiceCheckFailed, id, "A selected service check failed.", VerdictService)
 			default:
-				return blame(id, "A selected network check failed.", VerdictNetwork)
+				return blame(DiagnosisSelectedNetworkCheckFailed, id, "A selected network check failed.", VerdictNetwork)
 			}
 		}
 		if degraded {
-			return "Selected checks completed with warnings.", VerdictDegraded
+			return plain("Selected checks completed with warnings.", VerdictDegraded)
 		}
-		return "Selected checks passed.", VerdictOK
+		return plain("Selected checks passed.", VerdictOK)
 	}
 
 	if fail(ProbeIface) {
-		return blame(ProbeIface, "No usable network interface: the link is down.", VerdictNetwork)
+		return blame(DiagnosisNoUsableInterface, ProbeIface, "No usable network interface: the link is down.", VerdictNetwork)
 	}
 
 	prx := proxyCarries(res)
@@ -132,23 +171,23 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		}
 		switch {
 		case hasInternet && res[ProbeInternet].Portal != nil:
-			return blame(ProbeInternet, "Behind a captive portal: traffic is intercepted until you sign in to the network.", VerdictNetwork)
+			return blame(DiagnosisCaptivePortal, ProbeInternet, "Behind a captive portal: traffic is intercepted until you sign in to the network.", VerdictNetwork)
 		case directOK() && fail(ProbeDNS) && publicResolves:
-			return blame(ProbeDNS, "System DNS is failing, but public DNS resolves the name. Check the configured resolver, VPN, or DNS filter.", gv)
+			return blame(DiagnosisSystemDNSFailure, ProbeDNS, "System DNS is failing, but public DNS resolves the name. Check the configured resolver, VPN, or DNS filter.", gv, ProbeDNSPublic, ProbeInternet)
 		case directOK() && fail(ProbeDNS) && bothNotFound:
-			return blame(ProbeDNS, "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv)
+			return blame(DiagnosisDNSNameNotFound, ProbeDNS, "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv, ProbeDNSPublic, ProbeInternet)
 		case directOK() && has(ProbeQUIC) && fail(ProbeQUIC):
-			return blame(ProbeQUIC, "Direct TCP/443 works, but the QUIC handshake over UDP/443 failed. Applications can fall back to TCP, which may feel slower.", VerdictDegraded)
+			return blame(DiagnosisQUICUnavailable, ProbeQUIC, "Direct TCP/443 works, but the QUIC handshake over UDP/443 failed. Applications can fall back to TCP, which may feel slower.", VerdictDegraded, ProbeInternet)
 		case encryptedDNSBlocked(res):
-			return blame(ProbeDNSEncrypted, encryptedDNSSummary, VerdictDegraded)
+			return blame(DiagnosisEncryptedDNSUnavailable, ProbeDNSEncrypted, encryptedDNSSummary, VerdictDegraded, ProbeDNS, ProbeDNSPublic, ProbeInternet)
 		case warn(ProbeDNSPublic) && has(ProbeDNS) && functional(res[ProbeDNS].Status):
-			return blame(ProbeDNSPublic, "Online, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows).", gv)
+			return blame(DiagnosisDNSDisagreement, ProbeDNSPublic, "Online, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows).", gv, ProbeDNS)
 		case ip && dn && prxDown:
-			return blame(ProbeProxy, "Online directly, but the configured environment proxy check failed, so apps that use the proxy will fail (see the proxy row).", VerdictDegraded)
+			return blame(DiagnosisProxyFailure, ProbeProxy, "Online directly, but the configured environment proxy check failed, so apps that use the proxy will fail (see the proxy row).", VerdictDegraded, ProbeInternet, ProbeDNS)
 		case ip && dn:
-			return "Online: direct TCP egress and DNS both work.", gv
+			return plain("Online: direct TCP egress and DNS both work.", gv)
 		case warn(ProbeInternet) && res[ProbeInternet].downgraded && dn && prx:
-			return blame(ProbeInternet, "Online via the environment proxy: direct egress is blocked (proxy-only network).", gv)
+			return blame(DiagnosisProxyOnlyNetwork, ProbeInternet, "Online via the environment proxy: direct egress is blocked (proxy-only network).", gv, ProbeProxy, ProbeDNS)
 		case warn(ProbeInternet) && res[ProbeInternet].downgraded && fail(ProbeDNS) && prx:
 			// The same proxy-only network as the case above, with its resolver
 			// gone too. The Warn here is downgradeEgress's, not the probe's, so
@@ -160,23 +199,23 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 			// designed, which is why downgradeEgress already took the routing
 			// repair off the egress row. The resolver is the half of this
 			// sentence there is still something to do about.
-			return blame(ProbeDNS, "Direct egress is blocked and DNS resolution is failing; only the environment proxy is carrying traffic.", gv)
+			return blame(DiagnosisDNSFailure, ProbeDNS, "Direct egress is blocked and DNS resolution is failing; only the environment proxy is carrying traffic.", gv, ProbeInternet, ProbeProxy)
 		case directOK() && warn(ProbeInternet) && dn:
-			return blame(ProbeInternet, "Online but degraded: direct egress is impaired (see the ! row for details).", gv)
+			return blame(DiagnosisDirectEgressDegraded, ProbeInternet, "Online but degraded: direct egress is impaired (see the ! row for details).", gv, ProbeDNS)
 		case directOK() && warn(ProbeInternet) && fail(ProbeDNS):
 			// directOK, so this is a Warn the egress probe raised itself: one
 			// family down, packet loss, and so on. Direct egress really does
 			// carry traffic here, which is what separates it from the case
 			// above.
-			return blame(ProbeDNS, "Internet egress works (degraded) but DNS resolution is failing.", gv)
+			return blame(DiagnosisDNSFailure, ProbeDNS, "Internet egress works (degraded) but DNS resolution is failing.", gv, ProbeInternet)
 		case ip && fail(ProbeDNS):
-			return blame(ProbeDNS, "Internet egress works but DNS resolution is failing.", gv)
+			return blame(DiagnosisDNSFailure, ProbeDNS, "Internet egress works but DNS resolution is failing.", gv, ProbeInternet)
 		case hasInternet && !directOK() && dn:
-			return blame(ProbeInternet, "DNS resolves but there's no direct TCP egress (proxy-only or filtered network?).", gv)
+			return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "DNS resolves but there's no direct TCP egress (proxy-only or filtered network?).", gv, ProbeDNS)
 		case fail(ProbeInternet) && fail(ProbeDNS):
 			// Egress, not the resolver: nothing this machine sends is
 			// arriving, so the resolver has not been given a fair test yet.
-			return blame(ProbeInternet, "Offline: neither direct egress nor DNS is working.", gv)
+			return blame(DiagnosisOffline, ProbeInternet, "Offline: neither direct egress nor DNS is working.", gv, ProbeDNS)
 		default:
 			return fallback()
 		}
@@ -188,36 +227,46 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 	// Targeted mode: walk up the protocol stack (DNS → TCP → TLS → HTTP →
 	// banner) and report the first rung that broke. Everything above it
 	// failing is implied, everything below it passing is context.
-	targetOK := false
-	switch t.Proto {
-	case ProtoTLSHTTP:
-		targetOK = has(ProbeHTTP) && functional(res[ProbeHTTP].Status) && has(ProbeHTTPS) && functional(res[ProbeHTTPS].Status)
-	case ProtoHTTP:
-		targetOK = has(ProbeHTTP) && functional(res[ProbeHTTP].Status)
-	case ProtoSSH:
-		targetOK = has(ProbeSSH) && functional(res[ProbeSSH].Status)
-	case ProtoSMTP:
-		targetOK = has(ProbeSMTP) && functional(res[ProbeSMTP].Status)
-	default:
-		targetOK = has(ProbeTargetTCP) && functional(res[ProbeTargetTCP].Status)
+	//
+	// The rows that decide whether the target works are also the rows a
+	// verdict about the target rests on, so they are named once and used for
+	// both.
+	endpoint := targetRows(t)
+	targetOK := true
+	for _, id := range endpoint {
+		targetOK = targetOK && has(id) && functional(res[id].Status)
+	}
+	// Protocol rungs that spent their whole budget rather than answering,
+	// which is half of the path-MTU correlation below and the evidence a
+	// path-MTU verdict cites. Immediate failures such as a bad certificate are
+	// deliberately absent: they must continue down to their service-specific
+	// verdict.
+	var stalled []ProbeID
+	for _, id := range []ProbeID{ProbeTLS, ProbeHTTP, ProbeHTTPS} {
+		if fail(id) && timedOut(id) {
+			stalled = append(stalled, id)
+		}
 	}
 
 	switch {
 	case has(ProbeInternet) && res[ProbeInternet].Portal != nil:
 		// Ahead of the DNS rung: behind a portal every rung below is answering
 		// for the portal, so nothing further down the stack means what it says.
-		return blame(ProbeInternet, "Behind a captive portal: sign in to the network before trusting anything about "+host+".", VerdictNetwork)
+		return blame(DiagnosisCaptivePortal, ProbeInternet, "Behind a captive portal: sign in to the network before trusting anything about "+host+".", VerdictNetwork)
 	case fail(ProbeDNS):
+		id := DiagnosisDNSFailure
 		v := "Cannot resolve " + host + ": DNS failure."
 		if publicResolves {
+			id = DiagnosisSystemDNSFailure
 			v = "System DNS cannot resolve " + host + ", but public DNS can, so the configured resolver is failing or filtering the name."
 		} else if bothNotFound {
+			id = DiagnosisDNSNameNotFound
 			v = host + " has no A/AAAA records according to either system or public DNS."
 		}
 		if directOK() {
 			v += " (The general internet is reachable.)"
 		}
-		return blame(ProbeDNS, v, VerdictDNS)
+		return blame(id, ProbeDNS, v, VerdictDNS, ProbeDNSPublic, ProbeInternet)
 	case fail(ProbeTargetTCP):
 		// A device on the same network is not reached through the internet, so
 		// the egress rung is not evidence about it either way and none of the
@@ -228,18 +277,18 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 			case res[ProbeTargetTCP].Cause == ConnectionCauseRefused:
 				// Something answered for that address, so the device is on the
 				// network and the port is the whole of the problem.
-				return blame(ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the device is on the network, but nothing is listening on that port.", VerdictService)
+				return blame(DiagnosisTCPConnectionRefused, ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the device is on the network, but nothing is listening on that port.", VerdictService)
 			case directOK():
 				// This machine's own networking demonstrably works, so the
 				// silence is the device's. Which of the reasons it is cannot be
 				// told from here, and the sentence must not pick one.
-				return blame(ProbeTargetTCP, hp+" did not answer, though this machine's network is working: the device may be powered off or asleep, may have a different address now, or may be dropping the connection.", VerdictService)
+				return blame(DiagnosisLocalDeviceUnreachable, ProbeTargetTCP, hp+" did not answer, though this machine's network is working: the device may be powered off or asleep, may have a different address now, or may be dropping the connection.", VerdictService, ProbeInternet)
 			case !has(ProbeInternet):
-				return blame(ProbeTargetTCP, hp+" did not answer, and this machine's own network was not checked, so a problem here cannot be told apart from one on the device.", VerdictNetwork)
+				return blame(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" did not answer, and this machine's own network was not checked, so a problem here cannot be told apart from one on the device.", VerdictNetwork)
 			default:
 				// Nothing this machine sends is arriving anywhere, so the
 				// device has not been given a fair test yet.
-				return blame(ProbeInternet, hp+" did not answer, and this machine has no working network egress either: fix this machine's own connection first.", VerdictNetwork)
+				return blame(DiagnosisLocalEgressFailure, ProbeInternet, hp+" did not answer, and this machine has no working network egress either: fix this machine's own connection first.", VerdictNetwork, ProbeTargetTCP)
 			}
 		}
 		// Without working direct egress we can't tell a closed port from a dead
@@ -248,26 +297,25 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		// direct route this target needs.
 		if directOK() {
 			if res[ProbeTargetTCP].Cause == ConnectionCauseRefused {
-				return blame(ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the service may not be listening, or a firewall may be actively rejecting it.", VerdictService)
+				return blame(DiagnosisTCPConnectionRefused, ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the service may not be listening, or a firewall may be actively rejecting it.", VerdictService, ProbeInternet)
 			}
-			return blame(ProbeTargetTCP, hp+" is unreachable though DNS and the general internet work: remote port closed, firewall, or VPN routing.", VerdictService)
+			return blame(DiagnosisTargetUnreachable, ProbeTargetTCP, hp+" is unreachable though DNS and the general internet work: remote port closed, firewall, or VPN routing.", VerdictService, ProbeInternet, ProbeDNS)
 		}
 		if prx {
-			return blame(ProbeTargetTCP, hp+" is unreachable directly, but the environment proxy has egress: this is a proxy-only network, so route traffic through the proxy.", VerdictNetwork)
+			return blame(DiagnosisProxyOnlyNetwork, ProbeTargetTCP, hp+" is unreachable directly, but the environment proxy has egress: this is a proxy-only network, so route traffic through the proxy.", VerdictNetwork, ProbeProxy, ProbeInternet)
 		}
 		if !has(ProbeInternet) {
-			return blame(ProbeTargetTCP, hp+" is unreachable, but general internet reachability was not checked, so a local path problem cannot be told apart from a remote service failure.", VerdictNetwork)
+			return blame(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" is unreachable, but general internet reachability was not checked, so a local path problem cannot be told apart from a remote service failure.", VerdictNetwork)
 		}
 		// The egress row, not the target row: this sentence is about the local
 		// path, and the target connect is what that dead path looks like from
 		// one rung further up.
-		return blame(ProbeInternet, host+" resolves but neither it nor the general internet is reachable: local egress problem.", VerdictNetwork)
-	case warn(ProbePMTU) && ((fail(ProbeTLS) && timedOut(ProbeTLS)) ||
-		(fail(ProbeHTTP) && timedOut(ProbeHTTP)) || (fail(ProbeHTTPS) && timedOut(ProbeHTTPS))):
+		return blame(DiagnosisLocalEgressFailure, ProbeInternet, host+" resolves but neither it nor the general internet is reachable: local egress problem.", VerdictNetwork, ProbeTargetTCP, ProbeDNS)
+	case warn(ProbePMTU) && len(stalled) > 0:
 		// A protocol timeout and a separate bulk-write stall are correlated
 		// evidence for a path problem. Immediate failures such as a bad
 		// certificate must continue down to their service-specific verdict.
-		return blame(ProbePMTU, "TCP reaches "+hp+" but the protocol and bulk-transfer checks both stall, which is evidence of a path MTU black hole rather than a broken service (see the Path MTU row).", VerdictNetwork)
+		return blame(DiagnosisProbablePathMTU, ProbePMTU, "TCP reaches "+hp+" but the protocol and bulk-transfer checks both stall, which is evidence of a path MTU black hole rather than a broken service (see the Path MTU row).", VerdictNetwork, append([]ProbeID{ProbeTargetTCP}, stalled...)...)
 	case has(ProbeTLS) && fail(ProbeTLS):
 		// With a measured offset that points the same way as the certificate
 		// error there is nothing left to hedge about, so name it instead.
@@ -277,42 +325,60 @@ func diagnose(t *Target, order []ProbeID, res map[ProbeID]ProbeResult, focus *Pr
 		if d, ok := clockSkew(res); ok {
 			switch {
 			case skewExplainsTLS(res[ProbeTLS].Cause, d):
-				return blame(ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails because "+clockSkewPhrase(d)+", so "+clockSkewEffect(d)+".", VerdictService)
+				return blame(DiagnosisTLSClockSkew, ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails because "+clockSkewPhrase(d)+", so "+clockSkewEffect(d)+".", VerdictService, ProbeInternet, ProbeTargetTCP)
 			case skewDisprovesTLS(res[ProbeTLS].Cause, d):
-				return blame(ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert or MITM proxy.", VerdictService)
+				return blame(tlsDiagnosisID(res[ProbeTLS].Cause), ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert or MITM proxy.", VerdictService, ProbeInternet, ProbeTargetTCP)
 			}
 		}
-		return blame(ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert, clock skew, or MITM proxy.", VerdictService)
+		return blame(tlsDiagnosisID(res[ProbeTLS].Cause), ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert, clock skew, or MITM proxy.", VerdictService, ProbeTargetTCP)
 	case has(ProbeHTTPS) && fail(ProbeHTTPS):
-		return blame(ProbeHTTPS, "TLS is fine but no HTTPS response from "+hp+": application-layer or proxy block.", VerdictService)
+		return blame(DiagnosisHTTPSNoResponse, ProbeHTTPS, "TLS is fine but no HTTPS response from "+hp+": application-layer or proxy block.", VerdictService, ProbeTLS)
 	case has(ProbeHTTP) && fail(ProbeHTTP):
 		if t.Proto == ProtoTLSHTTP {
-			return blame(ProbeHTTP, "HTTPS works but no HTTP response from "+net.JoinHostPort(host, "80")+": the redirect/plain-HTTP endpoint may be blocked.", VerdictService)
+			return blame(DiagnosisHTTPNoResponse, ProbeHTTP, "HTTPS works but no HTTP response from "+net.JoinHostPort(host, "80")+": the redirect/plain-HTTP endpoint may be blocked.", VerdictService, ProbeHTTPS)
 		}
-		return blame(ProbeHTTP, "No HTTP response from "+hp+": application-layer or proxy block.", VerdictService)
+		return blame(DiagnosisHTTPNoResponse, ProbeHTTP, "No HTTP response from "+hp+": application-layer or proxy block.", VerdictService, ProbeTargetTCP)
 	case (has(ProbeSSH) && fail(ProbeSSH)) || (has(ProbeSMTP) && fail(ProbeSMTP)):
-		return blame(bannerRow(res, fail), hp+" accepts TCP but the service banner check failed.", VerdictService)
+		return blame(DiagnosisServiceBannerFailure, bannerRow(res, fail), hp+" accepts TCP but the service banner check failed.", VerdictService, ProbeTargetTCP)
 	case (has(ProbeSSH) && warn(ProbeSSH)) || (has(ProbeSMTP) && warn(ProbeSMTP)):
-		return blame(bannerRow(res, warn), hp+" accepts TCP but sent no service banner.", VerdictDegraded)
+		return blame(DiagnosisServiceBannerMissing, bannerRow(res, warn), hp+" accepts TCP but sent no service banner.", VerdictDegraded, ProbeTargetTCP)
 	case targetOK && has(ProbeQUIC) && fail(ProbeQUIC) && directOK():
-		return blame(ProbeQUIC, "The target and direct TCP/443 work, but the QUIC handshake over UDP/443 failed. Applications can fall back to TCP, which may feel slower.", VerdictDegraded)
+		return blame(DiagnosisQUICUnavailable, ProbeQUIC, "The target and direct TCP/443 work, but the QUIC handshake over UDP/443 failed. Applications can fall back to TCP, which may feel slower.", VerdictDegraded, ProbeInternet)
 	case encryptedDNSBlocked(res):
-		return blame(ProbeDNSEncrypted, encryptedDNSSummary, VerdictDegraded)
+		return blame(DiagnosisEncryptedDNSUnavailable, ProbeDNSEncrypted, encryptedDNSSummary, VerdictDegraded, ProbeDNS, ProbeDNSPublic, ProbeInternet)
 	case targetOK && (fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded)):
-		return blame(ProbeInternet, "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded)
+		return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded, endpoint...)
 	case targetOK && prxDown && directOK():
-		return blame(ProbeProxy, "The target and direct egress work, but the configured environment proxy check failed, so apps that use the proxy will fail (see the proxy row).", VerdictDegraded)
+		return blame(DiagnosisProxyFailure, ProbeProxy, "The target and direct egress work, but the configured environment proxy check failed, so apps that use the proxy will fail (see the proxy row).", VerdictDegraded, ProbeInternet)
 	case targetOK && warn(ProbeInternet):
-		return blame(ProbeInternet, "The target works but direct internet egress is degraded (see the ! row for details).", VerdictDegraded)
+		return blame(DiagnosisDirectEgressDegraded, ProbeInternet, "The target works but direct internet egress is degraded (see the ! row for details).", VerdictDegraded, endpoint...)
 	case targetOK && warn(ProbeDNSPublic) && has(ProbeDNS) && functional(res[ProbeDNS].Status):
-		return blame(ProbeDNSPublic, "The target works, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows).", VerdictDegraded)
+		return blame(DiagnosisDNSDisagreement, ProbeDNSPublic, "The target works, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows).", VerdictDegraded, ProbeDNS)
 	case targetOK && degraded:
-		return "The target works, but some checks are degraded (see the ! rows for details).", VerdictDegraded
+		return plain("The target works, but some checks are degraded (see the ! rows for details).", VerdictDegraded)
 	case targetOK:
-		return "All checks passed. " + hp + " looks healthy.", VerdictOK
+		return plain("All checks passed. "+hp+" looks healthy.", VerdictOK)
 	default:
 		return fallback()
 	}
+}
+
+// targetRows names the probe rows that decide whether the endpoint under test
+// works, which the target's protocol chooses. Every row named has to be
+// functional for the target to count as working, so the same list is both the
+// test and the evidence a verdict about the target rests on.
+func targetRows(t *Target) []ProbeID {
+	switch t.Proto {
+	case ProtoTLSHTTP:
+		return []ProbeID{ProbeHTTP, ProbeHTTPS}
+	case ProtoHTTP:
+		return []ProbeID{ProbeHTTP}
+	case ProtoSSH:
+		return []ProbeID{ProbeSSH}
+	case ProtoSMTP:
+		return []ProbeID{ProbeSMTP}
+	}
+	return []ProbeID{ProbeTargetTCP}
 }
 
 // Verdict classifications: the second half of Diagnose's return, for scripts
@@ -440,23 +506,13 @@ func encryptedDNSBlocked(res map[ProbeID]ProbeResult) bool {
 // failed probe had a working rung under it: a failure with its prerequisite
 // met is evidence about that probe alone.
 func Collateral(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) map[ProbeID]bool {
-	focus := new(ProbeID)
-	_, verdict := diagnose(t, order, res, focus)
-	if verdict == VerdictIncomplete {
+	d := Interpret(t, order, res)
+	if d.Verdict == VerdictIncomplete {
 		return nil
 	}
-	// The blamed row, read the same way the banner reads it: the row the
-	// verdict names when it names one, and otherwise the first failure. It is
-	// never collateral to itself.
-	blamed := *focus
-	if blamed == "" {
-		for _, id := range order {
-			if r, ok := res[id]; ok && r.Status == StatusFail {
-				blamed = id
-				break
-			}
-		}
-	}
+	// The blamed row the interpretation already worked out, which is what the
+	// banner reads too. It is never collateral to itself.
+	blamed, verdict := d.Blamed, d.Verdict
 	var out map[ProbeID]bool
 	for _, id := range order {
 		r, ok := res[id]

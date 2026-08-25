@@ -961,6 +961,18 @@ func TestReportJSONContract(t *testing.T) {
 			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","cause":"client_dns_failure","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","portal":{"redirect_url":"https://portal.example/signin"},"attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
 		},
 		{
+			// Findings serialize between failed_stage and ok, and an empty
+			// evidence list stays absent rather than becoming [].
+			name: "findings",
+			rep: report.Report{
+				Checks:   []report.Check{{}},
+				Summary:  "cert expired",
+				Verdict:  "service",
+				Findings: []report.Finding{{ID: "tls_certificate_expired", Focus: "tls", Evidence: []string{"tls", "target_tcp"}}, {ID: "quic_unavailable"}},
+			},
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"cert expired","verdict":"service","findings":[{"id":"tls_certificate_expired","focus":"tls","evidence":["tls","target_tcp"]},{"id":"quic_unavailable"}],"ok":false}`,
+		},
+		{
 			name: "empty",
 			rep:  report.Report{Checks: []report.Check{{}}},
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"","verdict":"","ok":false}`,
@@ -1080,5 +1092,78 @@ func TestRunJSONAllowedWithRedirectedStdout(t *testing.T) {
 	}
 	if !rep.OK {
 		t.Errorf("ok = false, want true with every check passing")
+	}
+}
+
+// The report's diagnostic fields all come from one interpretation, so a
+// finding cannot describe a different run from the summary printed beside it.
+// This checks the JSON the flag actually emits against the engine's own answer
+// rather than against a copy of it.
+func TestBuildReportFindingsComeFromTheDiagnosis(t *testing.T) {
+	target := &diagnostic.Target{Host: "example.com", Port: 443, Proto: diagnostic.ProtoTLSHTTP}
+	probes := []diagnostic.Probe{
+		{ID: diagnostic.ProbeIface, Name: "Interface"},
+		{ID: diagnostic.ProbeInternet, Name: "Internet (TCP egress)"},
+		{ID: diagnostic.ProbeDNS, Name: "DNS example.com"},
+		{ID: diagnostic.ProbeTargetTCP, Name: "TCP example.com:443"},
+		{ID: diagnostic.ProbeTLS, Name: "TLS example.com"},
+	}
+	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbeIface:     {Status: diagnostic.StatusPass},
+		diagnostic.ProbeInternet:  {Status: diagnostic.StatusPass},
+		diagnostic.ProbeDNS:       {Status: diagnostic.StatusPass},
+		diagnostic.ProbeTargetTCP: {Status: diagnostic.StatusPass},
+		diagnostic.ProbeTLS:       {Status: diagnostic.StatusFail, Cause: diagnostic.TLSCauseHostnameMismatch},
+	}
+	order := []diagnostic.ProbeID{}
+	for _, p := range probes {
+		order = append(order, p.ID)
+	}
+	want := diagnostic.Interpret(target, order, results)
+
+	rep := buildReport(target, probes, results)
+	if rep.Summary != want.Summary || rep.Verdict != want.Verdict {
+		t.Errorf("summary/verdict = %q/%q, want %q/%q", rep.Summary, rep.Verdict, want.Summary, want.Verdict)
+	}
+	if len(rep.Findings) != len(want.Findings) {
+		t.Fatalf("%d findings, want %d", len(rep.Findings), len(want.Findings))
+	}
+	for i, f := range want.Findings {
+		got := rep.Findings[i]
+		if got.ID != string(f.ID) || got.Focus != string(f.Focus) {
+			t.Errorf("finding %d = %+v, want id %q focus %q", i, got, f.ID, f.Focus)
+		}
+		if len(got.Evidence) != len(f.Evidence) {
+			t.Fatalf("finding %d evidence = %v, want %v", i, got.Evidence, f.Evidence)
+		}
+		for j, id := range f.Evidence {
+			if got.Evidence[j] != string(id) {
+				t.Errorf("finding %d evidence[%d] = %q, want %q", i, j, got.Evidence[j], id)
+			}
+		}
+	}
+	// The blamed row is where the remedy lives, so the report must carry a
+	// check with that id rather than a fix copied into the finding.
+	if len(rep.Findings) > 0 {
+		found := false
+		for _, c := range rep.Checks {
+			found = found || c.ID == rep.Findings[0].Focus
+		}
+		if !found {
+			t.Errorf("finding blames %q, which is not a check in the report", rep.Findings[0].Focus)
+		}
+	}
+
+	// A run with nothing to conclude keeps the report it has always emitted:
+	// no findings key at all.
+	for id := range results {
+		results[id] = diagnostic.ProbeResult{Status: diagnostic.StatusPass}
+	}
+	blob, err := json.Marshal(buildReport(target, probes, results))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "findings") {
+		t.Errorf("a healthy run emitted a findings key: %s", blob)
 	}
 }
