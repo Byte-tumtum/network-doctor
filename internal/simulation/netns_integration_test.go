@@ -246,6 +246,42 @@ func TestBrokenDNSScenario(t *testing.T) {
 	if out.ActualVerdict != "dns" {
 		t.Errorf("verdict = %s, want dns", out.ActualVerdict)
 	}
+	if len(out.Diagnosis.Findings) != 1 || out.Diagnosis.Findings[0].ID != string(diagnostic.DiagnosisSystemDNSFailure) {
+		t.Fatalf("finding = %+v, want %s", out.Diagnosis.Findings, diagnostic.DiagnosisSystemDNSFailure)
+	}
+	finding := out.Diagnosis.Findings[0]
+	wantSupport := map[string]string{
+		string(diagnostic.ProbeDNS):       string(diagnostic.ObservationCause),
+		string(diagnostic.ProbeDNSPublic): string(diagnostic.ObservationDNSAnswers),
+		string(diagnostic.ProbeInternet):  string(diagnostic.ObservationStatusPass),
+	}
+	for check, observation := range wantSupport {
+		if !hasDiagnosisCausalEvidence(finding, string(diagnostic.EvidenceSupport), check, observation, "", "") {
+			t.Errorf("finding has no support from %s/%s: %+v", check, observation, finding.CausalEvidence)
+		}
+	}
+	if !hasDiagnosisCausalEvidence(finding, string(diagnostic.EvidenceRuledOut), string(diagnostic.ProbeInternet),
+		string(diagnostic.ObservationStatusPass), string(diagnostic.DiagnosisOffline), "") {
+		t.Errorf("working internet did not rule out an outage: %+v", finding.CausalEvidence)
+	}
+	if !hasDiagnosisCausalEvidence(finding, string(diagnostic.EvidenceNotEvaluated), string(diagnostic.ProbeTargetTCP),
+		string(diagnostic.ObservationStatusSkip), "", string(diagnostic.NotEvaluatedPrerequisite)) {
+		t.Errorf("skipped target check did not stay not-evaluated: %+v", finding.CausalEvidence)
+	}
+	for _, evidence := range finding.CausalEvidence {
+		if evidence.Check == string(diagnostic.ProbeTargetTCP) && evidence.Kind == string(diagnostic.EvidenceRuledOut) {
+			t.Errorf("skipped target check was used to rule out a cause: %+v", evidence)
+		}
+	}
+	publicAnswer := false
+	for _, query := range rep.Evidence.DNSQueries {
+		if query.Source == "10.77.0.10" && query.Name == "example.test" && query.QueryType == "A" && query.ActualOutcome == "ANSWER" {
+			publicAnswer = true
+		}
+	}
+	if !publicAnswer {
+		t.Errorf("causal public-DNS support has no simulator answer: %+v", rep.Evidence.DNSQueries)
+	}
 	assertCleanedUp(t, rep)
 }
 
@@ -2323,6 +2359,18 @@ func TestTLSExpiredCertificateScenario(t *testing.T) {
 	if !hasTLSEvidence(rep, TLSCertificateExpired, "secure-target.test", "secure-target.test", true, "client_rejected_certificate") {
 		t.Errorf("no expired certificate rejection evidence: %+v", rep.Evidence.TLS)
 	}
+	if len(out.Diagnosis.Findings) != 1 || out.Diagnosis.Findings[0].ID != string(diagnostic.DiagnosisTLSCertificateExpired) {
+		t.Fatalf("finding = %+v, want %s", out.Diagnosis.Findings, diagnostic.DiagnosisTLSCertificateExpired)
+	}
+	finding := out.Diagnosis.Findings[0]
+	if !hasDiagnosisCausalEvidence(finding, string(diagnostic.EvidenceSupport), string(diagnostic.ProbeTLS),
+		string(diagnostic.ObservationCause), "", "") {
+		t.Errorf("TLS cause is absent from causal support: %+v", finding.CausalEvidence)
+	}
+	if !hasDiagnosisCausalEvidence(finding, string(diagnostic.EvidenceRuledOut), string(diagnostic.ProbeTargetTCP),
+		string(diagnostic.ObservationStatusPass), string(diagnostic.DiagnosisTLSTCPUnreachable), "") {
+		t.Errorf("working TCP did not rule out an unreachable TLS endpoint: %+v", finding.CausalEvidence)
+	}
 	for _, item := range rep.Evidence.TLS {
 		if item.CertificateMode == TLSCertificateExpired && !item.NotAfter.Before(rep.StartedAt) {
 			t.Errorf("expired NotAfter %s is not before evaluation %s", item.NotAfter, rep.StartedAt)
@@ -2904,6 +2952,12 @@ func diagnosisCheck(out TestOutcome, id string) DiagnosisCheck {
 		}
 	}
 	return DiagnosisCheck{}
+}
+
+func hasDiagnosisCausalEvidence(finding DiagnosisFinding, kind, check, observation, candidate, reason string) bool {
+	return slices.ContainsFunc(finding.CausalEvidence, func(e DiagnosisCausalEvidence) bool {
+		return e.Kind == kind && e.Check == check && e.Observation == observation && e.Candidate == candidate && e.Reason == reason
+	})
 }
 
 func hasDNSEvidence(rep Report, node, source, name, result string) bool {

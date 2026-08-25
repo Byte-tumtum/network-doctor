@@ -1045,15 +1045,22 @@ func TestReportJSONContract(t *testing.T) {
 		},
 		{
 			// Findings serialize between failed_stage and ok, and an empty
-			// evidence list stays absent rather than becoming [].
+			// evidence list stays absent rather than becoming []. Typed causal
+			// evidence is additive beside the original row-id projection.
 			name: "findings",
 			rep: report.Report{
-				Checks:   []report.Check{{}},
-				Summary:  "cert expired",
-				Verdict:  "service",
-				Findings: []report.Finding{{ID: "tls_certificate_expired", Focus: "tls", Evidence: []string{"tls", "target_tcp"}}, {ID: "quic_unavailable"}},
+				Checks:  []report.Check{{}},
+				Summary: "cert expired",
+				Verdict: "service",
+				Findings: []report.Finding{{
+					ID: "tls_certificate_expired", Focus: "tls", Evidence: []string{"tls", "target_tcp"},
+					CausalEvidence: []report.CausalEvidence{
+						{Kind: "support", Check: "tls", Observation: "cause"},
+						{Kind: "ruled_out", Check: "target_tcp", Observation: "status_pass", Candidate: "tls_tcp_unreachable"},
+					},
+				}, {ID: "quic_unavailable"}},
 			},
-			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"cert expired","verdict":"service","findings":[{"id":"tls_certificate_expired","focus":"tls","evidence":["tls","target_tcp"]},{"id":"quic_unavailable"}],"ok":false}`,
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"cert expired","verdict":"service","findings":[{"id":"tls_certificate_expired","focus":"tls","evidence":["tls","target_tcp"],"causal_evidence":[{"kind":"support","check":"tls","observation":"cause"},{"kind":"ruled_out","check":"target_tcp","observation":"status_pass","candidate":"tls_tcp_unreachable"}]},{"id":"quic_unavailable"}],"ok":false}`,
 		},
 		{
 			// Remediation is additive: it serializes inside its finding, after
@@ -1240,12 +1247,24 @@ func TestBuildReportFindingsComeFromTheDiagnosis(t *testing.T) {
 		if got.ID != string(f.ID) || got.Focus != string(f.Focus) {
 			t.Errorf("finding %d = %+v, want id %q focus %q", i, got, f.ID, f.Focus)
 		}
-		if len(got.Evidence) != len(f.Evidence) {
-			t.Fatalf("finding %d evidence = %v, want %v", i, got.Evidence, f.Evidence)
+		rows := f.EvidenceRows()
+		if len(got.Evidence) != len(rows) {
+			t.Fatalf("finding %d evidence = %v, want %v", i, got.Evidence, rows)
 		}
-		for j, id := range f.Evidence {
+		for j, id := range rows {
 			if got.Evidence[j] != string(id) {
 				t.Errorf("finding %d evidence[%d] = %q, want %q", i, j, got.Evidence[j], id)
+			}
+		}
+		if len(got.CausalEvidence) != len(f.Evidence) {
+			t.Fatalf("finding %d causal evidence = %v, want %v", i, got.CausalEvidence, f.Evidence)
+		}
+		for j, evidence := range f.Evidence {
+			gotEvidence := got.CausalEvidence[j]
+			if gotEvidence.Kind != string(evidence.Kind) || gotEvidence.Check != string(evidence.Check) ||
+				gotEvidence.Observation != string(evidence.Observation) || gotEvidence.Candidate != string(evidence.Candidate) ||
+				gotEvidence.Reason != string(evidence.Reason) {
+				t.Errorf("finding %d causal evidence[%d] = %+v, want %+v", i, j, gotEvidence, evidence)
 			}
 		}
 	}

@@ -158,6 +158,23 @@
           "internet_tcp",
           "target_tcp",
           "dns"
+        ],
+        "causal_evidence": [
+          {
+            "kind": "support",
+            "check": "internet_tcp",
+            "observation": "status_downgraded"
+          },
+          {
+            "kind": "support",
+            "check": "target_tcp",
+            "observation": "cause"
+          },
+          {
+            "kind": "support",
+            "check": "dns",
+            "observation": "dns_answers"
+          }
         ]
       }
     ]

@@ -129,6 +129,72 @@ func TestDecodeIgnoresUnknownFields(t *testing.T) {
 	}
 }
 
+func TestDecodePreEvidenceV1DoesNotInventCausalEvidence(t *testing.T) {
+	data := []byte(`{"schema":"` + Schema + `","checks":[{"id":"dns","status":"FAIL","ran":true,"duration_ms":1}],"diagnosis":{"verdict":"dns","summary":"DNS failed","findings":[{"id":"dns_failure","verdict":"dns","summary":"DNS failed","focus":"dns","evidence":["dns"]}]},"ok":false}`)
+	s, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode pre-evidence v1: %v", err)
+	}
+	if len(s.Diagnosis.Findings) != 1 || s.Diagnosis.Findings[0].CausalEvidence != nil {
+		t.Fatalf("old snapshot gained historical evidence: %+v", s.Diagnosis.Findings)
+	}
+	reencoded, err := Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(reencoded), "causal_evidence") {
+		t.Errorf("round trip invented causal evidence:\n%s", reencoded)
+	}
+}
+
+func TestCausalEvidenceValidation(t *testing.T) {
+	base := func() Snapshot {
+		return Snapshot{
+			Checks: []Check{
+				{ID: "dns", Status: StatusFail, Ran: true, DurationMs: 1},
+				{ID: "public_dns", Status: StatusPass, Ran: true, DurationMs: 1,
+					Observed: &Observed{Addresses: []string{"192.0.2.1"}}},
+				{ID: "target_tcp", Status: StatusSkip},
+			},
+			Diagnosis: Diagnosis{Findings: []Finding{{
+				ID: "system_dns_failure",
+				CausalEvidence: []CausalEvidence{
+					{Kind: EvidenceSupport, Check: "dns", Observation: ObservationStatusFail},
+					{Kind: EvidenceRuledOut, Check: "public_dns", Observation: ObservationDNSAnswers, Candidate: "dns_name_not_found"},
+					{Kind: EvidenceNotEvaluated, Check: "target_tcp", Observation: ObservationStatusSkip, Reason: NotEvaluatedPrerequisite},
+				},
+			}}},
+		}
+	}
+	if _, err := Encode(base()); err != nil {
+		t.Fatalf("valid causal evidence rejected: %v", err)
+	}
+	tests := []struct {
+		name string
+		edit func(*Snapshot)
+		want string
+	}{
+		{"missing check", func(s *Snapshot) { s.Diagnosis.Findings[0].CausalEvidence[0].Check = "missing" }, "not in the snapshot"},
+		{"absent observation", func(s *Snapshot) { s.Diagnosis.Findings[0].CausalEvidence[0].Observation = ObservationDNSAnswers }, "observation is absent"},
+		{"ruled out from skipped", func(s *Snapshot) {
+			s.Diagnosis.Findings[0].CausalEvidence[1] = CausalEvidence{Kind: EvidenceRuledOut, Check: "target_tcp", Observation: ObservationStatusSkip, Candidate: "target_unreachable"}
+		}, "cannot use an unevaluated observation"},
+		{"unknown not-evaluated reason", func(s *Snapshot) { s.Diagnosis.Findings[0].CausalEvidence[2].Reason = "unknown" }, "unknown not-evaluated reason"},
+		{"duplicate", func(s *Snapshot) {
+			s.Diagnosis.Findings[0].CausalEvidence = append(s.Diagnosis.Findings[0].CausalEvidence, s.Diagnosis.Findings[0].CausalEvidence[0])
+		}, "repeats causal evidence"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := base()
+			tt.edit(&s)
+			if _, err := Encode(s); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Encode error = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // Encode stamps the schema itself, so a caller cannot publish a file that
 // claims to be something else, or forget to claim anything.
 func TestEncodeStampsSchema(t *testing.T) {

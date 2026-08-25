@@ -376,7 +376,17 @@ func diffDiagnosis(d *diff, before, after snapshot.Snapshot) {
 		// from in the order it reasoned over them.
 		d.field(SectionDiagnosis, "", "diagnosis.findings."+id+".evidence", "finding "+id+" evidence",
 			strings.Join(b.Evidence, ","), strings.Join(a.Evidence, ","))
+		d.field(SectionDiagnosis, "", "diagnosis.findings."+id+".causal_evidence", "finding "+id+" causal evidence",
+			causalEvidenceValue(b.CausalEvidence), causalEvidenceValue(a.CausalEvidence))
 	}
+}
+
+func causalEvidenceValue(evidence []snapshot.CausalEvidence) string {
+	items := make([]string, len(evidence))
+	for i, e := range evidence {
+		items[i] = strings.Join([]string{e.Kind, e.Check, e.Observation, e.Candidate, e.Reason}, ":")
+	}
+	return strings.Join(items, ",")
 }
 
 func okWord(ok bool) string {

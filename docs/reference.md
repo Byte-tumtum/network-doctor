@@ -380,7 +380,14 @@ fields are unchanged.
 
 ## Drill-down tools
 
-Each diagnosis row is *evidence*; when you want proof, run the real tools as cancellable streaming jobs: several run at once, and `tab` switches between the live ones. A contextual toolbox shows the tools available for the current target with their hotkeys, greying out missing binaries with an install hint. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.
+Press `e` after a completed diagnosis to replace the focused Details panel with
+its causal explanation. The view separates observations supporting the answer,
+observations that rule out or contradict alternatives, and relevant checks that
+were not evaluated. Press `e` again for the ordinary row details. The full key
+cheatsheet behind `?` is generated from the same binding, so custom key presets
+cannot make dispatch and help disagree.
+
+Each diagnosis row is *evidence*; when you want proof beyond the built-in observations, run the real tools as cancellable streaming jobs: several run at once, and `tab` switches between the live ones. A contextual toolbox shows the tools available for the current target with their hotkeys, greying out missing binaries with an install hint. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.
 Review your local copy before sharing, since tool evidence may contain sensitive data.
 
 The same hotkeys map to each OS's built-in tools:
@@ -511,6 +518,11 @@ Every run is interpreted once, and that one interpretation produces the summary,
     "id": "tls_certificate_expired",
     "focus": "tls",
     "evidence": ["tls", "target_tcp"],
+    "causal_evidence": [
+      {"kind": "support", "check": "tls", "observation": "cause"},
+      {"kind": "support", "check": "target_tcp", "observation": "status_pass"},
+      {"kind": "ruled_out", "check": "target_tcp", "observation": "status_pass", "candidate": "tls_tcp_unreachable"}
+    ],
     "remediation": {
       "id": "renew_certificate",
       "action": "Renew the certificate, or check this machine's clock",
@@ -526,7 +538,34 @@ Every run is interpreted once, and that one interpretation produces the summary,
 ]
 ```
 
-`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `evidence` names the checks the conclusion was drawn from, `focus` first, and only checks the run actually made. `remediation` is what to do about the finding, described below.
+`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `evidence` remains the original compatibility list of observed check IDs, `focus` first. `causal_evidence` is its typed form and may also name a relevant check that was not evaluated. `remediation` is what to do about the finding, described below.
+
+Each causal item has a `kind`, a check ID in `check`, and, when an observation
+exists, its typed identity in `observation`. The value itself remains on the
+referenced check. This keeps a measured fact separate from what that fact means
+for a diagnosis.
+
+| `kind` | Meaning | Additional field |
+| --- | --- | --- |
+| `support` | The observation directly supports the selected diagnosis | none |
+| `contradiction` | The observation weakens a named alternative but does not exclude it | `candidate` diagnosis ID |
+| `ruled_out` | Independent positive evidence excludes a named alternative | `candidate` diagnosis ID |
+| `not_evaluated` | The check supplied no observation and remains unknown for this run | `reason` |
+
+The observation vocabulary is `status_pass`, `status_warn`, `status_fail`,
+`status_skip`, `status_not_applicable`, `cause`, `dns_answers`,
+`dns_not_found`, `captive_portal`, `timeout`, `clock_offset`, and
+`status_downgraded`. Not-evaluated reasons are `prerequisite_failed`,
+`not_selected`, `not_applicable`, and `incomplete`. A skipped, not-applicable,
+missing, or incomplete check is never enough to rule out a cause. An absent
+`causal_evidence` field means this producer did not record an explanation; it
+does not mean the listed alternatives were tested.
+
+The same interpretation branch creates the diagnosis and its causal items.
+There is no pass that receives a final diagnosis ID and reconstructs plausible
+reasons afterwards. The ordered array is deterministic, rejects duplicates in
+snapshots, and keeps every relationship tied to the check observation that
+actually occurred.
 
 The array is omitted when the run reached no specific conclusion: everything passed, the run is still going, nothing was selected, or the only impairment is on a row no diagnosis is about. Those runs answer with `summary` and `verdict` alone rather than being given an identity the probes did not support. Today a run reports at most one finding, the most specific one it reaches; the field is an array because that is the shape a run with several independent conclusions needs, and consumers should read it as one.
 
@@ -677,7 +716,7 @@ The file is JSON, indented and newline-terminated, so it reads in a pager and di
       "observed": {"addresses": ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]}
     }
   ],
-  "diagnosis": {"verdict": "network", "summary": "…", "blamed": "internet_tcp", "failed_stage": "target_tcp", "findings": []},
+  "diagnosis": {"verdict": "network", "summary": "…", "blamed": "internet_tcp", "failed_stage": "target_tcp", "findings": [{"id": "local_egress_failure", "verdict": "network", "summary": "…", "focus": "internet_tcp", "evidence": ["internet_tcp", "target_tcp", "dns"], "causal_evidence": [{"kind": "support", "check": "internet_tcp", "observation": "status_downgraded"}]}]},
   "ok": false
 }
 ```
@@ -696,6 +735,15 @@ An `INCOMPLETE` row is never a pass, and a run holding one is never `"ok": true`
 `ran` answers a narrower question, and only that one: did the probe body execute. It is what `duration_ms` alone cannot say, since a check that finished in under a millisecond also reports `0`. A skipped row and an incomplete row both report `ran: false`, so `ran` is not how a reader tells them apart; `status` is.
 
 Within a check, `observed` is what the probe measured and `derived` is what the cross-probe reasoning pass did to that row afterwards. Only `status_downgraded` lives under `derived` today: it marks an observed egress failure that was relaxed to a Warn because another path proved the network still carries traffic. Its presence is the signal that the row's status is a conclusion rather than a reading. `cause`, `verdict`, and the finding IDs use exactly the vocabularies documented for [JSON output](#json-output) and [diagnosis findings](#diagnosis-findings).
+
+Findings also persist their optional `causal_evidence` array. It records the
+interpretation made during the incident rather than asking a future Network
+Doctor version to reinterpret old observations. This is an additive v1 field,
+so existing `.ndoc` files remain loadable and the schema stays
+`netdoc.snapshot.v1`. Loading an older file without the field leaves it absent;
+the decoder never invents historical relationships. New files validate that
+every observed relationship points to a matching check fact, that
+not-evaluated reasons match the check state, and that no item is duplicated.
 
 Remediation text is deliberately not stored. Fix advice lives on the check rows as `fix`, and the structured next action is regenerable from a finding's `id` together with `tool.os`, so a snapshot does not carry a second copy to fall out of step.
 
@@ -738,7 +786,7 @@ The comparison is semantic, not a JSON diff. Every field it reads is named in th
 | Target | `host`, `ip`, `port`, `protocol`, and `port_explicit`, then `raw` on its own, so "the same host, entered differently" and "a different host" are separate answers |
 | Tool | `version`, `os`, and `arch`, because a diagnosis and its advice are chosen per platform |
 | Run settings | the probe timeout, the second-opinion resolver, the `--iface` binding, and the `--check`/`--skip` selection as **sets** |
-| Diagnosis | `ok`, `verdict`, `blamed`, `failed_stage`, the findings as a **set** keyed by `id`, and the first finding as the primary conclusion |
+| Diagnosis | `ok`, `verdict`, `blamed`, `failed_stage`, the findings as a **set** keyed by `id`, the first finding as the primary conclusion, and each finding's ordered `evidence` and `causal_evidence` |
 | Checks | membership, `status`, `cause`, `ran`, and `deps` in order |
 | Reasoning | `derived.status_downgraded`, so an inferred outcome and a measured one are not read as the same state |
 | Evidence | everything under `observed`: resolved addresses and connection attempts as **sets**, and the selected address, source address, interface, SSID, resolver, per-family egress, captive-portal state, and timeout flags as values |
@@ -753,7 +801,7 @@ These change between two runs of a machine that did not change, so treating them
 - `duration_ms` on a check and on a connection attempt. Both are the measurement itself.
 - `detail` and `fix` on a check, `summary` on the diagnosis and on a finding. All four are derived sentences that quote measurements ("in 41ms"), and the format documents them as never parsed back. `status` and `cause` are the machine-readable form of what they say, and those are compared.
 - `name` on a check, which is display text built from the probe and the target.
-- The order of resolved addresses, connection attempts, findings, and the `--check`/`--skip` selection. Order there is the resolver's, the dialer's, or the order you typed, and it is not the shape of anything. Order **is** kept where it carries meaning: a check's `deps` and a finding's `evidence` are compared as ordered lists.
+- The order of resolved addresses, connection attempts, findings, and the `--check`/`--skip` selection. Order there is the resolver's, the dialer's, or the order you typed, and it is not the shape of anything. Order **is** kept where it carries meaning: a check's `deps`, a finding's `evidence`, and its `causal_evidence` are compared as ordered lists.
 - Sub-second movement in `clock_offset_ms`. The offset is compared at whole-second resolution, which keeps the sign and the magnitude the diagnosis reasons about and drops the jitter of a clock that is fine.
 
 An optional field added to a future snapshot version is not compared until it is named here, which is deliberate: a new field cannot start producing differences on its own.

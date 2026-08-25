@@ -57,6 +57,34 @@ const (
 	StatusIncomplete = "INCOMPLETE"
 )
 
+// Causal-evidence vocabulary is part of the v1 file contract. These mirror
+// the diagnostic model without importing it, preserving the package boundary
+// that lets snapshots be decoded without the live probe engine.
+const (
+	EvidenceSupport       = "support"
+	EvidenceContradiction = "contradiction"
+	EvidenceRuledOut      = "ruled_out"
+	EvidenceNotEvaluated  = "not_evaluated"
+
+	ObservationStatusPass       = "status_pass"
+	ObservationStatusWarn       = "status_warn"
+	ObservationStatusFail       = "status_fail"
+	ObservationStatusSkip       = "status_skip"
+	ObservationStatusNA         = "status_not_applicable"
+	ObservationCause            = "cause"
+	ObservationDNSAnswers       = "dns_answers"
+	ObservationDNSNotFound      = "dns_not_found"
+	ObservationCaptivePortal    = "captive_portal"
+	ObservationTimeout          = "timeout"
+	ObservationClockOffset      = "clock_offset"
+	ObservationStatusDowngraded = "status_downgraded"
+
+	NotEvaluatedPrerequisite  = "prerequisite_failed"
+	NotEvaluatedNotSelected   = "not_selected"
+	NotEvaluatedNotApplicable = "not_applicable"
+	NotEvaluatedIncomplete    = "incomplete"
+)
+
 // UnsupportedSchemaError is what Decode returns for a file whose schema is not
 // this one, including a future version. It carries the schema it found so a
 // caller can say what it was handed rather than "not a snapshot".
@@ -276,6 +304,21 @@ type Finding struct {
 	Summary  string   `json:"summary"`
 	Focus    string   `json:"focus,omitempty"`
 	Evidence []string `json:"evidence,omitempty"`
+	// CausalEvidence preserves the interpretation made during the original
+	// run. It is optional so pre-evidence v1 snapshots remain valid and load
+	// without inventing relationships they never recorded.
+	CausalEvidence []CausalEvidence `json:"causal_evidence,omitempty"`
+}
+
+// CausalEvidence is one typed relationship to an observed check fact. The
+// observation value stays on the referenced Check; this records provenance
+// and the interpretation selected at capture time.
+type CausalEvidence struct {
+	Kind        string `json:"kind"`
+	Check       string `json:"check"`
+	Observation string `json:"observation,omitempty"`
+	Candidate   string `json:"candidate,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // Encode renders a snapshot as the bytes of an .ndoc file: indented JSON with
@@ -309,6 +352,7 @@ func Encode(s Snapshot) ([]byte, error) {
 // as one where a row simply had nothing to say. A reader that accepted what the
 // writer refuses is a reader whose invariants are only true by luck.
 func validate(s Snapshot) error {
+	checks := make(map[string]Check, len(s.Checks))
 	for _, c := range s.Checks {
 		switch {
 		case c.Status == "":
@@ -318,8 +362,108 @@ func validate(s Snapshot) error {
 		case c.Status == StatusIncomplete && s.OK:
 			return fmt.Errorf("snapshot check %q is %s, so the run cannot be reported ok", c.ID, StatusIncomplete)
 		}
+		checks[c.ID] = c
+	}
+	for _, finding := range s.Diagnosis.Findings {
+		seen := make(map[CausalEvidence]bool, len(finding.CausalEvidence))
+		for _, evidence := range finding.CausalEvidence {
+			if evidence.Check == "" {
+				return fmt.Errorf("snapshot finding %q has causal evidence with no check", finding.ID)
+			}
+			if seen[evidence] {
+				return fmt.Errorf("snapshot finding %q repeats causal evidence for check %q", finding.ID, evidence.Check)
+			}
+			seen[evidence] = true
+			if err := validateCausalEvidence(evidence, checks); err != nil {
+				return fmt.Errorf("snapshot finding %q: %w", finding.ID, err)
+			}
+		}
 	}
 	return nil
+}
+
+func validateCausalEvidence(e CausalEvidence, checks map[string]Check) error {
+	check, exists := checks[e.Check]
+	switch e.Kind {
+	case EvidenceSupport:
+		if e.Candidate != "" || e.Reason != "" {
+			return fmt.Errorf("support evidence for check %q has an alternative or not-evaluated reason", e.Check)
+		}
+	case EvidenceContradiction, EvidenceRuledOut:
+		if e.Candidate == "" || e.Reason != "" {
+			return fmt.Errorf("%s evidence for check %q must name one candidate and no reason", e.Kind, e.Check)
+		}
+		if e.Observation == ObservationStatusSkip || e.Observation == ObservationStatusNA {
+			return fmt.Errorf("%s evidence for check %q cannot use an unevaluated observation", e.Kind, e.Check)
+		}
+	case EvidenceNotEvaluated:
+		if e.Candidate != "" || e.Reason == "" {
+			return fmt.Errorf("not-evaluated evidence for check %q must name one reason and no candidate", e.Check)
+		}
+		switch e.Reason {
+		case NotEvaluatedNotSelected:
+			if exists || e.Observation != "" {
+				return fmt.Errorf("check %q is marked not selected but is present or has an observation", e.Check)
+			}
+			return nil
+		case NotEvaluatedPrerequisite:
+			if !exists || check.Status != StatusSkip || e.Observation != ObservationStatusSkip {
+				return fmt.Errorf("check %q is marked prerequisite-blocked without a SKIP observation", e.Check)
+			}
+			return nil
+		case NotEvaluatedNotApplicable:
+			if !exists || check.Status != StatusNA || e.Observation != ObservationStatusNA {
+				return fmt.Errorf("check %q is marked not applicable without an N/A observation", e.Check)
+			}
+			return nil
+		case NotEvaluatedIncomplete:
+			if !exists || check.Status != StatusIncomplete || e.Observation != "" {
+				return fmt.Errorf("check %q is marked incomplete without an incomplete row", e.Check)
+			}
+			return nil
+		default:
+			return fmt.Errorf("check %q has unknown not-evaluated reason %q", e.Check, e.Reason)
+		}
+	default:
+		return fmt.Errorf("check %q has unknown causal evidence kind %q", e.Check, e.Kind)
+	}
+	if !exists {
+		return fmt.Errorf("causal evidence references check %q, which is not in the snapshot", e.Check)
+	}
+	if !observationMatches(e.Observation, check) {
+		return fmt.Errorf("causal evidence references %s on check %q, but that observation is absent", e.Observation, e.Check)
+	}
+	return nil
+}
+
+func observationMatches(observation string, check Check) bool {
+	switch observation {
+	case ObservationStatusPass:
+		return check.Status == StatusPass
+	case ObservationStatusWarn:
+		return check.Status == StatusWarn && (check.Derived == nil || !check.Derived.StatusDowngraded)
+	case ObservationStatusFail:
+		return check.Status == StatusFail
+	case ObservationStatusSkip:
+		return check.Status == StatusSkip
+	case ObservationStatusNA:
+		return check.Status == StatusNA
+	case ObservationCause:
+		return check.Cause != ""
+	case ObservationDNSAnswers:
+		return check.Observed != nil && len(check.Observed.Addresses) > 0
+	case ObservationDNSNotFound:
+		return check.Observed != nil && check.Observed.DNSNotFound
+	case ObservationCaptivePortal:
+		return check.Observed != nil && check.Observed.Portal != nil
+	case ObservationTimeout:
+		return (check.Observed != nil && check.Observed.Timeout) || check.Cause == "timeout"
+	case ObservationClockOffset:
+		return check.Observed != nil && check.Observed.ClockOffsetMs != nil
+	case ObservationStatusDowngraded:
+		return check.Derived != nil && check.Derived.StatusDowngraded
+	}
+	return false
 }
 
 // Decode reads an .ndoc file. It refuses anything that is not this schema

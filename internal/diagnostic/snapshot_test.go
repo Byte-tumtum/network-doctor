@@ -154,6 +154,14 @@ func TestBuildSnapshotShape(t *testing.T) {
 	if s.Diagnosis.Verdict == "" || s.Diagnosis.Summary == "" {
 		t.Errorf("diagnosis = %+v, want a verdict and a sentence", s.Diagnosis)
 	}
+	if len(s.Diagnosis.Findings) != 1 || len(s.Diagnosis.Findings[0].CausalEvidence) == 0 {
+		t.Fatalf("diagnosis lost causal evidence: %+v", s.Diagnosis.Findings)
+	}
+	for _, evidence := range s.Diagnosis.Findings[0].CausalEvidence {
+		if evidence.Check == "" || checksByID(s)[evidence.Check].ID == "" {
+			t.Errorf("causal evidence has no snapshot check provenance: %+v", evidence)
+		}
+	}
 	// Probe order is the snapshot's order, so two runs of the same graph line up
 	// row for row without sorting.
 	if len(s.Checks) != len(probes) {
@@ -180,6 +188,29 @@ func TestBuildSnapshotShape(t *testing.T) {
 	}
 	if got := checks[string(ProbeSSID)]; got.Observed == nil || got.Observed.SSID != "Example Cafe Wi-Fi" {
 		t.Errorf("ssid = %+v", got.Observed)
+	}
+}
+
+func TestBuildSnapshotCausalEvidenceRoundTrip(t *testing.T) {
+	target, probes, results := fixtureRun()
+	want := BuildSnapshot(target, probes, results)
+	data, err := snapshot.Encode(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantEvidence := want.Diagnosis.Findings[0].CausalEvidence
+	gotEvidence := got.Diagnosis.Findings[0].CausalEvidence
+	if len(gotEvidence) != len(wantEvidence) {
+		t.Fatalf("causal evidence = %+v, want %+v", gotEvidence, wantEvidence)
+	}
+	for i := range wantEvidence {
+		if gotEvidence[i] != wantEvidence[i] {
+			t.Errorf("causal evidence[%d] = %+v, want %+v", i, gotEvidence[i], wantEvidence[i])
+		}
 	}
 }
 

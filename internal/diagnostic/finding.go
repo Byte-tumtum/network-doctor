@@ -75,6 +75,63 @@ const (
 	DiagnosisSelectedNetworkCheckFailed DiagnosisID = "selected_network_check_failed"
 )
 
+// EvidenceKind is the relationship between one observed fact and a diagnosis.
+// It is deliberately not a confidence score: each value says only what the
+// fact proves in the branch that selected the finding.
+type EvidenceKind string
+
+const (
+	EvidenceSupport       EvidenceKind = "support"
+	EvidenceContradiction EvidenceKind = "contradiction"
+	EvidenceRuledOut      EvidenceKind = "ruled_out"
+	EvidenceNotEvaluated  EvidenceKind = "not_evaluated"
+)
+
+// ObservationID identifies the measured field an evidence item references.
+// The value itself stays on ProbeResult, so evidence records a typed
+// relationship and provenance rather than copying observations into a second
+// store.
+type ObservationID string
+
+const (
+	ObservationStatusPass       ObservationID = "status_pass"
+	ObservationStatusWarn       ObservationID = "status_warn"
+	ObservationStatusFail       ObservationID = "status_fail"
+	ObservationStatusSkip       ObservationID = "status_skip"
+	ObservationStatusNA         ObservationID = "status_not_applicable"
+	ObservationCause            ObservationID = "cause"
+	ObservationDNSAnswers       ObservationID = "dns_answers"
+	ObservationDNSNotFound      ObservationID = "dns_not_found"
+	ObservationCaptivePortal    ObservationID = "captive_portal"
+	ObservationTimeout          ObservationID = "timeout"
+	ObservationClockOffset      ObservationID = "clock_offset"
+	ObservationStatusDowngraded ObservationID = "status_downgraded"
+)
+
+// NotEvaluatedReason keeps the ways a relevant check can lack an observation
+// distinct. In particular, a failed prerequisite is not the same as a check
+// that was not selected, did not apply, or never completed.
+type NotEvaluatedReason string
+
+const (
+	NotEvaluatedPrerequisite  NotEvaluatedReason = "prerequisite_failed"
+	NotEvaluatedNotSelected   NotEvaluatedReason = "not_selected"
+	NotEvaluatedNotApplicable NotEvaluatedReason = "not_applicable"
+	NotEvaluatedIncomplete    NotEvaluatedReason = "incomplete"
+)
+
+// CausalEvidence is one typed interpretation of one observed fact. Check and
+// Observation identify the provenance. Candidate is set only when the fact
+// contradicts or rules out another diagnosis. Reason is set only when the
+// relevant check was not evaluated.
+type CausalEvidence struct {
+	Kind        EvidenceKind
+	Check       ProbeID
+	Observation ObservationID
+	Candidate   DiagnosisID
+	Reason      NotEvaluatedReason
+}
+
 // DiagnosisFinding is one specific thing a run proved wrong, with everything a
 // caller needs to act on it without diagnosing the run a second time: the
 // stable identity, the sentence, the broad class that identity falls into, the
@@ -94,10 +151,25 @@ type DiagnosisFinding struct {
 	// Focus is the probe row the sentence is about, empty when the conclusion
 	// is about no single row.
 	Focus ProbeID
-	// Evidence names the rows the conclusion was drawn from, Focus first, and
-	// only rows that were part of the run. It is references, never copies:
-	// what each row observed stays on the ProbeResult.
-	Evidence []ProbeID
+	// Evidence records the facts the conclusion was drawn from, Focus first.
+	// Each item points back to the ProbeResult field that supplied the fact and
+	// states how that fact bears on the selected or an alternative diagnosis.
+	Evidence []CausalEvidence
+}
+
+// EvidenceRows is the compatibility projection used by the original JSON and
+// snapshot evidence fields: unique observed check IDs in reasoning order. A
+// not-evaluated check is deliberately absent because it supplied no observed
+// fact. New consumers should read the typed causal evidence beside it.
+func (f DiagnosisFinding) EvidenceRows() []ProbeID {
+	var rows []ProbeID
+	for _, e := range f.Evidence {
+		if e.Kind == EvidenceNotEvaluated || e.Check == "" || slices.Contains(rows, e.Check) {
+			continue
+		}
+		rows = append(rows, e.Check)
+	}
+	return rows
 }
 
 // Diagnosis is the one authoritative interpretation of a finished run: what
@@ -134,27 +206,6 @@ func (d Diagnosis) Focus() ProbeID {
 		return ""
 	}
 	return d.Findings[0].Focus
-}
-
-// evidenceRows keeps a finding's evidence honest: it drops rows that were not
-// part of this run, because naming a check nobody made as support for a
-// conclusion is a claim about evidence that does not exist. Order is the order
-// the caller listed, focus first, with duplicates removed.
-func evidenceRows(res map[ProbeID]ProbeResult, rows []ProbeID) []ProbeID {
-	out := make([]ProbeID, 0, len(rows))
-	for _, id := range rows {
-		if id == "" || slices.Contains(out, id) {
-			continue
-		}
-		if _, ran := res[id]; !ran {
-			continue
-		}
-		out = append(out, id)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // tlsDiagnosisID turns the cause the TLS probe already classified into the

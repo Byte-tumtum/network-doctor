@@ -49,6 +49,7 @@ func TestDefaultPresetKeepsHistoricalBindings(t *testing.T) {
 		{ctxList, "tab", actSwitchJob}, {ctxList, "y", actCopy},
 		{ctxList, "w", actSave}, {ctxList, "r", actRestart},
 		{ctxList, "S", actSSH}, {ctxList, "v", actNetworkMap},
+		{ctxList, "e", actExplain},
 		{ctxList, "?", actHelp}, {ctxList, "q", actQuit},
 		{ctxViewer, "up", actUp}, {ctxViewer, "k", actUp},
 		{ctxViewer, "down", actDown}, {ctxViewer, "j", actDown},

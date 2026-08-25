@@ -368,6 +368,13 @@ func (m model) detailRows(deferred bool) []string {
 		return nil
 	}
 	probe := m.probes[m.selected]
+	if m.explaining && m.selected == m.answerRow() {
+		why := m.whyLines()
+		if len(why) > 1 {
+			rows := append([]string{panelTitleStyle.Render("Why: " + probe.Name)}, why[1:]...)
+			return panelBody(rows)
+		}
+	}
 	var body strings.Builder
 	if r, ok := m.results[probe.ID]; ok {
 		// The answer block above is already quoting this row's finding and its
@@ -416,6 +423,161 @@ func (m model) detailRows(deferred bool) []string {
 	rows := append([]string{panelTitleStyle.Render("Details: " + probe.Name)},
 		strings.Split(strings.TrimRight(body.String(), "\n"), "\n")...)
 	return panelBody(rows)
+}
+
+func (m model) whyLines() []string {
+	d := m.diagnosis()
+	if len(d.Findings) == 0 || len(d.Findings[0].Evidence) == 0 {
+		return nil
+	}
+	finding := d.Findings[0]
+	lines := []string{"Why?"}
+	sections := []struct {
+		kind  diagnostic.EvidenceKind
+		title string
+	}{
+		{diagnostic.EvidenceSupport, "Evidence"},
+		{diagnostic.EvidenceRuledOut, "Ruled out"},
+		{diagnostic.EvidenceContradiction, "Against alternatives"},
+		{diagnostic.EvidenceNotEvaluated, "Not evaluated"},
+	}
+	for _, section := range sections {
+		start := len(lines)
+		for _, evidence := range finding.Evidence {
+			if evidence.Kind != section.kind {
+				continue
+			}
+			if len(lines) == start {
+				lines = append(lines, section.title)
+			}
+			lines = append(lines, "  "+m.causalEvidenceLine(evidence))
+		}
+	}
+	return lines
+}
+
+func (m model) causalEvidenceLine(e diagnostic.CausalEvidence) string {
+	observation := m.observationLine(e)
+	switch e.Kind {
+	case diagnostic.EvidenceRuledOut:
+		return "✓ " + diagnosisLabel(e.Candidate) + ": " + observation
+	case diagnostic.EvidenceContradiction:
+		return "! " + diagnosisLabel(e.Candidate) + ": " + observation
+	case diagnostic.EvidenceNotEvaluated:
+		return "⊘ " + m.probeLabel(e.Check) + ": " + notEvaluatedLabel(e.Reason)
+	default:
+		return evidenceGlyph(e.Observation) + " " + observation
+	}
+}
+
+func evidenceGlyph(observation diagnostic.ObservationID) string {
+	switch observation {
+	case diagnostic.ObservationStatusPass, diagnostic.ObservationDNSAnswers:
+		return "✓"
+	case diagnostic.ObservationStatusWarn, diagnostic.ObservationClockOffset:
+		return "!"
+	case diagnostic.ObservationStatusSkip, diagnostic.ObservationStatusNA:
+		return "⊘"
+	default:
+		return "✗"
+	}
+}
+
+func (m model) observationLine(e diagnostic.CausalEvidence) string {
+	name := m.probeLabel(e.Check)
+	r, ok := m.results[e.Check]
+	switch e.Observation {
+	case diagnostic.ObservationStatusPass:
+		return name + " passed"
+	case diagnostic.ObservationStatusWarn:
+		return name + " worked with a warning"
+	case diagnostic.ObservationStatusFail:
+		if ok && r.Detail != "" {
+			return name + ": " + r.Detail
+		}
+		return name + " failed"
+	case diagnostic.ObservationCause:
+		if ok && r.Detail != "" {
+			return name + ": " + r.Detail
+		}
+		return name + " identified the failure"
+	case diagnostic.ObservationDNSAnswers:
+		return name + " returned an address"
+	case diagnostic.ObservationDNSNotFound:
+		return name + " returned no A/AAAA records"
+	case diagnostic.ObservationCaptivePortal:
+		return name + " was intercepted by a network sign-in page"
+	case diagnostic.ObservationTimeout:
+		return name + " timed out"
+	case diagnostic.ObservationClockOffset:
+		return name + " measured a material clock offset"
+	case diagnostic.ObservationStatusDowngraded:
+		return name + " failed before another working path reduced its severity"
+	case diagnostic.ObservationStatusSkip:
+		return name + " was skipped"
+	case diagnostic.ObservationStatusNA:
+		return name + " did not apply"
+	}
+	return name + " supplied evidence"
+}
+
+func (m model) probeLabel(id diagnostic.ProbeID) string {
+	for _, probe := range m.probes {
+		if probe.ID == id {
+			return probe.Name
+		}
+	}
+	switch id {
+	case diagnostic.ProbeInternet:
+		return "General internet reachability"
+	case diagnostic.ProbeTargetTCP:
+		return "Target TCP connection"
+	case diagnostic.ProbeDNS:
+		return "System DNS"
+	case diagnostic.ProbeDNSPublic:
+		return "Independent DNS"
+	}
+	return "Relevant check"
+}
+
+func diagnosisLabel(id diagnostic.DiagnosisID) string {
+	switch id {
+	case diagnostic.DiagnosisOffline:
+		return "General network outage"
+	case diagnostic.DiagnosisDNSFailure:
+		return "General DNS failure"
+	case diagnostic.DiagnosisDNSNameNotFound:
+		return "Missing DNS record"
+	case diagnostic.DiagnosisSystemDNSFailure:
+		return "Configured resolver problem"
+	case diagnostic.DiagnosisLocalDeviceUnreachable:
+		return "Device unreachable"
+	case diagnostic.DiagnosisTargetUnreachable:
+		return "Destination unreachable"
+	case diagnostic.DiagnosisLocalEgressFailure:
+		return "This machine's general network path"
+	case diagnostic.DiagnosisTLSClockSkew:
+		return "Wrong local clock"
+	case diagnostic.DiagnosisTLSTCPUnreachable:
+		return "TLS endpoint unreachable"
+	case diagnostic.DiagnosisTLSHandshakeFailure:
+		return "TLS handshake problem"
+	}
+	return "Alternative explanation"
+}
+
+func notEvaluatedLabel(reason diagnostic.NotEvaluatedReason) string {
+	switch reason {
+	case diagnostic.NotEvaluatedPrerequisite:
+		return "a prerequisite failed"
+	case diagnostic.NotEvaluatedNotSelected:
+		return "the check was not selected"
+	case diagnostic.NotEvaluatedNotApplicable:
+		return "the check did not apply"
+	case diagnostic.NotEvaluatedIncomplete:
+		return "the check did not complete"
+	}
+	return "no observation was available"
 }
 
 // remediation is this run's structured next action, and false when the
@@ -995,6 +1157,13 @@ func (m model) helpView(deferred bool) string {
 		addAction(actHelp)
 		addAction(actQuit)
 		return withNotice(m.chordHint(helpKeys(m.width, kv...)))
+	}
+	if d := m.diagnosis(); m.allDone() && len(d.Findings) > 0 && len(d.Findings[0].Evidence) > 0 {
+		if m.explaining {
+			add(m.keys.label(ctxList, actExplain), "details")
+		} else {
+			addAction(actExplain)
+		}
 	}
 	if m.selectedPortalURL() != "" {
 		add(m.keys.label(ctxList, actCopy), "copy portal URL")

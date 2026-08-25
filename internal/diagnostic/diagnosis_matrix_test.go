@@ -651,8 +651,8 @@ func TestDiagnosisMatrix(t *testing.T) {
 			if f.Summary != c.summary || f.Verdict != c.verdict {
 				t.Errorf("finding restates the run differently: %q/%q", f.Summary, f.Verdict)
 			}
-			if !slices.Equal(f.Evidence, c.evidence) {
-				t.Errorf("evidence: got %v, want %v", f.Evidence, c.evidence)
+			if rows := f.EvidenceRows(); !slices.Equal(rows, c.evidence) {
+				t.Errorf("evidence rows: got %v, want %v", rows, c.evidence)
 			}
 		})
 	}
@@ -667,20 +667,30 @@ func TestDiagnosisEvidenceIsRealProbeState(t *testing.T) {
 	for _, c := range diagnosisMatrix() {
 		t.Run(c.name, func(t *testing.T) {
 			for _, f := range Interpret(c.target, c.order, c.res).Findings {
-				if f.Focus != "" && (len(f.Evidence) == 0 || f.Evidence[0] != f.Focus) {
+				rows := f.EvidenceRows()
+				if f.Focus != "" && (len(rows) == 0 || rows[0] != f.Focus) {
 					t.Errorf("evidence %v does not lead with the blamed row %q", f.Evidence, f.Focus)
 				}
-				seen := map[ProbeID]bool{}
-				for _, id := range f.Evidence {
-					if seen[id] {
-						t.Errorf("evidence names %q twice", id)
+				seen := map[CausalEvidence]bool{}
+				for _, evidence := range f.Evidence {
+					if seen[evidence] {
+						t.Errorf("evidence repeats %+v", evidence)
 					}
-					seen[id] = true
-					if !slices.Contains(c.order, id) {
-						t.Errorf("evidence names %q, which the run did not ask for", id)
+					seen[evidence] = true
+					if evidence.Kind == EvidenceNotEvaluated && evidence.Reason == NotEvaluatedNotSelected {
+						if slices.Contains(c.order, evidence.Check) {
+							t.Errorf("not-selected evidence names %q, which the run did ask for", evidence.Check)
+						}
+						if _, exists := c.res[evidence.Check]; exists {
+							t.Errorf("not-selected evidence names %q, which produced a result", evidence.Check)
+						}
+						continue
 					}
-					if _, ran := c.res[id]; !ran {
-						t.Errorf("evidence names %q, which produced no result", id)
+					if !slices.Contains(c.order, evidence.Check) {
+						t.Errorf("evidence names %q, which the run did not ask for", evidence.Check)
+					}
+					if _, ran := c.res[evidence.Check]; !ran {
+						t.Errorf("evidence names %q, which produced no result", evidence.Check)
 					}
 				}
 			}

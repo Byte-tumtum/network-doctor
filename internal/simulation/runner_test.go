@@ -404,6 +404,10 @@ func TestDecodeDiagnosisProjectsCanonicalReportWithoutExpandingSimulatorJSON(t *
 			Portal:   &report.Portal{RedirectURL: "https://portal.example/signin"},
 			Attempts: []report.Attempt{{IP: "192.0.2.1", Ms: 11}, {IP: "2001:db8::1", Ms: 17, Err: "timeout"}},
 		}},
+		Findings: []report.Finding{{
+			ID: "direct_egress_degraded", Focus: "internet_tcp", Evidence: []string{"internet_tcp"},
+			CausalEvidence: []report.CausalEvidence{{Kind: "support", Check: "internet_tcp", Observation: "status_warn"}},
+		}},
 		Summary: "IPv6 unavailable", Verdict: "degraded", FailedStage: "internet_tcp", OK: false,
 	}
 	stdout, err := json.Marshal(wire)
@@ -421,6 +425,10 @@ func TestDecodeDiagnosisProjectsCanonicalReportWithoutExpandingSimulatorJSON(t *
 			Families: &DiagnosisFamilies{IPv4: "reachable", IPv6: "unreachable"},
 			Attempts: []DiagnosisAttempt{{IP: "192.0.2.1", Ms: 11}, {IP: "2001:db8::1", Ms: 17, Error: "timeout"}},
 		}},
+		Findings: []DiagnosisFinding{{
+			ID: "direct_egress_degraded", Focus: "internet_tcp", Evidence: []string{"internet_tcp"},
+			CausalEvidence: []DiagnosisCausalEvidence{{Kind: "support", Check: "internet_tcp", Observation: "status_warn"}},
+		}},
 		Summary: "IPv6 unavailable", Verdict: "degraded", FailedStage: "internet_tcp", OK: false,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -431,7 +439,7 @@ func TestDecodeDiagnosisProjectsCanonicalReportWithoutExpandingSimulatorJSON(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantJSON = `{"checks":[{"id":"internet_tcp","name":"Internet connectivity","status":"WARN","cause":"ipv6_unreachable","ms":17,"detail":"IPv4 works","fix":"check IPv6 route","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"attempts":[{"ip":"192.0.2.1","ms":11},{"ip":"2001:db8::1","ms":17,"error":"timeout"}]}],"summary":"IPv6 unavailable","verdict":"degraded","failed_stage":"internet_tcp","ok":false}`
+	const wantJSON = `{"checks":[{"id":"internet_tcp","name":"Internet connectivity","status":"WARN","cause":"ipv6_unreachable","ms":17,"detail":"IPv4 works","fix":"check IPv6 route","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"attempts":[{"ip":"192.0.2.1","ms":11},{"ip":"2001:db8::1","ms":17,"error":"timeout"}]}],"findings":[{"id":"direct_egress_degraded","focus":"internet_tcp","evidence":["internet_tcp"],"causal_evidence":[{"kind":"support","check":"internet_tcp","observation":"status_warn"}]}],"summary":"IPv6 unavailable","verdict":"degraded","failed_stage":"internet_tcp","ok":false}`
 	if string(encoded) != wantJSON {
 		t.Errorf("simulator diagnosis JSON = %s\nwant                     %s", encoded, wantJSON)
 	}

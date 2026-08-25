@@ -226,6 +226,24 @@ func TestFindingEvidenceKeepsItsOrder(t *testing.T) {
 	}
 }
 
+func TestFindingCausalEvidenceKeepsItsOrder(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	evidence := after.Diagnosis.Findings[0].CausalEvidence
+	if len(evidence) < 2 {
+		t.Fatalf("fixture has too little causal evidence: %+v", evidence)
+	}
+	reversed := make([]snapshot.CausalEvidence, len(evidence))
+	for i, item := range evidence {
+		reversed[len(evidence)-1-i] = item
+	}
+	after.Diagnosis.Findings[0].CausalEvidence = reversed
+
+	c := Snapshots(before, after)
+	if got := changeAt(t, c, "diagnosis.findings.local_egress_failure.causal_evidence"); got.Kind != KindChanged {
+		t.Errorf("causal evidence change = %+v", got)
+	}
+}
+
 func TestSelectedInterfaceChange(t *testing.T) {
 	before, after := fixture(t), fixture(t)
 	for _, id := range []string{"iface", "internet_tcp", "target_tcp"} {

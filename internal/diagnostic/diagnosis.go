@@ -3,6 +3,7 @@ package diagnostic
 import (
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -99,6 +100,137 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 		return ok && (r.timedOut || r.Cause == TLSCauseTimeout)
 	}
 	directOK := func() bool { return directEgressOK(res) }
+	// observed turns one probe result into the most specific typed fact it
+	// carries. The result remains the observation store; this only identifies
+	// which field the diagnosis used.
+	observed := func(id ProbeID) (CausalEvidence, bool) {
+		r, ok := res[id]
+		if !ok {
+			return CausalEvidence{}, false
+		}
+		e := CausalEvidence{Kind: EvidenceSupport, Check: id}
+		switch {
+		case r.Portal != nil:
+			e.Observation = ObservationCaptivePortal
+		case r.DNSNotFound:
+			e.Observation = ObservationDNSNotFound
+		case r.Cause != "":
+			e.Observation = ObservationCause
+		case r.timedOut:
+			e.Observation = ObservationTimeout
+		case r.downgraded:
+			e.Observation = ObservationStatusDowngraded
+		case len(r.Addrs) > 0:
+			e.Observation = ObservationDNSAnswers
+		case r.Status == StatusPass:
+			e.Observation = ObservationStatusPass
+		case r.Status == StatusWarn:
+			e.Observation = ObservationStatusWarn
+		case r.Status == StatusFail:
+			e.Observation = ObservationStatusFail
+		case r.Status == StatusSkip:
+			e.Kind, e.Observation, e.Reason = EvidenceNotEvaluated, ObservationStatusSkip, NotEvaluatedPrerequisite
+		case r.Status == StatusNA:
+			e.Kind, e.Observation, e.Reason = EvidenceNotEvaluated, ObservationStatusNA, NotEvaluatedNotApplicable
+		default:
+			return CausalEvidence{}, false
+		}
+		return e, true
+	}
+	observationExists := func(id ProbeID, observation ObservationID) bool {
+		r, ok := res[id]
+		if !ok {
+			return false
+		}
+		switch observation {
+		case ObservationStatusPass:
+			return r.Status == StatusPass
+		case ObservationStatusWarn:
+			return r.Status == StatusWarn && !r.downgraded
+		case ObservationStatusFail:
+			return r.Status == StatusFail
+		case ObservationStatusSkip:
+			return r.Status == StatusSkip
+		case ObservationStatusNA:
+			return r.Status == StatusNA
+		case ObservationCause:
+			return r.Cause != ""
+		case ObservationDNSAnswers:
+			return len(r.Addrs) > 0
+		case ObservationDNSNotFound:
+			return r.DNSNotFound
+		case ObservationCaptivePortal:
+			return r.Portal != nil
+		case ObservationTimeout:
+			return r.timedOut || r.Cause == TLSCauseTimeout
+		case ObservationClockOffset:
+			return r.clockOffset.Abs() >= clockSkewThreshold
+		case ObservationStatusDowngraded:
+			return r.downgraded
+		}
+		return false
+	}
+	supportRows := func(rows ...ProbeID) []CausalEvidence {
+		out := make([]CausalEvidence, 0, len(rows))
+		for _, id := range rows {
+			if e, ok := observed(id); ok {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	supportObservation := func(id ProbeID, observation ObservationID) CausalEvidence {
+		if !observationExists(id, observation) {
+			return CausalEvidence{}
+		}
+		return CausalEvidence{Kind: EvidenceSupport, Check: id, Observation: observation}
+	}
+	relation := func(kind EvidenceKind, candidate DiagnosisID, id ProbeID, observation ObservationID) CausalEvidence {
+		if (kind != EvidenceContradiction && kind != EvidenceRuledOut) || candidate == "" ||
+			observation == ObservationStatusSkip || observation == ObservationStatusNA ||
+			!observationExists(id, observation) {
+			return CausalEvidence{}
+		}
+		return CausalEvidence{Kind: kind, Check: id, Observation: observation, Candidate: candidate}
+	}
+	contradicts := func(candidate DiagnosisID, id ProbeID, observation ObservationID) CausalEvidence {
+		return relation(EvidenceContradiction, candidate, id, observation)
+	}
+	rulesOut := func(candidate DiagnosisID, id ProbeID, observation ObservationID) CausalEvidence {
+		return relation(EvidenceRuledOut, candidate, id, observation)
+	}
+	notEvaluated := func(id ProbeID, reason NotEvaluatedReason) CausalEvidence {
+		e := CausalEvidence{Kind: EvidenceNotEvaluated, Check: id, Reason: reason}
+		switch reason {
+		case NotEvaluatedPrerequisite:
+			if observationExists(id, ObservationStatusSkip) {
+				e.Observation = ObservationStatusSkip
+				return e
+			}
+		case NotEvaluatedNotApplicable:
+			if observationExists(id, ObservationStatusNA) {
+				e.Observation = ObservationStatusNA
+				return e
+			}
+		case NotEvaluatedNotSelected:
+			if _, exists := res[id]; !exists && !slices.Contains(order, id) {
+				return e
+			}
+		case NotEvaluatedIncomplete:
+			if _, exists := res[id]; !exists && slices.Contains(order, id) {
+				return e
+			}
+		}
+		return CausalEvidence{}
+	}
+	addEvidence := func(base []CausalEvidence, extra ...CausalEvidence) []CausalEvidence {
+		for _, e := range extra {
+			if e.Check != "" {
+				base = append(base, e)
+			}
+		}
+		return base
+	}
 	// blame records the finding the sentence being returned carries: its
 	// stable identity, the row it is about, and the other rows it was drawn
 	// from. The caller uses the row to put the cursor, the remediation and the
@@ -110,15 +242,27 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 	// A sentence with no single subject deliberately blames nothing and
 	// carries no identity: a caller with no row to point at is honest, and one
 	// pointed at an arbitrary row is not. Those cases return plain instead.
-	blame := func(id DiagnosisID, focus ProbeID, summary, verdict string, from ...ProbeID) Diagnosis {
+	withEvidence := func(id DiagnosisID, focus ProbeID, summary, verdict string, evidence []CausalEvidence) Diagnosis {
+		seen := make(map[CausalEvidence]bool, len(evidence))
+		clean := make([]CausalEvidence, 0, len(evidence))
+		for _, e := range evidence {
+			if e.Check == "" || seen[e] {
+				continue
+			}
+			seen[e] = true
+			clean = append(clean, e)
+		}
 		finding := DiagnosisFinding{
 			ID:       id,
 			Verdict:  verdict,
 			Summary:  summary,
 			Focus:    focus,
-			Evidence: evidenceRows(res, append([]ProbeID{focus}, from...)),
+			Evidence: clean,
 		}
 		return Diagnosis{Summary: summary, Verdict: verdict, Findings: []DiagnosisFinding{finding}}
+	}
+	blame := func(id DiagnosisID, focus ProbeID, summary, verdict string, from ...ProbeID) Diagnosis {
+		return withEvidence(id, focus, summary, verdict, supportRows(append([]ProbeID{focus}, from...)...))
 	}
 	fallback := func() Diagnosis {
 		for _, id := range order {
@@ -140,7 +284,10 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 	}
 
 	if fail(ProbeIface) {
-		return blame(DiagnosisNoUsableInterface, ProbeIface, "No usable network interface: the link is down.", VerdictNetwork)
+		evidence := addEvidence(supportRows(ProbeIface),
+			notEvaluated(ProbeInternet, NotEvaluatedPrerequisite),
+			notEvaluated(ProbeDNS, NotEvaluatedPrerequisite))
+		return withEvidence(DiagnosisNoUsableInterface, ProbeIface, "No usable network interface: the link is down.", VerdictNetwork, evidence)
 	}
 
 	prx := proxyCarries(res)
@@ -173,9 +320,16 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 		case hasInternet && res[ProbeInternet].Portal != nil:
 			return blame(DiagnosisCaptivePortal, ProbeInternet, "Behind a captive portal: traffic is intercepted until you sign in to the network.", VerdictNetwork)
 		case directOK() && fail(ProbeDNS) && publicResolves:
-			return blame(DiagnosisSystemDNSFailure, ProbeDNS, "System DNS is failing, but public DNS resolves the name. Check the configured resolver, VPN, or DNS filter.", gv, ProbeDNSPublic, ProbeInternet)
+			evidence := addEvidence(supportRows(ProbeDNS, ProbeDNSPublic, ProbeInternet),
+				contradicts(DiagnosisDNSFailure, ProbeDNSPublic, ObservationDNSAnswers),
+				rulesOut(DiagnosisDNSNameNotFound, ProbeDNSPublic, ObservationDNSAnswers),
+				rulesOut(DiagnosisOffline, ProbeInternet, ObservationStatusPass))
+			return withEvidence(DiagnosisSystemDNSFailure, ProbeDNS, "System DNS is failing, but public DNS resolves the name. Check the configured resolver, VPN, or DNS filter.", gv, evidence)
 		case directOK() && fail(ProbeDNS) && bothNotFound:
-			return blame(DiagnosisDNSNameNotFound, ProbeDNS, "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv, ProbeDNSPublic, ProbeInternet)
+			evidence := addEvidence(supportRows(ProbeDNS, ProbeDNSPublic, ProbeInternet),
+				rulesOut(DiagnosisSystemDNSFailure, ProbeDNSPublic, ObservationDNSNotFound),
+				rulesOut(DiagnosisOffline, ProbeInternet, ObservationStatusPass))
+			return withEvidence(DiagnosisDNSNameNotFound, ProbeDNS, "Internet egress works, but the DNS test name has no A/AAAA records according to either resolver.", gv, evidence)
 		case directOK() && has(ProbeQUIC) && fail(ProbeQUIC):
 			return blame(DiagnosisQUICUnavailable, ProbeQUIC, "Direct TCP/443 works, but the QUIC handshake over UDP/443 failed. Applications can fall back to TCP, which may feel slower.", VerdictDegraded, ProbeInternet)
 		case encryptedDNSBlocked(res):
@@ -207,9 +361,13 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 			// family down, packet loss, and so on. Direct egress really does
 			// carry traffic here, which is what separates it from the case
 			// above.
-			return blame(DiagnosisDNSFailure, ProbeDNS, "Internet egress works (degraded) but DNS resolution is failing.", gv, ProbeInternet)
+			evidence := addEvidence(supportRows(ProbeDNS, ProbeInternet),
+				rulesOut(DiagnosisOffline, ProbeInternet, ObservationStatusWarn))
+			return withEvidence(DiagnosisDNSFailure, ProbeDNS, "Internet egress works (degraded) but DNS resolution is failing.", gv, evidence)
 		case ip && fail(ProbeDNS):
-			return blame(DiagnosisDNSFailure, ProbeDNS, "Internet egress works but DNS resolution is failing.", gv, ProbeInternet)
+			evidence := addEvidence(supportRows(ProbeDNS, ProbeInternet),
+				rulesOut(DiagnosisOffline, ProbeInternet, ObservationStatusPass))
+			return withEvidence(DiagnosisDNSFailure, ProbeDNS, "Internet egress works but DNS resolution is failing.", gv, evidence)
 		case hasInternet && !directOK() && dn:
 			return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "DNS resolves but there's no direct TCP egress (proxy-only or filtered network?).", gv, ProbeDNS)
 		case fail(ProbeInternet) && fail(ProbeDNS):
@@ -266,7 +424,25 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 		if directOK() {
 			v += " (The general internet is reachable.)"
 		}
-		return blame(id, ProbeDNS, v, VerdictDNS, ProbeDNSPublic, ProbeInternet)
+		evidence := supportRows(ProbeDNS, ProbeDNSPublic, ProbeInternet)
+		switch id {
+		case DiagnosisSystemDNSFailure:
+			evidence = addEvidence(evidence,
+				contradicts(DiagnosisDNSFailure, ProbeDNSPublic, ObservationDNSAnswers),
+				rulesOut(DiagnosisDNSNameNotFound, ProbeDNSPublic, ObservationDNSAnswers))
+		case DiagnosisDNSNameNotFound:
+			evidence = addEvidence(evidence,
+				rulesOut(DiagnosisSystemDNSFailure, ProbeDNSPublic, ObservationDNSNotFound))
+		}
+		if directOK() {
+			observation := ObservationStatusPass
+			if warn(ProbeInternet) {
+				observation = ObservationStatusWarn
+			}
+			evidence = addEvidence(evidence, rulesOut(DiagnosisOffline, ProbeInternet, observation))
+		}
+		evidence = addEvidence(evidence, notEvaluated(ProbeTargetTCP, NotEvaluatedPrerequisite))
+		return withEvidence(id, ProbeDNS, v, VerdictDNS, evidence)
 	case fail(ProbeTargetTCP):
 		// A device on the same network is not reached through the internet, so
 		// the egress rung is not evidence about it either way and none of the
@@ -277,14 +453,18 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 			case res[ProbeTargetTCP].Cause == ConnectionCauseRefused:
 				// Something answered for that address, so the device is on the
 				// network and the port is the whole of the problem.
-				return blame(DiagnosisTCPConnectionRefused, ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the device is on the network, but nothing is listening on that port.", VerdictService)
+				evidence := addEvidence(supportRows(ProbeTargetTCP),
+					rulesOut(DiagnosisLocalDeviceUnreachable, ProbeTargetTCP, ObservationCause))
+				return withEvidence(DiagnosisTCPConnectionRefused, ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the device is on the network, but nothing is listening on that port.", VerdictService, evidence)
 			case directOK():
 				// This machine's own networking demonstrably works, so the
 				// silence is the device's. Which of the reasons it is cannot be
 				// told from here, and the sentence must not pick one.
 				return blame(DiagnosisLocalDeviceUnreachable, ProbeTargetTCP, hp+" did not answer, though this machine's network is working: the device may be powered off or asleep, may have a different address now, or may be dropping the connection.", VerdictService, ProbeInternet)
 			case !has(ProbeInternet):
-				return blame(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" did not answer, and this machine's own network was not checked, so a problem here cannot be told apart from one on the device.", VerdictNetwork)
+				evidence := addEvidence(supportRows(ProbeTargetTCP),
+					notEvaluated(ProbeInternet, NotEvaluatedNotSelected))
+				return withEvidence(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" did not answer, and this machine's own network was not checked, so a problem here cannot be told apart from one on the device.", VerdictNetwork, evidence)
 			default:
 				// Nothing this machine sends is arriving anywhere, so the
 				// device has not been given a fair test yet.
@@ -297,15 +477,23 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 		// direct route this target needs.
 		if directOK() {
 			if res[ProbeTargetTCP].Cause == ConnectionCauseRefused {
-				return blame(DiagnosisTCPConnectionRefused, ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the service may not be listening, or a firewall may be actively rejecting it.", VerdictService, ProbeInternet)
+				evidence := addEvidence(supportRows(ProbeTargetTCP, ProbeInternet),
+					rulesOut(DiagnosisTargetUnreachable, ProbeTargetTCP, ObservationCause),
+					rulesOut(DiagnosisLocalEgressFailure, ProbeInternet, ObservationStatusPass))
+				return withEvidence(DiagnosisTCPConnectionRefused, ProbeTargetTCP, "Every TCP connection attempt to "+hp+" was explicitly refused: the service may not be listening, or a firewall may be actively rejecting it.", VerdictService, evidence)
 			}
-			return blame(DiagnosisTargetUnreachable, ProbeTargetTCP, hp+" is unreachable though DNS and the general internet work: remote port closed, firewall, or VPN routing.", VerdictService, ProbeInternet, ProbeDNS)
+			evidence := addEvidence(supportRows(ProbeTargetTCP, ProbeInternet, ProbeDNS),
+				rulesOut(DiagnosisLocalEgressFailure, ProbeInternet, ObservationStatusPass),
+				rulesOut(DiagnosisDNSFailure, ProbeDNS, ObservationDNSAnswers))
+			return withEvidence(DiagnosisTargetUnreachable, ProbeTargetTCP, hp+" is unreachable though DNS and the general internet work: remote port closed, firewall, or VPN routing.", VerdictService, evidence)
 		}
 		if prx {
 			return blame(DiagnosisProxyOnlyNetwork, ProbeTargetTCP, hp+" is unreachable directly, but the environment proxy has egress: this is a proxy-only network, so route traffic through the proxy.", VerdictNetwork, ProbeProxy, ProbeInternet)
 		}
 		if !has(ProbeInternet) {
-			return blame(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" is unreachable, but general internet reachability was not checked, so a local path problem cannot be told apart from a remote service failure.", VerdictNetwork)
+			evidence := addEvidence(supportRows(ProbeTargetTCP),
+				notEvaluated(ProbeInternet, NotEvaluatedNotSelected))
+			return withEvidence(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" is unreachable, but general internet reachability was not checked, so a local path problem cannot be told apart from a remote service failure.", VerdictNetwork, evidence)
 		}
 		// The egress row, not the target row: this sentence is about the local
 		// path, and the target connect is what that dead path looks like from
@@ -325,14 +513,29 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 		if d, ok := clockSkew(res); ok {
 			switch {
 			case skewExplainsTLS(res[ProbeTLS].Cause, d):
-				return blame(DiagnosisTLSClockSkew, ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails because "+clockSkewPhrase(d)+", so "+clockSkewEffect(d)+".", VerdictService, ProbeInternet, ProbeTargetTCP)
+				evidence := addEvidence(supportRows(ProbeTLS, ProbeInternet, ProbeTargetTCP),
+					supportObservation(ProbeInternet, ObservationClockOffset),
+					rulesOut(DiagnosisTLSTCPUnreachable, ProbeTargetTCP, ObservationStatusPass))
+				return withEvidence(DiagnosisTLSClockSkew, ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails because "+clockSkewPhrase(d)+", so "+clockSkewEffect(d)+".", VerdictService, evidence)
 			case skewDisprovesTLS(res[ProbeTLS].Cause, d):
-				return blame(tlsDiagnosisID(res[ProbeTLS].Cause), ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert or MITM proxy.", VerdictService, ProbeInternet, ProbeTargetTCP)
+				id := tlsDiagnosisID(res[ProbeTLS].Cause)
+				evidence := addEvidence(supportRows(ProbeTLS, ProbeInternet, ProbeTargetTCP),
+					rulesOut(DiagnosisTLSClockSkew, ProbeInternet, ObservationClockOffset),
+					rulesOut(DiagnosisTLSTCPUnreachable, ProbeTargetTCP, ObservationStatusPass))
+				return withEvidence(id, ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert or MITM proxy.", VerdictService, evidence)
 			}
 		}
-		return blame(tlsDiagnosisID(res[ProbeTLS].Cause), ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert, clock skew, or MITM proxy.", VerdictService, ProbeTargetTCP)
+		id := tlsDiagnosisID(res[ProbeTLS].Cause)
+		evidence := supportRows(ProbeTLS, ProbeTargetTCP)
+		if id != DiagnosisTLSTCPUnreachable {
+			evidence = addEvidence(evidence,
+				rulesOut(DiagnosisTLSTCPUnreachable, ProbeTargetTCP, ObservationStatusPass))
+		}
+		return withEvidence(id, ProbeTLS, "TCP reaches "+hp+" but the TLS handshake fails: bad/expired cert, clock skew, or MITM proxy.", VerdictService, evidence)
 	case has(ProbeHTTPS) && fail(ProbeHTTPS):
-		return blame(DiagnosisHTTPSNoResponse, ProbeHTTPS, "TLS is fine but no HTTPS response from "+hp+": application-layer or proxy block.", VerdictService, ProbeTLS)
+		evidence := addEvidence(supportRows(ProbeHTTPS, ProbeTLS),
+			rulesOut(DiagnosisTLSHandshakeFailure, ProbeTLS, ObservationStatusPass))
+		return withEvidence(DiagnosisHTTPSNoResponse, ProbeHTTPS, "TLS is fine but no HTTPS response from "+hp+": application-layer or proxy block.", VerdictService, evidence)
 	case has(ProbeHTTP) && fail(ProbeHTTP):
 		if t.Proto == ProtoTLSHTTP {
 			return blame(DiagnosisHTTPNoResponse, ProbeHTTP, "HTTPS works but no HTTP response from "+net.JoinHostPort(host, "80")+": the redirect/plain-HTTP endpoint may be blocked.", VerdictService, ProbeHTTPS)

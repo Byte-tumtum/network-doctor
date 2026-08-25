@@ -46,8 +46,9 @@ Run `netdoc` with no target to check the local interface, internet egress,
 configured proxy, public DNS, and Wi-Fi metadata. A finished run leads with the
 answer: the verdict, the fix, the tool worth reaching for next, and the one line
 of evidence the verdict rests on, above the checks that produced them. Select
-any other row to see its own evidence and suggested fix; press `?` for every
-shortcut.
+any other row to see its own evidence and suggested fix. Press `e` to replace
+the focused Details panel with the causal explanation for the diagnosis, and
+`?` for every shortcut.
 
 ## Install
 
@@ -233,6 +234,7 @@ netdoc --peer-connect             # paste its temporary pairing string when prom
 |-----|--------|
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device or service in the network map |
 | `a` | expand the checks a finished run collapsed (the passing rows, and the toolbox on a clean run), and collapse them again |
+| `e` | show why the selected diagnosis follows from the observed checks, and return to normal details |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | open the selected map device, then diagnose one of the services it answers on, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |

@@ -846,8 +846,14 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 	rep.Summary, rep.Verdict = d.Summary, d.Verdict
 	for i, f := range d.Findings {
 		finding := report.Finding{ID: string(f.ID), Focus: string(f.Focus)}
-		for _, id := range f.Evidence {
+		for _, id := range f.EvidenceRows() {
 			finding.Evidence = append(finding.Evidence, string(id))
+		}
+		for _, e := range f.Evidence {
+			finding.CausalEvidence = append(finding.CausalEvidence, report.CausalEvidence{
+				Kind: string(e.Kind), Check: string(e.Check), Observation: string(e.Observation),
+				Candidate: string(e.Candidate), Reason: string(e.Reason),
+			})
 		}
 		// The advice comes from the same interpretation as the finding it hangs
 		// off, so automation reads what the app shows rather than a second

@@ -27,9 +27,21 @@ type Diagnosis struct {
 // DiagnosisFinding is one conclusion from netdoc's report: the stable id, the
 // check row it blames, and the rows it rests on.
 type DiagnosisFinding struct {
-	ID       string   `json:"id"`
-	Focus    string   `json:"focus,omitempty"`
-	Evidence []string `json:"evidence,omitempty"`
+	ID             string                    `json:"id"`
+	Focus          string                    `json:"focus,omitempty"`
+	Evidence       []string                  `json:"evidence,omitempty"`
+	CausalEvidence []DiagnosisCausalEvidence `json:"causal_evidence,omitempty"`
+}
+
+// DiagnosisCausalEvidence is the simulator's verbatim view of one typed
+// relationship in netdoc's finding. Ground truth never writes these fields;
+// it only checks the production diagnosis that came back from netdoc.
+type DiagnosisCausalEvidence struct {
+	Kind        string `json:"kind"`
+	Check       string `json:"check"`
+	Observation string `json:"observation,omitempty"`
+	Candidate   string `json:"candidate,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // DiagnosisCheck is one probe row.

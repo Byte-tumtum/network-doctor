@@ -108,6 +108,12 @@ func (m model) report() string {
 		b.WriteString("target: none (general connection check)\n")
 	}
 	b.WriteString("verdict: " + m.verdictLine() + "\n")
+	if why := m.whyLines(); len(why) > 1 {
+		b.WriteString("why:\n")
+		for _, line := range why[1:] {
+			b.WriteString("  " + line + "\n")
+		}
+	}
 	// The remediation reads from the same diagnosis as the verdict above it, so
 	// a pasted report carries the advice the screen showed rather than a second
 	// opinion. The command is labelled as a suggestion: a report that lists a

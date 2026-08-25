@@ -37,10 +37,25 @@ type Finding struct {
 	ID       string   `json:"id"`
 	Focus    string   `json:"focus,omitempty"`
 	Evidence []string `json:"evidence,omitempty"`
+	// CausalEvidence states how each observed check fact bears on this finding
+	// or an alternative. Evidence above remains the compatible row-ID
+	// projection for existing consumers.
+	CausalEvidence []CausalEvidence `json:"causal_evidence,omitempty"`
 	// Remediation is what to do about this finding, as data rather than prose
 	// to be parsed out of fix. Omitted when the conclusion has no advice
 	// beyond what the checks already say.
 	Remediation *Remediation `json:"remediation,omitempty"`
+}
+
+// CausalEvidence is one typed relationship to an observation in Checks.
+// Candidate is present only for contradiction and ruled_out items. Reason is
+// present only when the relevant check was not evaluated.
+type CausalEvidence struct {
+	Kind        string `json:"kind"`
+	Check       string `json:"check"`
+	Observation string `json:"observation,omitempty"`
+	Candidate   string `json:"candidate,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // Remediation is the structured next action for a finding: an additive object

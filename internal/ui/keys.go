@@ -148,6 +148,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// what ran, what the diagnosis concluded, or what the report carries.
 		m.expanded = !m.expanded
 		return m, nil
+	case actExplain:
+		d := m.diagnosis()
+		if !m.allDone() || len(d.Findings) == 0 || len(d.Findings[0].Evidence) == 0 {
+			return m, m.setNotice("no diagnosis explanation is available yet", false)
+		}
+		m.explaining = !m.explaining
+		if m.explaining {
+			if i := m.focusRow(); i >= 0 {
+				m.selected = i
+			}
+		}
+		return m, nil
 	case actCancelJob:
 		// On an opened device, esc is the way back to the device list before
 		// it is anything else: the job it would otherwise cancel is the
@@ -166,6 +178,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case actSwitchJob:
 		return m, m.switchJob()
 	case actUp:
+		m.explaining = false
 		if m.networkMap {
 			m.moveMap(-1)
 			return m, nil
@@ -173,6 +186,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveRow(-1)
 		return m, nil
 	case actDown:
+		m.explaining = false
 		if m.networkMap {
 			m.moveMap(1)
 			return m, nil
@@ -180,6 +194,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveRow(1)
 		return m, nil
 	case actTop:
+		m.explaining = false
 		if m.networkMap {
 			at, _ := m.mapCursor()
 			*at = 0
@@ -188,6 +203,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveRow(-len(m.probes))
 		return m, nil
 	case actBottom:
+		m.explaining = false
 		if m.networkMap {
 			at, n := m.mapCursor()
 			*at = max(n-1, 0)
@@ -571,6 +587,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.tools = toolsFor(m.target, runtime.GOOS, bindFor(m.sources))
 	m.generation++
 	m.selMoved = false
+	m.explaining = false
 	m.results = map[diagnostic.ProbeID]diagnostic.ProbeResult{}
 	m.started = map[diagnostic.ProbeID]bool{}
 	m.pending, m.confirmTool, m.sshPrompt = nil, nil, false
