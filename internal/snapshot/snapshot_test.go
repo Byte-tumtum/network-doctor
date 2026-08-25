@@ -498,3 +498,40 @@ func TestWriteFileRefusesAnUnlabelledRow(t *testing.T) {
 		t.Errorf("directory holds %d entries, want nothing written", len(entries))
 	}
 }
+
+// Decode applies the rules Encode enforces, so a reader cannot be handed a row
+// that says nothing about itself. A hand-edited or truncated file is where this
+// comes from: Encode never wrote one, which is exactly why a decoder that
+// accepted it would hold an invariant only by luck. A comparison reading two
+// files is the first consumer that would have silently compared the gap.
+func TestDecodeRefusesRowsEncodeWouldRefuseToWrite(t *testing.T) {
+	tests := []struct {
+		name, body, want string
+	}{
+		{"a row with no status", `"checks":[{"id":"iface"}]`, "no status"},
+		{"incomplete but claiming to have run",
+			`"checks":[{"id":"iface","status":"INCOMPLETE","ran":true}]`, "also ran"},
+		{"incomplete inside a run called ok",
+			`"ok":true,"checks":[{"id":"iface","status":"INCOMPLETE"}]`, "cannot be reported ok"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Decode([]byte(`{"schema":"` + Schema + `",` + tt.body + `}`))
+			if err == nil {
+				t.Fatal("Decode accepted a file Encode would refuse to write")
+			}
+			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "iface") {
+				t.Errorf("error = %q, want it to name the row and say %q", err, tt.want)
+			}
+		})
+	}
+	// The honest spellings of the same rows still decode.
+	if _, err := Decode([]byte(`{"schema":"` + Schema + `","checks":[{"id":"iface","status":"INCOMPLETE"}]}`)); err != nil {
+		t.Errorf("Decode refused a well-formed incomplete row: %v", err)
+	}
+	// And a snapshot with no checks at all is still a snapshot: an empty probe
+	// selection produces one.
+	if _, err := Decode([]byte(`{"schema":"` + Schema + `","checks":[],"ok":true}`)); err != nil {
+		t.Errorf("Decode refused a run with no checks: %v", err)
+	}
+}

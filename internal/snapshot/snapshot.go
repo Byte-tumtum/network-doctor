@@ -288,15 +288,8 @@ type Finding struct {
 // the absence of evidence never leaves here looking like evidence.
 func Encode(s Snapshot) ([]byte, error) {
 	s.Schema = Schema
-	for _, c := range s.Checks {
-		switch {
-		case c.Status == "":
-			return nil, fmt.Errorf("snapshot check %q has no status: a row with no completed result must say %s", c.ID, StatusIncomplete)
-		case c.Status == StatusIncomplete && c.Ran:
-			return nil, fmt.Errorf("snapshot check %q is %s and also ran: a row that reported has an outcome", c.ID, StatusIncomplete)
-		case c.Status == StatusIncomplete && s.OK:
-			return nil, fmt.Errorf("snapshot check %q is %s, so the run cannot be reported ok", c.ID, StatusIncomplete)
-		}
+	if err := validate(s); err != nil {
+		return nil, err
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -309,12 +302,34 @@ func Encode(s Snapshot) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// validate holds the rules a snapshot has to satisfy to be a snapshot, rather
+// than valid JSON that happens to have these keys. Both directions apply them:
+// Encode so a file that says nothing about a row never gets published, and
+// Decode so a hand-edited or truncated file is refused instead of being read
+// as one where a row simply had nothing to say. A reader that accepted what the
+// writer refuses is a reader whose invariants are only true by luck.
+func validate(s Snapshot) error {
+	for _, c := range s.Checks {
+		switch {
+		case c.Status == "":
+			return fmt.Errorf("snapshot check %q has no status: a row with no completed result must say %s", c.ID, StatusIncomplete)
+		case c.Status == StatusIncomplete && c.Ran:
+			return fmt.Errorf("snapshot check %q is %s and also ran: a row that reported has an outcome", c.ID, StatusIncomplete)
+		case c.Status == StatusIncomplete && s.OK:
+			return fmt.Errorf("snapshot check %q is %s, so the run cannot be reported ok", c.ID, StatusIncomplete)
+		}
+	}
+	return nil
+}
+
 // Decode reads an .ndoc file. It refuses anything that is not this schema
 // before looking at a single other field, so a v2 file written by a later
 // netdoc is reported as unreadable rather than half understood.
 //
 // Unknown fields inside a v1 file are ignored on purpose: that is what makes
-// an added optional field a compatible change.
+// an added optional field a compatible change. A row that does not say what it
+// is, on the other hand, is not an unknown field: it is the one thing Encode
+// refuses to write, and Decode refuses to read it back.
 func Decode(data []byte) (Snapshot, error) {
 	var head struct {
 		Schema string `json:"schema"`
@@ -327,6 +342,9 @@ func Decode(data []byte) (Snapshot, error) {
 	}
 	var s Snapshot
 	if err := json.Unmarshal(data, &s); err != nil {
+		return Snapshot{}, err
+	}
+	if err := validate(s); err != nil {
 		return Snapshot{}, err
 	}
 	return s, nil
