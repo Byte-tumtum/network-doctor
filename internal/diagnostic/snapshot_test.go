@@ -483,3 +483,46 @@ func TestSnapshotStatusVocabularyMatchesProbeStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotPreservesCounterfactualDiagnosisAndAttemptEvidence(t *testing.T) {
+	target := &Target{Raw: "example.com:443", Host: "example.com", Port: 443, Proto: ProtoNone}
+	v4a, v4b := net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")
+	probes := []Probe{
+		{ID: ProbeIface, Name: "Interface"},
+		{ID: ProbeInternet, Name: "Internet"},
+		{ID: ProbeDNS, Name: "DNS"},
+		{ID: ProbeTargetTCP, Name: "Target TCP", Deps: []ProbeID{ProbeDNS}},
+	}
+	results := map[ProbeID]ProbeResult{
+		ProbeIface: {Status: StatusPass, Dur: time.Millisecond},
+		ProbeInternet: {Status: StatusPass, Dur: time.Millisecond,
+			Families: &FamilyConnectivity{IPv4: FamilyReachable}},
+		ProbeDNS: {Status: StatusPass, Dur: time.Millisecond, Addrs: []net.IP{v4a, v4b}},
+		ProbeTargetTCP: {Status: StatusWarn, Dur: time.Millisecond, SelectedIP: v4b,
+			Families: &FamilyConnectivity{IPv4: FamilyReachable}, Attempts: []Attempt{
+				{IP: v4a, Dur: time.Millisecond, Err: errors.New("network unreachable"), Cause: ConnectionCauseUnreachable},
+				{IP: v4b, Dur: time.Millisecond},
+			}},
+	}
+	s := BuildSnapshot(target, probes, results)
+	data, err := snapshot.Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Diagnosis.Findings) != 1 || decoded.Diagnosis.Findings[0].ID != string(DiagnosisPartialReachability) {
+		t.Fatalf("diagnosis = %+v", decoded.Diagnosis)
+	}
+	finding := decoded.Diagnosis.Findings[0]
+	if finding.Counterfactual == nil || finding.Counterfactual.Variable != string(CounterfactualResolvedAddress) ||
+		len(finding.Counterfactual.Alternatives) != 2 {
+		t.Errorf("counterfactual = %+v", finding.Counterfactual)
+	}
+	attempts := decoded.Checks[3].Observed.Attempts
+	if len(attempts) != 2 || attempts[0].Cause != ConnectionCauseUnreachable || attempts[0].Aborted {
+		t.Errorf("attempt evidence = %+v", attempts)
+	}
+}

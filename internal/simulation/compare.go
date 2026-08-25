@@ -31,6 +31,7 @@ type DiagnosisFinding struct {
 	Focus          string                    `json:"focus,omitempty"`
 	Evidence       []string                  `json:"evidence,omitempty"`
 	CausalEvidence []DiagnosisCausalEvidence `json:"causal_evidence,omitempty"`
+	Counterfactual *DiagnosisCounterfactual  `json:"counterfactual,omitempty"`
 }
 
 // DiagnosisCausalEvidence is the simulator's verbatim view of one typed
@@ -40,8 +41,20 @@ type DiagnosisCausalEvidence struct {
 	Kind        string `json:"kind"`
 	Check       string `json:"check"`
 	Observation string `json:"observation,omitempty"`
+	Value       string `json:"value,omitempty"`
 	Candidate   string `json:"candidate,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+type DiagnosisCounterfactual struct {
+	Variable     string                               `json:"variable"`
+	Alternatives []DiagnosisCounterfactualAlternative `json:"alternatives"`
+}
+
+type DiagnosisCounterfactualAlternative struct {
+	Value    string                    `json:"value"`
+	Outcome  string                    `json:"outcome"`
+	Evidence []DiagnosisCausalEvidence `json:"evidence"`
 }
 
 // DiagnosisCheck is one probe row.
@@ -58,12 +71,14 @@ type DiagnosisCheck struct {
 }
 
 type DiagnosisAttempt struct {
-	IP    string `json:"ip"`
-	Ms    int64  `json:"ms"`
-	Error string `json:"error,omitempty"`
+	IP      string `json:"ip"`
+	Ms      int64  `json:"ms"`
+	Error   string `json:"error,omitempty"`
+	Cause   string `json:"cause,omitempty"`
+	Aborted bool   `json:"aborted,omitempty"`
 }
 
-// DiagnosisFamilies carries netdoc's per-family egress verdicts. A family is
+// DiagnosisFamilies carries netdoc's per-family reachability observations. A family is
 // present only when netdoc actually dialed it, so a key netdoc omitted for a
 // family the selected source has no address for must stay omitted when the
 // simulator re-encodes this into its own report. Serializing the empty string

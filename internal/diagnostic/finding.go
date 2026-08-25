@@ -48,6 +48,9 @@ const (
 	DiagnosisTargetUnreachable      DiagnosisID = "target_unreachable"
 	DiagnosisLocalDeviceUnreachable DiagnosisID = "local_device_unreachable"
 	DiagnosisReachabilityUntested   DiagnosisID = "reachability_untested"
+	DiagnosisIPv4TargetUnreachable  DiagnosisID = "ipv4_target_unreachable"
+	DiagnosisIPv6TargetUnreachable  DiagnosisID = "ipv6_target_unreachable"
+	DiagnosisPartialReachability    DiagnosisID = "partial_endpoint_reachability"
 
 	// TLS, which keeps the fine-grained causes the handshake already
 	// classified rather than flattening them into one service failure.
@@ -106,6 +109,26 @@ const (
 	ObservationTimeout          ObservationID = "timeout"
 	ObservationClockOffset      ObservationID = "clock_offset"
 	ObservationStatusDowngraded ObservationID = "status_downgraded"
+	ObservationFamilyReachable  ObservationID = "family_reachable"
+	ObservationFamilyFailed     ObservationID = "family_failed"
+	ObservationAddressSucceeded ObservationID = "address_succeeded"
+	ObservationAddressFailed    ObservationID = "address_failed"
+)
+
+type CounterfactualVariable string
+
+const (
+	CounterfactualDNSResolver     CounterfactualVariable = "dns_resolver"
+	CounterfactualAddressFamily   CounterfactualVariable = "address_family"
+	CounterfactualResolvedAddress CounterfactualVariable = "resolved_address"
+)
+
+type CounterfactualOutcome string
+
+const (
+	CounterfactualSucceeded CounterfactualOutcome = "succeeded"
+	CounterfactualFailed    CounterfactualOutcome = "failed"
+	CounterfactualNotFound  CounterfactualOutcome = "not_found"
 )
 
 // NotEvaluatedReason keeps the ways a relevant check can lack an observation
@@ -128,8 +151,25 @@ type CausalEvidence struct {
 	Kind        EvidenceKind
 	Check       ProbeID
 	Observation ObservationID
-	Candidate   DiagnosisID
-	Reason      NotEvaluatedReason
+	// Value identifies the member of a structured observation, such as an IP
+	// address or address family. Empty for whole-row observations.
+	Value     string
+	Candidate DiagnosisID
+	Reason    NotEvaluatedReason
+}
+
+// Counterfactual records the controlled alternatives behind a conclusion.
+// Each alternative points back to CausalEvidence instead of copying a probe
+// result, so Diagnosis remains the sole interpretation of the run.
+type Counterfactual struct {
+	Variable     CounterfactualVariable
+	Alternatives []CounterfactualAlternative
+}
+
+type CounterfactualAlternative struct {
+	Value    string
+	Outcome  CounterfactualOutcome
+	Evidence []CausalEvidence
 }
 
 // DiagnosisFinding is one specific thing a run proved wrong, with everything a
@@ -155,6 +195,9 @@ type DiagnosisFinding struct {
 	// Each item points back to the ProbeResult field that supplied the fact and
 	// states how that fact bears on the selected or an alternative diagnosis.
 	Evidence []CausalEvidence
+	// Counterfactual is present when this conclusion compares controlled
+	// alternatives observed during the same run.
+	Counterfactual *Counterfactual
 }
 
 // EvidenceRows is the compatibility projection used by the original JSON and
@@ -181,9 +224,8 @@ func (f DiagnosisFinding) EvidenceRows() []ProbeID {
 // sentence with no finding under them, because forcing an identity onto them
 // would be inventing one.
 //
-// Findings is a slice because a run can hold more than one conclusion. Today
-// the pass reports the single most specific one it reaches, which is what
-// keeps the summary, the verdict and the blamed row from ever disagreeing.
+// Findings is a slice because a run can hold more than one conclusion. The
+// first finding owns the summary; later findings add compatible deductions.
 type Diagnosis struct {
 	// Verdict is the run's broad class, the stable vocabulary the JSON report
 	// has always published. See the Verdict constants.

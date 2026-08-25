@@ -445,9 +445,23 @@ func decodeDiagnosis(res ExecResult) (*Diagnosis, error) {
 		converted := DiagnosisFinding{ID: finding.ID, Focus: finding.Focus, Evidence: finding.Evidence}
 		for _, evidence := range finding.CausalEvidence {
 			converted.CausalEvidence = append(converted.CausalEvidence, DiagnosisCausalEvidence{
-				Kind: evidence.Kind, Check: evidence.Check, Observation: evidence.Observation,
+				Kind: evidence.Kind, Check: evidence.Check, Observation: evidence.Observation, Value: evidence.Value,
 				Candidate: evidence.Candidate, Reason: evidence.Reason,
 			})
+		}
+		if finding.Counterfactual != nil {
+			cf := &DiagnosisCounterfactual{Variable: finding.Counterfactual.Variable}
+			for _, alternative := range finding.Counterfactual.Alternatives {
+				item := DiagnosisCounterfactualAlternative{Value: alternative.Value, Outcome: alternative.Outcome}
+				for _, evidence := range alternative.Evidence {
+					item.Evidence = append(item.Evidence, DiagnosisCausalEvidence{
+						Kind: evidence.Kind, Check: evidence.Check, Observation: evidence.Observation, Value: evidence.Value,
+						Candidate: evidence.Candidate, Reason: evidence.Reason,
+					})
+				}
+				cf.Alternatives = append(cf.Alternatives, item)
+			}
+			converted.Counterfactual = cf
 		}
 		d.Findings = append(d.Findings, converted)
 	}
@@ -460,7 +474,8 @@ func decodeDiagnosis(res ExecResult) (*Diagnosis, error) {
 		if check.Attempts != nil {
 			d.Checks[i].Attempts = make([]DiagnosisAttempt, len(check.Attempts))
 			for j, attempt := range check.Attempts {
-				d.Checks[i].Attempts[j] = DiagnosisAttempt{IP: attempt.IP, Ms: attempt.Ms, Error: attempt.Err}
+				d.Checks[i].Attempts[j] = DiagnosisAttempt{IP: attempt.IP, Ms: attempt.Ms, Error: attempt.Err,
+					Cause: attempt.Cause, Aborted: attempt.Aborted}
 			}
 		}
 	}

@@ -864,9 +864,9 @@ func TestTargetTCPProbeIgnoresTheAbsentFamily(t *testing.T) {
 		attempts int
 	}{
 		{"v6 unreachable, v4 won", []net.IP{v4, v6}, v4, StatusPass, 2},
-		// dialIPs leads with IPv6 (RFC 8305), so a v6 win returns before the
-		// staggered v4 attempt ever starts: one attempt, and nothing to warn about.
-		{"v4 unreachable, v6 won", []net.IP{v4, v6}, v6, StatusPass, 1},
+		// Both families are now observed independently. The failed family stays
+		// evidence, but does not warn until general egress proves it usable.
+		{"v4 unreachable, v6 won", []net.IP{v4, v6}, v6, StatusPass, 2},
 		{"same-family sibling failed", []net.IP{v4b, v4}, v4, StatusWarn, 2},
 	}
 	for _, c := range cases {

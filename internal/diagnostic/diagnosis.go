@@ -45,6 +45,33 @@ func FocusProbe(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) ProbeID
 // each other.
 func Interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosis {
 	d := interpret(t, order, res)
+	var counterfactuals []DiagnosisFinding
+	if d.Verdict != VerdictIncomplete {
+		counterfactuals = counterfactualFindings(t, res)
+	}
+	for _, finding := range counterfactuals {
+		matched := false
+		for i := range d.Findings {
+			if d.Findings[i].ID != finding.ID {
+				continue
+			}
+			d.Findings[i].Counterfactual = finding.Counterfactual
+			for _, evidence := range finding.Evidence {
+				if !slices.Contains(d.Findings[i].Evidence, evidence) {
+					d.Findings[i].Evidence = append(d.Findings[i].Evidence, evidence)
+				}
+			}
+			matched = true
+			break
+		}
+		if matched {
+			continue
+		}
+		if len(d.Findings) == 0 {
+			d.Summary, d.Verdict = finding.Summary, finding.Verdict
+		}
+		d.Findings = append(d.Findings, finding)
+	}
 	// The row a caller should point at, which is the row the diagnosis names
 	// when it names one and otherwise the first failure. A verdict about no
 	// single row still leaves a reader wanting somewhere to look.
@@ -790,6 +817,7 @@ func Finalize(res map[ProbeID]ProbeResult) {
 	// report says it means rather than what it said mid-pass.
 	reconcileEncryptedDNS(res)
 	reconcileClockSkew(res)
+	reconcileCounterfactuals(res)
 }
 
 // clockSkewThreshold is how far this machine's clock has to be off the

@@ -219,6 +219,11 @@ func TestSameFamilyFailoverScenario(t *testing.T) {
 	if out.ActualVerdict != diagnostic.VerdictOK {
 		t.Errorf("verdict = %s, want %s after successful fallback", out.ActualVerdict, diagnostic.VerdictOK)
 	}
+	for _, finding := range out.Diagnosis.Findings {
+		if finding.ID == string(diagnostic.DiagnosisPartialReachability) {
+			t.Errorf("a canceled black-holed attempt became a partial-reachability finding: %+v", finding)
+		}
+	}
 	assertCleanedUp(t, rep)
 }
 
@@ -250,6 +255,10 @@ func TestBrokenDNSScenario(t *testing.T) {
 		t.Fatalf("finding = %+v, want %s", out.Diagnosis.Findings, diagnostic.DiagnosisSystemDNSFailure)
 	}
 	finding := out.Diagnosis.Findings[0]
+	if finding.Counterfactual == nil || finding.Counterfactual.Variable != string(diagnostic.CounterfactualDNSResolver) ||
+		len(finding.Counterfactual.Alternatives) != 2 {
+		t.Errorf("DNS counterfactual = %+v", finding.Counterfactual)
+	}
 	wantSupport := map[string]string{
 		string(diagnostic.ProbeDNS):       string(diagnostic.ObservationCause),
 		string(diagnostic.ProbeDNSPublic): string(diagnostic.ObservationDNSAnswers),
@@ -2706,6 +2715,48 @@ func TestDualStackHealthyScenario(t *testing.T) {
 		!hasSelectedFamilyRoute(rep, "client", "2606:4700:4700::1111", "ipv6") {
 		t.Errorf("family route selections = %+v", rep.Evidence.Routes)
 	}
+}
+
+func TestTargetIPv6FailureProducesCounterfactualDiagnosis(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	scenario, err := LibraryScenario("dual-stack-healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario.Name = "target-ipv6-failure"
+	scenario.Faults = []Fault{{
+		Type: FaultDrop, Node: "target", Direction: DirectionInbound, Family: "ipv6",
+		To: "2001:db8:77:2::20", Protocol: "tcp", Port: 80,
+	}}
+	scenario.Expect.Verdict = diagnostic.VerdictDegraded
+	for i := range scenario.Expect.Checks {
+		if scenario.Expect.Checks[i].ID == string(diagnostic.ProbeTargetTCP) {
+			scenario.Expect.Checks[i].Status = "WARN"
+		}
+	}
+	rep := runScenarioDefinition(t, sim, netdoc, scenario)
+	if rep.Result != ResultPass || len(rep.Tests) != 1 {
+		t.Fatalf("result = %s error=%q tests=%+v suggestions=%+v", rep.Result, rep.Error, rep.Tests, rep.Suggestions)
+	}
+	out := rep.Tests[0]
+	internet := diagnosisCheck(out, string(diagnostic.ProbeInternet))
+	if internet.Families == nil || internet.Families.IPv6 != diagnostic.FamilyReachable {
+		t.Fatalf("general IPv6 path did not remain reachable: %+v", out.Diagnosis.Checks)
+	}
+	finding, found := DiagnosisFinding{}, false
+	for _, item := range out.Diagnosis.Findings {
+		if item.ID == string(diagnostic.DiagnosisIPv6TargetUnreachable) {
+			finding, found = item, true
+		}
+		if item.ID == string(diagnostic.DiagnosisPartialReachability) {
+			t.Errorf("the probe-wide IPv6 timeout became a failed backend address: %+v", item)
+		}
+	}
+	if !found || finding.Counterfactual == nil || finding.Counterfactual.Variable != string(diagnostic.CounterfactualAddressFamily) {
+		t.Fatalf("findings = %+v, want IPv6 family counterfactual", out.Diagnosis.Findings)
+	}
+	assertCleanedUp(t, rep)
 }
 
 func TestIPv4WorksIPv6BrokenScenario(t *testing.T) {

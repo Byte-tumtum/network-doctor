@@ -831,7 +831,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			c.Source = r.Source.String()
 		}
 		for _, a := range r.Attempts {
-			ra := report.Attempt{IP: a.IP.String(), Ms: diagnostic.Ms(a.Dur)}
+			ra := report.Attempt{IP: a.IP.String(), Ms: diagnostic.Ms(a.Dur), Cause: a.Cause, Aborted: a.Aborted}
 			if a.Err != nil {
 				ra.Err = a.Err.Error()
 			}
@@ -852,8 +852,22 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 		for _, e := range f.Evidence {
 			finding.CausalEvidence = append(finding.CausalEvidence, report.CausalEvidence{
 				Kind: string(e.Kind), Check: string(e.Check), Observation: string(e.Observation),
-				Candidate: string(e.Candidate), Reason: string(e.Reason),
+				Value: e.Value, Candidate: string(e.Candidate), Reason: string(e.Reason),
 			})
+		}
+		if f.Counterfactual != nil {
+			cf := &report.Counterfactual{Variable: string(f.Counterfactual.Variable)}
+			for _, alternative := range f.Counterfactual.Alternatives {
+				item := report.CounterfactualAlternative{Value: alternative.Value, Outcome: string(alternative.Outcome)}
+				for _, e := range alternative.Evidence {
+					item.Evidence = append(item.Evidence, report.CausalEvidence{
+						Kind: string(e.Kind), Check: string(e.Check), Observation: string(e.Observation),
+						Value: e.Value, Candidate: string(e.Candidate), Reason: string(e.Reason),
+					})
+				}
+				cf.Alternatives = append(cf.Alternatives, item)
+			}
+			finding.Counterfactual = cf
 		}
 		// The advice comes from the same interpretation as the finding it hangs
 		// off, so automation reads what the app shows rather than a second

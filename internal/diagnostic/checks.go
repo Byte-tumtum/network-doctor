@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,9 +71,8 @@ const (
 	FamilyUnreachable = "unreachable"
 )
 
-// FamilyConnectivity records the independently tested direct-egress result
-// for each address family. It is additive JSON evidence: generic hostname
-// fallback cannot turn one family's failure into an apparent success here.
+// FamilyConnectivity records independently tested reachability for each
+// address family. An empty value means that family was not tested.
 type FamilyConnectivity struct {
 	IPv4 string
 	IPv6 string
@@ -87,9 +87,11 @@ func (s Status) String() string {
 
 // Attempt is one connection attempt against a single address.
 type Attempt struct {
-	IP  net.IP
-	Dur time.Duration
-	Err error
+	IP      net.IP
+	Dur     time.Duration
+	Err     error
+	Cause   string
+	Aborted bool // cancellation or the enclosing probe deadline, not this address
 }
 
 // Ms renders a duration that actually elapsed as at least 1ms. Milliseconds()
@@ -1602,33 +1604,70 @@ func ConnectionFailureCause(err error) string {
 func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
 		var r ProbeResult
-		addrs := deps[ProbeDNS].Addrs
+		addrs := interleaveFamilies(deps[ProbeDNS].Addrs)
+		if len(addrs) > maxAttempts {
+			addrs = addrs[:maxAttempts]
+		}
 		if len(addrs) == 0 {
 			r.Status, r.Detail = StatusFail, "no resolved addresses"
 			return r
 		}
-		conn, sel, attempts, rtt := o.dialIPs(ctx, addrs, port)
-		r.Attempts = attempts
+		v4addrs, v6addrs := splitFamilies(addrs)
+		type familyResult struct {
+			conn     net.Conn
+			sel      net.IP
+			attempts []Attempt
+			rtt      time.Duration
+		}
+		var v4, v6 familyResult
+		var wg sync.WaitGroup
+		if len(v4addrs) > 0 {
+			wg.Go(func() { v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, v4addrs, port) })
+		}
+		if len(v6addrs) > 0 {
+			wg.Go(func() { v6.conn, v6.sel, v6.attempts, v6.rtt = o.dialIPs(ctx, v6addrs, port) })
+		}
+		wg.Wait()
+		r.Families = &FamilyConnectivity{
+			IPv4: targetFamilyState(v4addrs, v4.conn, v4.attempts),
+			IPv6: targetFamilyState(v6addrs, v6.conn, v6.attempts),
+		}
+
+		// Prefer IPv6 when both complete together, but keep the faster working
+		// family when one path is measurably slower. The other family is still
+		// independently observed before this probe ends.
+		primary, secondary := v6, v4
+		if primary.conn == nil || secondary.conn != nil && secondary.rtt < primary.rtt {
+			primary, secondary = v4, v6
+		}
+		conn, sel, rtt := primary.conn, primary.sel, primary.rtt
+		r.Attempts = append(append([]Attempt{}, primary.attempts...), secondary.attempts...)
 		if conn != nil {
 			defer conn.Close()
+			if secondary.conn != nil {
+				defer secondary.conn.Close()
+			}
 			src, iface, ambiguous := o.pathIdentity(ctx, conn, sel, port)
 			r.Status, r.SelectedIP, r.Source, r.Iface, r.ifaceAmbiguous = StatusPass, sel, src, iface, ambiguous
 			r.Detail = fmt.Sprintf("connected to %s:%d in %dms (src %s %s)", sel, port, Ms(rtt), src, iface)
-			// Warnings judge only the winning family, exactly as the egress row
-			// does: dialIPs races both at once, so a family this network simply
-			// doesn't carry arrives as a pile of failed siblings, and a dual-stack
-			// name on an IPv4-only link would otherwise read as degraded forever.
-			// A family that is configured and still unreachable is the egress
-			// row's story to tell. The losers are appended back afterwards so the
-			// details panel still lists every address that was tried.
-			same, other := splitAttemptFamilies(attempts, sel)
-			r.Attempts = same
+			// Failed addresses within a family that did connect are partial
+			// reachability. A whole failed family is reconciled later against the
+			// independent egress-family observation, so single-stack hosts stay clean.
+			var warningAttempts []Attempt
+			if v4.conn != nil {
+				warningAttempts = append(warningAttempts, v4.attempts...)
+			}
+			if v6.conn != nil {
+				warningAttempts = append(warningAttempts, v6.attempts...)
+			}
+			allAttempts := r.Attempts
+			r.Attempts = warningAttempts
 			applyDialWarnings(&r, rtt)
-			r.Attempts = append(same, other...)
+			r.Attempts = allAttempts
 			return r
 		}
-		refused := len(attempts) > 0 && ctx.Err() == nil
-		for _, attempt := range attempts {
+		refused := len(r.Attempts) > 0 && ctx.Err() == nil
+		for _, attempt := range r.Attempts {
 			if ConnectionFailureCause(attempt.Err) != ConnectionCauseRefused {
 				refused = false
 				break
@@ -1637,17 +1676,17 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 		// All addresses failed: deterministic fallback path = first address.
 		src, iface, ambiguous := o.pathIdentity(ctx, nil, addrs[0], port)
 		r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, src, iface, ambiguous
-		tried := make([]net.IP, len(attempts))
-		for i, a := range attempts {
+		tried := make([]net.IP, len(r.Attempts))
+		for i, a := range r.Attempts {
 			tried[i] = a.IP
 		}
 		if refused {
 			r.Cause = ConnectionCauseRefused
-			r.Detail = fmt.Sprintf("connection to port %d was refused on all %d attempted address(es): %s", port, len(attempts), joinIPs(tried))
+			r.Detail = fmt.Sprintf("connection to port %d was refused on all %d attempted address(es): %s", port, len(r.Attempts), joinIPs(tried))
 			r.Fix = fmt.Sprintf("connection refused: check that a service is listening on port %d and that no firewall is actively rejecting it", port)
 			return r
 		}
-		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(attempts), joinIPs(tried))
+		r.Detail = fmt.Sprintf("port %d unreachable on all %d address(es): %s", port, len(r.Attempts), joinIPs(tried))
 		r.Fix = fmt.Sprintf("port %d blocked/refused: firewall, wrong network, or VPN routing?", port)
 		return r
 	}
@@ -2144,23 +2183,22 @@ func familyState(ips []net.IP, conn net.Conn) string {
 	}
 }
 
-// splitAttemptFamilies partitions attempts into the winner's address family
-// and everything else, so a dial result can be judged on the family that
-// actually carried it. A nil winner leaves everything in same, since there is no
-// family to judge against, and the caller is on its failure path anyway.
-func splitAttemptFamilies(attempts []Attempt, sel net.IP) (same, other []Attempt) {
-	if sel == nil {
-		return attempts, nil
+// targetFamilyState requires every eligible address to have been attempted
+// before it calls a whole target family unreachable. A canceled probe or an
+// early winner in another family cannot turn unattempted addresses into proof.
+func targetFamilyState(ips []net.IP, conn net.Conn, attempts []Attempt) string {
+	if len(ips) == 0 {
+		return ""
 	}
-	selV4 := sel.To4() != nil
-	for _, a := range attempts {
-		if (a.IP.To4() != nil) == selV4 {
-			same = append(same, a)
-		} else {
-			other = append(other, a)
+	if conn != nil {
+		return FamilyReachable
+	}
+	for _, ip := range ips {
+		if !slices.ContainsFunc(attempts, func(attempt Attempt) bool { return attempt.IP.Equal(ip) }) {
+			return ""
 		}
 	}
-	return same, other
+	return FamilyUnreachable
 }
 
 // interleaveFamilies orders addresses IPv6-first, alternating families
@@ -2245,6 +2283,9 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 				}
 				conn, err := o.dialContext(dctx, network, net.JoinHostPort(ip.String(), strconv.Itoa(port)))
 				att := Attempt{IP: ip, Dur: since(start), Err: err}
+				if err != nil {
+					att.Cause = ConnectionFailureCause(err)
+				}
 				results <- result{conn, att}
 				if err != nil {
 					next <- struct{}{}
@@ -2286,7 +2327,11 @@ func (o *netops) dialIPs(ctx context.Context, ips []net.IP, port int) (net.Conn,
 			attempts = append(attempts, got.att) // winner last; applyDialWarnings counts on it
 			return got.conn, got.att.IP, attempts, got.att.Dur
 		case <-ctx.Done():
+			before := len(attempts)
 			drain()
+			for i := before; i < len(attempts); i++ {
+				attempts[i].Aborted = true
+			}
 			return nil, nil, attempts, 0
 		}
 	}

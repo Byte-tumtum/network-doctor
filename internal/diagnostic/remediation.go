@@ -515,6 +515,27 @@ var remedies = map[remedyKey]remedy{
 		},
 		expect: "Either a trace that stops at an identifiable hop, or confirmation that the endpoint is down.",
 	},
+	{id: DiagnosisIPv4TargetUnreachable}: {
+		id:     RemedyTracePath,
+		action: "Check the target's IPv4 path",
+		why:    "The same target and port work over IPv6 while every tested IPv4 alternative fails. Independent IPv4 egress or explicit peer replies prove the family was testable, narrowing the impairment to this target's IPv4 path or listener.",
+		steps:  []string{"Check the target's IPv4 listener, firewall policy, and route."},
+		expect: "The target accepting the same connection over IPv4.",
+	},
+	{id: DiagnosisIPv6TargetUnreachable}: {
+		id:     RemedyTracePath,
+		action: "Check the target's IPv6 path",
+		why:    "The same target and port work over IPv4 while every tested IPv6 alternative fails. Independent IPv6 egress or explicit peer replies prove the family was testable, narrowing the impairment to this target's IPv6 path or listener.",
+		steps:  []string{"Check the target's IPv6 listener, firewall policy, and route."},
+		expect: "The target accepting the same connection over IPv6.",
+	},
+	{id: DiagnosisPartialReachability}: {
+		id:     RemedyTracePath,
+		action: "Check the failed endpoint addresses",
+		why:    "At least one resolved address failed an actual connection attempt while another address for the same target and port succeeded.",
+		steps:  []string{"Compare the failed addresses in Details with the target's current backends, listeners, and firewall policy."},
+		expect: "Every published address accepting the connection, or stale addresses removed from DNS.",
+	},
 	{id: DiagnosisLocalDeviceUnreachable}: {
 		id:     RemedyCheckTheDevice,
 		action: "Check the device itself",

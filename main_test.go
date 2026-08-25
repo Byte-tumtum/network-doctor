@@ -891,6 +891,37 @@ func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing
 	}
 }
 
+func TestBuildReportPreservesCounterfactualFinding(t *testing.T) {
+	target := &diagnostic.Target{Host: "example.com", Port: 443, Proto: diagnostic.ProtoNone}
+	a, b := net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")
+	probes := []diagnostic.Probe{
+		{ID: diagnostic.ProbeIface, Name: "Interface"},
+		{ID: diagnostic.ProbeInternet, Name: "Internet"},
+		{ID: diagnostic.ProbeDNS, Name: "DNS"},
+		{ID: diagnostic.ProbeTargetTCP, Name: "Target TCP"},
+	}
+	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbeIface:    {Status: diagnostic.StatusPass},
+		diagnostic.ProbeInternet: {Status: diagnostic.StatusPass},
+		diagnostic.ProbeDNS:      {Status: diagnostic.StatusPass, Addrs: []net.IP{a, b}},
+		diagnostic.ProbeTargetTCP: {Status: diagnostic.StatusWarn, SelectedIP: b,
+			Families: &diagnostic.FamilyConnectivity{IPv4: diagnostic.FamilyReachable}, Attempts: []diagnostic.Attempt{
+				{IP: a, Err: errors.New("unreachable"), Cause: diagnostic.ConnectionCauseUnreachable}, {IP: b},
+			}},
+	}
+	rep := buildReport(target, probes, results)
+	if len(rep.Findings) != 1 || rep.Findings[0].ID != string(diagnostic.DiagnosisPartialReachability) {
+		t.Fatalf("findings = %+v", rep.Findings)
+	}
+	cf := rep.Findings[0].Counterfactual
+	if cf == nil || cf.Variable != string(diagnostic.CounterfactualResolvedAddress) || len(cf.Alternatives) != 2 {
+		t.Errorf("counterfactual = %+v", cf)
+	}
+	if rep.Checks[3].Attempts[0].Cause != diagnostic.ConnectionCauseUnreachable {
+		t.Errorf("attempt = %+v", rep.Checks[3].Attempts[0])
+	}
+}
+
 func TestBuildReportKeepsEncryptedResolverWarningFunctional(t *testing.T) {
 	probes := []diagnostic.Probe{
 		{ID: diagnostic.ProbeInternet, Name: "Internet"},

@@ -41,6 +41,7 @@ type Finding struct {
 	// or an alternative. Evidence above remains the compatible row-ID
 	// projection for existing consumers.
 	CausalEvidence []CausalEvidence `json:"causal_evidence,omitempty"`
+	Counterfactual *Counterfactual  `json:"counterfactual,omitempty"`
 	// Remediation is what to do about this finding, as data rather than prose
 	// to be parsed out of fix. Omitted when the conclusion has no advice
 	// beyond what the checks already say.
@@ -54,8 +55,20 @@ type CausalEvidence struct {
 	Kind        string `json:"kind"`
 	Check       string `json:"check"`
 	Observation string `json:"observation,omitempty"`
+	Value       string `json:"value,omitempty"`
 	Candidate   string `json:"candidate,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+type Counterfactual struct {
+	Variable     string                      `json:"variable"`
+	Alternatives []CounterfactualAlternative `json:"alternatives"`
+}
+
+type CounterfactualAlternative struct {
+	Value    string           `json:"value"`
+	Outcome  string           `json:"outcome"`
+	Evidence []CausalEvidence `json:"evidence"`
 }
 
 // Remediation is the structured next action for a finding: an additive object
@@ -111,7 +124,9 @@ type Portal struct {
 }
 
 type Attempt struct {
-	IP  string `json:"ip"`
-	Ms  int64  `json:"ms"` // same flooring as Check.Ms
-	Err string `json:"error,omitempty"`
+	IP      string `json:"ip"`
+	Ms      int64  `json:"ms"` // same flooring as Check.Ms
+	Err     string `json:"error,omitempty"`
+	Cause   string `json:"cause,omitempty"`
+	Aborted bool   `json:"aborted,omitempty"`
 }

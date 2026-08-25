@@ -472,7 +472,8 @@ func (m model) causalEvidenceLine(e diagnostic.CausalEvidence) string {
 
 func evidenceGlyph(observation diagnostic.ObservationID) string {
 	switch observation {
-	case diagnostic.ObservationStatusPass, diagnostic.ObservationDNSAnswers:
+	case diagnostic.ObservationStatusPass, diagnostic.ObservationDNSAnswers,
+		diagnostic.ObservationFamilyReachable, diagnostic.ObservationAddressSucceeded:
 		return "✓"
 	case diagnostic.ObservationStatusWarn, diagnostic.ObservationClockOffset:
 		return "!"
@@ -502,6 +503,9 @@ func (m model) observationLine(e diagnostic.CausalEvidence) string {
 		}
 		return name + " identified the failure"
 	case diagnostic.ObservationDNSAnswers:
+		if e.Value != "" {
+			return name + " returned " + e.Value
+		}
 		return name + " returned an address"
 	case diagnostic.ObservationDNSNotFound:
 		return name + " returned no A/AAAA records"
@@ -513,12 +517,30 @@ func (m model) observationLine(e diagnostic.CausalEvidence) string {
 		return name + " measured a material clock offset"
 	case diagnostic.ObservationStatusDowngraded:
 		return name + " failed before another working path reduced its severity"
+	case diagnostic.ObservationFamilyReachable:
+		return name + " reached the target over " + addressFamilyLabel(e.Value)
+	case diagnostic.ObservationFamilyFailed:
+		return name + " could not reach the target over " + addressFamilyLabel(e.Value)
+	case diagnostic.ObservationAddressSucceeded:
+		return name + " reached " + e.Value
+	case diagnostic.ObservationAddressFailed:
+		return name + " could not reach " + e.Value
 	case diagnostic.ObservationStatusSkip:
 		return name + " was skipped"
 	case diagnostic.ObservationStatusNA:
 		return name + " did not apply"
 	}
 	return name + " supplied evidence"
+}
+
+func addressFamilyLabel(value string) string {
+	switch value {
+	case "ipv4":
+		return "IPv4"
+	case "ipv6":
+		return "IPv6"
+	}
+	return value
 }
 
 func (m model) probeLabel(id diagnostic.ProbeID) string {
@@ -556,6 +578,12 @@ func diagnosisLabel(id diagnostic.DiagnosisID) string {
 		return "Destination unreachable"
 	case diagnostic.DiagnosisLocalEgressFailure:
 		return "This machine's general network path"
+	case diagnostic.DiagnosisIPv4TargetUnreachable:
+		return "IPv4 target connectivity"
+	case diagnostic.DiagnosisIPv6TargetUnreachable:
+		return "IPv6 target connectivity"
+	case diagnostic.DiagnosisPartialReachability:
+		return "Partial endpoint reachability"
 	case diagnostic.DiagnosisTLSClockSkew:
 		return "Wrong local clock"
 	case diagnostic.DiagnosisTLSTCPUnreachable:

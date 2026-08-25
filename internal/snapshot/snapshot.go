@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // Schema is the identity of the format this package reads and writes. It is
@@ -78,6 +79,10 @@ const (
 	ObservationTimeout          = "timeout"
 	ObservationClockOffset      = "clock_offset"
 	ObservationStatusDowngraded = "status_downgraded"
+	ObservationFamilyReachable  = "family_reachable"
+	ObservationFamilyFailed     = "family_failed"
+	ObservationAddressSucceeded = "address_succeeded"
+	ObservationAddressFailed    = "address_failed"
 
 	NotEvaluatedPrerequisite  = "prerequisite_failed"
 	NotEvaluatedNotSelected   = "not_selected"
@@ -229,8 +234,8 @@ type Observed struct {
 	// It is retained because it is often the thing that changed between two
 	// snapshots, and it is the field a future redaction pass will want first.
 	SSID string `json:"ssid,omitempty"`
-	// Families is direct egress tested per address family, each independently
-	// measured. An absent family was never dialed.
+	// Families is independently tested reachability per address family. An
+	// absent family was never dialed.
 	Families *Families `json:"address_families,omitempty"`
 	Portal   *Portal   `json:"portal,omitempty"`
 	Attempts []Attempt `json:"attempts,omitempty"`
@@ -248,7 +253,7 @@ type Observed struct {
 	InterfaceAmbiguous bool `json:"interface_ambiguous,omitempty"`
 }
 
-// Families is per address family direct-egress state, using the same
+// Families is per-address-family reachability, using the same
 // reachable/unreachable vocabulary as the JSON report.
 type Families struct {
 	IPv4 string `json:"ipv4,omitempty"`
@@ -267,6 +272,8 @@ type Attempt struct {
 	IP         string `json:"ip"`
 	DurationMs int64  `json:"duration_ms"`
 	Error      string `json:"error,omitempty"`
+	Cause      string `json:"cause,omitempty"`
+	Aborted    bool   `json:"aborted,omitempty"`
 }
 
 // Derived records that the cross-probe pass rewrote this row's outcome, which
@@ -308,6 +315,7 @@ type Finding struct {
 	// run. It is optional so pre-evidence v1 snapshots remain valid and load
 	// without inventing relationships they never recorded.
 	CausalEvidence []CausalEvidence `json:"causal_evidence,omitempty"`
+	Counterfactual *Counterfactual  `json:"counterfactual,omitempty"`
 }
 
 // CausalEvidence is one typed relationship to an observed check fact. The
@@ -317,8 +325,20 @@ type CausalEvidence struct {
 	Kind        string `json:"kind"`
 	Check       string `json:"check"`
 	Observation string `json:"observation,omitempty"`
+	Value       string `json:"value,omitempty"`
 	Candidate   string `json:"candidate,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+type Counterfactual struct {
+	Variable     string                      `json:"variable"`
+	Alternatives []CounterfactualAlternative `json:"alternatives"`
+}
+
+type CounterfactualAlternative struct {
+	Value    string           `json:"value"`
+	Outcome  string           `json:"outcome"`
+	Evidence []CausalEvidence `json:"evidence"`
 }
 
 // Encode renders a snapshot as the bytes of an .ndoc file: indented JSON with
@@ -378,6 +398,21 @@ func validate(s Snapshot) error {
 				return fmt.Errorf("snapshot finding %q: %w", finding.ID, err)
 			}
 		}
+		if finding.Counterfactual != nil {
+			if finding.Counterfactual.Variable == "" || len(finding.Counterfactual.Alternatives) < 2 {
+				return fmt.Errorf("snapshot finding %q has an incomplete counterfactual", finding.ID)
+			}
+			for _, alternative := range finding.Counterfactual.Alternatives {
+				if alternative.Value == "" || alternative.Outcome == "" || len(alternative.Evidence) == 0 {
+					return fmt.Errorf("snapshot finding %q has an incomplete counterfactual alternative", finding.ID)
+				}
+				for _, evidence := range alternative.Evidence {
+					if !seen[evidence] {
+						return fmt.Errorf("snapshot finding %q counterfactual references evidence not carried by the finding", finding.ID)
+					}
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -430,14 +465,14 @@ func validateCausalEvidence(e CausalEvidence, checks map[string]Check) error {
 	if !exists {
 		return fmt.Errorf("causal evidence references check %q, which is not in the snapshot", e.Check)
 	}
-	if !observationMatches(e.Observation, check) {
+	if !observationMatches(e, check) {
 		return fmt.Errorf("causal evidence references %s on check %q, but that observation is absent", e.Observation, e.Check)
 	}
 	return nil
 }
 
-func observationMatches(observation string, check Check) bool {
-	switch observation {
+func observationMatches(e CausalEvidence, check Check) bool {
+	switch e.Observation {
 	case ObservationStatusPass:
 		return check.Status == StatusPass
 	case ObservationStatusWarn:
@@ -451,7 +486,8 @@ func observationMatches(observation string, check Check) bool {
 	case ObservationCause:
 		return check.Cause != ""
 	case ObservationDNSAnswers:
-		return check.Observed != nil && len(check.Observed.Addresses) > 0
+		return check.Observed != nil && len(check.Observed.Addresses) > 0 &&
+			(e.Value == "" || slices.Contains(check.Observed.Addresses, e.Value))
 	case ObservationDNSNotFound:
 		return check.Observed != nil && check.Observed.DNSNotFound
 	case ObservationCaptivePortal:
@@ -462,8 +498,33 @@ func observationMatches(observation string, check Check) bool {
 		return check.Observed != nil && check.Observed.ClockOffsetMs != nil
 	case ObservationStatusDowngraded:
 		return check.Derived != nil && check.Derived.StatusDowngraded
+	case ObservationFamilyReachable:
+		return familyObservation(check, e.Value) == "reachable"
+	case ObservationFamilyFailed:
+		return familyObservation(check, e.Value) == "unreachable"
+	case ObservationAddressSucceeded:
+		return check.Observed != nil && slices.ContainsFunc(check.Observed.Attempts, func(a Attempt) bool {
+			return a.IP == e.Value && a.Error == ""
+		})
+	case ObservationAddressFailed:
+		return check.Observed != nil && slices.ContainsFunc(check.Observed.Attempts, func(a Attempt) bool {
+			return a.IP == e.Value && a.Error != "" && !a.Aborted && a.Cause != "" && a.Cause != "canceled"
+		})
 	}
 	return false
+}
+
+func familyObservation(check Check, family string) string {
+	if check.Observed == nil || check.Observed.Families == nil {
+		return ""
+	}
+	if family == "ipv4" {
+		return check.Observed.Families.IPv4
+	}
+	if family == "ipv6" {
+		return check.Observed.Families.IPv6
+	}
+	return ""
 }
 
 // Decode reads an .ndoc file. It refuses anything that is not this schema

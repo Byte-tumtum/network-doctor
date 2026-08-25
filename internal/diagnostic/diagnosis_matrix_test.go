@@ -11,6 +11,7 @@
 package diagnostic
 
 import (
+	"errors"
 	"go/ast"
 	"go/token"
 	"net"
@@ -50,6 +51,7 @@ func diagnosisMatrix() []matrixCase {
 	local := &Target{Host: "192.168.1.10", IP: net.ParseIP("192.168.1.10"), Port: 9100, Proto: ProtoNone}
 	httpOnly := &Target{Host: "example.com", Port: 80, Proto: ProtoHTTP}
 	ssh := &Target{Host: "example.com", Port: 22, Proto: ProtoSSH}
+	tcp := &Target{Host: "example.com", Port: 443, Proto: ProtoNone}
 
 	webOrder := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP, ProbePMTU, ProbeTLS, ProbeHTTP, ProbeHTTPS}
 	webHealthy := func() map[ProbeID]ProbeResult {
@@ -306,6 +308,50 @@ func diagnosisMatrix() []matrixCase {
 			summary: "example.com has no A/AAAA records according to either system or public DNS. (The general internet is reachable.)",
 			verdict: VerdictDNS, focus: ProbeDNS,
 			id: "dns_name_not_found", evidence: []ProbeID{ProbeDNS, ProbeDNSPublic, ProbeInternet},
+		},
+		{
+			name: "target reachable over IPv4 only", target: tcp,
+			order: []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
+			res: map[ProbeID]ProbeResult{
+				ProbeIface:    ok(StatusPass),
+				ProbeInternet: {Status: StatusPass, Families: &FamilyConnectivity{IPv4: FamilyReachable, IPv6: FamilyReachable}},
+				ProbeDNS:      {Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")}},
+				ProbeTargetTCP: {Status: StatusWarn, SelectedIP: net.ParseIP("192.0.2.1"),
+					Families: &FamilyConnectivity{IPv4: FamilyReachable, IPv6: FamilyUnreachable}},
+			},
+			summary: "IPv6 connectivity to example.com is failing, but IPv4 works.",
+			verdict: VerdictDegraded, focus: ProbeTargetTCP,
+			id: "ipv6_target_unreachable", evidence: []ProbeID{ProbeTargetTCP, ProbeInternet},
+		},
+		{
+			name: "target reachable over IPv6 only", target: tcp,
+			order: []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
+			res: map[ProbeID]ProbeResult{
+				ProbeIface:    ok(StatusPass),
+				ProbeInternet: {Status: StatusPass, Families: &FamilyConnectivity{IPv4: FamilyReachable, IPv6: FamilyReachable}},
+				ProbeDNS:      {Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")}},
+				ProbeTargetTCP: {Status: StatusWarn, SelectedIP: net.ParseIP("2001:db8::1"),
+					Families: &FamilyConnectivity{IPv4: FamilyUnreachable, IPv6: FamilyReachable}},
+			},
+			summary: "IPv4 connectivity to example.com is failing, but IPv6 works.",
+			verdict: VerdictDegraded, focus: ProbeTargetTCP,
+			id: "ipv4_target_unreachable", evidence: []ProbeID{ProbeTargetTCP, ProbeInternet},
+		},
+		{
+			name: "one target address fails before another succeeds", target: tcp,
+			order: []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: ok(StatusPass), ProbeInternet: ok(StatusPass),
+				ProbeDNS: {Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")}},
+				ProbeTargetTCP: {Status: StatusWarn, SelectedIP: net.ParseIP("192.0.2.2"),
+					Families: &FamilyConnectivity{IPv4: FamilyReachable}, Attempts: []Attempt{
+						{IP: net.ParseIP("192.0.2.1"), Err: errors.New("unreachable"), Cause: ConnectionCauseUnreachable},
+						{IP: net.ParseIP("192.0.2.2")},
+					}},
+			},
+			summary: "A connection to one address for example.com fails, but another succeeds.",
+			verdict: VerdictDegraded, focus: ProbeTargetTCP,
+			id: "partial_endpoint_reachability", evidence: []ProbeID{ProbeTargetTCP, ProbeDNS},
 		},
 		{
 			name: "local device refuses the port", target: local,

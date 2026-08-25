@@ -98,8 +98,22 @@ func BuildSnapshot(t *Target, probes []Probe, results map[ProbeID]ProbeResult) s
 		for _, e := range f.Evidence {
 			finding.CausalEvidence = append(finding.CausalEvidence, snapshot.CausalEvidence{
 				Kind: string(e.Kind), Check: string(e.Check), Observation: string(e.Observation),
-				Candidate: string(e.Candidate), Reason: string(e.Reason),
+				Value: e.Value, Candidate: string(e.Candidate), Reason: string(e.Reason),
 			})
+		}
+		if f.Counterfactual != nil {
+			cf := &snapshot.Counterfactual{Variable: string(f.Counterfactual.Variable)}
+			for _, alternative := range f.Counterfactual.Alternatives {
+				item := snapshot.CounterfactualAlternative{Value: alternative.Value, Outcome: string(alternative.Outcome)}
+				for _, e := range alternative.Evidence {
+					item.Evidence = append(item.Evidence, snapshot.CausalEvidence{
+						Kind: string(e.Kind), Check: string(e.Check), Observation: string(e.Observation),
+						Value: e.Value, Candidate: string(e.Candidate), Reason: string(e.Reason),
+					})
+				}
+				cf.Alternatives = append(cf.Alternatives, item)
+			}
+			finding.Counterfactual = cf
 		}
 		s.Diagnosis.Findings = append(s.Diagnosis.Findings, finding)
 	}
@@ -135,7 +149,7 @@ func observedFrom(r ProbeResult) *snapshot.Observed {
 		o.Portal = &snapshot.Portal{RedirectURL: r.Portal.RedirectURL}
 	}
 	for _, a := range r.Attempts {
-		attempt := snapshot.Attempt{IP: a.IP.String(), DurationMs: Ms(a.Dur)}
+		attempt := snapshot.Attempt{IP: a.IP.String(), DurationMs: Ms(a.Dur), Cause: a.Cause, Aborted: a.Aborted}
 		if a.Err != nil {
 			attempt.Error = a.Err.Error()
 		}

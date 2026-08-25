@@ -114,6 +114,24 @@ func TestPerAddressAttemptsAreDetailsOnly(t *testing.T) {
 	}
 }
 
+func TestCounterfactualEvidenceUsesTheExistingWhyView(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	m.results[diagnostic.ProbeTargetTCP] = diagnostic.ProbeResult{}
+	for _, tt := range []struct {
+		evidence diagnostic.CausalEvidence
+		want     string
+	}{
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationFamilyFailed, Value: "ipv6"}, "could not reach the target over IPv6"},
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationAddressSucceeded, Value: "192.0.2.2"}, "reached 192.0.2.2"},
+	} {
+		if got := m.causalEvidenceLine(tt.evidence); !strings.Contains(got, tt.want) {
+			t.Errorf("line = %q, want %q", got, tt.want)
+		}
+	}
+}
+
 // watchHistoryModel is a finished watch pass with runs recorded ticks long for
 // the failing DNS row, which is also the row the cursor is on.
 func watchHistoryModel(t *testing.T, ticks int) model {

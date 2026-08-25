@@ -474,12 +474,15 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 }
 ```
 
-`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`; it is not inferred from a hostname dial that may fall back. Under `--iface` or an explicit source address, a family the selected source has no address for is never dialed and its key is omitted, meaning untested rather than unreachable; a selection leaving no usable family at all reports the whole row as `N/A`, as the QUIC and encrypted-DNS rows already do. A configured family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed QUIC, encrypted-DNS, proxy, and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; QUIC uses `timeout` or `quic_handshake_failure`, encrypted DNS uses `timeout` or `encrypted_dns_unavailable`, while TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. Failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`, read from the local routing and neighbor tables on Linux, macOS, and Windows. macOS route entries carry no preference metric, so `preferred_route_failed` comes only from Linux and Windows, and `gateway_unreachable` needs a neighbor cache entry that exists and shows the next hop unresolved, so an unseen next hop leaves the weaker `selected_path_failed` rather than a guess. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable, so they are safe to script against. Exit codes follow the table in [README.md](../README.md#exit-codes) (`ok: false` ⇒ exit `1`).
+`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`. `target_tcp.address_families` records the same states for a dual-stack target after comparison with the host's independent family paths. Under `--iface` or an explicit source address, a family the selected source has no address for is never dialed and its key is omitted, meaning untested rather than unreachable. A target family is also omitted when the target publishes it but the host did not prove a usable local path for it. A selection leaving no usable family at all reports the whole egress row as `N/A`, as the QUIC and encrypted-DNS rows already do. A configured egress family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed QUIC, encrypted-DNS, proxy, and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; QUIC uses `timeout` or `quic_handshake_failure`, encrypted DNS uses `timeout` or `encrypted_dns_unavailable`, while TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. Failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`, read from the local routing and neighbor tables on Linux, macOS, and Windows. macOS route entries carry no preference metric, so `preferred_route_failed` comes only from Linux and Windows, and `gateway_unreachable` needs a neighbor cache entry that exists and shows the next hop unresolved, so an unseen next hop leaves the weaker `selected_path_failed` rather than a guess. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable, so they are safe to script against. Exit codes follow the table in [README.md](../README.md#exit-codes) (`ok: false` ⇒ exit `1`).
 
 Resolver failures can add `dns_timeout` or `dns_temporary_failure`; a target TCP
 check whose every attempted address explicitly refuses the connection adds
 `connection_refused`; a peer that accepted TCP before resetting adds
-`connection_reset`. These are optional additions to the existing check objects.
+`connection_reset`. Each target attempt can add the same stable connection
+`cause`. `aborted: true` means cancellation or the enclosing probe deadline
+ended that attempt, so it is not evidence that the individual address failed.
+These are optional additions to the existing check objects.
 
 `fix` is the one-line remedy netdoc prints as that row's `Fix:` line, on a Warn row as well as a failed one, and is omitted where there is nothing useful to suggest. Some hints name the thing to change by whatever the host OS calls it. A name-resolution failure directs Linux users to `/etc/resolv.conf` and DNS settings, while macOS points at System Settings and Windows at `ipconfig /all`. Others, such as the certificate and routing hints, carry no OS-specific wording at all.
 
@@ -538,7 +541,7 @@ Every run is interpreted once, and that one interpretation produces the summary,
 ]
 ```
 
-`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `evidence` remains the original compatibility list of observed check IDs, `focus` first. `causal_evidence` is its typed form and may also name a relevant check that was not evaluated. `remediation` is what to do about the finding, described below.
+`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `evidence` remains the original compatibility list of observed check IDs, `focus` first. `causal_evidence` is its typed form and may also name a relevant check that was not evaluated. A `value` identifies a member of a structured observation, such as `ipv6` or one attempted address. `counterfactual` names the variable that changed and the observed alternatives, each of which references causal evidence already carried by the finding. `remediation` is what to do about the finding, described below.
 
 Each causal item has a `kind`, a check ID in `check`, and, when an observation
 exists, its typed identity in `observation`. The value itself remains on the
@@ -554,8 +557,9 @@ for a diagnosis.
 
 The observation vocabulary is `status_pass`, `status_warn`, `status_fail`,
 `status_skip`, `status_not_applicable`, `cause`, `dns_answers`,
-`dns_not_found`, `captive_portal`, `timeout`, `clock_offset`, and
-`status_downgraded`. Not-evaluated reasons are `prerequisite_failed`,
+`dns_not_found`, `captive_portal`, `timeout`, `clock_offset`,
+`status_downgraded`, `family_reachable`, `family_failed`,
+`address_succeeded`, and `address_failed`. Not-evaluated reasons are `prerequisite_failed`,
 `not_selected`, `not_applicable`, and `incomplete`. A skipped, not-applicable,
 missing, or incomplete check is never enough to rule out a cause. An absent
 `causal_evidence` field means this producer did not record an explanation; it
@@ -567,7 +571,7 @@ reasons afterwards. The ordered array is deterministic, rejects duplicates in
 snapshots, and keeps every relationship tied to the check observation that
 actually occurred.
 
-The array is omitted when the run reached no specific conclusion: everything passed, the run is still going, nothing was selected, or the only impairment is on a row no diagnosis is about. Those runs answer with `summary` and `verdict` alone rather than being given an identity the probes did not support. Today a run reports at most one finding, the most specific one it reaches; the field is an array because that is the shape a run with several independent conclusions needs, and consumers should read it as one.
+The array is omitted when the run reached no specific conclusion: everything passed, the run is still going, nothing was selected, or the only impairment is on a row no diagnosis is about. Those runs answer with `summary` and `verdict` alone rather than being given an identity the probes did not support. The primary finding remains first and supplies the headline. Additional counterfactual findings can preserve a separate partial impairment proved by the same run.
 
 | `id` | What netdoc concluded |
 |---|---|
@@ -590,6 +594,9 @@ The array is omitted when the run reached no specific conclusion: everything pas
 | `target_unreachable` | The target does not answer though DNS and the internet work |
 | `local_device_unreachable` | A device on the local network is silent while this machine's network works |
 | `reachability_untested` | The target is silent and direct egress was not checked, so neither end can be blamed |
+| `ipv4_target_unreachable` | The target works over IPv6 while its IPv4 alternatives fail despite an independently proved IPv4 path |
+| `ipv6_target_unreachable` | The target works over IPv4 while its IPv6 alternatives fail despite an independently proved IPv6 path |
+| `partial_endpoint_reachability` | An attempted resolved address fails while another address for the same target and port succeeds |
 | `tls_certificate_expired` | The certificate is outside its validity window |
 | `tls_certificate_not_yet_valid` | The certificate's start date has not arrived |
 | `tls_hostname_mismatch` | The certificate is for a different name |
@@ -736,14 +743,17 @@ An `INCOMPLETE` row is never a pass, and a run holding one is never `"ok": true`
 
 Within a check, `observed` is what the probe measured and `derived` is what the cross-probe reasoning pass did to that row afterwards. Only `status_downgraded` lives under `derived` today: it marks an observed egress failure that was relaxed to a Warn because another path proved the network still carries traffic. Its presence is the signal that the row's status is a conclusion rather than a reading. `cause`, `verdict`, and the finding IDs use exactly the vocabularies documented for [JSON output](#json-output) and [diagnosis findings](#diagnosis-findings).
 
-Findings also persist their optional `causal_evidence` array. It records the
-interpretation made during the incident rather than asking a future Network
-Doctor version to reinterpret old observations. This is an additive v1 field,
-so existing `.ndoc` files remain loadable and the schema stays
-`netdoc.snapshot.v1`. Loading an older file without the field leaves it absent;
-the decoder never invents historical relationships. New files validate that
-every observed relationship points to a matching check fact, that
-not-evaluated reasons match the check state, and that no item is duplicated.
+Findings also persist their optional `causal_evidence` and `counterfactual`
+fields. They record the interpretation made during the incident rather than
+asking a future Network Doctor version to reinterpret old observations.
+Attempt `cause` and `aborted` fields retain whether an address supplied usable
+failure evidence. These are additive v1 fields, so existing `.ndoc` files remain
+loadable and the schema stays `netdoc.snapshot.v1`. Loading an older file
+without the fields leaves them absent; the decoder never invents historical
+relationships. New files validate that every observed relationship points to a
+matching check fact, that counterfactual alternatives reference evidence the
+finding carries, that not-evaluated reasons match the check state, and that no
+item is duplicated.
 
 Remediation text is deliberately not stored. Fix advice lives on the check rows as `fix`, and the structured next action is regenerable from a finding's `id` together with `tool.os`, so a snapshot does not carry a second copy to fall out of step.
 
@@ -789,7 +799,7 @@ The comparison is semantic, not a JSON diff. Every field it reads is named in th
 | Diagnosis | `ok`, `verdict`, `blamed`, `failed_stage`, the findings as a **set** keyed by `id`, the first finding as the primary conclusion, and each finding's ordered `evidence` and `causal_evidence` |
 | Checks | membership, `status`, `cause`, `ran`, and `deps` in order |
 | Reasoning | `derived.status_downgraded`, so an inferred outcome and a measured one are not read as the same state |
-| Evidence | everything under `observed`: resolved addresses and connection attempts as **sets**, and the selected address, source address, interface, SSID, resolver, per-family egress, captive-portal state, and timeout flags as values |
+| Evidence | everything under `observed`: resolved addresses and connection attempts as **sets**, and the selected address, source address, interface, SSID, resolver, per-family reachability, captive-portal state, and timeout flags as values |
 
 Absence is never collapsed into a zero. `SKIP`, `N/A`, and `INCOMPLETE` stay three different things that happened to a row. A resolver that answered with no records is not the same as one that did not answer. A captive portal that advertised no sign-in URL is not the same as no portal, so interception is its own field rather than something inferred from an empty URL. A second opinion switched off with `--public-dns ""` is reported as a removal, not as a change to nothing.
 

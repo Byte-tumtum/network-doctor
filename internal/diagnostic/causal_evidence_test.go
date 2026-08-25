@@ -169,7 +169,9 @@ func assertEvidenceObservation(t *testing.T, selected DiagnosisID, evidence Caus
 	case ObservationCause:
 		observed = r.Cause != ""
 	case ObservationDNSAnswers:
-		observed = len(r.Addrs) > 0
+		observed = len(r.Addrs) > 0 && (evidence.Value == "" || slices.ContainsFunc(r.Addrs, func(ip net.IP) bool {
+			return ip.String() == evidence.Value
+		}))
 	case ObservationDNSNotFound:
 		observed = r.DNSNotFound
 	case ObservationCaptivePortal:
@@ -180,6 +182,20 @@ func assertEvidenceObservation(t *testing.T, selected DiagnosisID, evidence Caus
 		observed = r.clockOffset.Abs() >= 5*time.Minute
 	case ObservationStatusDowngraded:
 		observed = r.downgraded
+	case ObservationFamilyReachable:
+		observed = r.Families != nil && (evidence.Value == "ipv4" && r.Families.IPv4 == FamilyReachable ||
+			evidence.Value == "ipv6" && r.Families.IPv6 == FamilyReachable)
+	case ObservationFamilyFailed:
+		observed = r.Families != nil && (evidence.Value == "ipv4" && r.Families.IPv4 == FamilyUnreachable ||
+			evidence.Value == "ipv6" && r.Families.IPv6 == FamilyUnreachable)
+	case ObservationAddressSucceeded:
+		for _, attempt := range r.Attempts {
+			observed = observed || attempt.IP.String() == evidence.Value && attempt.Err == nil
+		}
+	case ObservationAddressFailed:
+		for _, attempt := range r.Attempts {
+			observed = observed || attempt.IP.String() == evidence.Value && attempt.Err != nil && !isCanceledAttempt(attempt)
+		}
 	}
 	if !observed {
 		t.Errorf("evidence references an observation that did not occur: %+v from %+v", evidence, r)
