@@ -37,8 +37,18 @@ jobs:
       - run: go build ./...
         env:
           CGO_ENABLED: "0"
-      - run: go test ./...
-      - run: go test -tags integration ./internal/diagnostic ./internal/simulation
+      - if: runner.os != 'Linux'
+        run: go test ./...
+      - if: runner.os == 'Linux'
+        name: Run tests with coverage
+        run: |
+          mkdir -p coverage
+          go test -covermode=set -coverprofile=coverage/unit.out ./...
+      - if: runner.os != 'Linux'
+        run: go test -tags integration ./internal/diagnostic ./internal/simulation
+      - if: runner.os == 'Linux'
+        name: Run loopback integration tests with coverage
+        run: go test -covermode=set -coverprofile=coverage/integration.out -tags integration ./internal/diagnostic ./internal/simulation
       # The job runner does concurrent subprocess cancellation; gate it.
       - if: runner.os == 'Linux'
         run: go test -race ./...
@@ -77,7 +87,7 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - if: runner.os == 'Linux'
         name: Run namespace integration tests
-        run: go test -tags netns_integration -count=1 -skip '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
+        run: go test -covermode=set -coverprofile=coverage/netns.out -tags netns_integration -count=1 -skip '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
         env:
           NETDOC_SIM_REQUIRE_NETNS: "1"
       # Keep one small fixed-seed stress Hunt regression separate from the
@@ -85,9 +95,21 @@ jobs:
       # that its known generated path-MTU fault still reaches the intended probe.
       - if: runner.os == 'Linux'
         name: Run fixed-seed stress Hunt regression
-        run: go test -tags netns_integration -count=1 -run '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
+        run: go test -covermode=set -coverprofile=coverage/netns-stress.out -tags netns_integration -count=1 -run '^TestGeneratedStressHuntPMTUBlackholeCaseReachesThePathMTUProbe$' ./internal/simulation
         env:
           NETDOC_SIM_REQUIRE_NETNS: "1"
+      - if: runner.os == 'Linux'
+        name: Merge coverage
+        run: |
+          go run ./cmd/covermerge -o coverage.out coverage/unit.out coverage/integration.out coverage/netns.out coverage/netns-stress.out
+          go tool cover -func=coverage.out
+      - if: runner.os == 'Linux'
+        name: Upload merged coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-coverage
+          path: coverage.out
+          if-no-files-found: error
   # The container is how macOS and Windows reach Challenge Mode, so the artifact
   # is tested rather than assumed: this job builds the image and runs a real
   # namespace-backed simulation and a real challenge inside it. The runner's

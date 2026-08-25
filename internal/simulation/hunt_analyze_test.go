@@ -848,6 +848,34 @@ func TestObservedTruthRequiresAnActualTCPReset(t *testing.T) {
 	}
 }
 
+func TestHuntAnalysisReportsAnUnclassifiedTCPReset(t *testing.T) {
+	for _, tc := range []struct {
+		name, checkID, cause, wantProbe string
+		wantFinding                     bool
+	}{
+		{name: "classified reset", checkID: "http", cause: "connection_reset"},
+		{name: "protocol probe", checkID: "http", wantProbe: "http", wantFinding: true},
+		{name: "generic TCP probe", checkID: "internet_tcp", wantProbe: "target_tcp", wantFinding: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := &Report{Cleanup: CleanupInfo{Done: true}, Tests: []TestOutcome{{
+				ProcessOutcome: ProcessExited,
+				Diagnosis:      &Diagnosis{Checks: []DiagnosisCheck{{ID: tc.checkID, Cause: tc.cause}}},
+			}}}
+			findings := analyzeHuntCase(huntManifest(), report, ObservedTruth{TCP: "reset"})
+			if !tc.wantFinding {
+				if len(findings) != 0 {
+					t.Fatalf("classified reset findings = %+v", findings)
+				}
+				return
+			}
+			if len(findings) != 1 || findings[0].Code != "tcp_reset_not_distinguished" || findings[0].Probe != tc.wantProbe {
+				t.Fatalf("findings = %+v, want reset gap for %s", findings, tc.wantProbe)
+			}
+		})
+	}
+}
+
 func TestObservedTruthTLSUsesHandshakeResultVocabulary(t *testing.T) {
 	passed := []TLSEvidence{{Result: tlsHandshakeResult(nil, true)}}
 	if truth := collectObservedTruth(huntManifest(), &Report{Evidence: Evidence{TLS: passed}}); truth.TLS != "observed" {

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -1295,6 +1297,56 @@ func TestRunChallengeOrderAndNetdocArguments(t *testing.T) {
 		if strings.Contains(strings.ToUpper(kv), "CHALLENGE") {
 			t.Fatalf("netdoc's environment carries %q", kv)
 		}
+	}
+}
+
+type interactiveFakeEnv struct {
+	*fakeEnv
+	argv []string
+	env  []string
+}
+
+func (e *interactiveFakeEnv) ExecInteractive(_ context.Context, _ string, argv, env []string,
+	_ io.Reader, _, _ io.Writer) error {
+	e.argv = slices.Clone(argv)
+	e.env = slices.Clone(env)
+	return nil
+}
+
+func TestChallengeSessionShell(t *testing.T) {
+	challenge := challengeWithMutation(t, "service.tcp_reset")
+	unsupported := &ChallengeSession{Challenge: challenge, env: &fakeEnv{}}
+	if unsupported.ShellAvailable() {
+		t.Fatal("fake backend unexpectedly offers a shell")
+	}
+	if err := unsupported.Shell(context.Background(), nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("shell opened on a backend without interactive execution")
+	}
+
+	shell := filepath.Join(t.TempDir(), "player-shell")
+	t.Setenv("SHELL", shell)
+	env := &interactiveFakeEnv{fakeEnv: &fakeEnv{}}
+	session := &ChallengeSession{Challenge: challenge, env: env, shellEnv: []string{"SSL_CERT_FILE=/sim/ca.pem"}}
+	if !session.ShellAvailable() {
+		t.Fatal("interactive backend does not offer a shell")
+	}
+	if err := session.Shell(context.Background(), nil, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(env.argv, []string{shell, "-i"}) {
+		t.Errorf("shell argv = %q", env.argv)
+	}
+	wantEnv := []string{"NETDOC_CHALLENGE=" + challenge.ID,
+		"NETDOC_CHALLENGE_TARGET=" + challenge.Target,
+		"NETDOC_CHALLENGE_HOST=" + challengeTargetHost(challenge.Target),
+		"SSL_CERT_FILE=/sim/ca.pem"}
+	if !slices.Equal(env.env, wantEnv) {
+		t.Errorf("shell env = %q, want %q", env.env, wantEnv)
+	}
+
+	t.Setenv("SHELL", "relative-shell")
+	if got := loginShell(); got != "/bin/sh" {
+		t.Errorf("relative login shell = %q, want /bin/sh", got)
 	}
 }
 

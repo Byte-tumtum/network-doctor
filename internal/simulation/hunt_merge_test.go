@@ -221,6 +221,20 @@ func TestMergeHuntResultsPropagatesShardRuntimeFailure(t *testing.T) {
 	}
 }
 
+func TestMergeHuntResultsDoesNotHideAnErrorBehindCancellation(t *testing.T) {
+	shards := dryHuntShards(t, 4, 2)
+	shards[0].Result, shards[0].Cancelled = HuntResultCancelled, true
+	shards[1].Result, shards[1].RuntimeFailure = HuntResultError, true
+	shards[1].ErrorKind, shards[1].Error = "runtime", "netdoc failed"
+	merged, err := MergeHuntResults(shards...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Result != HuntResultError || !merged.Cancelled || !merged.RuntimeFailure {
+		t.Fatalf("merged failure = %+v", merged)
+	}
+}
+
 func TestMergeHuntResultsIsDeterministicAcrossInputOrder(t *testing.T) {
 	shards := dryHuntShards(t, 11, 4)
 	forward, err := MergeHuntResults(shards...)
