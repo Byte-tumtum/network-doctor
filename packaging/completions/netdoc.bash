@@ -15,7 +15,7 @@ _netdoc() {
             COMPREPLY=($(compgen -W "$(command ls /sys/class/net 2>/dev/null)" -- "$cur"))
             return
             ;;
-        -timeout | --timeout | -check | --check | -skip | --skip)
+        -timeout | --timeout | -check | --check | -skip | --skip | -peer-listen | --peer-listen)
             # These values have nothing useful to enumerate.
             return
             ;;
@@ -37,6 +37,8 @@ _netdoc() {
             -toolbox --toolbox
             -json --json
             -watch --watch
+            -peer-listen --peer-listen
+            -peer-connect --peer-connect
             -check --check
             -skip --skip
             -iface --iface

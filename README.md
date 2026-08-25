@@ -38,6 +38,8 @@ netdoc github.com       # DNS → TCP → TLS → HTTP diagnosis
 netdoc github.com:22    # SSH path and banner diagnosis
 netdoc --watch host     # catch intermittent failures
 netdoc --json host      # structured report for scripts or bug reports
+netdoc --peer-listen 192.168.1.20:4242  # offer one direct, authenticated peer session
+netdoc --peer-connect   # paste the temporary pairing string at the hidden prompt
 ```
 
 Run `netdoc` with no target to check the local interface, internet egress,
@@ -219,6 +221,8 @@ netdoc --skip internet_tcp,quic_udp_443 example.com  # omit these probe branches
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
 netdoc --no-history host          # don't read or save the target history file
+netdoc --peer-listen 192.168.1.20:4242  # wait for one directly reachable peer
+netdoc --peer-connect             # paste its temporary pairing string when prompted
 ```
 
 `--timeout` overrides the per-check probe timeout. `--check`/`--skip` select probes by stable ID plus their dependency closure; `--iface` and address-only binding follow probe traffic through the drill-down tools too. Full flag semantics, the target-parsing rules, and the history file are in **[docs/reference.md](docs/reference.md#usage-details)**.
@@ -311,14 +315,52 @@ The typed password never reaches argv or shell history; it's handed to `ssh` thr
 
 Field names and the status vocabulary are stable, so they are safe to script against. The full field reference (`cause` values, `address_families`, `failed_stage`, `--json --watch` NDJSON) is in **[docs/reference.md](docs/reference.md#json-output)**.
 
+### Two-ended peer diagnosis
+
+Peer mode compares independently observed traffic in both directions instead
+of running the ordinary report twice. On the machine that can accept a direct
+connection, bind an exact local address:
+
+```sh
+netdoc --peer-listen 192.168.1.20:4242
+```
+
+Paste the printed temporary pairing string into the prompt on the other
+machine:
+
+```sh
+netdoc --peer-connect
+```
+
+Repeat `--peer-listen` once with an IPv6 address to test both families. Add
+`--json` on either side for the separate `netdoc.peer.v1` schema; the ordinary
+JSON report is unchanged.
+
+Each session uses a fresh pinned TLS 1.3 certificate and 256-bit token. The
+pairing string is secret and expires after five minutes, so the connector reads
+it from a hidden prompt instead of argv or target history. Reports never contain
+the token or certificate pin. The peers exchange their host names, temporary
+listener addresses, actual socket endpoints, timing, and TCP/TLS/small-payload
+outcomes, then derive one conservative combined diagnosis.
+
+There is no relay, rendezvous, account, automatic port forwarding, or NAT
+traversal. At least one advertised listener address must be directly reachable.
+A directional failure is evidence about the failing path, but does not by
+itself prove firewall, NAT, or routing as the cause. Peer mode does not send a
+large payload and makes no MTU claim. See the full security, privacy, protocol,
+diagnosis, timeout, and JSON contract in
+**[docs/reference.md](docs/reference.md#peer-diagnosis)**.
+
 ### Exit codes
 
 | Situation | Exit |
 |---|---|
 | Chain completed, no failed row (Skips allowed) | `0` |
+| Peer tests completed with authenticated traffic passing both ways | `0` |
 | Any failed row | `1` |
+| Peer diagnostic failed, stayed incomplete, or the session errored | `1` |
 | Quit before the chain finished | `1` |
-| Bad arguments, validation reject, or no terminal for the TUI | `2` |
+| Bad arguments, pairing-input reject, validation reject, or no terminal for the TUI | `2` |
 
 ```sh
 netdoc github.com || echo "path to github is broken"
@@ -345,7 +387,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
 
 ## Built with
 
@@ -376,14 +418,15 @@ Before submitting a change, run the complete CI gate. Every tool runs through `g
 go vet ./...
 CGO_ENABLED=0 go build ./...
 go test ./...
-go test -tags integration ./internal/diagnostic ./internal/simulation
+go test -tags integration ./internal/diagnostic ./internal/peer ./internal/simulation
 go test -tags acceptance -run '^TestNative' . ./internal/ui
 go test -tags netns_integration -count=1 -v ./internal/simulation
 go test -race ./...
-go test -race -tags integration ./internal/diagnostic ./internal/simulation
+go test -race -tags integration ./internal/diagnostic ./internal/peer ./internal/simulation
 go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe
 go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic
 go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic
+go test -fuzz=FuzzDecodeMessage -fuzztime=10s ./internal/peer
 go test -fuzz=FuzzGenerateHuntCase -fuzztime=10s ./internal/simulation
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1 run ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

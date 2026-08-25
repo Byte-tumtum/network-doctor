@@ -86,6 +86,288 @@ The target parser has two independent axes: **port** (explicit `:port` > scheme 
 
 The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. `--no-history` turns that off for one run: the file is neither read nor written, so the targets you type stay in that session only. It leaves an existing file untouched, so exit `netdoc` and delete it to clear what is already saved.
 
+## Peer diagnosis
+
+Peer mode is a separate, headless two-ended diagnosis. It does not run the
+ordinary target DAG twice or concatenate two reports. One authenticated control
+connection coordinates independent TCP, TLS, and application-payload attempts
+in both directions, exchanges those observations as data, and runs one combined
+truth table on each machine.
+
+### Pairing workflow
+
+The listening machine binds one exact local unicast address. Port zero asks the
+kernel to select a temporary port:
+
+```sh
+netdoc --peer-listen 192.168.1.20:0
+```
+
+To offer both families, repeat the flag once:
+
+```sh
+netdoc \
+  --peer-listen 192.168.1.20:4242 \
+  --peer-listen '[2001:db8:1234::20]:4242'
+```
+
+The listener prints each direct endpoint and one `ndp1.` pairing string. On the
+other machine, run:
+
+```sh
+netdoc --peer-connect
+```
+
+Paste the string at the `Temporary pairing string:` prompt. On a terminal the
+prompt disables echo. The credential is read from standard input, never argv,
+the target history, a file, or an environment variable. A script may pipe one
+line to the prompt, but then owns the security of that pipe.
+
+`--iface` may accompany `--peer-connect`; it supplies the connector's source
+address and reverse listener address for each available family. The listening
+form already names exact bind addresses, so combining `--iface` with
+`--peer-listen` is rejected. Peer mode cannot be combined with a target,
+`--watch`, `--toolbox`, `--check`, `--skip`, `--public-dns`, `--no-history`, or
+`--keys`. It does not enter the TUI.
+
+The listener waits at most five minutes for one authenticated control session.
+After connection, the complete exchange is bounded to one minute. `--timeout`
+sets each dial, TLS handshake, read, and write budget as it does for an ordinary
+probe, but peer mode caps it at 30 seconds. Ctrl+C and SIGTERM cancel pending
+accepts, dials, handshakes, reads, and writes and close all listeners and
+connections.
+
+### Authentication and encryption
+
+Every listening run generates, with `crypto/rand`:
+
+- a fresh Ed25519 self-signed server certificate,
+- a fresh 256-bit session token,
+- fresh request nonces and fixed-payload challenges.
+
+The pairing string contains protocol version 1, its expiration, at most one
+IPv4 and one IPv6 direct endpoint, the certificate's SHA-256 pin, and the token.
+It uses only URL-safe printable characters and is easy to paste, but it is a
+secret until the session ends. Do not post it in a ticket or chat archive.
+
+TLS 1.3 encrypts every control and probe connection. The connector accepts only
+the exact pinned certificate, and the listener compares the decoded token in
+constant time before accepting a control or probe request. Each authenticated
+request needs a fresh 128-bit nonce; repeats are rejected. One listener accepts
+one control connection and no more than eight total connections, then closes
+and discards the certificate, token, and nonce set. A wrong token does not
+consume the one valid session, though repeated bad connections eventually hit
+the connection cap and end it. A stopped or expired listener makes an old
+pairing string useless.
+
+The token and certificate pin never appear in the peer result, ordinary report,
+or returned error. Listener readiness and the pairing string go to stderr in
+both output modes so stdout contains only the final result. Stderr is therefore
+a deliberate secret-bearing pairing channel for that invocation and must be
+handled accordingly.
+
+### Wire protocol
+
+Protocol version 1 uses TLS-protected messages framed by a four-byte
+big-endian length followed by UTF-8 JSON. JSON was chosen because it is
+deterministic for the defined structs, inspectable in tests, and does not add a
+serialization dependency. Go `gob` is not used.
+
+Every message carries `version` and a fixed `type`:
+
+| Type | Direction | Purpose |
+|------|-----------|---------|
+| `hello` | connector to listener | authenticate the control connection, echo a random challenge, and offer the connector's bounded reverse endpoints |
+| `hello_ok` | listener to connector | prove the listener completed the authenticated application exchange and identify itself |
+| `probe` / `probe_ok` | either test direction | authenticate one family-specific connection and echo a fixed 32-byte random payload |
+| `evidence` | each side once | exchange at most two structural observations, one per family |
+| `done` | connector to listener | confirm both sides received the evidence before closing |
+
+Frames are limited to 16 KiB. Endpoint and peer-name fields are bounded,
+endpoint offers and evidence collections contain at most two entries, each
+session has a fixed message sequence, and JSON with unknown fields, trailing
+values, malformed encoding, an unknown type, or a different version is
+rejected. Reads allocate only after checking the frame length. Peer strings are
+sanitized before display. There is no message for a filename, command, target
+port range, shell input, configuration change, or arbitrary diagnostic action.
+
+The listener does make at most one bounded TLS probe per address family to the
+reverse endpoints offered by the authenticated connector. This is the minimum
+operation needed to test the other direction. A deliberately malicious holder
+of the pairing token could point those two attempts elsewhere, but cannot vary
+the operation, exceed the family/connection limits, bypass the certificate pin
+it supplied, or make Network Doctor send anything except the fixed protocol
+exchange.
+
+Version 1 is intended to remain compatible across releases. A release may add
+optional result fields without changing the wire. Any incompatible message or
+semantic change requires a new protocol version and pairing prefix; version 1
+peers reject it instead of attempting a downgrade. There is no cross-version
+negotiation in the first protocol.
+
+### Evidence and diagnoses
+
+The authenticated control channel is recorded separately from the diagnostic
+attempts. Each independent attempt records:
+
+- semantic direction (`listener_to_connector` or
+  `connector_to_listener`),
+- IPv4 or IPv6,
+- actual source and destination socket addresses where known,
+- `PASS`, `FAIL`, or `N/A`,
+- cross-platform cause such as `connection_refused`, `timeout`, or
+  `unreachable`,
+- whether TCP connected,
+- whether the pinned TLS peer authenticated,
+- whether the 32-byte application payload completed,
+- elapsed milliseconds.
+
+This supports the following combined diagnosis IDs:
+
+| ID | What the evidence proves |
+|----|--------------------------|
+| `peer_bidirectional_ok` | authenticated small application traffic passed in both directions |
+| `peer_directional_failure` | at least one direction passed and the other failed; wording names the traffic direction, not a device firewall |
+| `peer_symmetric_failure` | the independent bounded attempts failed in both directions while the control channel remained available |
+| `peer_address_family_asymmetry` | one tested family carried peer traffic while the other tested family did not |
+| `peer_listener_local_only` | the failed destination was definitively bound only to loopback |
+| `peer_application_failure` | TCP and pinned TLS succeeded but the fixed application payload did not |
+| `peer_security_failure` | TCP connected but the endpoint did not authenticate as the paired TLS peer |
+| `peer_incomplete_evidence` | too little independent evidence exists to distinguish a directional or endpoint failure |
+
+`connection_refused` proves that the tested address actively refused the TCP
+connection. It does not distinguish no listener from an active rejecting
+filter. A timeout or unreachable result does not distinguish endpoint
+filtering, routing, address translation, a stale address, or another
+reachability failure. Directional and address-family diagnoses therefore set
+`ambiguous: true` and list the remaining explanations. They never claim a
+firewall, NAT, or routing root cause without independent proof.
+
+Peer version 1 exchanges only the fixed 32-byte challenge plus its small
+protocol messages. It does not reuse the ordinary 24 KiB Path MTU probe because
+the peer protocol's own reader changes the control evidence that probe relies
+on. It cannot diagnose "small succeeds, large stalls" and makes no MTU or PMTU
+claim. It also does no traceroute orchestration, packet capture, raw sockets,
+port scanning, remote shell, or repair.
+
+### Direct-connect and privacy limits
+
+There is no Network Doctor service, hosted rendezvous, relay, account,
+telemetry, UPnP, NAT-PMP, or automatic firewall change. The connector must
+reach at least one address printed by `--peer-listen`. If the listener is behind
+NAT, its operator must already have a directly reachable address and port; peer
+mode does not create one. The reverse test uses the connector's temporary
+listener and, for the control family, the source address the listener actually
+observed. A NAT or stateful filter may still prevent that new reverse
+connection. The result says so without pretending to know which device or rule
+caused it. A relay could later carry the same evidence messages without
+changing their semantics, but version 1 implements no relay transport.
+
+The peers exchange their sanitized host names, the temporary listener
+addresses they offer, the actual local and remote socket addresses seen during
+the session, address families, phase outcomes, and timing. This can reveal
+private addresses, public NAT addresses, interface choices, and host names.
+Nothing is sent anywhere except the paired direct endpoints, and no telemetry
+exists, but review a saved result before sharing it.
+
+### Peer JSON output
+
+`--json` in peer mode emits `netdoc.peer.v1`, not the ordinary report schema:
+
+```json
+{
+  "schema": "netdoc.peer.v1",
+  "version": "1.2.3",
+  "protocol_version": 1,
+  "local": {
+    "role": "connector",
+    "name": "machine-b",
+    "listen_addresses": ["192.168.1.21:53122"],
+    "observed_address": "192.168.1.21:49018"
+  },
+  "remote": {
+    "role": "listener",
+    "name": "machine-a",
+    "listen_addresses": ["192.168.1.20:4242"],
+    "observed_address": "192.168.1.20:4242"
+  },
+  "channel": {
+    "established": true,
+    "family": "ipv4",
+    "local": "192.168.1.21:49018",
+    "remote": "192.168.1.20:4242",
+    "ms": 3
+  },
+  "observations": [
+    {
+      "direction": "listener_to_connector",
+      "family": "ipv4",
+      "source": "192.168.1.20:49410",
+      "destination": "192.168.1.21:53122",
+      "status": "PASS",
+      "tcp_connected": true,
+      "tls_authenticated": true,
+      "application_traffic": true,
+      "payload_bytes": 32,
+      "ms": 2
+    },
+    {
+      "direction": "listener_to_connector",
+      "family": "ipv6",
+      "status": "N/A",
+      "cause": "family_unavailable",
+      "tcp_connected": false,
+      "tls_authenticated": false,
+      "application_traffic": false,
+      "payload_bytes": 0,
+      "ms": 0
+    },
+    {
+      "direction": "connector_to_listener",
+      "family": "ipv4",
+      "source": "192.168.1.21:49022",
+      "destination": "192.168.1.20:4242",
+      "status": "PASS",
+      "tcp_connected": true,
+      "tls_authenticated": true,
+      "application_traffic": true,
+      "payload_bytes": 32,
+      "ms": 2
+    },
+    {
+      "direction": "connector_to_listener",
+      "family": "ipv6",
+      "status": "N/A",
+      "cause": "family_unavailable",
+      "tcp_connected": false,
+      "tls_authenticated": false,
+      "application_traffic": false,
+      "payload_bytes": 0,
+      "ms": 0
+    }
+  ],
+  "diagnosis": {
+    "id": "peer_bidirectional_ok",
+    "verdict": "ok",
+    "summary": "Authenticated peer traffic succeeds in both directions.",
+    "evidence": ["listener_to_connector/ipv4", "connector_to_listener/ipv4"],
+    "ambiguous": false
+  },
+  "ok": true
+}
+```
+
+`observations` is always ordered listener-to-connector IPv4, listener-to-
+connector IPv6, connector-to-listener IPv4, connector-to-listener IPv6. An
+unavailable family has an explicit `N/A` observation with
+`cause: "family_unavailable"`. The two machines reverse only `local` and
+`remote`; directions keep their semantic names. Field names, ordering rules,
+status/cause values, diagnosis IDs, and the meaning of `ok` are stable for this
+schema. `ok` is true only when small authenticated traffic passes in both
+directions. A diagnostic failure exits `1`; bad peer CLI arguments or an
+unreadable pairing input exit `2`. Existing ordinary exit meanings and JSON
+fields are unchanged.
+
 ## Drill-down tools
 
 Each diagnosis row is *evidence*; when you want proof, run the real tools as cancellable streaming jobs: several run at once, and `tab` switches between the live ones. A contextual toolbox shows the tools available for the current target with their hotkeys, greying out missing binaries with an install hint. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.

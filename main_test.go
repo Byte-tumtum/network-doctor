@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/peer"
 	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/ui"
 )
@@ -63,6 +64,8 @@ func TestRun(t *testing.T) {
 		{"help lists check", []string{"-help"}, 0, "-check", ""},
 		{"help lists skip", []string{"-help"}, 0, "-skip", ""},
 		{"help lists -no-history", []string{"-help"}, 0, "-no-history", ""},
+		{"help lists peer listener", []string{"-help"}, 0, "-peer-listen", ""},
+		{"help lists peer connector", []string{"-help"}, 0, "-peer-connect", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -77,6 +80,82 @@ func TestRun(t *testing.T) {
 				t.Errorf("stderr = %q, want contains %q", stderr.String(), tt.wantStderr)
 			}
 		})
+	}
+}
+
+func TestRunPeerConnectJSON(t *testing.T) {
+	originalRead, originalConnect := readPeerPairing, connectPeer
+	t.Cleanup(func() { readPeerPairing, connectPeer = originalRead, originalConnect })
+	const secret = "temporary-pairing-secret"
+	readPeerPairing = func(io.Writer) (string, error) { return secret, nil }
+	connectPeer = func(_ context.Context, code string, options peer.Options) (peer.Result, error) {
+		if code != secret || options.Version != version || options.Timeout != diagnostic.DefaultProbeTimeout {
+			t.Fatalf("connect args = %q, %+v", code, options)
+		}
+		return peer.Result{
+			Schema: peer.ResultSchema, Version: version, ProtocolVersion: peer.ProtocolVersion,
+			Local:        peer.EndpointIdentity{Role: peer.RoleConnector, Name: "b", ListenAddresses: []string{"127.0.0.1:2"}},
+			Remote:       peer.EndpointIdentity{Role: peer.RoleListener, Name: "a", ListenAddresses: []string{"127.0.0.1:1"}},
+			Diagnosis:    peer.CombinedDiagnosis{ID: peer.DiagnosisBidirectionalOK, Verdict: diagnostic.VerdictOK, Summary: "works", Evidence: []string{}},
+			Observations: []peer.Observation{}, OK: true,
+		}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--peer-connect", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", code, stderr.String())
+	}
+	var result peer.Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("peer JSON: %v\n%s", err, stdout.String())
+	}
+	if result.Schema != peer.ResultSchema || strings.Contains(stdout.String(), secret) || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunPeerRejectsMalformedPairingWithoutEchoingIt(t *testing.T) {
+	originalRead, originalConnect := readPeerPairing, connectPeer
+	t.Cleanup(func() { readPeerPairing, connectPeer = originalRead, originalConnect })
+	const malformed = "not-a-pairing-string"
+	readPeerPairing = func(io.Writer) (string, error) { return malformed, nil }
+	connectPeer = peer.Connect
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--peer-connect", "--json"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 || strings.Contains(stderr.String(), malformed) {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestPeerModeRejectsConflictingOrdinaryOptions(t *testing.T) {
+	tests := [][]string{
+		{"--peer-connect", "--peer-listen", "127.0.0.1:0"},
+		{"--peer-connect", "example.com"},
+		{"--peer-connect", "--watch"},
+		{"--peer-connect", "--check", "iface"},
+		{"--peer-connect", "--public-dns", "9.9.9.9"},
+		{"--peer-listen", "127.0.0.1:0", "--iface", "127.0.0.1"},
+		{"--peer-listen", "127.0.0.1:0", "--timeout", "31s"},
+	}
+	for _, args := range tests {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 2 {
+			t.Errorf("run(%q) = %d, want 2; stderr: %s", args, code, stderr.String())
+		}
+	}
+}
+
+func TestPeerListenFlagAllowsOneAddressPerFamily(t *testing.T) {
+	var addresses peerListenList
+	if err := addresses.Set("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := addresses.Set("[::1]:0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := addresses.Set("192.0.2.1:1"); err == nil {
+		t.Fatal("second IPv4 peer listener was accepted")
 	}
 }
 

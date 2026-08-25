@@ -217,3 +217,19 @@ func TestWrapRunTimesAndCleans(t *testing.T) {
 		t.Errorf("Detail = %q, want the escape sanitized away", r.Detail)
 	}
 }
+
+func TestConnectionFailureCause(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		want string
+	}{
+		{context.Canceled, ConnectionCauseCanceled},
+		{context.DeadlineExceeded, ConnectionCauseTimeout},
+		{connectionRefusedErrno, ConnectionCauseRefused},
+		{errors.New("no route"), ConnectionCauseUnreachable},
+	} {
+		if got := ConnectionFailureCause(test.err); got != test.want {
+			t.Errorf("ConnectionFailureCause(%v) = %q, want %q", test.err, got, test.want)
+		}
+	}
+}

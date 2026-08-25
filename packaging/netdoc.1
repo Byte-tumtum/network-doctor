@@ -1,10 +1,18 @@
-.TH NETDOC 1 "2026-08-13" "network-doctor" "User Commands"
+.TH NETDOC 1 "2026-08-25" "network-doctor" "User Commands"
 .SH NAME
 netdoc \- diagnose network connectivity and explain where the connection breaks
 .SH SYNOPSIS
 .B netdoc
 .RI [ flags ]
 .RI [ target ]
+.br
+.B netdoc
+.BI \-peer\-listen " IP:port"
+.RI [ \-peer\-listen " IP:port" ]
+.br
+.B netdoc
+.B \-peer\-connect
+.RI [ \-json ]
 .SH DESCRIPTION
 .B netdoc
 diagnoses network connectivity layer by layer and reports where the path
@@ -88,6 +96,23 @@ it streams one compact JSON report per line until the process is interrupted;
 those lines carry an extra
 .B ts
 field (RFC 3339, UTC) and are otherwise the one-shot report unchanged.
+.TP
+.BI \-peer\-listen " IP:port"
+Open one temporary authenticated peer session on an exact local unicast IP and
+port. Port zero asks the kernel to choose an ephemeral port. Repeat once to
+offer both IPv4 and IPv6. The command prints a short-lived pairing string,
+waits for one peer, runs the two-ended diagnosis, then exits. The advertised
+addresses must be directly reachable from the connector.
+.TP
+.B \-peer\-connect
+Read a temporary pairing string from standard input, without placing the
+credential in command arguments or target history, then connect and run the
+two-ended diagnosis. On a terminal the prompt disables echo. Peer mode is
+headless; use
+.B \-json
+for the separate
+.B netdoc.peer.v1
+result schema.
 .TP
 .BI \-check " probe[,probe...]"
 Run only the named stable probe IDs and the prerequisite closure derived from
@@ -196,17 +221,36 @@ Print usage and exit.
 .SH EXIT STATUS
 .TP
 .B 0
-The chain completed with no failed row. Skipped rows are allowed.
+The chain completed with no failed row, or peer traffic passed in both
+directions. Skipped rows are allowed.
 .TP
 .B 1
 A row failed, the terminal UI was quit before the chain finished, or the run
-itself errored. Under
+itself errored. A failed, ambiguous, or incomplete peer diagnosis also exits
+with this status. Under
 .B \-json \-watch
 this is the last completed pass's status.
 .TP
 .B 2
-Bad arguments, a target the parser rejected, or no terminal on standard
-output to run the terminal UI on.
+Bad arguments, a target or pairing input the parser rejected, or no terminal on
+standard output to run the terminal UI on.
+.SH PEER SECURITY AND REACHABILITY
+Each listening run creates a new Ed25519 TLS certificate and a random 256-bit
+session token. The pairing string carries direct endpoint addresses, the
+certificate's SHA-256 pin, the token, protocol version, and expiration. TLS 1.3
+encrypts the exchange; the pin authenticates the listener and the token
+authenticates the connector. Requests use fresh nonces and one session accepts
+only a bounded number of messages and connections. Credentials exist only in
+memory and in the pairing string, and are excluded from reports and errors.
+.PP
+The peer exchanges host names, short-lived listener addresses, actual socket
+addresses, connection timing, TCP/TLS/application phase outcomes, and the
+combined diagnosis. Review this network metadata before sharing a JSON result.
+.PP
+There is no relay, rendezvous service, account, automatic port forwarding, or
+NAT traversal. At least one listener address must be directly reachable. A
+failed reverse connection can be consistent with filtering, routing, or NAT,
+but does not prove which one caused it.
 .SH EXAMPLES
 .PP
 Run the generic local and internet diagnosis:
@@ -281,6 +325,15 @@ Take the second opinion from a different resolver, or drop it altogether:
 .EX
 netdoc \-\-public\-dns 9.9.9.9 github.com
 netdoc \-\-public\-dns "" github.com
+.EE
+.RE
+.PP
+Offer a temporary direct peer session, then connect from the other machine:
+.PP
+.RS 4
+.EX
+netdoc \-\-peer\-listen 192.168.1.20:4242
+netdoc \-\-peer\-connect
 .EE
 .RE
 .PP

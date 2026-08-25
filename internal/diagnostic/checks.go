@@ -60,6 +60,9 @@ const (
 	DNSCauseTemporaryFailure      = "dns_temporary_failure"
 	ConnectionCauseRefused        = "connection_refused"
 	ConnectionCauseReset          = "connection_reset"
+	ConnectionCauseTimeout        = "timeout"
+	ConnectionCauseUnreachable    = "unreachable"
+	ConnectionCauseCanceled       = "canceled"
 )
 
 const (
@@ -1578,6 +1581,24 @@ func dnsNotFound(err error) bool {
 	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
+// ConnectionFailureCause gives peer mode and the ordinary target probe one
+// cross-platform vocabulary for a failed TCP dial.
+func ConnectionFailureCause(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return ConnectionCauseCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return ConnectionCauseTimeout
+	case isConnectionRefused(err):
+		return ConnectionCauseRefused
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ConnectionCauseTimeout
+	}
+	return ConnectionCauseUnreachable
+}
+
 func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
 		var r ProbeResult
@@ -1608,7 +1629,7 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 		}
 		refused := len(attempts) > 0 && ctx.Err() == nil
 		for _, attempt := range attempts {
-			if !isConnectionRefused(attempt.Err) {
+			if ConnectionFailureCause(attempt.Err) != ConnectionCauseRefused {
 				refused = false
 				break
 			}
