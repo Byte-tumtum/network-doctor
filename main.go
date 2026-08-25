@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -454,10 +455,22 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 	// runs.
 	d := diagnostic.Interpret(t, order, results)
 	rep.Summary, rep.Verdict = d.Summary, d.Verdict
-	for _, f := range d.Findings {
+	for i, f := range d.Findings {
 		finding := report.Finding{ID: string(f.ID), Focus: string(f.Focus)}
 		for _, id := range f.Evidence {
 			finding.Evidence = append(finding.Evidence, string(id))
+		}
+		// The advice comes from the same interpretation as the finding it hangs
+		// off, so automation reads what the app shows rather than a second
+		// opinion assembled here. Remediate answers for the primary finding,
+		// the one the summary is about, exactly as Focus does.
+		if i == 0 {
+			if rem, ok := diagnostic.Remediate(d, results, runtime.GOOS); ok {
+				finding.Remediation = &report.Remediation{
+					ID: string(rem.ID), Action: rem.Action, Why: rem.Why,
+					Steps: rem.Steps, Command: rem.Command, Expect: rem.Expect,
+				}
+			}
 		}
 		rep.Findings = append(rep.Findings, finding)
 	}

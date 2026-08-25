@@ -215,11 +215,26 @@ Every run is interpreted once, and that one interpretation produces the summary,
 
 ```json
 "findings": [
-  {"id": "tls_certificate_expired", "focus": "tls", "evidence": ["tls", "target_tcp"]}
+  {
+    "id": "tls_certificate_expired",
+    "focus": "tls",
+    "evidence": ["tls", "target_tcp"],
+    "remediation": {
+      "id": "renew_certificate",
+      "action": "Renew the certificate, or check this machine's clock",
+      "why": "The handshake was rejected because the certificate is outside its validity window. Either it really has expired, or this machine's clock runs far enough ahead to make a valid one look expired.",
+      "steps": [
+        "Compare the validity dates on the TLS row with today's date.",
+        "Confirm this machine's clock before blaming the certificate."
+      ],
+      "command": ["timedatectl", "status"],
+      "expect": "A certificate whose validity window covers now, on a machine whose clock is right."
+    }
+  }
 ]
 ```
 
-`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the remedy stays on the row that wrote it rather than being restated here. `evidence` names the checks the conclusion was drawn from, `focus` first, and only checks the run actually made.
+`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `evidence` names the checks the conclusion was drawn from, `focus` first, and only checks the run actually made. `remediation` is what to do about the finding, described below.
 
 The array is omitted when the run reached no specific conclusion: everything passed, the run is still going, nothing was selected, or the only impairment is on a row no diagnosis is about. Those runs answer with `summary` and `verdict` alone rather than being given an identity the probes did not support. Today a run reports at most one finding, the most specific one it reaches; the field is an array because that is the shape a run with several independent conclusions needs, and consumers should read it as one.
 
@@ -264,3 +279,76 @@ The array is omitted when the run reached no specific conclusion: everything pas
 The TLS identities are drawn from the same classification the `cause` field publishes, so a finding stays as precise as the handshake was. The sentence in `summary` is deliberately more hedged than the identity for the failures a client genuinely cannot tell apart, and `tls_handshake_failure` is what an unclassifiable handshake gets rather than a specific accusation.
 
 Nothing here claims a wrong default route, a missing subnet route, or an operator's intent, because no probe proves those. `id` values are added over time; treat an unrecognized one as "some specific problem" and fall back to `verdict`.
+
+### Remediation
+
+A finding says what is wrong. Its `remediation` says what to do about it, as data rather than a sentence to be parsed out of `fix`.
+
+```json
+"remediation": {
+  "id": "restore_default_route",
+  "action": "Restore a default route",
+  "why": "Nothing in the routing table leads off this network, so traffic for the internet has nowhere to go. That is usually DHCP not completing, a VPN that dropped its route, or a static configuration with no gateway.",
+  "steps": [
+    "Renew the DHCP lease, or reconnect the VPN that installs the route.",
+    "On a static configuration, check that the gateway is set and sits on this machine's own subnet."
+  ],
+  "command": ["ip", "route"],
+  "expect": "A default route (0.0.0.0/0 or ::/0) pointing at the gateway."
+}
+```
+
+`id` is a stable identity to branch on, from the table below. `action` is the next step in one line, `why` is what makes it the right one given the evidence this run collected, `steps` breaks it down in the order worth trying, and `expect` is what success looks like, so a script or a person knows whether a rerun is worth it yet. `why`, `steps`, `command` and `expect` are omitted when empty, as every other optional field is; `id` and `action` are always present.
+
+`command` is an **argv array, never a shell string, and netdoc never runs it**. It is offered for you to read and run yourself. Every command in the table is a read-only inspection of local state (routes, links, neighbors, resolvers, the clock, interface MTUs), chosen per OS: Linux gets `ip route`, macOS `netstat -rn`, Windows `route print -4`. None of them changes configuration, none escalates privilege, and none carries the target inside it, because investigating the target itself is what the [drill-down tools](#drill-down-tools) are for. A remediation with nothing local worth inspecting has no `command` at all.
+
+The advice is chosen from the finding's `id` and, where the focused check classified its failure further, that check's stable `cause`. So one conclusion can lead to several remediations: `offline` with `no_default_route` says to restore the route, with `gateway_unreachable` says to get the gateway answering, and with `selected_path_failed` says the break is past a router that looks fine from here. A cause netdoc does not have specific advice for keeps the conclusion's general answer rather than losing the remediation.
+
+Where netdoc genuinely cannot tell two causes apart, the remediation says what to investigate instead of presenting a guess as fact: `narrow_tls_failure` lists what is still possible rather than naming one, and `rerun_with_egress_check` says the run itself was too narrow to blame either end.
+
+In the TUI the same advice appears in the Details panel of the row the diagnosis focuses, and `R` reruns the identical checks against the same target once you have acted on it.
+
+| `id` | Next action |
+|---|---|
+| `bring_up_link` | Bring a network interface up |
+| `sign_in_to_portal` | Sign in to the network |
+| `check_local_path` | Check this machine's own path off the network |
+| `restore_default_route` | Restore a default route |
+| `reach_gateway` | Get the default gateway answering |
+| `check_router_uplink` | Check the router's own uplink |
+| `fix_preferred_route` | Check the interface holding the preferred default route |
+| `fix_local_egress_first` | Fix this machine's connection before judging the target |
+| `use_proxy_path` | Send the traffic the way this network allows |
+| `check_proxy_config` | Check the configured proxy |
+| `check_proxy_reachable` | Check that the proxy itself is up |
+| `check_proxy_resolution` | Check name resolution on the proxy |
+| `check_proxy_egress` | Check what the proxy is allowed to reach |
+| `restore_ipv4_egress` | Restore IPv4 egress, or accept an IPv6-only path |
+| `restore_ipv6_egress` | Restore IPv6 egress, or accept an IPv4-only path |
+| `read_egress_warning` | Read what the egress row is warning about |
+| `fix_system_resolver` | Fix or replace the configured resolver |
+| `check_the_name` | Check the name itself |
+| `check_name_resolution` | Check name resolution on this machine |
+| `confirm_split_dns` | Confirm which of the two DNS answers is right |
+| `choose_encrypted_dns` | Decide whether encrypted DNS has to work here |
+| `expect_tcp_fallback` | Expect the TCP fallback, and open UDP/443 if speed matters |
+| `start_the_service` | Start the service, or check the port |
+| `trace_the_path` | Work out where the packets stop |
+| `check_the_device` | Check the local device itself |
+| `rerun_with_egress_check` | Rerun with the general connectivity check included |
+| `lower_path_mtu` | Try a lower MTU on the path |
+| `renew_certificate` | Renew the certificate, or check this machine's clock |
+| `await_certificate_validity` | Check the clock, then the certificate's start date |
+| `set_the_clock` | Set this machine's clock |
+| `match_certificate_name` | Connect with the name the certificate is for |
+| `resolve_untrusted_issuer` | Find out who signed the certificate |
+| `check_tls_path` | Check the path before blaming the service |
+| `check_tls_termination` | Check what is terminating the handshake |
+| `retry_tls_dial` | Retest, since the TLS check could not open its own connection |
+| `narrow_tls_failure` | Narrow the handshake failure down by hand |
+| `check_application_layer` | Check the service on top of a working connection |
+| `check_banner_service` | Check the service behind the open port |
+| `identify_listener` | Confirm which service is on that port |
+| `rerun_full_chain` | Rerun without the check selection |
+
+`remediation` is additive: it appears alongside the fields findings have always carried, and `fix` on each check is unchanged. A row's `fix` is still the one-line hint that row wrote about itself, with the certificate dates and measurements only that probe held; the remediation is the finished diagnosis's answer for the run. New `id` values are added over time, so treat an unrecognized one as "some specific advice" and show `action` and `steps` rather than branching on it.

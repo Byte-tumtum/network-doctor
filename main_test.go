@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -973,6 +975,30 @@ func TestReportJSONContract(t *testing.T) {
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"cert expired","verdict":"service","findings":[{"id":"tls_certificate_expired","focus":"tls","evidence":["tls","target_tcp"]},{"id":"quic_unavailable"}],"ok":false}`,
 		},
 		{
+			// Remediation is additive: it serializes inside its finding, after
+			// the fields findings have always carried, and every optional part
+			// of it stays absent rather than becoming an empty value.
+			name: "finding with remediation",
+			rep: report.Report{
+				Checks:  []report.Check{{}},
+				Summary: "no default route",
+				Verdict: "network",
+				Findings: []report.Finding{{
+					ID:    "offline",
+					Focus: "internet_tcp",
+					Remediation: &report.Remediation{
+						ID:      "restore_default_route",
+						Action:  "Restore a default route",
+						Why:     "nothing leads off this network",
+						Steps:   []string{"renew the lease"},
+						Command: []string{"ip", "route"},
+						Expect:  "a default route",
+					},
+				}, {ID: "quic_unavailable", Remediation: &report.Remediation{ID: "expect_tcp_fallback", Action: "expect TCP"}}},
+			},
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"no default route","verdict":"network","findings":[{"id":"offline","focus":"internet_tcp","remediation":{"id":"restore_default_route","action":"Restore a default route","why":"nothing leads off this network","steps":["renew the lease"],"command":["ip","route"],"expect":"a default route"}},{"id":"quic_unavailable","remediation":{"id":"expect_tcp_fallback","action":"expect TCP"}}],"ok":false}`,
+		},
+		{
 			name: "empty",
 			rep:  report.Report{Checks: []report.Check{{}}},
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"","verdict":"","ok":false}`,
@@ -1154,6 +1180,24 @@ func TestBuildReportFindingsComeFromTheDiagnosis(t *testing.T) {
 		}
 	}
 
+	// The advice hangs off the finding and comes from the same interpretation,
+	// so automation reads what the app shows instead of parsing fix.
+	wantRem, ok := diagnostic.Remediate(want, results, runtime.GOOS)
+	if !ok {
+		t.Fatal("a hostname mismatch should reach a remediation")
+	}
+	got := rep.Findings[0].Remediation
+	if got == nil {
+		t.Fatal("the finding carries no remediation")
+	}
+	if got.ID != string(wantRem.ID) || got.Action != wantRem.Action || got.Why != wantRem.Why ||
+		got.Expect != wantRem.Expect || !slices.Equal(got.Steps, wantRem.Steps) || !slices.Equal(got.Command, wantRem.Command) {
+		t.Errorf("remediation = %+v, want %+v", got, wantRem)
+	}
+	if got.ID != "match_certificate_name" {
+		t.Errorf("a hostname mismatch got advice %q", got.ID)
+	}
+
 	// A run with nothing to conclude keeps the report it has always emitted:
 	// no findings key at all.
 	for id := range results {
@@ -1163,7 +1207,7 @@ func TestBuildReportFindingsComeFromTheDiagnosis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(blob), "findings") {
-		t.Errorf("a healthy run emitted a findings key: %s", blob)
+	if strings.Contains(string(blob), "findings") || strings.Contains(string(blob), "remediation") {
+		t.Errorf("a healthy run emitted a findings or remediation key: %s", blob)
 	}
 }

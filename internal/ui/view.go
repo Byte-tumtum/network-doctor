@@ -6,6 +6,7 @@ package ui
 import (
 	"fmt"
 	"net"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -384,6 +385,15 @@ func (m model) detailRows(deferred bool) []string {
 		if !answered && (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 			body.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
 		}
+		// The remediation belongs to the diagnosis rather than to any one row,
+		// so it is shown on the row the diagnosis focuses and nowhere else:
+		// repeated under every cursor position it would read as advice about
+		// whatever row the reader happened to land on. It goes here, above the
+		// per-attempt evidence, because a run with sixteen connection attempts
+		// must not push the one actionable block off the panel.
+		if answered {
+			body.WriteString(m.remediationBlock())
+		}
 		if r.Portal != nil && r.Portal.RedirectURL != "" {
 			body.WriteString(faintStyle.Render("portal "+r.Portal.RedirectURL) + "\n")
 		}
@@ -406,6 +416,52 @@ func (m model) detailRows(deferred bool) []string {
 	rows := append([]string{panelTitleStyle.Render("Details: " + probe.Name)},
 		strings.Split(strings.TrimRight(body.String(), "\n"), "\n")...)
 	return panelBody(rows)
+}
+
+// remediation is this run's structured next action, and false when the
+// diagnosis supports none: an unfinished run, a healthy one, or a verdict
+// about no single conclusion. It reads the model's one diagnosis, so the
+// advice cannot point somewhere the banner and the cursor do not.
+func (m model) remediation() (diagnostic.Remediation, bool) {
+	return diagnostic.Remediate(m.diagnosis(), m.results, runtime.GOOS)
+}
+
+// remediationBlock is the Details panel's remediation section, newline
+// terminated and empty when there is nothing to advise. It is progressive
+// disclosure rather than a screen of its own: the answer block above the
+// panels already carries the verdict, the row's own hint and the evidence, and
+// this is the part a reader who wants to act on it opens the row for.
+//
+// The command is shown, never run. netdoc is a diagnostic tool, and a
+// remediation command is a thing to read and decide about, which is also why
+// it is only ever a read-only inspection of local state.
+func (m model) remediationBlock() string {
+	rem, ok := m.remediation()
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(skipStyle.Render("Do: ") + rem.Action + "\n")
+	if rem.Why != "" {
+		b.WriteString(faintStyle.Render(rem.Why) + "\n")
+	}
+	for _, step := range rem.Steps {
+		b.WriteString("· " + step + "\n")
+	}
+	if line := rem.CommandLine(); line != "" {
+		b.WriteString(faintStyle.Render("Run: ") + line + "\n")
+	}
+	if rem.Expect != "" {
+		b.WriteString(faintStyle.Render("Expect: "+rem.Expect) + "\n")
+	}
+	// The payoff line: the advice is only half a workflow without the way to
+	// ask the same question again. Dropped when the action has no key, since a
+	// custom keymap is free to leave it unbound.
+	if m.keys.bound(ctxList, actRetest) {
+		b.WriteString(faintStyle.Render("Then press ") + selStyle.Render(m.keys.label(ctxList, actRetest)) +
+			faintStyle.Render(" to retest") + "\n")
+	}
+	return b.String()
 }
 
 // panelBody drops a panel that has a title and nothing readable under it,

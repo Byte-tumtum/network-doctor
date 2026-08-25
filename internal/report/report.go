@@ -37,6 +37,26 @@ type Finding struct {
 	ID       string   `json:"id"`
 	Focus    string   `json:"focus,omitempty"`
 	Evidence []string `json:"evidence,omitempty"`
+	// Remediation is what to do about this finding, as data rather than prose
+	// to be parsed out of fix. Omitted when the conclusion has no advice
+	// beyond what the checks already say.
+	Remediation *Remediation `json:"remediation,omitempty"`
+}
+
+// Remediation is the structured next action for a finding: an additive object
+// that gives automation the same advice the app shows, without parsing fix or
+// detail.
+//
+// Command is an argv, never a shell string, and netdoc never runs it: it is a
+// safe read-only command offered for a person to run and read. Absent when the
+// advice is prose alone.
+type Remediation struct {
+	ID      string   `json:"id"`
+	Action  string   `json:"action"`
+	Why     string   `json:"why,omitempty"`
+	Steps   []string `json:"steps,omitempty"`
+	Command []string `json:"command,omitempty"`
+	Expect  string   `json:"expect,omitempty"`
 }
 
 type Target struct {

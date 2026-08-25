@@ -107,7 +107,27 @@ func (m model) report() string {
 	} else {
 		b.WriteString("target: none (general connection check)\n")
 	}
-	b.WriteString("verdict: " + m.verdictLine() + "\n\nchecks:\n")
+	b.WriteString("verdict: " + m.verdictLine() + "\n")
+	// The remediation reads from the same diagnosis as the verdict above it, so
+	// a pasted report carries the advice the screen showed rather than a second
+	// opinion. The command is labelled as a suggestion: a report that lists a
+	// command with no such label reads as a record of one that was run.
+	if rem, ok := m.remediation(); ok {
+		fmt.Fprintf(&b, "next action: %s\n", rem.Action)
+		if rem.Why != "" {
+			b.WriteString("  why: " + rem.Why + "\n")
+		}
+		for _, step := range rem.Steps {
+			b.WriteString("  step: " + step + "\n")
+		}
+		if line := rem.CommandLine(); line != "" {
+			b.WriteString("  run (suggested, not executed): " + line + "\n")
+		}
+		if rem.Expect != "" {
+			b.WriteString("  expect: " + rem.Expect + "\n")
+		}
+	}
+	b.WriteString("\nchecks:\n")
 	for _, p := range m.probes {
 		r := m.results[p.ID]
 		fmt.Fprintf(&b, "  [%s] %s: %s\n", r.Status, p.Name, r.Detail)
