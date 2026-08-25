@@ -225,17 +225,17 @@ netdoc --no-history host          # don't read or save the target history file
 
 | Key | Action |
 |-----|--------|
-| `↑`/`↓` (`k`/`j`) | select a probe row, or a device in the network map |
+| `↑`/`↓` (`k`/`j`) | select a probe row, or a device or service in the network map |
 | `a` | expand the checks a finished run collapsed (the passing rows, and the toolbox on a clean run), and collapse them again |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
-| `enter` | set the selected map device as the new target, or open the current tool job's output |
+| `enter` | open the selected map device, then diagnose one of the services it answers on, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
 | `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
 | `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
 | `r` | restart with a new target |
 | `S` | SSH login: a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
 | `tab` | switch between running tool jobs |
-| `esc` | cancel the focused job only (`tab` picks which); `q` is the stop-everything path |
+| `esc` | cancel the focused job only (`tab` picks which), or leave an opened device on the map; `q` is the stop-everything path |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
 | `?` | full-screen key cheatsheet; any key closes it |
 | `q` | quit (cancels running jobs first, then exits) |
@@ -263,7 +263,7 @@ Each diagnosis row is *evidence*; when you want proof, run the real tools as can
 | `m` | `mtr --report --report-cycles 5` | same (via brew) | `pathping -h 20 -q 5 -p 100 -w 500` |
 | `n` | `nmap -sT -Pn --host-timeout 110s` | same | same |
 
-`n` and `v` are gated behind an explicit confirmation before their active probes run. Full per-tool argument details, binding rules, and `--toolbox` are in **[docs/reference.md](docs/reference.md#drill-down-tools)**.
+`n` and `v` are gated behind an explicit confirmation before their active probes run. Full per-tool argument details, binding rules, `--toolbox`, and the device-to-service flow behind `v` are in **[docs/reference.md](docs/reference.md#drill-down-tools)**.
 
 ### SSH login
 
@@ -344,7 +344,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
+Native DAG probes + diagnosis engine + two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
 
 ## Built with
 

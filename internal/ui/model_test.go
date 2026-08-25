@@ -199,7 +199,9 @@ func TestNetworkMapDomainIgnoresBareAliases(t *testing.T) {
 	}
 }
 
-func TestNetworkMapSelectsNewTarget(t *testing.T) {
+// Selecting a device opens that device; it does not silently decide the device
+// is an HTTPS server on 443, which is what it used to amount to.
+func TestNetworkMapSelectsDeviceNotADefaultService(t *testing.T) {
 	m := newModel(mustTarget(t, "example.com:22"), false)
 	m.networkMap = true
 	m.networkCIDR = "192.168.12.0/24"
@@ -211,17 +213,21 @@ func TestNetworkMapSelectsNewTarget(t *testing.T) {
 
 	u, _ := m.Update(keyMsg("j"))
 	m = asModel(t, u)
-	if m.mapSelected != 1 || !strings.Contains(m.helpView(false), "set target") {
+	if m.mapSelected != 1 || !strings.Contains(m.helpView(false), "open device") {
 		t.Fatalf("map selection = %d, help = %q", m.mapSelected, m.helpView(false))
 	}
 
+	before := m.target
 	u, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = asModel(t, u)
-	if m.target == nil || m.target.Host != "192.168.12.50" || m.target.Port != 443 {
-		t.Fatalf("target = %+v, want discovered host on the default port", m.target)
+	if m.target != before || m.generation != 0 {
+		t.Fatalf("target = %+v (generation %d), want the run left alone until a service is picked", m.target, m.generation)
 	}
-	if m.networkMap || m.generation != 1 || cmd == nil {
-		t.Fatal("selecting a map host must close the map and restart the checks")
+	if m.svc.host != "192.168.12.50" || m.svc.done || cmd == nil {
+		t.Fatalf("device = %q done=%v cmd=%v, want the selected device opened and its services asked for", m.svc.host, m.svc.done, cmd != nil)
+	}
+	if view := m.View(); !strings.Contains(view, "Services on 192.168.12.50 (printer.lan)") || !strings.Contains(view, "checking common service ports") {
+		t.Fatalf("the opened device must say what it is doing:\n%s", view)
 	}
 }
 
@@ -235,8 +241,8 @@ func TestNetworkMapEnterClampsAfterShrink(t *testing.T) {
 
 	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = asModel(t, u)
-	if m.target == nil || m.target.Host != "192.168.12.1" {
-		t.Fatalf("target = %+v, want the last remaining host", m.target)
+	if m.svc.host != "192.168.12.1" {
+		t.Fatalf("opened device = %q, want the last remaining host", m.svc.host)
 	}
 }
 

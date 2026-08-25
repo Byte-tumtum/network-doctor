@@ -114,6 +114,16 @@ The routes and sockets tools are target-independent; the rest need a host. Tools
 
 `--toolbox [<host>]` opens straight into the toolbox without auto-running the chain (press `r` to run it). With no host, only the target-independent tools are offered.
 
+### Local devices
+
+`v` answers "I cannot reach the printer" in two steps, so neither one has to be known in advance. The first is the map: unprivileged `nmap -sn` across the source address's `/24`, which finds a device only if it accepts or refuses a TCP connect on port 80 or 443. This machine is listed separately rather than as a device to diagnose, and an address gains a name when mDNS, reverse DNS, or an `ssh_config` alias supplies one.
+
+`enter` on a device opens it and asks what it answers on: one round of ordinary TCP connects, run in parallel inside a single probe timeout, against a fixed list of fifteen ports (21, 22, 23, 53, 80, 443, 445, 515, 631, 2049, 3389, 5900, 8080, 8443, 9100). This is a chooser, not a scan: the list is fixed rather than a range, and nothing is sent after the connect, so the name beside a port ("IPP", "JetDirect") is that port's registered service name and not a claim about what the device is.
+
+`enter` on a service makes it the target and runs the normal checks against it, so a printer picked off the map becomes `192.168.1.23:631` instead of an HTTPS check against a port it never had. Ports whose protocol netdoc probes add their rows (`http`, `https`, `ssh`); the rest stop at the TCP rung, which is all a connect can honestly report. `esc` returns to the device list, and `r` still accepts a port typed by hand for a service the list does not carry.
+
+When nothing answers, the panel says which of the two things happened: refused connections show the device is on the network with nothing listening on those ports, while silence leaves powered off, gone, and dropping traffic all open. A target on this machine's own network is also diagnosed as one: a failed connect to it is never explained by the state of internet egress, which it does not use.
+
 ### SSH login
 
 `S` logs in to the current target, the machine the checks are about, so it needs one (`r` sets it). The form asks for the three things that are yours rather than the target's: `tab` moves between fields, `←`/`→` picks the key, `enter` connects, and `esc` backs out.

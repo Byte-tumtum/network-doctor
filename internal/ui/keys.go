@@ -147,6 +147,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.expanded = !m.expanded
 		return m, nil
 	case actCancelJob:
+		// On an opened device, esc is the way back to the device list before
+		// it is anything else: the job it would otherwise cancel is the
+		// finished scan that produced that list.
+		if m.networkMap && m.svc.host != "" {
+			m.svc = serviceChoice{}
+			return m, nil
+		}
 		// Cancel only the focused job (tab picks which); quit remains the
 		// nuke-everything path. The terminal event arrives as JobCanceled.
 		if m.cur.active != nil && m.cur.active.cancel != nil {
@@ -158,45 +165,46 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.switchJob()
 	case actUp:
 		if m.networkMap {
-			if m.mapSelected > 0 {
-				m.mapSelected--
-			}
+			m.moveMap(-1)
 			return m, nil
 		}
 		m.moveRow(-1)
 		return m, nil
 	case actDown:
 		if m.networkMap {
-			if m.mapSelected < len(m.networkHosts())-1 {
-				m.mapSelected++
-			}
+			m.moveMap(1)
 			return m, nil
 		}
 		m.moveRow(1)
 		return m, nil
 	case actTop:
 		if m.networkMap {
-			m.mapSelected = 0
+			at, _ := m.mapCursor()
+			*at = 0
 			return m, nil
 		}
 		m.moveRow(-len(m.probes))
 		return m, nil
 	case actBottom:
 		if m.networkMap {
-			m.mapSelected = max(len(m.networkHosts())-1, 0)
+			at, n := m.mapCursor()
+			*at = max(n-1, 0)
 			return m, nil
 		}
 		m.moveRow(len(m.probes))
 		return m, nil
 	case actOpen:
-		if hosts := m.networkHosts(); m.networkMap && len(hosts) > 0 {
-			m.mapSelected = min(m.mapSelected, len(hosts)-1)
-			address, _, _ := strings.Cut(hosts[m.mapSelected], " ")
-			t, err := diagnostic.ParseTarget(address)
-			if err != nil {
-				return m, m.setNotice("invalid discovered target: "+err.Error(), false)
+		// Two steps, because a device is not an endpoint: the first opens the
+		// selected device and asks it which services it has, the second points
+		// the checks at one of them.
+		if m.networkMap {
+			if m.svc.host != "" {
+				return m.diagnoseService()
 			}
-			return m.restartWithTarget(t)
+			if hosts := m.networkHosts(); len(hosts) > 0 {
+				m.mapSelected = min(m.mapSelected, len(hosts)-1)
+				return m.openDevice(hosts[m.mapSelected])
+			}
 		}
 		if !m.hasJob() {
 			return m, m.setNotice("nothing to view yet", false)
@@ -226,6 +234,73 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// mapCursor is the network map's cursor and the length of the list it walks:
+// the opened device's services when one is showing, the discovered devices
+// otherwise. Returned as a pointer so the movement keys stay one branch rather
+// than one per list.
+func (m *model) mapCursor() (*int, int) {
+	if m.svc.host != "" {
+		return &m.svc.sel, len(m.svc.scan.Open)
+	}
+	return &m.mapSelected, len(m.networkHosts())
+}
+
+// moveMap walks the map's cursor by delta and clamps it at both ends.
+func (m *model) moveMap(delta int) {
+	at, n := m.mapCursor()
+	*at = min(max(*at+delta, 0), max(n-1, 0))
+}
+
+// discoverServices is the seam the device step dials through, so the model's
+// own tests can drive the whole flow without a network under them.
+var discoverServices = diagnostic.DiscoverServices
+
+// openDevice asks one discovered device which of the common service ports it
+// answers on, so the endpoint the checks run against comes from the device
+// rather than from a default port that has nothing to do with it.
+//
+// row is a line the LAN scan printed, and it is parsed rather than trusted:
+// past this point the address is a target like any other.
+func (m model) openDevice(row string) (tea.Model, tea.Cmd) {
+	address, _, _ := strings.Cut(row, " ")
+	t, err := diagnostic.ParseTarget(address)
+	if err != nil {
+		return m, m.setNotice("invalid discovered device: "+err.Error(), false)
+	}
+	wasTicking := m.spinnerActive()
+	m.svc = serviceChoice{host: t.Host, name: row}
+	// The scan can be the first thing a --toolbox session does, before any
+	// generation context exists, so initialize it lazily as launchTool does.
+	if m.ctx == nil {
+		m.ctx, m.cancel = context.WithCancel(context.Background())
+	}
+	ctx, gen, host, sources, timeout := m.ctx, m.generation, t.Host, m.sources, m.probeTimeout
+	cmd := func() tea.Msg {
+		return lanServicesMsg{gen: gen, host: host, scan: discoverServices(ctx, sources, host, timeout)}
+	}
+	if wasTicking {
+		return m, cmd
+	}
+	return m, tea.Batch(cmd, m.spinner.Tick)
+}
+
+// diagnoseService restarts the checks against the selected service on the
+// opened device. The endpoint is spelled the way a person would type it and
+// re-parsed, so a service found here reaches the probe DAG through the same
+// target grammar and the same protocol inference as one typed at the prompt.
+func (m model) diagnoseService() (tea.Model, tea.Cmd) {
+	open := m.svc.scan.Open
+	if len(open) == 0 {
+		return m, m.setNotice("no service answered on "+m.svc.host+": press "+m.keys.label(ctxList, actRestart)+" to name a port yourself", false)
+	}
+	svc := open[min(m.svc.sel, len(open)-1)]
+	t, err := diagnostic.ParseTarget(svc.Target(m.svc.host))
+	if err != nil {
+		return m, m.setNotice("invalid discovered target: "+err.Error(), false)
+	}
+	return m.restartWithTarget(t)
 }
 
 // moveRow walks the cursor delta rows through the Checks panel's row list and
@@ -473,6 +548,7 @@ func (m *model) doRestart() tea.Cmd {
 	m.pending, m.confirmTool, m.sshPrompt = nil, nil, false
 	m.dropJobs()
 	m.networkMap, m.mapSelected, m.networkCIDR = false, 0, ""
+	m.svc = serviceChoice{}
 	m.hostNames, m.namesPending = nil, nil
 	m.notice = ""
 	if m.viewing {
@@ -496,7 +572,9 @@ func (m *model) launchTool(tool Tool) tea.Cmd {
 	m.stashJob()
 	m.networkMap = tool.Key == "v"
 	if m.networkMap {
-		m.mapSelected = 0
+		// A fresh sweep replaces the device list, so whatever device was open
+		// on the last one is not a row of this one.
+		m.mapSelected, m.svc = 0, serviceChoice{}
 	}
 	if !tool.Available {
 		m.cur.name, m.cur.status = tool.Name, JobFailed

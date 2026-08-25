@@ -65,6 +65,30 @@ type lanNameMsg struct {
 	name string
 }
 
+// lanServicesMsg carries what one opened map device answered on its common
+// service ports. host is checked as well as gen, so a scan the user has
+// already moved on from cannot repaint the device they moved to.
+type lanServicesMsg struct {
+	gen  int
+	host string
+	scan diagnostic.ServiceScan
+}
+
+// serviceChoice is the network map's second step: the services one discovered
+// device answered on, and which of them the cursor is on. It is what keeps
+// "diagnose this device" from silently meaning "test HTTPS on it", since a
+// device is not an endpoint and only the device is what the map knows.
+//
+// host is empty whenever no device has been opened, which is the whole of the
+// "is the chooser showing" question.
+type serviceChoice struct {
+	host string
+	name string // the map's label for the device, for the panel title
+	scan diagnostic.ServiceScan
+	done bool // the scan landed, so an empty Open means "none", not "not yet"
+	sel  int
+}
+
 // pendingAction is a state change deferred until the active job's terminal event
 // arrives, so Update never blocks waiting on it (that would deadlock, since
 // Update is the goroutine that consumes the event).
@@ -147,7 +171,10 @@ type model struct {
 	// namesPending holds the IPs whose name lookup is still in flight; those
 	// rows show a spinner instead of nmap's PTR guess.
 	namesPending map[string]bool
-	spinner      spinner.Model
+	// svc is the opened device's service list, the step between picking a
+	// device on the map and pointing the checks at one endpoint on it.
+	svc     serviceChoice
+	spinner spinner.Model
 
 	generation int
 	// Generation context; cancel kills all in-flight probes and the active job on
@@ -398,10 +425,16 @@ func (m model) sshDetected() bool {
 }
 
 // spinnerActive reports whether the spinner tick chain should keep running for
-// probes, jobs, name lookups, or SSH configuration resolution.
+// probes, jobs, name lookups, a device's service check, or SSH configuration
+// resolution.
 func (m model) spinnerActive() bool {
-	return ((!m.toolbox || m.generation > 0 || m.chainRan()) && !m.allDone()) || m.jobsRunning() || len(m.namesPending) > 0 || m.ssh.pending != nil
+	return ((!m.toolbox || m.generation > 0 || m.chainRan()) && !m.allDone()) || m.jobsRunning() ||
+		len(m.namesPending) > 0 || m.svcPending() || m.ssh.pending != nil
 }
+
+// svcPending reports whether an opened device's service check is still in
+// flight, which is the one thing on the map with nothing else to animate it.
+func (m model) svcPending() bool { return m.svc.host != "" && !m.svc.done }
 
 // setNotice shows one-line feedback and schedules its expiry. The expiry tick
 // carries the deadline it was armed with, so a leftover tick from an earlier
@@ -562,11 +595,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// so those rows fall back to nmap's own name instead of spinning
 		// forever.
 		mapOpen, mapSel, cidr, names := m.networkMap, m.mapSelected, m.networkCIDR, m.hostNames
+		// The opened device's service list is carried over for the same
+		// reason: a pass that happens while the user is reading it must not
+		// throw the list away and drop them back on the device rows.
+		svc := m.svc
 		cmd := m.doRestart()
 		m.cur, m.otherJobs = cur, other
 		m.pending, m.confirmTool, m.sshPrompt = pending, confirm, ssh
 		m.notice, m.selMoved = notice, selMoved
 		m.networkMap, m.mapSelected, m.networkCIDR, m.hostNames = mapOpen, mapSel, cidr, names
+		m.svc = svc
 		if m.viewing {
 			m.refreshViewport()
 		}
@@ -670,6 +708,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return m, tea.Batch(cmds...)
+
+	case lanServicesMsg:
+		// The device is checked as well as the generation: esc and a second
+		// device both leave an in-flight scan behind, and its reply must not
+		// land on whatever is on screen by the time it arrives.
+		if msg.gen != m.generation || msg.host != m.svc.host {
+			return m, nil
+		}
+		m.svc.scan, m.svc.done, m.svc.sel = msg.scan, true, 0
+		return m, nil
 
 	case lanNameMsg:
 		if msg.gen != m.generation {

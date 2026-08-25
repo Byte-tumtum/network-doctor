@@ -59,26 +59,26 @@ type actionHelp struct {
 // actionDefs is the shared dispatch context, help text, and cheatsheet order.
 var actionDefs = []actionDef{
 	{actUp, "up", map[keyContext]actionHelp{
-		ctxList:   {"select", "previous check, or device on the network map"},
+		ctxList:   {"select", "previous check, or device/service on the network map"},
 		ctxViewer: {"scroll", "scroll up"},
 	}},
 	{actDown, "down", map[keyContext]actionHelp{
-		ctxList:   {"select", "next check, or device on the network map"},
+		ctxList:   {"select", "next check, or device/service on the network map"},
 		ctxViewer: {"scroll", "scroll down"},
 	}},
 	{actTop, "top", map[keyContext]actionHelp{
-		ctxList:   {"first/last", "first check, or device on the network map"},
+		ctxList:   {"first/last", "first check, or device/service on the network map"},
 		ctxViewer: {"top/bottom", "jump to top"},
 	}},
 	{actBottom, "bottom", map[keyContext]actionHelp{
-		ctxList:   {"first/last", "last check, or device on the network map"},
+		ctxList:   {"first/last", "last check, or device/service on the network map"},
 		ctxViewer: {"top/bottom", "jump to bottom (re-enables follow)"},
 	}},
 	{actPageUp, "page-up", map[keyContext]actionHelp{ctxViewer: {"page", "page up"}}},
 	{actPageDown, "page-down", map[keyContext]actionHelp{ctxViewer: {"page", "page down"}}},
 	{actHalfPageUp, "half-page-up", map[keyContext]actionHelp{ctxViewer: {"half page", "half page up"}}},
 	{actHalfPageDown, "half-page-down", map[keyContext]actionHelp{ctxViewer: {"half page", "half page down"}}},
-	{actOpen, "open", map[keyContext]actionHelp{ctxList: {"open", "full output, or set target on the network map"}}},
+	{actOpen, "open", map[keyContext]actionHelp{ctxList: {"open", "full output; on the network map, open a device then diagnose one of its services"}}},
 	{actFilter, "filter", map[keyContext]actionHelp{ctxViewer: {"filter", "filter lines"}}},
 	{actCopy, "copy", map[keyContext]actionHelp{
 		ctxList:   {"copy", "copy selected portal URL, otherwise report"},
@@ -92,8 +92,8 @@ var actionDefs = []actionDef{
 		ctxList:   {"switch job", "switch job"},
 		ctxViewer: {"switch job", "switch job"},
 	}},
-	{actCancelJob, "cancel-job", map[keyContext]actionHelp{ctxList: {"cancel job", "cancel the focused job"}}},
-	{actNetworkMap, "network-map", map[keyContext]actionHelp{ctxList: {"network map", "toggle network map"}}},
+	{actCancelJob, "cancel-job", map[keyContext]actionHelp{ctxList: {"cancel job", "cancel the focused job, or leave an opened device on the network map"}}},
+	{actNetworkMap, "network-map", map[keyContext]actionHelp{ctxList: {"network map", "find a device on the local network, and back to the checks"}}},
 	{actExpand, "expand", map[keyContext]actionHelp{ctxList: {"expand", "show the collapsed passing checks and the whole toolbox"}}},
 	{actRestart, "restart", map[keyContext]actionHelp{ctxList: {"restart", "restart with a new target"}}},
 	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "log in to a host, handing the terminal to ssh"}}},

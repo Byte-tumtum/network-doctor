@@ -612,8 +612,47 @@ func (m model) namePending(address string) bool {
 	return m.hostNames[address] == "" && (m.namesPending[address] || m.cur.active != nil)
 }
 
-// networkMapView renders hosts found by the LAN scan.
+// serviceChooserView renders what one opened device answered on the common
+// service ports: the endpoints the checks can be pointed at, or, when there
+// are none, exactly what was learned instead of guessing at one.
+func (m model) serviceChooserView() string {
+	var b strings.Builder
+	b.WriteString(panelTitleStyle.Render("Services on "+m.svc.name) + "\n")
+	scan := m.svc.scan
+	switch {
+	case !m.svc.done:
+		b.WriteString(m.spinner.View() + faintStyle.Render(" checking common service ports…") + "\n")
+	case len(scan.Open) > 0:
+		for i, svc := range scan.Open {
+			branch := "├─ "
+			if i == len(scan.Open)-1 {
+				branch = "└─ "
+			}
+			row := fmt.Sprintf("%-5d %s", svc.Port, svc.Name)
+			marker := "  "
+			if i == m.svc.sel {
+				marker, row = selStyle.Render("› "), selStyle.Render(row)
+			}
+			b.WriteString(marker + faintStyle.Render(branch) + passStyle.Render("●") + " " + row + "\n")
+		}
+	case scan.Refused > 0:
+		// A refusal is an answer: the device is there and reachable, and the
+		// only thing missing is something listening.
+		b.WriteString(faintStyle.Render(fmt.Sprintf("└─ No common service answered, but %d of %d ports refused the connection, so the device is on the network.", scan.Refused, scan.Checked())) + "\n")
+		b.WriteString(faintStyle.Render("Press "+m.keys.label(ctxList, actRestart)+" to name a port yourself.") + "\n")
+	default:
+		b.WriteString(faintStyle.Render(fmt.Sprintf("└─ Nothing answered on any of the %d ports checked: the device may be powered off, may have left the network, or may be dropping connections.", scan.Checked())) + "\n")
+		b.WriteString(faintStyle.Render("Press "+m.keys.label(ctxList, actRestart)+" to name a port yourself.") + "\n")
+	}
+	return panelStyle.Width(max(m.width-2, 24)).Render(strings.TrimRight(b.String(), "\n"))
+}
+
+// networkMapView renders hosts found by the LAN scan, or the services of the
+// device opened from it.
 func (m model) networkMapView() string {
+	if m.svc.host != "" {
+		return m.serviceChooserView()
+	}
 	source, _ := m.discoveryNetwork()
 	hosts := m.networkHosts()
 	// Only names that carry a domain vote here: a bare ssh alias like
@@ -812,10 +851,11 @@ func (m model) sshFormView() string {
 }
 
 func (m model) helpView(deferred bool) string {
-	// Only the map branch cares how many devices there are, and networkHosts
-	// walks the whole job line buffer, so don't pay for it on every checks frame.
+	// Only the device-list branch cares how many devices there are, and
+	// networkHosts walks the whole job line buffer, so don't pay for it on
+	// every checks frame or while the services of one device are on screen.
 	hosts := 0
-	if m.networkMap {
+	if m.networkMap && m.svc.host == "" {
 		hosts = len(m.networkHosts())
 	}
 	// Every chip is looked up in the selected preset.
@@ -838,11 +878,19 @@ func (m model) helpView(deferred bool) string {
 		}
 	}
 	switch {
+	case m.networkMap && m.svc.host != "":
+		if len(m.svc.scan.Open) > 0 {
+			add(m.keys.pairLabel(ctxList, actUp, actDown), "select service")
+			addPair(actTop, actBottom)
+			add(m.keys.label(ctxList, actOpen), "diagnose it")
+		}
+		add(m.keys.label(ctxList, actCancelJob), "devices")
+		add(m.keys.label(ctxList, actNetworkMap), "checks")
 	case m.networkMap:
 		if hosts > 0 {
 			add(m.keys.pairLabel(ctxList, actUp, actDown), "select device")
 			addPair(actTop, actBottom)
-			add(m.keys.label(ctxList, actOpen), "set target")
+			add(m.keys.label(ctxList, actOpen), "open device")
 		}
 		add(m.keys.label(ctxList, actNetworkMap), "checks")
 	case deferred:
@@ -864,9 +912,10 @@ func (m model) helpView(deferred bool) string {
 		}
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
-	// hint tracks exactly when the key does something. On the map with devices
-	// listed, it sets the target instead.
-	if m.hasJob() && (!m.networkMap || hosts == 0) {
+	// hint tracks exactly when the key does something. On the map it opens a
+	// device or diagnoses a service instead, so it is only the empty device
+	// list that leaves the key free.
+	if m.hasJob() && (!m.networkMap || m.svc.host == "" && hosts == 0) {
 		add(m.keys.label(ctxList, actOpen), "full output")
 	}
 	if !deferred && m.cur.active != nil {
@@ -998,6 +1047,11 @@ func (m model) banner() string {
 	// two ways at once.
 	i := m.answerRow()
 	if i < 0 {
+		// Nothing to fix and nothing to chase, which is the one moment there
+		// is room to say what else netdoc can be pointed at.
+		if hint := m.localDeviceHint(); hint != "" {
+			return lines[0] + "\n  " + hint
+		}
 		return lines[0]
 	}
 	blamed := m.probes[i].ID
@@ -1016,6 +1070,22 @@ func (m model) banner() string {
 		lines = append(lines, faintStyle.Render(line))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// localDeviceHint is the way into the local-device workflow for a reader with
+// no failure to chase. A finished targetless run on a private network has
+// nothing else to suggest, and finding another device is the part of netdoc
+// least likely to be stumbled upon. Empty everywhere else, including on a
+// machine with no private IPv4 network to sweep, where the key would only
+// answer that there is nothing to map.
+func (m model) localDeviceHint() string {
+	if m.target != nil || m.networkMap || !m.keys.bound(ctxList, actNetworkMap) {
+		return ""
+	}
+	if _, cidr := m.discoveryNetwork(); cidr == "" {
+		return ""
+	}
+	return "Next: press " + selStyle.Render(m.keys.label(ctxList, actNetworkMap)) + " to find a device on your network and diagnose it"
 }
 
 // evidenceLine is the answer block's quote of a probe's finding, clipped to one
