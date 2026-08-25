@@ -41,8 +41,11 @@ netdoc --json host      # structured report for scripts or bug reports
 ```
 
 Run `netdoc` with no target to check the local interface, internet egress,
-configured proxy, public DNS, and Wi-Fi metadata. In the TUI, select a failed
-row to see its evidence and suggested fix; press `?` for every shortcut.
+configured proxy, public DNS, and Wi-Fi metadata. A finished run leads with the
+answer: the verdict, the fix, the tool worth reaching for next, and the one line
+of evidence the verdict rests on, above the checks that produced them. Select
+any other row to see its own evidence and suggested fix; press `?` for every
+shortcut.
 
 ## Install
 

@@ -750,7 +750,9 @@ func TestVisibleRowOrderAcrossMixedStatuses(t *testing.T) {
 }
 
 // TestCursorWalkKeepsDetailsAligned: hiding rows must not decouple the cursor
-// from the panel that describes it. Every step down names its own probe.
+// from what describes it. Every step down is described by its own probe's
+// Details panel, or, on the one row the answer block above the panels is
+// already quoting, by that block.
 func TestCursorWalkKeepsDetailsAligned(t *testing.T) {
 	m, _ := renderAt(t, naModel(t, diagnostic.ProbeDNS))
 	rows := m.checkRows()
@@ -760,8 +762,16 @@ func TestCursorWalkKeepsDetailsAligned(t *testing.T) {
 		}
 		v := m.View()
 		name := m.probes[i].Name
-		if !strings.Contains(v, "Details: "+name) {
-			t.Fatalf("row %d (%q) has the wrong Details panel:\n%s", i, name, v)
+		described := strings.Contains(v, "Details: "+name)
+		if i == m.answerRow() {
+			// The answer block owns this row: it carries the finding, the
+			// remedy and the evidence, so the panel is not a second place to
+			// look for them. It comes back the moment the cursor leaves.
+			line, _ := m.evidenceLine(m.results[m.probes[i].ID].Detail)
+			described = strings.Contains(v, strings.TrimSpace(line))
+		}
+		if !described {
+			t.Fatalf("row %d (%q) is described nowhere:\n%s", i, name, v)
 		}
 		if !hasRow(v, name) {
 			t.Fatalf("the cursor row %q is not in the Checks view:\n%s", name, v)

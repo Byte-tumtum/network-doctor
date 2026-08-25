@@ -136,9 +136,9 @@ func (m model) View() string {
 	// toolbox chips lose their names first (they wrap to a row per couple of
 	// tools on a narrow terminal), then the results block scrolls down toward
 	// a single probe row, then the chips and finally the block go entirely.
-	// The banner carries the verdict with its Fix and Next lines, the header
-	// carries the target that verdict is about, and the help bar is the way to
-	// anywhere else, so those three never yield to the results block.
+	// The banner carries the answer with its Fix, Next and Evidence lines, the
+	// header carries the target that answer is about, and the help bar is the
+	// way to anywhere else, so those three never yield to the results block.
 	if m.height > 0 && avail < minAvail {
 		toolbox = m.toolboxView(true)
 		budget()
@@ -164,7 +164,7 @@ func (m model) View() string {
 		// Last resort: a terminal too short for the banner, the header and the
 		// help bar together. Clip from the bottom: losing the help bar beats
 		// the renderer eating the top of the screen, which is where the
-		// verdict and its Fix and Next lines live.
+		// verdict and the guidance under it live.
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
 	}
 	return out
@@ -369,8 +369,19 @@ func (m model) detailRows(deferred bool) []string {
 	probe := m.probes[m.selected]
 	var body strings.Builder
 	if r, ok := m.results[probe.ID]; ok {
-		body.WriteString(statusStyles[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
-		if (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
+		// The answer block above is already quoting this row's finding and its
+		// remedy, a few rows higher and ahead of the panels, so the panel adds
+		// only what that quote left out: it repeats the finding when the quote
+		// had to be clipped to one row, and never repeats the remedy, which is
+		// up there in full either way. A panel that says again what the answer
+		// said reads as a second, competing answer. Every other row keeps both
+		// lines, because nothing else on screen is saying them.
+		_, quoted := m.evidenceLine(r.Detail)
+		answered := m.selected == m.answerRow()
+		if !answered || !quoted {
+			body.WriteString(statusStyles[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
+		}
+		if !answered && (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
 			body.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
 		}
 		if r.Portal != nil && r.Portal.RedirectURL != "" {
@@ -974,12 +985,18 @@ func (m model) banner() string {
 	}
 	summary, verdict := m.diagnose(m.probeOrder())
 	st := verdictStatus(verdict)
-	lines := []string{statusStyles[st].Render(probeGlyph(st) + " " + summary)}
-	// Both remediation lines follow the row the verdict blames rather than the
-	// first failing row: a path MTU black hole fails TLS but the evidence and
-	// the remedy are both on the Path MTU row, and a "Fix:" taken from one row
-	// with a "Next:" taken from another sends the reader two ways at once.
-	i := m.focusRow()
+	// Bold as well as coloured: the panel titles under this sentence are bold,
+	// and the answer must not be the lighter of the two. A terminal that
+	// renders no attributes at all drops both together, which is why the
+	// hierarchy is carried by position, by the glyph and by the labels below,
+	// and never by weight alone.
+	lines := []string{statusStyles[st].Bold(true).Render(probeGlyph(st) + " " + summary)}
+	// All three lines under the verdict follow the row the diagnosis blames
+	// rather than the first failing row: a path MTU black hole fails TLS but
+	// the evidence and the remedy are both on the Path MTU row, and a "Fix:"
+	// taken from one row with a "Next:" taken from another sends the reader
+	// two ways at once.
+	i := m.answerRow()
 	if i < 0 {
 		return lines[0]
 	}
@@ -990,7 +1007,46 @@ func (m model) banner() string {
 	if next := m.nextStep(blamed); next != "" {
 		lines = append(lines, "  "+next)
 	}
+	// The evidence comes last, because it is what supports the answer rather
+	// than what the reader does about it. One row: it is quoted here to save
+	// the reader a trip to the Checks panel for the "why", not to reproduce
+	// the panel, and the cursor is already parked on the row that holds the
+	// whole of it.
+	if line, _ := m.evidenceLine(m.results[blamed].Detail); line != "" {
+		lines = append(lines, faintStyle.Render(line))
+	}
 	return strings.Join(lines, "\n")
+}
+
+// evidenceLine is the answer block's quote of a probe's finding, clipped to one
+// terminal row, plus whether the whole finding fit inside it. The clip is what
+// holds the evidence to one line however long a probe's detail runs: some of
+// them are a paragraph, and supporting evidence that reflows into six rows
+// crowds out the answer it is supporting. The Details panel reads the second
+// return to decide whether it still has the rest of that finding to add. Empty
+// detail yields an empty line, and the caller drops it rather than labelling
+// nothing.
+func (m model) evidenceLine(detail string) (line string, whole bool) {
+	if detail == "" {
+		return "", true
+	}
+	line = "  Evidence: " + detail
+	if m.width <= 0 {
+		return line, true
+	}
+	clipped := ansi.Truncate(line, m.width, "…")
+	return clipped, clipped == line
+}
+
+// answerRow is the probe row the answer block above the panels is quoting: the
+// row the finished diagnosis blames, and -1 when the run is unfinished or the
+// diagnosis blames no row. The Details panel reads it to avoid printing the
+// same finding twice, a few rows apart, in two different places.
+func (m model) answerRow() int {
+	if !m.allDone() {
+		return -1
+	}
+	return m.focusRow()
 }
 
 // probeOrder is the run's probe IDs in DAG order, which is what the diagnosis

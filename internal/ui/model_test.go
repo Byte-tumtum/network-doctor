@@ -909,14 +909,12 @@ func TestCompletionSelectsBlamedRow(t *testing.T) {
 			if got := done.probes[done.selected].ID; got != tt.want {
 				t.Fatalf("selected row = %s, want %s", got, tt.want)
 			}
-			var wantName string
-			for _, p := range done.probes {
-				if p.ID == tt.want {
-					wantName = "Details: " + p.Name
-				}
-			}
-			if body := done.bodyView(false, 0); !strings.Contains(body, wantName) {
-				t.Errorf("Details pane does not show %q:\n%s", wantName, body)
+			// The blamed row is the one the answer block quotes, so that is
+			// where its finding, its remedy and its evidence are: the Details
+			// panel deliberately does not print them a second time.
+			line, _ := done.evidenceLine(done.results[tt.want].Detail)
+			if banner := done.banner(); !strings.Contains(banner, strings.TrimSpace(line)) {
+				t.Errorf("the answer block does not quote %s:\n%s", tt.want, banner)
 			}
 		})
 	}

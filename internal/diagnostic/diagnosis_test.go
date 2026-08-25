@@ -285,10 +285,11 @@ func TestDiagnoseTargetWarnings(t *testing.T) {
 	}
 }
 
-// FocusProbe is what lets the UI park the cursor on the row the prose points
-// at. It has to stay tied to the verdict that was actually reached: a black
-// hole preempted by a broken resolver blames nothing, or the cursor would land
-// on Path MTU while the banner talks about DNS.
+// FocusProbe is what lets the UI park the cursor, the remediation and the
+// evidence on the row the prose points at. It has to stay tied to the verdict
+// that was actually reached: a black hole preempted by a broken resolver
+// blames the resolver, or the cursor would land on Path MTU while the banner
+// talks about DNS.
 func TestFocusProbe(t *testing.T) {
 	tg := mustTarget(t, "github.com")
 	order := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbePMTU, ProbeTLS, ProbeHTTP, ProbeHTTPS}
@@ -309,16 +310,22 @@ func TestFocusProbe(t *testing.T) {
 		want ProbeID
 	}{
 		{"path MTU black hole", blackHole, ProbePMTU},
-		{"immediate TLS failure", map[ProbeID]ProbeResult{ProbeTLS: {Status: StatusFail}}, ""},
-		{"a stall with no PMTU warning", map[ProbeID]ProbeResult{ProbeTLS: {Status: StatusFail, Cause: TLSCauseTimeout}}, ""},
+		// No black hole to redirect the reader: the handshake failure is its
+		// own answer, so the TLS row is the row the sentence is about.
+		{"immediate TLS failure", map[ProbeID]ProbeResult{ProbeTLS: {Status: StatusFail}}, ProbeTLS},
+		{"a stall with no PMTU warning", map[ProbeID]ProbeResult{ProbeTLS: {Status: StatusFail, Cause: TLSCauseTimeout}}, ProbeTLS},
 		// TLS reaching the far end while the bulk rows do not is the same
 		// black hole seen through the other half of the correlation.
 		{"the stall shows only on the HTTP rows", map[ProbeID]ProbeResult{
 			ProbePMTU: {Status: StatusWarn},
 			ProbeHTTP: {Status: StatusFail, timedOut: true},
 		}, ProbePMTU},
+		// Nothing failed and nothing is degraded, so there is no row to send
+		// the reader to and none is invented.
 		{"everything passes", nil, ""},
-		{"resolver failure outranks the stall", withDNSDown, ""},
+		// The resolver preempts the black hole, so the row follows the prose
+		// down to DNS rather than staying on the stall the verdict dropped.
+		{"resolver failure outranks the stall", withDNSDown, ProbeDNS},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

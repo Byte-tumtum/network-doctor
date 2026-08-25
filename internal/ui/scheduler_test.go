@@ -114,8 +114,10 @@ func TestCompletedRunSelectsFirstFailure(t *testing.T) {
 	if nm.selected != 7 {
 		t.Fatalf("selected = %d, want first failed probe 7", nm.selected)
 	}
-	if !strings.Contains(nm.bodyView(false, 0), "connection refused") {
-		t.Error("details panel must show the selected failure")
+	// The row the run blames is the row the answer block quotes, so the
+	// evidence for it is above the panels rather than inside one.
+	if !strings.Contains(nm.banner(), "connection refused") {
+		t.Error("the answer block must quote the selected failure")
 	}
 }
 

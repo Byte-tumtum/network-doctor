@@ -137,9 +137,12 @@ func TestChecksPanelMarksCollateralFailures(t *testing.T) {
 				})
 				return m
 			},
-			// Only the rows that go direct by construction: the proxy proves
-			// the network carries traffic, so the resolver is its own problem.
-			want: []diagnostic.ProbeID{diagnostic.ProbeDNSEncrypted},
+			// The proxy proves the network carries traffic, so the resolver
+			// failing on top of it is its own problem and keeps its red. The
+			// rows that go direct by construction do not: the direct path is
+			// down, so their failures are that one dead path seen again.
+			want:   []diagnostic.ProbeID{diagnostic.ProbeQUIC, diagnostic.ProbeDNSEncrypted},
+			actual: diagnostic.ProbeDNS,
 		},
 		{
 			name: "the target's own service failing",
@@ -175,7 +178,9 @@ func TestChecksPanelMarksCollateralFailures(t *testing.T) {
 			want: []diagnostic.ProbeID{
 				diagnostic.ProbeQUIC, diagnostic.ProbeDNSEncrypted,
 			},
-			actual: diagnostic.ProbeInternet,
+			// The egress row failed first, but the sentence on screen is about
+			// the resolver, so that is the row the reader is sent to.
+			actual: diagnostic.ProbeDNS,
 		},
 	}
 

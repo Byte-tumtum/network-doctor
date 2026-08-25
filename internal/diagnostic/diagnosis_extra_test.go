@@ -533,6 +533,10 @@ func TestCollateralNamesOnlyExplainedFailures(t *testing.T) {
 			},
 		},
 		{
+			// The proxy carries traffic, so a resolver failing on top of it is
+			// its own problem and keeps its red. The two rows that go direct by
+			// construction do not: with the direct path down, their failures
+			// are what that one dead path looks like from two more probes.
 			name:  "proxy-only: the resolver is its own problem, the direct rows are not",
 			order: genericOrder,
 			res: map[ProbeID]ProbeResult{
@@ -540,7 +544,7 @@ func TestCollateralNamesOnlyExplainedFailures(t *testing.T) {
 				ProbeQUIC: fail, ProbeProxy: pass,
 				ProbeDNS: fail, ProbeDNSPublic: na, ProbeDNSEncrypted: fail,
 			},
-			want: []ProbeID{ProbeDNSEncrypted},
+			want: []ProbeID{ProbeQUIC, ProbeDNSEncrypted},
 		},
 		{
 			name:   "target service failure with every rung under it working",

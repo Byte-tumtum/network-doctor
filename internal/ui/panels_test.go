@@ -313,6 +313,9 @@ func TestDetailsPanelIsDroppedWhenItHasNothingToSay(t *testing.T) {
 // TestDetailsPanelComesBackWithContent is the other half of that rule: the
 // panel is decided by what it would contain, not by the verdict. A healthy run
 // still has a cursor row with evidence, and the panel is there to carry it.
+// The failing row is the case where the answer block has taken the finding and
+// the remedy: what the panel is left holding is the raw probe evidence, and
+// that is enough to keep it on screen.
 func TestDetailsPanelComesBackWithContent(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -320,7 +323,7 @@ func TestDetailsPanelComesBackWithContent(t *testing.T) {
 		want  string
 	}{
 		{"healthy run", wifiModel, "interface wlan0 is up"},
-		{"failing row", evidenceModel, "no A or AAAA record"},
+		{"failing row", evidenceModel, "198.51.100.10"},
 		{"checks not run yet", func(t *testing.T) model { return newModel(mustTarget(t, "example.com:443"), true) },
 			"the checks haven't run"},
 	} {
