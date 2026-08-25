@@ -214,6 +214,7 @@ netdoc github.com:22    # port selects the protocol rows (→ SSH banner)
 netdoc https://host:80  # explicit scheme selects the protocol (→ TLS + HTTPS on :80)
 netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
+netdoc --save incident.ndoc host  # headless: save the finished run as a snapshot file
 netdoc --watch host     # TUI: re-run continuously and track intermittent failures
 netdoc --json --watch host  # headless: one JSON report per line, until interrupted
 netdoc --check dns,target_tcp,tls example.com  # run only these IDs and their prerequisites
@@ -315,6 +316,18 @@ The typed password never reaches argv or shell history; it's handed to `ssh` thr
 
 Field names and the status vocabulary are stable, so they are safe to script against. The full field reference (`cause` values, `address_families`, `failed_stage`, `--json --watch` NDJSON) is in **[docs/reference.md](docs/reference.md#json-output)**.
 
+### Diagnostic snapshots
+
+`--save file` runs the checks headless and writes the finished run to a `.ndoc` file, so it can be reopened later without probing anything again:
+
+```sh
+netdoc --save incident.ndoc github.com
+```
+
+The file is versioned JSON (`"schema": "netdoc.snapshot.v1"`) holding the target as typed and as parsed, the run settings, every check with its status, timings and evidence, and the diagnosis. It is for the failure you cannot reproduce on demand, and for the comparison of two runs a later release will do for you. It never changes the diagnosis or the exit code, and can be combined with `--json` to get the report on stdout too.
+
+A snapshot is network information about the machine that produced it: addresses, the source interface, the connected Wi-Fi network name. It carries no credentials, and nothing is uploaded anywhere. There is no redaction pass yet, so read one before sharing it. Full format, versioning rules, and the field-by-field privacy note are in **[docs/reference.md](docs/reference.md#diagnostic-snapshots)**.
+
 ### Two-ended peer diagnosis
 
 Peer mode compares independently observed traffic in both directions instead
@@ -387,7 +400,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), report copy/save.
 
 ## Built with
 

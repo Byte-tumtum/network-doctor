@@ -18,6 +18,7 @@ func TestPackageLayering(t *testing.T) {
 	layers := map[string]int{
 		"internal/textsafe":   0,
 		"internal/report":     0,
+		"internal/snapshot":   0,
 		"internal/diagnostic": 1,
 		"internal/peer":       2,
 		"internal/ui":         2,
@@ -72,7 +73,7 @@ func TestPackageLayering(t *testing.T) {
 				continue
 			}
 			if sourceKnown && dependencyLayer >= sourceLayer {
-				t.Errorf("%s: package layering violation: %s depends on %s; rule: dependencies must point down ui/peer/simulation -> diagnostic -> report/textsafe", fset.Position(spec.Pos()), pkg, dependency)
+				t.Errorf("%s: package layering violation: %s depends on %s; rule: dependencies must point down ui/peer/simulation -> diagnostic -> report/snapshot/textsafe", fset.Position(spec.Pos()), pkg, dependency)
 			}
 		}
 		return nil

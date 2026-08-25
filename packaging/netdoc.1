@@ -97,6 +97,32 @@ those lines carry an extra
 .B ts
 field (RFC 3339, UTC) and are otherwise the one-shot report unchanged.
 .TP
+.BI \-save " file"
+Run the checks headless and write a diagnostic snapshot of the finished run to
+.IR file ,
+conventionally with a
+.B .ndoc
+extension. The file is JSON carrying an explicit
+.B netdoc.snapshot.v1
+schema field, and holds what the run observed and what it concluded: the
+target as typed and as parsed, the run settings, every check with its status,
+timings and evidence, and the diagnosis. It exists to be reopened, compared,
+or attached to a bug report later, without probing anything again.
+.IP
+Implies headless operation, so it needs no terminal, and it is independent of
+.BR \-json ,
+which may be given alongside to get the report on standard output as well.
+Cannot be combined with
+.B \-watch
+or
+.BR \-toolbox .
+The snapshot never changes the diagnosis or the exit code; a snapshot that
+cannot be written exits
+.BR 2 .
+A snapshot contains network information about the machine that ran it,
+including addresses, interface names, and the connected Wi\-Fi network name.
+It carries no credentials.
+.TP
 .BI \-peer\-listen " IP:port"
 Open one temporary authenticated peer session on an exact local unicast IP and
 port. Port zero asks the kernel to choose an ephemeral port. Repeat once to

@@ -24,6 +24,7 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/peer"
 	"github.com/heymaikol/network-doctor/internal/report"
+	"github.com/heymaikol/network-doctor/internal/snapshot"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 	"github.com/heymaikol/network-doctor/internal/ui"
 )
@@ -205,6 +206,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {}
 	toolbox := fs.Bool("toolbox", false, "start in toolbox mode")
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
+	save := fs.String("save", "", "run the checks headless and write a diagnostic snapshot to `file` (.ndoc)")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	var peerListen peerListenList
 	fs.Var(&peerListen, "peer-listen", "listen for one authenticated peer on exact `IP:port`; repeat for the other address family")
@@ -263,7 +265,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if peerMode {
 		setFlags := map[string]bool{}
 		fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
-		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys"} {
+		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save"} {
 			if setFlags[name] {
 				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with peer mode\n", name)
 				return 2
@@ -285,6 +287,35 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *jsonOut && *toolbox {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
+	}
+	if *save != "" {
+		if *toolbox {
+			fmt.Fprintln(stderr, "netdoc: -save and -toolbox cannot be combined")
+			return 2
+		}
+		// A snapshot is one finished run, and -watch never finishes: writing
+		// one per pass would leave whichever pass happened to be last, which is
+		// not a decision to make silently. Recording a watch is its own
+		// feature, and this is not it.
+		if *watch {
+			fmt.Fprintln(stderr, "netdoc: -save and -watch cannot be combined")
+			return 2
+		}
+		// Checked before any probe runs: a snapshot into a directory that is
+		// not there is a typo, and finding out after several seconds of
+		// network traffic helps nobody. This is the argument check every other
+		// flag gets, not a claim that the write will succeed.
+		if dir := filepath.Dir(*save); dir != "" {
+			info, err := os.Stat(dir)
+			if err != nil {
+				fmt.Fprintln(stderr, "netdoc: -save:", textsafe.Clean(err.Error()))
+				return 2
+			}
+			if !info.IsDir() {
+				fmt.Fprintf(stderr, "netdoc: -save: %s is not a directory\n", textsafe.Clean(dir))
+				return 2
+			}
+		}
 	}
 	// An IP, never a hostname: resolving the second opinion through the
 	// resolver it exists to cross-check would defeat the check. Empty is a
@@ -336,8 +367,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	if *jsonOut {
-		return runJSON(context.Background(), t, sources, *watch, *publicDNS, selection, *timeout, stdout, stderr)
+	// -save runs headless for the same reason -json does: a snapshot is a
+	// finished run, and the TUI's run is not finished until the user leaves it.
+	if *jsonOut || *save != "" {
+		return runHeadless(context.Background(), headless{
+			target: t, sources: sources, selection: selection,
+			check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
+			watch: *watch, json: *jsonOut, save: *save,
+		}, stdout, stderr)
 	}
 
 	// With no terminal on stdout the TUI has nowhere to draw: bubbletea would
@@ -528,15 +565,40 @@ func emitPeerResult(result peer.Result, jsonOut bool, stdout, stderr io.Writer) 
 // runAll is stubbed in tests so -json runs don't touch the network.
 var runAll = diagnostic.RunAll
 
-// runJSON runs the probe DAG headless and prints the JSON report. Exit code
-// mirrors the TUI contract: 1 if any check failed, else 0.
+// headless is one non-TUI run: what to probe, and what to do with the result.
+// It is a struct rather than a parameter list because -save reads most of the
+// same settings the JSON report does, and a second copy of them passed
+// alongside would be a second chance for the two to disagree.
+type headless struct {
+	target    *diagnostic.Target
+	sources   *diagnostic.SourceAddresses
+	selection diagnostic.ProbeSelection
+	// check and skip are the selection as the user spelled it. selection holds
+	// the same IDs as sets, which have no order to record.
+	check     probeList
+	skip      probeList
+	publicDNS string
+	timeout   time.Duration
+	watch     bool
+	// json asks for the report on stdout. It is independent of save: a run can
+	// want the artifact, the report, or both.
+	json bool
+	// save is the .ndoc destination, empty when no snapshot was asked for.
+	save string
+}
+
+// runHeadless runs the probe DAG headless, prints the JSON report when one was
+// asked for, and writes the snapshot when one was. Exit code mirrors the TUI
+// contract: 1 if any check failed, else 0. A snapshot that cannot be written
+// is exit 2, the environment-is-wrong code, since the artifact the run was for
+// does not exist; the diagnosis it reached is untouched either way.
 //
 // With watch it never stops on its own: one compact report per line, forever,
 // until the terminal interrupts it. That's NDJSON, but not a new schema: the
 // line is the same report struct, plus the ts that makes a stream readable.
-func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.SourceAddresses, watch bool, publicDNS string, selection diagnostic.ProbeSelection, timeout time.Duration, stdout, stderr io.Writer) int {
+func runHeadless(ctx context.Context, h headless, stdout, stderr io.Writer) int {
 	enc := json.NewEncoder(stdout)
-	if !watch {
+	if !h.watch {
 		enc.SetIndent("", "  ")
 	} else {
 		// Ctrl-C, or the SIGTERM a supervisor sends, has to end the stream
@@ -550,26 +612,37 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 	// success, so an interrupt before the first line lands has to fail closed.
 	code := 1
 	for {
-		probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS))
-		results := runAll(ctx, probes, timeout)
+		probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
+		results := runAll(ctx, probes, h.timeout)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,
 			// so reporting that pass would be a lie.
 			return code
 		}
-		rep := buildReport(t, probes, results)
+		rep := buildReport(h.target, probes, results)
 		code = 0
 		if !rep.OK {
 			code = 1
 		}
-		if watch {
+		if h.watch {
 			rep.Ts = time.Now().UTC().Format(time.RFC3339)
 		}
-		if err := enc.Encode(rep); err != nil {
-			fmt.Fprintln(stderr, "netdoc:", err)
-			return 1
+		if h.json {
+			if err := enc.Encode(rep); err != nil {
+				fmt.Fprintln(stderr, "netdoc:", err)
+				return 1
+			}
 		}
-		if !watch {
+		// The snapshot is written after the report, so a save that fails leaves
+		// the stdout contract already honored: the run's answer reaches a pipe
+		// either way, and only the exit code says the artifact is missing.
+		if h.save != "" {
+			if err := writeSnapshot(h, probes, results); err != nil {
+				fmt.Fprintln(stderr, "netdoc: -save:", textsafe.Clean(err.Error()))
+				return 2
+			}
+		}
+		if !h.watch {
 			return code
 		}
 		select {
@@ -579,6 +652,48 @@ func runJSON(ctx context.Context, t *diagnostic.Target, sources *diagnostic.Sour
 		}
 	}
 }
+
+// snapshotWriteFile is stubbed in tests that need the write itself to fail.
+var snapshotWriteFile = snapshot.WriteFile
+
+// writeSnapshot builds the portable artifact for a finished run and saves it.
+//
+// The conversion from probe results lives in internal/diagnostic, which is the
+// only package that can read its own evidence. What is added here is what
+// describes the invocation rather than the network: which build ran, when, and
+// the settings that decide what the probes did, so a later comparison can tell
+// a changed network from a differently configured run.
+func writeSnapshot(h headless, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) error {
+	s := diagnostic.BuildSnapshot(h.target, probes, results)
+	s.Tool = snapshot.Tool{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH}
+	s.CreatedAt = timeNow().UTC().Format(time.RFC3339)
+	s.Options = snapshot.Options{
+		ProbeTimeoutMs: h.timeout.Milliseconds(),
+		PublicDNS:      h.publicDNS,
+	}
+	for _, id := range h.check {
+		s.Options.Check = append(s.Options.Check, string(id))
+	}
+	for _, id := range h.skip {
+		s.Options.Skip = append(s.Options.Skip, string(id))
+	}
+	// Only the binding netdoc was told to use. Nothing here enumerates the
+	// machine's other interfaces or addresses.
+	if h.sources != nil {
+		source := snapshot.Source{Interface: h.sources.Iface}
+		if h.sources.IPv4 != nil {
+			source.IPv4 = h.sources.IPv4.String()
+		}
+		if h.sources.IPv6 != nil {
+			source.IPv6 = h.sources.IPv6.String()
+		}
+		s.Options.Source = &source
+	}
+	return snapshotWriteFile(h.save, s)
+}
+
+// timeNow is stubbed in tests so a snapshot's timestamp is reproducible.
+var timeNow = time.Now
 
 // buildReport flattens probe results into the stable JSON shape, preserving
 // probe order. OK means "no check failed"; Warn, Skip, and N/A don't count

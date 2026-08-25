@@ -23,6 +23,12 @@ _netdoc() {
             COMPREPLY=($(compgen -W "default vim" -- "$cur"))
             return
             ;;
+        -save | --save)
+            # A path to write the snapshot to, so this is the one flag whose
+            # value really is a local filename.
+            COMPREPLY=($(compgen -f -- "$cur"))
+            return
+            ;;
         -public-dns | --public-dns)
             # An IP address, or the empty string to skip the check. Neither is
             # enumerable, so offer nothing rather than local filenames.
@@ -37,6 +43,7 @@ _netdoc() {
             -toolbox --toolbox
             -json --json
             -watch --watch
+            -save --save
             -peer-listen --peer-listen
             -peer-connect --peer-connect
             -check --check

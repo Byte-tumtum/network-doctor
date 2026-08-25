@@ -24,6 +24,7 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/peer"
 	"github.com/heymaikol/network-doctor/internal/report"
+	"github.com/heymaikol/network-doctor/internal/snapshot"
 	"github.com/heymaikol/network-doctor/internal/ui"
 )
 
@@ -748,7 +749,7 @@ func TestRunJSONWatchStreamsOnePerLine(t *testing.T) {
 	defer cancel()
 	var buf, stderr bytes.Buffer
 	out := &cancelAfter{buf: &buf, n: 3, cancel: cancel}
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, diagnostic.DefaultProbeTimeout, out, &stderr); got != 1 {
+	if got := runHeadless(ctx, headless{watch: true, json: true, publicDNS: diagnostic.DefaultPublicDNS, timeout: diagnostic.DefaultProbeTimeout}, out, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 
@@ -786,7 +787,7 @@ func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
 	var buf, stderr bytes.Buffer
 	out := &cancelAfter{buf: &buf, n: 2, cancel: cancel}
 	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, selection, diagnostic.DefaultProbeTimeout, out, &stderr); got != 0 {
+	if got := runHeadless(ctx, headless{watch: true, json: true, publicDNS: diagnostic.DefaultPublicDNS, selection: selection, timeout: diagnostic.DefaultProbeTimeout}, out, &stderr); got != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 	}
 	for i, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -801,7 +802,7 @@ func TestRunJSONWatchHandlesEmptySelection(t *testing.T) {
 }
 
 // If the context is already cancelled before the first pass completes, there
-// is no report to trust, so runJSON must fail closed rather than default to 0.
+// is no report to trust, so runHeadless must fail closed rather than default to 0.
 func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 	orig := runAll
 	t.Cleanup(func() { runAll = orig })
@@ -816,7 +817,7 @@ func TestRunJSONInterruptedBeforeFirstReport(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if got := runJSON(ctx, nil, nil, true, diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}, diagnostic.DefaultProbeTimeout, &stdout, &stderr); got != 1 {
+	if got := runHeadless(ctx, headless{watch: true, json: true, publicDNS: diagnostic.DefaultPublicDNS, timeout: diagnostic.DefaultProbeTimeout}, &stdout, &stderr); got != 1 {
 		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
 	}
 	if stdout.Len() != 0 {
@@ -1288,5 +1289,320 @@ func TestBuildReportFindingsComeFromTheDiagnosis(t *testing.T) {
 	}
 	if strings.Contains(string(blob), "findings") || strings.Contains(string(blob), "remediation") {
 		t.Errorf("a healthy run emitted a findings or remediation key: %s", blob)
+	}
+}
+
+// --save is the whole CLI surface for the .ndoc artifact, so these cover what
+// it writes, what it refuses, and what it must leave alone.
+
+// stubPassingRun makes every probe in the built DAG report a measured pass, so
+// -save tests never touch the network.
+func stubPassingRun(t *testing.T) {
+	t.Helper()
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass, Dur: 2 * time.Millisecond}
+		}
+		return results
+	}
+}
+
+// fixedNow pins the snapshot timestamp so a test can assert on it.
+func fixedNow(t *testing.T, stamp string) {
+	t.Helper()
+	when, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := timeNow
+	t.Cleanup(func() { timeNow = orig })
+	timeNow = func() time.Time { return when }
+}
+
+func TestRunSaveWritesSnapshot(t *testing.T) {
+	stubPassingRun(t)
+	fixedNow(t, "2026-03-04T05:06:07Z")
+	path := filepath.Join(t.TempDir(), "incident.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--save", path, "--timeout", "3s", "example.com:8443"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	// Without -json the run says nothing on stdout: the artifact is the output.
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+
+	// #nosec G304 -- path is this test's temporary snapshot file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	s, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if s.Schema != snapshot.Schema {
+		t.Errorf("schema = %q", s.Schema)
+	}
+	if s.CreatedAt != "2026-03-04T05:06:07Z" {
+		t.Errorf("created_at = %q", s.CreatedAt)
+	}
+	if s.Tool.Version != version || s.Tool.OS != runtime.GOOS || s.Tool.Arch != runtime.GOARCH {
+		t.Errorf("tool = %+v", s.Tool)
+	}
+	if s.Target == nil || s.Target.Host != "example.com" || s.Target.Port != 8443 || !s.Target.PortExplicit {
+		t.Errorf("target = %+v", s.Target)
+	}
+	if s.Options.ProbeTimeoutMs != 3000 || s.Options.PublicDNS != diagnostic.DefaultPublicDNS {
+		t.Errorf("options = %+v", s.Options)
+	}
+	if len(s.Checks) == 0 || !s.OK {
+		t.Errorf("snapshot = %d checks, ok=%v", len(s.Checks), s.OK)
+	}
+}
+
+// The probe selection is what makes two snapshots comparable or not, so it is
+// recorded in the order it was given rather than as an unordered set.
+func TestRunSaveRecordsProbeSelection(t *testing.T) {
+	stubPassingRun(t)
+	fixedNow(t, "2026-03-04T05:06:07Z")
+	path := filepath.Join(t.TempDir(), "selected.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--save", path, "--skip", "quic_udp_443,proxy_connect", "--public-dns", ""}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	// #nosec G304 -- path is this test's temporary snapshot file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	want := []string{"quic_udp_443", "proxy_connect"}
+	if !slices.Equal(s.Options.Skip, want) {
+		t.Errorf("skip = %v, want %v", s.Options.Skip, want)
+	}
+	if len(s.Options.Check) != 0 {
+		t.Errorf("check = %v, want nothing recorded", s.Options.Check)
+	}
+	if s.Options.PublicDNS != "" {
+		t.Errorf("public_dns = %q, want the empty opt-out preserved", s.Options.PublicDNS)
+	}
+	if s.Target != nil {
+		t.Errorf("target = %+v, want null for a generic run", s.Target)
+	}
+	for _, c := range s.Checks {
+		if c.ID == "quic_udp_443" || c.ID == "proxy_connect" || c.ID == "dns_public" {
+			t.Errorf("%s is in the snapshot, but the run left it out", c.ID)
+		}
+	}
+}
+
+// -save and -json are independent: asking for both gets the report on stdout
+// and the artifact on disk, and the report is byte-identical to a -json run
+// that saved nothing.
+func TestRunSaveLeavesJSONReportUnchanged(t *testing.T) {
+	stubPassingRun(t)
+	fixedNow(t, "2026-03-04T05:06:07Z")
+
+	var plain, stderr bytes.Buffer
+	if got := run([]string{"--json", "example.com"}, &plain, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	path := filepath.Join(t.TempDir(), "both.ndoc")
+	var withSave bytes.Buffer
+	stderr.Reset()
+	if got := run([]string{"--json", "--save", path, "example.com"}, &withSave, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if withSave.String() != plain.String() {
+		t.Errorf("-save changed the JSON report:\n%s\nwant:\n%s", withSave.String(), plain.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("no snapshot written alongside the report: %v", err)
+	}
+}
+
+// A failing run still saves, and still exits 1: the artifact records the
+// diagnosis, it does not change it.
+func TestRunSaveKeepsExitCode(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+		for _, p := range probes {
+			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusFail, Dur: time.Millisecond}
+		}
+		return results
+	}
+	fixedNow(t, "2026-03-04T05:06:07Z")
+	path := filepath.Join(t.TempDir(), "failed.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--save", path, "example.com"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	// #nosec G304 -- path is this test's temporary snapshot file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if s.OK || s.Diagnosis.FailedStage == "" {
+		t.Errorf("snapshot = ok:%v failed_stage:%q, want a recorded failure", s.OK, s.Diagnosis.FailedStage)
+	}
+}
+
+// A destination that cannot exist is an argument error, caught before any
+// probe runs rather than after several seconds of network traffic.
+func TestRunSaveRejectsMissingDirectoryBeforeProbing(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(context.Context, []diagnostic.Probe, time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		t.Error("probes ran for a destination that cannot be written")
+		return nil
+	}
+	path := filepath.Join(t.TempDir(), "no-such-dir", "incident.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--save", path, "example.com"}, &stdout, &stderr); got != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-save") {
+		t.Errorf("stderr = %q, want it to name the flag", stderr.String())
+	}
+}
+
+// A write that fails only when it is attempted is exit 2 as well: the run
+// reached an answer, but the artifact it was for does not exist.
+func TestRunSaveWriteFailureExitsTwo(t *testing.T) {
+	stubPassingRun(t)
+	fixedNow(t, "2026-03-04T05:06:07Z")
+	origWrite := snapshotWriteFile
+	t.Cleanup(func() { snapshotWriteFile = origWrite })
+	snapshotWriteFile = func(string, snapshot.Snapshot) error {
+		return errors.New("disk went away")
+	}
+	path := filepath.Join(t.TempDir(), "doomed.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--json", "--save", path, "example.com"}, &stdout, &stderr); got != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "disk went away") {
+		t.Errorf("stderr = %q, want the write error", stderr.String())
+	}
+	// The report still reached stdout: a failed save does not swallow the
+	// answer the run already produced.
+	var rep report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+		t.Errorf("stdout is not the usual report: %v\n%s", err, stdout.String())
+	}
+}
+
+func TestRunSaveRejectsIncompatibleFlags(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(context.Context, []diagnostic.Probe, time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		t.Error("probes ran for a rejected flag combination")
+		return nil
+	}
+	path := filepath.Join(t.TempDir(), "rejected.ndoc")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"watch", []string{"--save", path, "--watch", "example.com"}, "-save and -watch"},
+		{"toolbox", []string{"--save", path, "--toolbox"}, "-save and -toolbox"},
+		{"peer mode", []string{"--save", path, "--peer-connect"}, "-save cannot be combined with peer mode"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(tt.args, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Errorf("stderr = %q, want it to mention %q", stderr.String(), tt.want)
+			}
+			if _, err := os.Stat(path); err == nil {
+				t.Error("a rejected run still wrote a snapshot")
+			}
+		})
+	}
+}
+
+// Without -save nothing writes a file, and the ordinary modes are untouched.
+func TestNoSaveWritesNothing(t *testing.T) {
+	stubPassingRun(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--json", "example.com"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a plain -json run left %d files behind", len(entries))
+	}
+}
+
+// The --iface binding is recorded as an option, because a run bound to a VPN
+// tunnel and a run on the default route are not comparable without knowing it.
+func TestRunSaveRecordsSourceBinding(t *testing.T) {
+	stubPassingRun(t)
+	fixedNow(t, "2026-03-04T05:06:07Z")
+	path := filepath.Join(t.TempDir(), "bound.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--save", path, "--iface", "127.0.0.1"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	// #nosec G304 -- path is this test's temporary snapshot file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if s.Options.Source == nil || s.Options.Source.IPv4 != "127.0.0.1" {
+		t.Fatalf("source = %+v, want the exact IPv4 binding", s.Options.Source)
+	}
+	// An exact-IP selection names no interface, and must not invent one.
+	if s.Options.Source.Interface != "" {
+		t.Errorf("interface = %q, want empty for an address selection", s.Options.Source.Interface)
+	}
+
+	// And an unbound run records no source at all, rather than an empty object.
+	plain := filepath.Join(t.TempDir(), "unbound.ndoc")
+	stdout.Reset()
+	stderr.Reset()
+	if got := run([]string{"--save", plain}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	// #nosec G304 -- plain is this test's temporary snapshot file.
+	data, err = os.ReadFile(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"source"`) {
+		t.Errorf("an unbound run recorded a source binding:\n%s", data)
 	}
 }

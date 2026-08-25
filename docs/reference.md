@@ -127,8 +127,8 @@ line to the prompt, but then owns the security of that pipe.
 address and reverse listener address for each available family. The listening
 form already names exact bind addresses, so combining `--iface` with
 `--peer-listen` is rejected. Peer mode cannot be combined with a target,
-`--watch`, `--toolbox`, `--check`, `--skip`, `--public-dns`, `--no-history`, or
-`--keys`. It does not enter the TUI.
+`--watch`, `--toolbox`, `--check`, `--skip`, `--public-dns`, `--no-history`,
+`--keys`, or `--save`. It does not enter the TUI.
 
 The listener waits at most five minutes for one authenticated control session.
 After connection, the complete exchange is bounded to one minute. `--timeout`
@@ -644,3 +644,74 @@ In the TUI the same advice appears in the Details panel of the row the diagnosis
 | `rerun_full_chain` | Rerun without the check selection |
 
 `remediation` is additive: it appears alongside the fields findings have always carried, and `fix` on each check is unchanged. A row's `fix` is still the one-line hint that row wrote about itself, with the certificate dates and measurements only that probe held; the remediation is the finished diagnosis's answer for the run. New `id` values are added over time, so treat an unrecognized one as "some specific advice" and show `action` and `steps` rather than branching on it.
+
+## Diagnostic snapshots
+
+`--save file` runs the checks headless and writes a **diagnostic snapshot** of the finished run, conventionally with a `.ndoc` extension:
+
+```sh
+netdoc --save incident.ndoc github.com      # just the artifact
+netdoc --json --save incident.ndoc github.com  # the report on stdout too
+```
+
+A snapshot is one finished run, recorded so it can be reopened later without probing anything again: the target as you typed it and as netdoc parsed it, the run settings, every check with its status, timings and evidence, and the diagnosis that was drawn from them. It is meant for the failure you cannot reproduce on demand, for attaching to a bug report, and for the comparison of two runs that a later release will do for you.
+
+`--save` implies headless operation, so it needs no terminal, and it is independent of `--json`: give both to get the usual report on stdout as well. It cannot be combined with `--watch` (a snapshot is a finished run, and a watch never finishes) or with `--toolbox`. The snapshot never changes the diagnosis or the exit code: a run that fails still exits `1` and still saves. A destination whose directory does not exist is rejected with exit `2` before any probe runs, and a write that fails once attempted also exits `2`, since the artifact the run was for does not exist. The file is written through a temporary file in the same directory and renamed into place, so a failed write leaves any previous snapshot intact rather than a truncated one.
+
+### Snapshot format and versioning
+
+The file is JSON, indented and newline-terminated, so it reads in a pager and diffs line by line. Encoding is deterministic: the same run always produces the same bytes.
+
+```json
+{
+  "schema": "netdoc.snapshot.v1",
+  "created_at": "2026-01-02T03:04:05Z",
+  "tool": {"version": "1.2.3", "os": "linux", "arch": "amd64"},
+  "target": {"raw": "example.com", "host": "example.com", "port": 443, "protocol": "tls+http", "port_explicit": false},
+  "options": {"probe_timeout_ms": 4000, "public_dns": "8.8.8.8"},
+  "checks": [
+    {
+      "id": "dns", "name": "DNS example.com", "deps": ["iface"],
+      "status": "PASS", "ran": true, "duration_ms": 12,
+      "detail": "example.com resolved to 2 addresses",
+      "observed": {"addresses": ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]}
+    }
+  ],
+  "diagnosis": {"verdict": "network", "summary": "…", "blamed": "internet_tcp", "failed_stage": "target_tcp", "findings": []},
+  "ok": false
+}
+```
+
+`schema` is the first field and the artifact's identity. A reader must check it before anything else and refuse a schema it does not know, rather than guessing at the fields underneath. The version moves only for a change an older reader would misread, such as a renamed field, a changed unit, or a changed meaning; adding an optional field is not that, so decoders ignore keys they do not recognize and treat every absent optional field as "not known" rather than as zero.
+
+`options` records only the settings that decide what the probes did: the per-check timeout, the second-opinion resolver (empty when `--public-dns ""` switched that row off), the `--check`/`--skip` selection in the order it was given, and the `--iface` binding netdoc resolved. `check`, `skip`, and `source` are absent when the run used none of them. Flags that only affect presentation are not recorded, because a comparison never reads them.
+
+Every check the run built appears in `checks`, including the ones that never produced an answer, and `status` says on its own which is which. It is always present and never empty. Alongside the `PASS`, `WARN`, `FAIL`, `SKIP`, and `N/A` used everywhere else, a snapshot has one more value that no probe can return:
+
+- `SKIP` is a check deliberately left out, because a prerequisite failed.
+- `INCOMPLETE` is a check that never reported at all, which is what a cancelled or interrupted run leaves behind. Nothing decided to leave it out; the run ended first.
+
+An `INCOMPLETE` row is never a pass, and a run holding one is never `"ok": true`. That is enforced when the file is written rather than left to readers to remember, so a snapshot in which absent evidence could be read as a passing check does not exist.
+
+`ran` answers a narrower question, and only that one: did the probe body execute. It is what `duration_ms` alone cannot say, since a check that finished in under a millisecond also reports `0`. A skipped row and an incomplete row both report `ran: false`, so `ran` is not how a reader tells them apart; `status` is.
+
+Within a check, `observed` is what the probe measured and `derived` is what the cross-probe reasoning pass did to that row afterwards. Only `status_downgraded` lives under `derived` today: it marks an observed egress failure that was relaxed to a Warn because another path proved the network still carries traffic. Its presence is the signal that the row's status is a conclusion rather than a reading. `cause`, `verdict`, and the finding IDs use exactly the vocabularies documented for [JSON output](#json-output) and [diagnosis findings](#diagnosis-findings).
+
+Remediation text is deliberately not stored. Fix advice lives on the check rows as `fix`, and the structured next action is regenerable from a finding's `id` together with `tool.os`, so a snapshot does not carry a second copy to fall out of step.
+
+### What a snapshot contains, and what it does not
+
+A snapshot holds only what the run already gathered. Nothing is collected for the file's benefit: no packet capture, no scan of unrelated interfaces or routes, no environment variables, no configuration files, and nothing is uploaded anywhere.
+
+Treat the file as network information about the machine that produced it. It deliberately retains, because a diagnosis is not readable without them:
+
+- resolved IP addresses, the address netdoc selected, and per-attempt errors
+- the local source address and interface name probes used
+- the connected Wi-Fi network name (SSID), on the `ssid` row
+- the target hostname as typed, which may be a private or internal name
+- the proxy host and port from `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`, where one is configured
+- the second-opinion resolver, and the local clock's offset from the captive-portal endpoint's
+
+It contains no credentials. Userinfo in a target is rejected by the parser before a run starts, and the proxy rows record only the proxy's host and port, never the username or password from a proxy URL. Probe text is sanitized on the way out of the runner, so a hostile hostname or server banner lands in the file as inert bytes.
+
+Redaction is not implemented yet. Until it is, look at a snapshot before sharing it: the fields above are grouped under `observed` on each check precisely so a later redaction pass can act on them predictably.
