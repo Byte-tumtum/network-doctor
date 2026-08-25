@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heymaikol/network-doctor/internal/compare"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/peer"
 	"github.com/heymaikol/network-doctor/internal/report"
@@ -1604,5 +1605,313 @@ func TestRunSaveRecordsSourceBinding(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"source"`) {
 		t.Errorf("an unbound run recorded a source binding:\n%s", data)
+	}
+}
+
+// writeSnapshotFile saves a snapshot for the compare tests to read back through
+// the real CLI, so the artifact under test is one Encode published.
+func writeSnapshotFile(t *testing.T, dir, name string, s snapshot.Snapshot) string {
+	t.Helper()
+	path := filepath.Join(dir, name+snapshot.Extension)
+	if err := snapshot.WriteFile(path, s); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return path
+}
+
+// comparableSnapshot is one finished run, written by hand so the compare tests
+// depend on the format rather than on which probes the current build runs.
+func comparableSnapshot() snapshot.Snapshot {
+	return snapshot.Snapshot{
+		Schema:    snapshot.Schema,
+		CreatedAt: "2026-03-04T05:06:07Z",
+		Tool:      snapshot.Tool{Version: "1.2.3", OS: "linux", Arch: "amd64"},
+		Target: &snapshot.Target{
+			Raw: "example.com", Host: "example.com", Port: 443, Protocol: "tls+http",
+		},
+		Options: snapshot.Options{ProbeTimeoutMs: 4000, PublicDNS: "8.8.8.8"},
+		Checks: []snapshot.Check{
+			{ID: "iface", Name: "Interface", Status: snapshot.StatusPass, Ran: true, DurationMs: 2,
+				Observed: &snapshot.Observed{Interface: "eth0", SourceIP: "192.0.2.10"}},
+			{ID: "dns", Name: "DNS example.com", Deps: []string{"iface"},
+				Status: snapshot.StatusPass, Ran: true, DurationMs: 12,
+				Observed: &snapshot.Observed{Addresses: []string{"93.184.216.34"}}},
+		},
+		Diagnosis: snapshot.Diagnosis{Verdict: "ok", Summary: "everything worked"},
+		OK:        true,
+	}
+}
+
+func TestRunCompareReportsWhatChanged(t *testing.T) {
+	dir := t.TempDir()
+	before := comparableSnapshot()
+	after := comparableSnapshot()
+	after.CreatedAt = "2026-03-05T05:06:07Z"
+	after.Checks[1].Status = snapshot.StatusFail
+	after.Checks[0].Observed.Interface = "wg0"
+	after.Diagnosis.Verdict = "dns"
+	after.OK = false
+
+	beforePath := writeSnapshotFile(t, dir, "before", before)
+	afterPath := writeSnapshotFile(t, dir, "after", after)
+
+	var stdout, stderr bytes.Buffer
+	// Differences found, so the exit code says so.
+	if got := run([]string{"--compare", beforePath, afterPath}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+	for _, want := range []string{
+		"Network Doctor snapshot comparison",
+		"dns changed from PASS to FAIL (worse)",
+		"iface interface changed from eth0 to wg0",
+		"verdict changed from ok to dns",
+		"overall result changed from ok to not ok",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output does not contain %q:\n%s", want, stdout.String())
+		}
+	}
+	// The timestamps differ and are reported as context, never as a change.
+	if strings.Contains(stdout.String(), "created_at changed") {
+		t.Errorf("the capture time was reported as a difference:\n%s", stdout.String())
+	}
+}
+
+// Two artifacts describing the same state exit 0, which is what a script asks
+// this command in the first place: did anything move.
+func TestRunCompareIdenticalSnapshotsExitZero(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No meaningful differences.") {
+		t.Errorf("output does not say the runs match:\n%s", stdout.String())
+	}
+}
+
+func TestRunCompareJSON(t *testing.T) {
+	dir := t.TempDir()
+	before := comparableSnapshot()
+	after := comparableSnapshot()
+	after.Checks[1].Status = snapshot.StatusFail
+	after.OK = false
+
+	beforePath := writeSnapshotFile(t, dir, "before", before)
+	afterPath := writeSnapshotFile(t, dir, "after", after)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", "--json", beforePath, afterPath}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	var got struct {
+		Schema  string `json:"schema"`
+		Changes []struct {
+			Path      string `json:"path"`
+			Kind      string `json:"kind"`
+			Before    string `json:"before"`
+			After     string `json:"after"`
+			Direction string `json:"direction"`
+		} `json:"changes"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode comparison: %v\n%s", err, stdout.String())
+	}
+	if got.Schema != compare.Schema {
+		t.Errorf("schema = %q, want %q", got.Schema, compare.Schema)
+	}
+	var found bool
+	for _, change := range got.Changes {
+		if change.Path == "checks.dns.status" {
+			found = true
+			if change.Before != "PASS" || change.After != "FAIL" || change.Direction != "worse" {
+				t.Errorf("dns status change = %+v", change)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no dns status change in %s", stdout.String())
+	}
+	// The machine form carries no rendered table.
+	if strings.Contains(stdout.String(), "Network Doctor snapshot comparison") {
+		t.Error("the JSON output carries the human report")
+	}
+}
+
+// A comparison never touches the network, so nothing here may reach the DAG.
+func TestRunCompareRunsNoProbes(t *testing.T) {
+	orig := runAll
+	t.Cleanup(func() { runAll = orig })
+	runAll = func(context.Context, []diagnostic.Probe, time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		t.Fatal("compare mode ran the probe DAG")
+		return nil
+	}
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+}
+
+func TestRunCompareArgumentErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"no files", []string{"--compare"}, "needs two snapshot files"},
+		{"one file", []string{"--compare", path}, "needs two snapshot files"},
+		{"three files", []string{"--compare", path, path, path}, "unexpected arguments"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(tt.args, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2", got)
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Errorf("stderr = %q, want it to mention %q", stderr.String(), tt.want)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+}
+
+// Every flag that describes a run netdoc would perform is refused: a comparison
+// performs none, and accepting one would suggest it applied to something.
+func TestRunCompareRejectsRunFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	for _, args := range [][]string{
+		{"--toolbox"}, {"--watch"}, {"--save", filepath.Join(dir, "out.ndoc")},
+		{"--check", "dns"}, {"--skip", "dns"}, {"--iface", "lo"},
+		{"--public-dns", "9.9.9.9"}, {"--no-history"}, {"--keys", "vim"},
+		{"--timeout", "1s"}, {"--peer-connect"}, {"--peer-listen", "127.0.0.1:0"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			full := append([]string{"--compare"}, args...)
+			full = append(full, path, path)
+			if got := run(full, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "cannot be combined with -compare") {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+		})
+	}
+	// -json is the one flag that does apply, and it is not refused.
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", "--json", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("--json exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+}
+
+// Which of the two files is unreadable is the useful half of the message.
+func TestRunCompareRejectsUnusableArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	good := writeSnapshotFile(t, dir, "good", comparableSnapshot())
+
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	garbage := write("garbage.ndoc", "not json at all")
+	future := write("future.ndoc", `{"schema":"netdoc.snapshot.v2","checks":[]}`)
+	unlabelled := write("unlabelled.ndoc", `{"schema":"`+snapshot.Schema+`","checks":[{"id":"iface"}]}`)
+	missing := filepath.Join(dir, "nothing-here.ndoc")
+
+	tests := []struct {
+		name, path, want string
+	}{
+		{"malformed", garbage, "not a Network Doctor snapshot"},
+		{"a future schema", future, "unsupported snapshot schema"},
+		{"a row with no status", unlabelled, "has no status"},
+		{"a file that is not there", missing, "nothing-here"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run([]string{"--compare", good, tt.path}, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Errorf("stderr = %q, want it to mention %q", stderr.String(), tt.want)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			// The bad file is named, since two were given.
+			if tt.name != "a file that is not there" && !strings.Contains(stderr.String(), filepath.Base(tt.path)) {
+				t.Errorf("stderr = %q, want it to name the file", stderr.String())
+			}
+		})
+	}
+}
+
+// Comparing two runs of different targets is allowed, because a snapshot keeps
+// the typed spelling next to the parsed host exactly so this question can be
+// answered. It is not allowed to be quiet about it.
+func TestRunCompareDifferentTargetsIsLoudNotFatal(t *testing.T) {
+	dir := t.TempDir()
+	before := comparableSnapshot()
+	after := comparableSnapshot()
+	after.Target = &snapshot.Target{Raw: "github.com", Host: "github.com", Port: 443, Protocol: "tls+http"}
+
+	beforePath := writeSnapshotFile(t, dir, "before", before)
+	afterPath := writeSnapshotFile(t, dir, "after", after)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", beforePath, afterPath}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "observed different targets") {
+		t.Errorf("output does not warn about the targets:\n%s", stdout.String())
+	}
+}
+
+// A hand-edited snapshot reaches a terminal through this path, so the argument
+// and the artifact's own text are both sanitized on the way out.
+func TestRunCompareKeepsHostileTextInert(t *testing.T) {
+	dir := t.TempDir()
+	before := comparableSnapshot()
+	after := comparableSnapshot()
+	after.Target.Host = "example.com\x1b[2Jwiped"
+	beforePath := writeSnapshotFile(t, dir, "before", before)
+	afterPath := writeSnapshotFile(t, dir, "after", after)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", beforePath, afterPath}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	if strings.ContainsAny(stdout.String(), "\x1b\x07") {
+		t.Errorf("escape bytes reached stdout: %q", stdout.String())
+	}
+}
+
+// A comparison is headless: it renders no terminal UI, so it works on a pipe.
+func TestRunCompareWorksWithRedirectedStdout(t *testing.T) {
+	origTerm := termIsTerminal
+	t.Cleanup(func() { termIsTerminal = origTerm })
+	termIsTerminal = func(uintptr) bool { return false }
+
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--compare", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
 	}
 }

@@ -654,7 +654,7 @@ netdoc --save incident.ndoc github.com      # just the artifact
 netdoc --json --save incident.ndoc github.com  # the report on stdout too
 ```
 
-A snapshot is one finished run, recorded so it can be reopened later without probing anything again: the target as you typed it and as netdoc parsed it, the run settings, every check with its status, timings and evidence, and the diagnosis that was drawn from them. It is meant for the failure you cannot reproduce on demand, for attaching to a bug report, and for the comparison of two runs that a later release will do for you.
+A snapshot is one finished run, recorded so it can be reopened later without probing anything again: the target as you typed it and as netdoc parsed it, the run settings, every check with its status, timings and evidence, and the diagnosis that was drawn from them. It is meant for the failure you cannot reproduce on demand, for attaching to a bug report, and for [comparing two runs](#comparing-two-snapshots).
 
 `--save` implies headless operation, so it needs no terminal, and it is independent of `--json`: give both to get the usual report on stdout as well. It cannot be combined with `--watch` (a snapshot is a finished run, and a watch never finishes) or with `--toolbox`. The snapshot never changes the diagnosis or the exit code: a run that fails still exits `1` and still saves. A destination whose directory does not exist is rejected with exit `2` before any probe runs, and a write that fails once attempted also exits `2`, since the artifact the run was for does not exist. The file is written through a temporary file in the same directory and renamed into place, so a failed write leaves any previous snapshot intact rather than a truncated one.
 
@@ -715,3 +715,105 @@ Treat the file as network information about the machine that produced it. It del
 It contains no credentials. Userinfo in a target is rejected by the parser before a run starts, and the proxy rows record only the proxy's host and port, never the username or password from a proxy URL. Probe text is sanitized on the way out of the runner, so a hostile hostname or server banner lands in the file as inert bytes.
 
 Redaction is not implemented yet. Until it is, look at a snapshot before sharing it: the fields above are grouped under `observed` on each check precisely so a later redaction pass can act on them predictably.
+
+## Comparing two snapshots
+
+`--compare` reads two saved snapshots and reports what changed between them. The two files are arguments, the earlier or known-good run first:
+
+```sh
+netdoc --compare good.ndoc bad.ndoc         # the table
+netdoc --compare --json good.ndoc bad.ndoc  # the same comparison, machine-readable
+```
+
+It runs no probes and opens no socket. Everything reported comes out of the two artifacts, so a comparison works long after the fact and on a machine that has never seen either network. It is headless, needs no terminal, and cannot be combined with any flag that describes a run netdoc would perform (`--toolbox`, `--watch`, `--save`, `--check`, `--skip`, `--iface`, `--public-dns`, `--no-history`, `--keys`, `--timeout`, and either peer flag). Those settings are already recorded in the files.
+
+Exit `0` means the two snapshots describe the same diagnostic state, `1` means they differ, and `2` means an argument or an artifact was unusable. A snapshot that records a failed run is not itself an error here: the question `--compare` answers is whether anything moved, not whether the network is healthy.
+
+### What counts as a difference
+
+The comparison is semantic, not a JSON diff. Every field it reads is named in the implementation on purpose, which is what lets it ignore the parts of a snapshot that change on their own, and what decides which collections are ordered:
+
+| Compared | How |
+| --- | --- |
+| Target | `host`, `ip`, `port`, `protocol`, and `port_explicit`, then `raw` on its own, so "the same host, entered differently" and "a different host" are separate answers |
+| Tool | `version`, `os`, and `arch`, because a diagnosis and its advice are chosen per platform |
+| Run settings | the probe timeout, the second-opinion resolver, the `--iface` binding, and the `--check`/`--skip` selection as **sets** |
+| Diagnosis | `ok`, `verdict`, `blamed`, `failed_stage`, the findings as a **set** keyed by `id`, and the first finding as the primary conclusion |
+| Checks | membership, `status`, `cause`, `ran`, and `deps` in order |
+| Reasoning | `derived.status_downgraded`, so an inferred outcome and a measured one are not read as the same state |
+| Evidence | everything under `observed`: resolved addresses and connection attempts as **sets**, and the selected address, source address, interface, SSID, resolver, per-family egress, captive-portal state, and timeout flags as values |
+
+Absence is never collapsed into a zero. `SKIP`, `N/A`, and `INCOMPLETE` stay three different things that happened to a row. A resolver that answered with no records is not the same as one that did not answer. A captive portal that advertised no sign-in URL is not the same as no portal, so interception is its own field rather than something inferred from an empty URL. A second opinion switched off with `--public-dns ""` is reported as a removal, not as a change to nothing.
+
+### What is intentionally ignored
+
+These change between two runs of a machine that did not change, so treating them as differences would bury the ones that matter:
+
+- `created_at`, the capture time. It is shown in the header of the report as context, and is never a difference.
+- `duration_ms` on a check and on a connection attempt. Both are the measurement itself.
+- `detail` and `fix` on a check, `summary` on the diagnosis and on a finding. All four are derived sentences that quote measurements ("in 41ms"), and the format documents them as never parsed back. `status` and `cause` are the machine-readable form of what they say, and those are compared.
+- `name` on a check, which is display text built from the probe and the target.
+- The order of resolved addresses, connection attempts, findings, and the `--check`/`--skip` selection. Order there is the resolver's, the dialer's, or the order you typed, and it is not the shape of anything. Order **is** kept where it carries meaning: a check's `deps` and a finding's `evidence` are compared as ordered lists.
+- Sub-second movement in `clock_offset_ms`. The offset is compared at whole-second resolution, which keeps the sign and the magnitude the diagnosis reasons about and drops the jitter of a clock that is fine.
+
+An optional field added to a future snapshot version is not compared until it is named here, which is deliberate: a new field cannot start producing differences on its own.
+
+### Ordering and determinism
+
+The same two files always produce the same bytes and the same text. Nothing is sorted after the fact and no map decides what gets printed: differences come out in section order (target, tool, run settings, diagnosis, checks), and within the check section in the order the later run executed its probes, followed by any check only the earlier run had, in that run's order. Set membership is the one thing sorted, so that a resolver's answer order cannot reach the output.
+
+### Version compatibility
+
+Both files go through the same decoder every other reader uses, so the schema rule is stated once. A file whose `schema` is not the one this build reads, including a future version, is refused by name with exit `2` rather than half understood, and so is a file that is not JSON or that holds a check row with no `status`. There is one schema version today, so there is no cross-version comparison to perform; when there is one, it will be the decoder's migration, not a second copy of the rules inside `--compare`.
+
+### Different targets
+
+Comparing snapshots of two different endpoints is allowed. A snapshot keeps the typed spelling next to the parsed host precisely so a comparison can tell "the same host, entered differently" from "a different host", and refusing the second case would throw away an answer it is equipped to give. It is not allowed to be quiet about it: when the two runs did not observe the same endpoint, the report says so above the table, because every row underneath then describes two different things. The machine-readable form carries the same fact as `same_target`. A generic run against a targeted one is reported as one change rather than as a field-by-field list of a target only one side ever had.
+
+### Interpretation
+
+The report states direct facts about the two readings and stops there. "The DNS resolver changed from X to Y", "the DNS check changed from PASS to FAIL", "traffic used wg0 instead of wlan0" are all statements about what the files say. `--compare` does not claim that one of them caused another. A status move between `PASS`, `WARN`, and `FAIL` is marked `better` or `worse`, which is a comparison of two outcomes and not a cause; `SKIP`, `N/A`, and `INCOMPLETE` have no rank, so a move to or from one of them carries no direction rather than a guessed one.
+
+### Machine-readable comparison
+
+`--json` prints the comparison as its own versioned document, separate from the snapshot schema it reads because scripts consume it:
+
+```json
+{
+  "schema": "netdoc.comparison.v1",
+  "before": {"created_at": "2026-03-04T05:06:07Z", "tool": {"version": "1.2.3", "os": "linux", "arch": "amd64"},
+             "target": "github.com:443 tls+http", "verdict": "ok", "summary": "…", "ok": true},
+  "after":  {"created_at": "2026-03-04T18:22:41Z", "tool": {"version": "1.2.3", "os": "linux", "arch": "amd64"},
+             "target": "github.com:443 tls+http", "verdict": "dns", "summary": "…", "ok": false},
+  "same_target": true,
+  "checks": [
+    {"id": "iface", "before": "PASS", "after": "PASS", "kind": "unchanged", "differs": true},
+    {"id": "dns", "before": "PASS", "after": "FAIL", "kind": "changed", "direction": "worse", "differs": true}
+  ],
+  "changes": [
+    {"section": "diagnosis", "path": "diagnosis.verdict", "label": "verdict", "kind": "changed",
+     "before": "ok", "after": "dns", "summary": "verdict changed from ok to dns"},
+    {"section": "check", "check": "iface", "path": "checks.iface.observed.interface",
+     "label": "iface interface", "kind": "changed", "before": "wlan0", "after": "wg0",
+     "summary": "iface interface changed from wlan0 to wg0"}
+  ]
+}
+```
+
+`path` is a difference's stable identity, spelled as the field path inside the snapshot, so two runs name the same difference the same way and a script can key on it. `kind` is `added`, `removed`, or `changed`, and it is what says whether an empty `before` or `after` is an absent value: an `added` change always has an empty `before` and a non-empty `after`, and `changed` has neither empty. Both keys are always present, so an empty string is a value rather than a key a reader has to interpret.
+
+`checks` is every check in either snapshot, unchanged rows included, so the same document answers "what stayed the same". Its `kind` is about the status alone, while `differs` is true whenever anything about that check moved, including evidence underneath a status that held. `direction` is `better` or `worse` where the outcomes have an ordering, and absent otherwise.
+
+An empty `changes` array is the machine-readable form of "no meaningful differences", and it is what exit `0` means.
+
+### What a comparison cannot tell you yet
+
+A snapshot holds only what the run gathered, so a comparison can only report what is in there. Today that leaves some questions unanswerable from two `.ndoc` files:
+
+- **The system resolver.** The snapshot records the second-opinion resolver netdoc queried directly (`observed.resolver`), not the resolver the system handed the probes, so a change of DNS server underneath an unchanged `--public-dns` shows up only as the DNS check's outcome and addresses moving.
+- **Routes.** No route or default-route state is captured, so a route change is visible only through its effects: the source address, the selected interface, and the reachability rows.
+- **The proxy.** The proxy host and port appear in the proxy row's `detail`, which is derived text and not compared. A proxy change registers as that row's status or `cause` moving, not as the proxy itself.
+- **Path MTU.** The path-MTU row records its outcome, not a measured MTU number, so there is no MTU value to compare.
+- **VPN and tunnel state as such.** There is no tunnel field; a VPN shows up as the interface name and source address on the rows that observed them, which is usually enough to see it, and never enough to name it.
+
+Adding fields to the snapshot for the sake of a fuller comparison is deliberately not done here. Each one is a change to a published format, and a comparison is worth more trustworthy than complete.

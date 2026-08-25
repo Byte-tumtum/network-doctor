@@ -215,6 +215,7 @@ netdoc https://host:80  # explicit scheme selects the protocol (→ TLS + HTTPS 
 netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
 netdoc --save incident.ndoc host  # headless: save the finished run as a snapshot file
+netdoc --compare good.ndoc bad.ndoc  # headless: report what changed between two snapshots
 netdoc --watch host     # TUI: re-run continuously and track intermittent failures
 netdoc --json --watch host  # headless: one JSON report per line, until interrupted
 netdoc --check dns,target_tcp,tls example.com  # run only these IDs and their prerequisites
@@ -324,9 +325,53 @@ Field names and the status vocabulary are stable, so they are safe to script aga
 netdoc --save incident.ndoc github.com
 ```
 
-The file is versioned JSON (`"schema": "netdoc.snapshot.v1"`) holding the target as typed and as parsed, the run settings, every check with its status, timings and evidence, and the diagnosis. It is for the failure you cannot reproduce on demand, and for the comparison of two runs a later release will do for you. It never changes the diagnosis or the exit code, and can be combined with `--json` to get the report on stdout too.
+The file is versioned JSON (`"schema": "netdoc.snapshot.v1"`) holding the target as typed and as parsed, the run settings, every check with its status, timings and evidence, and the diagnosis. It is for the failure you cannot reproduce on demand. It never changes the diagnosis or the exit code, and can be combined with `--json` to get the report on stdout too.
 
 A snapshot is network information about the machine that produced it: addresses, the source interface, the connected Wi-Fi network name. It carries no credentials, and nothing is uploaded anywhere. There is no redaction pass yet, so read one before sharing it. Full format, versioning rules, and the field-by-field privacy note are in **[docs/reference.md](docs/reference.md#diagnostic-snapshots)**.
+
+### Comparing two snapshots
+
+`--compare` reads two saved snapshots and reports what changed between them. It runs no probes and opens no socket, so it works long after the fact, and on a machine that has never seen either network:
+
+```sh
+netdoc --save good.ndoc github.com
+# ... later, when it breaks ...
+netdoc --save bad.ndoc github.com
+netdoc --compare good.ndoc bad.ndoc
+```
+
+```text
+Network Doctor snapshot comparison
+
+          BEFORE                   AFTER
+Target    github.com:443 tls+http  github.com:443 tls+http
+Captured  2026-03-04T05:06:07Z     2026-03-04T18:22:41Z
+Tool      1.2.3 linux/amd64        1.2.3 linux/amd64
+Verdict   ok                       dns
+Overall   ok                       not ok
+
+Checks        BEFORE  AFTER
+iface         PASS    PASS   evidence changed
+internet_tcp  PASS    PASS   evidence changed
+dns           PASS    FAIL   changed (worse)
+target_tcp    PASS    SKIP   changed
+
+Changes:
+  overall result changed from ok to not ok (worse)
+  verdict changed from ok to dns
+  blamed check changed from none to dns
+  first failed check changed from none to dns
+  iface interface changed from wlan0 to wg0
+  internet_tcp interface changed from wlan0 to wg0
+  dns changed from PASS to FAIL (worse)
+  dns resolved address 140.82.121.4 is in the before snapshot only
+  target_tcp changed from PASS to SKIP
+  target_tcp ran changed from yes to no
+
+10 changes.
+```
+
+The comparison is semantic, not a JSON diff: capture times, probe durations, and derived sentences full of measurements are not differences, and resolved addresses, connection attempts, and the `--check` selection are compared as sets, so a reordering is not one either. It exits `0` when the two runs describe the same state and `1` when they do not, so `netdoc --compare a.ndoc b.ndoc` is usable as a question in a script. `--json` prints the same comparison as `netdoc.comparison.v1` instead of the table. Details, including the ignored fields and the different-target behavior, are in **[docs/reference.md](docs/reference.md#comparing-two-snapshots)**.
 
 ### Two-ended peer diagnosis
 
@@ -400,7 +445,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, portable `.ndoc` diagnostic snapshots (`--save`) and semantic snapshot comparison (`--compare`), report copy/save.
 
 ## Built with
 

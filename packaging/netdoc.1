@@ -13,6 +13,11 @@ netdoc \- diagnose network connectivity and explain where the connection breaks
 .B netdoc
 .B \-peer\-connect
 .RI [ \-json ]
+.br
+.B netdoc
+.B \-compare
+.I before.ndoc after.ndoc
+.RI [ \-json ]
 .SH DESCRIPTION
 .B netdoc
 diagnoses network connectivity layer by layer and reports where the path
@@ -122,6 +127,40 @@ cannot be written exits
 A snapshot contains network information about the machine that ran it,
 including addresses, interface names, and the connected Wi\-Fi network name.
 It carries no credentials.
+.TP
+.B \-compare
+Compare two diagnostic snapshots written by
+.B \-save
+and report what changed between them. The two files are given as arguments, the
+earlier or known-good run first. Runs no probes and opens no socket: everything
+reported comes out of the two artifacts, so a comparison works on a machine that
+has never seen either network.
+.IP
+The comparison is semantic rather than a JSON diff. Capture timestamps, probe
+durations, and the derived sentences that quote a measurement are not
+differences; a set of resolved addresses, a set of connection attempts, and the
+.B \-check
+selection are compared as sets, so a reordering is not one either. A clock
+offset is compared at whole-second resolution. Differences are reported in one
+fixed order, so the same two files always produce the same output.
+.IP
+Comparing snapshots of two different targets is allowed, and the report says so
+before anything else, since every row then describes two different endpoints. A
+file this build cannot read, including a future
+.B schema
+version, is refused by name with exit
+.BR 2 .
+Exit
+.B 0
+means the two runs describe the same diagnostic state and
+.B 1
+means they do not; a snapshot recording a failed run is not itself an error
+here. Headless, so it needs no terminal, and independent of
+.BR \-json ,
+which prints the separate
+.B netdoc.comparison.v1
+schema instead of the table. Cannot be combined with any flag that describes a
+run netdoc would perform.
 .TP
 .BI \-peer\-listen " IP:port"
 Open one temporary authenticated peer session on an exact local unicast IP and
@@ -248,18 +287,23 @@ Print usage and exit.
 .TP
 .B 0
 The chain completed with no failed row, or peer traffic passed in both
-directions. Skipped rows are allowed.
+directions. Skipped rows are allowed. Under
+.B \-compare
+it means the two snapshots describe the same diagnostic state.
 .TP
 .B 1
 A row failed, the terminal UI was quit before the chain finished, or the run
 itself errored. A failed, ambiguous, or incomplete peer diagnosis also exits
 with this status. Under
 .B \-json \-watch
-this is the last completed pass's status.
+this is the last completed pass's status. Under
+.B \-compare
+it means the two snapshots differ, which is an answer rather than a failure.
 .TP
 .B 2
-Bad arguments, a target or pairing input the parser rejected, or no terminal on
-standard output to run the terminal UI on.
+Bad arguments, a target or pairing input the parser rejected, a snapshot
+.B \-compare
+could not read, or no terminal on standard output to run the terminal UI on.
 .SH PEER SECURITY AND REACHABILITY
 Each listening run creates a new Ed25519 TLS certificate and a random 256-bit
 session token. The pairing string carries direct endpoint addresses, the
@@ -351,6 +395,16 @@ Take the second opinion from a different resolver, or drop it altogether:
 .EX
 netdoc \-\-public\-dns 9.9.9.9 github.com
 netdoc \-\-public\-dns "" github.com
+.EE
+.RE
+.PP
+Save a run now, and later ask what changed:
+.PP
+.RS 4
+.EX
+netdoc \-\-save good.ndoc github.com
+netdoc \-\-save bad.ndoc github.com
+netdoc \-\-compare good.ndoc bad.ndoc
 .EE
 .RE
 .PP

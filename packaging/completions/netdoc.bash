@@ -37,26 +37,33 @@ _netdoc() {
     esac
 
     # Targets are hostnames, URLs, and IP literals, none of them enumerable, so
-    # a non-flag word completes to nothing rather than to local filenames.
-    if [[ $cur == -* ]]; then
-        COMPREPLY=($(compgen -W "
-            -toolbox --toolbox
-            -json --json
-            -watch --watch
-            -save --save
-            -peer-listen --peer-listen
-            -peer-connect --peer-connect
-            -check --check
-            -skip --skip
-            -iface --iface
-            -public-dns --public-dns
-            -no-history --no-history
-            -keys --keys
-            -timeout --timeout
-            -version --version
-            -h -help --help
-        " -- "$cur"))
+    # a non-flag word completes to nothing rather than to local filenames. The
+    # exception is --compare, whose two arguments are local snapshot files.
+    if [[ $cur != -* ]]; then
+        if [[ " ${COMP_WORDS[*]} " == *" -compare "* || " ${COMP_WORDS[*]} " == *" --compare "* ]]; then
+            COMPREPLY=($(compgen -f -- "$cur"))
+        fi
+        return
     fi
+
+    COMPREPLY=($(compgen -W "
+        -toolbox --toolbox
+        -json --json
+        -watch --watch
+        -save --save
+        -compare --compare
+        -peer-listen --peer-listen
+        -peer-connect --peer-connect
+        -check --check
+        -skip --skip
+        -iface --iface
+        -public-dns --public-dns
+        -no-history --no-history
+        -keys --keys
+        -timeout --timeout
+        -version --version
+        -h -help --help
+    " -- "$cur"))
 }
 
 complete -F _netdoc netdoc

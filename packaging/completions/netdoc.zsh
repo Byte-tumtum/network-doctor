@@ -16,12 +16,16 @@ _netdoc_ifaces() {
 # No -s: it would let single-letter options stack, and the single-dash long
 # spellings below (-json) would be read as stacked letters.
 # Targets are hostnames, URLs, and IP literals, none of them enumerable, so
-# the positional completes to nothing rather than to local filenames.
+# the positional completes to nothing rather than to local filenames. That
+# holds for --compare's two snapshot files too: one positional spec cannot be
+# a target here and a filename there, and offering files for every target is
+# the worse of the two mistakes.
 _arguments \
   '(--toolbox -toolbox --json -json)'{--toolbox,-toolbox}'[start in toolbox mode]' \
   '(--json -json --toolbox -toolbox)'{--json,-json}'[run the checks headless and print a JSON report]' \
   '(--watch -watch)'{--watch,-watch}'[continuously re-run checks]' \
   '(--save -save)'{--save,-save}'[write a diagnostic snapshot (.ndoc) to a file]:file:_files' \
+  '(--compare -compare)'{--compare,-compare}'[compare two saved snapshots (.ndoc); runs no probes]' \
   '*'{--peer-listen,-peer-listen}'[listen for an authenticated peer on an exact IP\:port]:address:' \
   '(--peer-connect -peer-connect)'{--peer-connect,-peer-connect}'[read a temporary pairing string and run a two-ended diagnosis]' \
   '*'{--check,-check}'[run stable probe IDs (comma-separated; repeatable)]:probe IDs:' \

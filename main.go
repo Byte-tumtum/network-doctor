@@ -21,6 +21,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/term"
+	"github.com/heymaikol/network-doctor/internal/compare"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/peer"
 	"github.com/heymaikol/network-doctor/internal/report"
@@ -207,6 +208,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	toolbox := fs.Bool("toolbox", false, "start in toolbox mode")
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
 	save := fs.String("save", "", "run the checks headless and write a diagnostic snapshot to `file` (.ndoc)")
+	compareMode := fs.Bool("compare", false, "compare two saved snapshots given as arguments; runs no probes")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	var peerListen peerListenList
 	fs.Var(&peerListen, "peer-listen", "listen for one authenticated peer on exact `IP:port`; repeat for the other address family")
@@ -243,15 +245,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 		positional = append(positional, fs.Arg(0))
 		args = fs.Args()[1:]
 	}
-	if len(positional) > 1 {
+	// One argument everywhere except -compare, which reads two files rather
+	// than probing one target.
+	allowed := 1
+	if *compareMode {
+		allowed = 2
+	}
+	if len(positional) > allowed {
 		// %q, not %v: argv is untrusted enough to matter, and quoting escapes
 		// control bytes so an OSC 52 in an argument prints instead of running.
-		fmt.Fprintf(stderr, "netdoc: unexpected arguments: %q\n", positional[1:])
+		fmt.Fprintf(stderr, "netdoc: unexpected arguments: %q\n", positional[allowed:])
 		return 2
 	}
 	if *showVersion {
 		fmt.Fprintln(stdout, "netdoc", version)
 		return 0
+	}
+	// Before every other mode, and before a single probe flag is validated: a
+	// comparison reads two files and touches the network at no point, so the
+	// settings that decide what probes do have nothing to say about it.
+	if *compareMode {
+		return runCompare(positional, setFlagNames(fs), *jsonOut, stdout, stderr)
 	}
 	if *timeout <= 0 {
 		fmt.Fprintln(stderr, "netdoc: -timeout must be positive")
@@ -263,8 +277,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if peerMode {
-		setFlags := map[string]bool{}
-		fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+		setFlags := setFlagNames(fs)
 		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save"} {
 			if setFlags[name] {
 				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with peer mode\n", name)
@@ -433,6 +446,7 @@ func printUsage(w io.Writer, fs *flag.FlagSet) {
 	fmt.Fprint(w, `Usage: netdoc [flags] [target]
        netdoc --peer-listen IP:port [--peer-listen IP:port]
        netdoc --peer-connect [--json]
+       netdoc --compare before.ndoc after.ndoc [--json]
 
 Diagnoses network connectivity layer by layer. With no target it runs the
 generic checks; with a target it also probes that endpoint. Flags may be
@@ -440,6 +454,10 @@ given before or after the target.
 
 Peer mode is headless. The listener prints a temporary direct-connect pairing
 string; the connector reads it from a hidden prompt so it does not enter argv.
+
+Compare mode is headless and runs no probes: it reads two snapshots written by
+--save and reports what changed between them. It exits 0 when they describe the
+same state and 1 when they do not.
 
 Target forms:
 `+diagnostic.TargetForms+"\n\nFlags:\n")
@@ -557,6 +575,81 @@ func emitPeerResult(result peer.Result, jsonOut bool, stdout, stderr io.Writer) 
 		}
 	}
 	if result.OK {
+		return 0
+	}
+	return 1
+}
+
+// setFlagNames is the set of flags the user actually spelled out, which is how
+// a mode rejects a combination without mistaking a flag's default for a
+// request. fs.Visit walks only the ones that were set.
+func setFlagNames(fs *flag.FlagSet) map[string]bool {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	return set
+}
+
+// compareIncompatibleFlags is every flag that describes a run netdoc would
+// perform. A comparison performs none: it reads two finished runs off disk. The
+// settings that produced them are already recorded in the files, and letting
+// one be named again here would suggest it applied to something.
+var compareIncompatibleFlags = []string{
+	"toolbox", "watch", "save", "peer-listen", "peer-connect",
+	"check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
+}
+
+// runCompare reports what changed between two saved snapshots. It opens no
+// socket: both arguments are files, and everything reported comes out of them.
+//
+// Exit code says whether anything changed, which is the question the command
+// answers: 0 for two runs that describe the same diagnostic state, 1 for any
+// meaningful difference, and 2 when an argument or an artifact is unusable, the
+// same environment-is-wrong code the rest of the CLI spends. A snapshot that
+// records a failed run is not itself an error here; a comparison is about
+// change, not about health.
+func runCompare(paths []string, setFlags map[string]bool, jsonOut bool, stdout, stderr io.Writer) int {
+	for _, name := range compareIncompatibleFlags {
+		if setFlags[name] {
+			fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with -compare\n", name)
+			return 2
+		}
+	}
+	if len(paths) != 2 {
+		fmt.Fprintln(stderr, "netdoc: -compare needs two snapshot files: netdoc --compare before"+snapshot.Extension+" after"+snapshot.Extension)
+		return 2
+	}
+	snapshots := make([]snapshot.Snapshot, len(paths))
+	for i, path := range paths {
+		// #nosec G304 -- the path is the user's own argument, and reading the
+		// file they named is the whole command.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc: -compare:", textsafe.Clean(err.Error()))
+			return 2
+		}
+		// One decoder for both files, the same one that reads a snapshot
+		// anywhere else, so the schema check and the row rules are stated once.
+		// A file this build cannot read is named, rather than reported as "a
+		// snapshot": with two arguments, which one is wrong is the useful half.
+		s, err := snapshot.Decode(data)
+		if err != nil {
+			fmt.Fprintf(stderr, "netdoc: -compare: %s: %s\n", textsafe.Clean(path), textsafe.Clean(err.Error()))
+			return 2
+		}
+		snapshots[i] = s
+	}
+	result := compare.Snapshots(snapshots[0], snapshots[1])
+	if jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(result); err != nil {
+			fmt.Fprintln(stderr, "netdoc:", err)
+			return 1
+		}
+	} else {
+		fmt.Fprint(stdout, result.Text())
+	}
+	if result.Same() {
 		return 0
 	}
 	return 1
