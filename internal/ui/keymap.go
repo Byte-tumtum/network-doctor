@@ -35,6 +35,7 @@ const (
 	actNetworkMap
 	actExpand
 	actExplain
+	actIncidents
 	actHelp
 	actQuit
 )
@@ -98,6 +99,7 @@ var actionDefs = []actionDef{
 	{actNetworkMap, "network-map", map[keyContext]actionHelp{ctxList: {"network map", "find a device on the local network, and back to the checks"}}},
 	{actExpand, "expand", map[keyContext]actionHelp{ctxList: {"expand", "show the collapsed passing checks and the whole toolbox"}}},
 	{actExplain, "explain", map[keyContext]actionHelp{ctxList: {"why", "show why the selected diagnosis follows from the observed checks"}}},
+	{actIncidents, "incidents", map[keyContext]actionHelp{ctxList: {"incidents", "inspect failures recorded during this watch session"}}},
 	{actRestart, "restart", map[keyContext]actionHelp{ctxList: {"restart", "restart with a new target"}}},
 	{actRetest, "retest", map[keyContext]actionHelp{ctxList: {"retest", "rerun the same checks on the same target, after acting on the remediation"}}},
 	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "log in to a host, handing the terminal to ssh"}}},
@@ -136,6 +138,7 @@ var defaultPreset = keyPreset{
 		actNetworkMap: {"v"},
 		actExpand:     {"a"},
 		actExplain:    {"e"},
+		actIncidents:  {"i"},
 		actHelp:       {"?"},
 		actQuit:       {"q"},
 	},

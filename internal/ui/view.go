@@ -70,6 +70,9 @@ func (m model) View() string {
 	if m.helping {
 		return m.helpOverlay()
 	}
+	if m.incidentViewing {
+		return m.incidentView()
+	}
 	if m.viewing {
 		return m.outputView()
 	}
@@ -218,6 +221,16 @@ func (m model) headerView() string {
 	}
 	if m.watch {
 		parts = append(parts, "watch")
+		if latest, ok := m.incidents.Latest(); ok {
+			state := "last incident recovered after " + durationText(latest.Duration(m.incidentNow()))
+			if latest.Active() {
+				state = "incident active for " + durationText(latest.Duration(m.incidentNow()))
+			}
+			if count := len(m.incidents.Incidents()); count > 1 {
+				state += fmt.Sprintf(" (%d recorded)", count)
+			}
+			parts = append(parts, state)
+		}
 	}
 	if len(parts) == 0 {
 		return ""
@@ -1255,6 +1268,9 @@ func (m model) helpView(deferred bool) string {
 		} else {
 			addAction(actExplain)
 		}
+	}
+	if m.watch && len(m.incidents.Incidents()) > 0 {
+		addAction(actIncidents)
 	}
 	if m.selectedPortalURL() != "" {
 		add(m.keys.label(ctxList, actCopy), "copy portal URL")

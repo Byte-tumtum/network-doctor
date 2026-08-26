@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/incident"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
@@ -159,6 +160,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selected = i
 			}
 		}
+		return m, nil
+	case actIncidents:
+		if !m.watch {
+			return m, m.setNotice("incident history is available in watch mode", false)
+		}
+		if len(m.incidents.Incidents()) == 0 {
+			return m, m.setNotice("no incidents recorded", false)
+		}
+		m.openIncidentViewer()
 		return m, nil
 	case actCancelJob:
 		// On an opened device, esc is the way back to the device list before
@@ -563,6 +573,8 @@ func (m *model) applyTarget(t *diagnostic.Target) {
 	m.probes = m.selection.Apply(diagnostic.BuildProbesFromSources(t, m.sources, m.publicDNS))
 	m.selected = 0
 	m.runHistory = map[diagnostic.ProbeID][]diagnostic.Status{}
+	m.incidents = incident.Timeline{}
+	m.incidentViewing, m.incidentSelected = false, 0
 }
 
 func (m model) runPending(p *pendingAction) (tea.Model, tea.Cmd) {

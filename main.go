@@ -167,6 +167,14 @@ func (p probeList) set() map[diagnostic.ProbeID]struct{} {
 	return set
 }
 
+func (p probeList) strings() []string {
+	ids := make([]string, len(p))
+	for i, id := range p {
+		ids[i] = string(id)
+	}
+	return ids
+}
+
 type peerListenList []string
 
 func (addresses *peerListenList) String() string { return strings.Join(*addresses, ",") }
@@ -403,7 +411,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
 	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection,
-		ui.WithKeymap(keymap), ui.WithProbeTimeout(*timeout)), tea.WithAltScreen())
+		ui.WithKeymap(keymap), ui.WithProbeTimeout(*timeout), ui.WithSnapshotSelection(checks.strings(), skips.strings())), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -764,12 +772,8 @@ func writeSnapshot(h headless, probes []diagnostic.Probe, results map[diagnostic
 		ProbeTimeoutMs: h.timeout.Milliseconds(),
 		PublicDNS:      h.publicDNS,
 	}
-	for _, id := range h.check {
-		s.Options.Check = append(s.Options.Check, string(id))
-	}
-	for _, id := range h.skip {
-		s.Options.Skip = append(s.Options.Skip, string(id))
-	}
+	s.Options.Check = h.check.strings()
+	s.Options.Skip = h.skip.strings()
 	// Only the binding netdoc was told to use. Nothing here enumerates the
 	// machine's other interfaces or addresses.
 	if h.sources != nil {

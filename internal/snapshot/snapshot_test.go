@@ -351,6 +351,97 @@ func TestRoundTripPreservesOptionalStates(t *testing.T) {
 	}
 }
 
+func TestIncidentRoundTripAndOlderV1Compatibility(t *testing.T) {
+	before := &Snapshot{CreatedAt: "2026-08-25T12:03:51Z", OK: true, Checks: []Check{}}
+	during := &Snapshot{CreatedAt: "2026-08-25T12:04:01Z", Checks: []Check{}}
+	recovered := &Snapshot{CreatedAt: "2026-08-25T12:04:06Z", OK: true, Checks: []Check{}}
+	onset := Snapshot{
+		CreatedAt: "2026-08-25T12:03:56Z", Checks: []Check{},
+		Incident: &Incident{
+			StartedAt: "2026-08-25T12:03:56Z", EndedAt: "2026-08-25T12:04:06Z", Passes: 2,
+			Before: before, During: during, Recovered: recovered,
+		},
+	}
+	data, err := Encode(onset)
+	if err != nil {
+		t.Fatalf("Encode incident: %v", err)
+	}
+	got, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode incident: %v", err)
+	}
+	if got.Incident == nil || got.Incident.Passes != 2 || got.Incident.Before == nil || got.Incident.During == nil || got.Incident.Recovered == nil {
+		t.Fatalf("incident round trip = %+v", got.Incident)
+	}
+	reencoded, err := Encode(got)
+	if err != nil || string(reencoded) != string(data) {
+		t.Fatalf("incident encoding is not deterministic after round trip: err=%v", err)
+	}
+	for name, nested := range map[string]*Snapshot{"before": got.Incident.Before, "during": got.Incident.During, "recovered": got.Incident.Recovered} {
+		if nested.Schema != Schema {
+			t.Errorf("%s schema = %q, want %q", name, nested.Schema, Schema)
+		}
+	}
+	// Encode stamps copies. Callers can reuse their in-memory run records
+	// without the artifact writer changing them behind their back.
+	if before.Schema != "" || during.Schema != "" || recovered.Schema != "" {
+		t.Errorf("Encode mutated nested schemas: %q %q %q", before.Schema, during.Schema, recovered.Schema)
+	}
+
+	old, err := Decode([]byte(`{"schema":"` + Schema + `","created_at":"2026-08-25T12:00:00Z","target":null,"options":{"probe_timeout_ms":0,"public_dns":""},"checks":[],"diagnosis":{"verdict":"ok","summary":"healthy"},"ok":true}`))
+	if err != nil {
+		t.Fatalf("Decode older v1 snapshot: %v", err)
+	}
+	if old.Incident != nil {
+		t.Fatalf("older v1 snapshot invented an incident: %+v", old.Incident)
+	}
+}
+
+func TestIncidentValidationRejectsImpossibleHistory(t *testing.T) {
+	valid := func() Snapshot {
+		return Snapshot{
+			Schema: Schema, CreatedAt: "2026-08-25T12:03:56Z", Checks: []Check{},
+			Incident: &Incident{
+				StartedAt: "2026-08-25T12:03:56Z", EndedAt: "2026-08-25T12:04:06Z", Passes: 2,
+				Before:    &Snapshot{Schema: Schema, CreatedAt: "2026-08-25T12:03:51Z", OK: true, Checks: []Check{}},
+				During:    &Snapshot{Schema: Schema, CreatedAt: "2026-08-25T12:04:01Z", Checks: []Check{}},
+				Recovered: &Snapshot{Schema: Schema, CreatedAt: "2026-08-25T12:04:06Z", OK: true, Checks: []Check{}},
+			},
+		}
+	}
+	tests := []struct {
+		name string
+		edit func(*Snapshot)
+		want string
+	}{
+		{"invalid start", func(s *Snapshot) { s.Incident.StartedAt = "yesterday" }, "RFC 3339 UTC"},
+		{"onset mismatch", func(s *Snapshot) { s.CreatedAt = "2026-08-25T12:03:55Z" }, "does not match"},
+		{"healthy onset", func(s *Snapshot) { s.OK = true }, "reported ok"},
+		{"no passes", func(s *Snapshot) { s.Incident.Passes = 0 }, "at least the pass"},
+		{"missing recovered run", func(s *Snapshot) { s.Incident.Recovered = nil }, "end time without"},
+		{"end before start", func(s *Snapshot) { s.Incident.EndedAt = "2026-08-25T12:03:50Z" }, "ended before"},
+		{"late baseline", func(s *Snapshot) { s.Incident.Before.CreatedAt = "2026-08-25T12:03:57Z" }, "before state"},
+		{"healthy during", func(s *Snapshot) { s.Incident.During.OK = true }, "during state reports"},
+		{"late during", func(s *Snapshot) { s.Incident.During.CreatedAt = "2026-08-25T12:04:07Z" }, "outside"},
+		{"recovery mismatch", func(s *Snapshot) { s.Incident.Recovered.CreatedAt = "2026-08-25T12:04:07Z" }, "does not match"},
+		{"nested schema", func(s *Snapshot) { s.Incident.Before.Schema = "netdoc.snapshot.v2" }, "has schema"},
+		{"nested incident", func(s *Snapshot) { s.Incident.Before.Incident = &Incident{} }, "incident of its own"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := valid()
+			tt.edit(&s)
+			data, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Decode(data); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Decode error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteFileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "incident"+Extension)
 	want := Snapshot{CreatedAt: "2026-01-02T03:04:05Z", Checks: []Check{{ID: "iface", Status: "PASS", Ran: true, DurationMs: 1}}}

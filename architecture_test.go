@@ -11,20 +11,21 @@ import (
 )
 
 func TestPackageLayering(t *testing.T) {
-	// Internal dependencies must descend this order. UI, peer transport, and
-	// simulation are peers, so none can depend on another, and so are the live
-	// diagnosis and the snapshot comparison: comparison reads artifacts, never
-	// probes. report and textsafe are dependency-free leaves. Checking every
-	// direct edge also rules out a transitive path to the same or a higher layer.
+	// Internal dependencies must descend this order. Incident reconstruction
+	// reads comparisons but no probes, and UI may present it. Peer transport and
+	// simulation remain peers. Live diagnosis and snapshot comparison are peers:
+	// comparison reads artifacts, never probes. Checking every direct edge also
+	// rules out a transitive path to the same or a higher layer.
 	layers := map[string]int{
 		"internal/textsafe":   0,
 		"internal/report":     0,
 		"internal/snapshot":   0,
 		"internal/compare":    1,
 		"internal/diagnostic": 1,
+		"internal/incident":   2,
 		"internal/peer":       2,
-		"internal/ui":         2,
 		"internal/simulation": 2,
+		"internal/ui":         3,
 	}
 	const internalPrefix = "github.com/heymaikol/network-doctor/internal/"
 
@@ -75,7 +76,7 @@ func TestPackageLayering(t *testing.T) {
 				continue
 			}
 			if sourceKnown && dependencyLayer >= sourceLayer {
-				t.Errorf("%s: package layering violation: %s depends on %s; rule: dependencies must point down ui/peer/simulation -> diagnostic/compare -> report/snapshot/textsafe", fset.Position(spec.Pos()), pkg, dependency)
+				t.Errorf("%s: package layering violation: %s depends on %s; rule: dependencies must point down ui -> incident/peer/simulation -> diagnostic/compare -> report/snapshot/textsafe", fset.Position(spec.Pos()), pkg, dependency)
 			}
 		}
 		return nil

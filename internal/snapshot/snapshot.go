@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 )
 
 // Schema is the identity of the format this package reads and writes. It is
@@ -126,6 +127,45 @@ type Snapshot struct {
 	// OK means no check failed, the same rule as the JSON report and the exit
 	// code. Warn, Skip, and N/A do not count against it.
 	OK bool `json:"ok"`
+	// Incident is present when this run is the first failing pass of a watch
+	// incident, and it carries the runs around that failure. Absent on every
+	// ordinary snapshot, which is what a one-shot --save writes.
+	Incident *Incident `json:"incident,omitempty"`
+}
+
+// Incident is one failure a watch session observed, recorded around the run
+// that carries it: the snapshot this hangs off is the incident's onset, the
+// first pass that failed.
+//
+// The runs are stored and the differences between them are not. Everything a
+// reader wants to say about what changed is a comparison of two of these
+// records, computed the same way netdoc computes any other comparison, so a
+// stored answer cannot fall out of step with the states it describes. That is
+// the same reason remediation text is not stored beside a finding.
+//
+// Each nested record is itself a complete, valid snapshot, schema included: a
+// reader may lift one out and hand it to anything that reads an .ndoc.
+type Incident struct {
+	// StartedAt is when the onset run was observed, RFC 3339 in UTC, and the
+	// same instant as this snapshot's created_at.
+	StartedAt string `json:"started_at"`
+	// EndedAt is when the first non-failing run after it was observed. Absent
+	// means the incident was still open when the file was written, which is
+	// not the same as an incident that never recovered.
+	EndedAt string `json:"ended_at,omitempty"`
+	// Passes is how many watch passes saw this incident still failing,
+	// counting the onset. It is a count of observations, never of seconds.
+	Passes int `json:"passes"`
+	// Before is the last run that was not failing before the onset. Absent
+	// when the watch session began during the failure, in which case there is
+	// no earlier state and nothing may be inferred about one.
+	Before *Snapshot `json:"before,omitempty"`
+	// During is the most recent failing run, recorded only when it differed
+	// from the onset. Absent means the failing state never moved.
+	During *Snapshot `json:"during,omitempty"`
+	// Recovered is the first run after the incident that was not failing.
+	// Absent alongside an absent ended_at, and never present without one.
+	Recovered *Snapshot `json:"recovered,omitempty"`
 }
 
 // Tool is the build that produced the snapshot. GOOS and GOARCH are here
@@ -417,7 +457,7 @@ type CounterfactualAlternative struct {
 // check that never reported is not a clean one, so neither can be published:
 // the absence of evidence never leaves here looking like evidence.
 func Encode(s Snapshot) ([]byte, error) {
-	s.Schema = Schema
+	s = stamped(s)
 	if err := validate(s); err != nil {
 		return nil, err
 	}
@@ -430,6 +470,29 @@ func Encode(s Snapshot) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// stamped puts this build's schema on the snapshot and on every run record
+// nested under an incident, so each of them decodes on its own rather than
+// only as part of the file it arrived in. It copies the incident block rather
+// than writing through the caller's pointers: encoding a snapshot must not
+// edit the one the caller still holds.
+func stamped(s Snapshot) Snapshot {
+	s.Schema = Schema
+	if s.Incident == nil {
+		return s
+	}
+	incident := *s.Incident
+	for _, nested := range []**Snapshot{&incident.Before, &incident.During, &incident.Recovered} {
+		if *nested == nil {
+			continue
+		}
+		record := **nested
+		record.Schema = Schema
+		*nested = &record
+	}
+	s.Incident = &incident
+	return s
 }
 
 // validate holds the rules a snapshot has to satisfy to be a snapshot, rather
@@ -481,7 +544,110 @@ func validate(s Snapshot) error {
 			}
 		}
 	}
+	return validateIncident(s)
+}
+
+// validateIncident holds an incident record to what a watch session can
+// actually have observed, in both directions like every other rule here.
+//
+// The four states are not interchangeable: the run this record hangs off is
+// the onset and therefore failed, the run before it and the run that ended it
+// did not, and a later failing state is still a failing one. A file that says
+// otherwise is describing something no watch pass produced, and reading it
+// would put an outage's before and after the wrong way round.
+//
+// A run record is one run, so it carries no incident of its own. That keeps
+// the shape one level deep, which is what makes validating it a walk rather
+// than a recursion a hostile file could steer.
+func validateIncident(s Snapshot) error {
+	if s.Incident == nil {
+		return nil
+	}
+	i := *s.Incident
+	switch {
+	case i.StartedAt == "":
+		return fmt.Errorf("snapshot incident has no start time")
+	case i.Passes < 1:
+		return fmt.Errorf("snapshot incident was observed %d times: an incident is at least the pass that opened it", i.Passes)
+	case s.OK:
+		return fmt.Errorf("snapshot incident hangs off a run that reported ok: the onset of an incident is a run that failed")
+	case (i.EndedAt == "") != (i.Recovered == nil):
+		return fmt.Errorf("snapshot incident records an end time without the run that ended it, or the reverse")
+	}
+	started, err := parseIncidentTime("start", i.StartedAt)
+	if err != nil {
+		return err
+	}
+	onset, err := parseIncidentTime("onset run", s.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if !started.Equal(onset) {
+		return fmt.Errorf("snapshot incident start time %q does not match its onset run %q", i.StartedAt, s.CreatedAt)
+	}
+	var ended time.Time
+	if i.EndedAt != "" {
+		ended, err = parseIncidentTime("end", i.EndedAt)
+		if err != nil {
+			return err
+		}
+		if ended.Before(started) {
+			return fmt.Errorf("snapshot incident ended before it started")
+		}
+	}
+	for _, state := range []struct {
+		name    string
+		record  *Snapshot
+		failing bool
+	}{
+		{"before", i.Before, false},
+		{"during", i.During, true},
+		{"recovered", i.Recovered, false},
+	} {
+		if state.record == nil {
+			continue
+		}
+		if state.record.Incident != nil {
+			return fmt.Errorf("snapshot incident %s state carries an incident of its own: a run record is one run", state.name)
+		}
+		if state.record.Schema != Schema {
+			return fmt.Errorf("snapshot incident %s state has schema %q, want %q", state.name, state.record.Schema, Schema)
+		}
+		if state.record.OK == state.failing {
+			return fmt.Errorf("snapshot incident %s state reports ok=%v, which is not what that point in an incident is", state.name, state.record.OK)
+		}
+		if err := validate(*state.record); err != nil {
+			return fmt.Errorf("snapshot incident %s state: %w", state.name, err)
+		}
+		at, err := parseIncidentTime(state.name+" state", state.record.CreatedAt)
+		if err != nil {
+			return err
+		}
+		switch state.name {
+		case "before":
+			if at.After(started) {
+				return fmt.Errorf("snapshot incident before state was observed after the incident started")
+			}
+		case "during":
+			if at.Before(started) || !ended.IsZero() && at.After(ended) {
+				return fmt.Errorf("snapshot incident during state falls outside the incident")
+			}
+		case "recovered":
+			if !at.Equal(ended) {
+				return fmt.Errorf("snapshot incident recovery time %q does not match its recovered run %q", i.EndedAt, state.record.CreatedAt)
+			}
+		}
+	}
 	return nil
+}
+
+func parseIncidentTime(name, value string) (time.Time, error) {
+	at, err := time.Parse(time.RFC3339, value)
+	_, offset := at.Zone()
+	if err != nil || offset != 0 {
+		return time.Time{}, fmt.Errorf("snapshot incident %s time %q is not RFC 3339 UTC", name, value)
+	}
+	return at, nil
 }
 
 func validateCausalEvidence(e CausalEvidence, checks map[string]Check) error {

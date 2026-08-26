@@ -50,6 +50,13 @@ any other row to see its own evidence and suggested fix. Press `e` to replace
 the focused Details panel with the causal explanation for the diagnosis, and
 `?` for every shortcut.
 
+In `--watch`, Network Doctor keeps a bounded incident timeline around each
+intermittent failure. It retains the last working state, the failure onset,
+meaningful changes while the failure continues, and the first recovered state.
+Press `i` after an incident appears to inspect what changed at onset and
+recovery, the diagnosis and its causal evidence, or save the selected incident
+as a portable `.ndoc` with `w`.
+
 ## Install
 
 Runs on **Linux, macOS, and Windows**. Project = `network-doctor`; installed binary = `netdoc`.
@@ -235,6 +242,7 @@ netdoc --peer-connect             # paste its temporary pairing string when prom
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device or service in the network map |
 | `a` | expand the checks a finished run collapsed (the passing rows, and the toolbox on a clean run), and collapse them again |
 | `e` | show why the selected diagnosis follows from the observed checks, and return to normal details |
+| `i` | in Watch Mode, inspect recorded incidents; use left/right to choose one, and `w` to save it as `.ndoc` |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
 | `enter` | open the selected map device, then diagnose one of the services it answers on, or open the current tool job's output |
 | `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
@@ -328,6 +336,12 @@ netdoc --save incident.ndoc github.com
 ```
 
 The file is versioned JSON (`"schema": "netdoc.snapshot.v1"`) holding the target as typed and as parsed, the run settings, every check with its status, timings and evidence, and the diagnosis. It is for the failure you cannot reproduce on demand. It never changes the diagnosis or the exit code, and can be combined with `--json` to get the report on stdout too.
+
+A `.ndoc` saved from Watch Mode's incident viewer uses the same schema. Its
+root is the failure-onset snapshot, with optional `incident` state containing
+the last pre-failure run, the latest distinct failing state, and the recovery
+run when one was observed. Older v1 files have no incident field and continue
+to load as ordinary snapshots.
 
 A snapshot is network information about the machine that produced it: addresses, the source interface, the connected Wi-Fi network name. It carries no credentials, and nothing is uploaded anywhere. There is no redaction pass yet, so read one before sharing it. Full format, versioning rules, and the field-by-field privacy note are in **[docs/reference.md](docs/reference.md#diagnostic-snapshots)**.
 
@@ -447,7 +461,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` (TUI history strip and `--json` NDJSON), `--json` output, portable `.ndoc` diagnostic snapshots (`--save`) and semantic snapshot comparison (`--compare`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`) and semantic snapshot comparison (`--compare`), report copy/save.
 
 ## Built with
 

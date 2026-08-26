@@ -70,6 +70,24 @@ No verdict depends on ICMP: a failed `ping` proves nothing and a successful one 
 
 `--timeout` overrides the per-check probe timeout; see `netdoc --help` for the default. `--watch` starts another pass five seconds after each run; in the TUI it shows the last 20 states plus a failure count for every check, and with `--json` it streams the same report on stdout, one compact JSON object per line, until the process is interrupted. Those lines carry an extra `ts` field (RFC 3339, UTC) and are otherwise the one-shot report unchanged; one-shot output stays pretty-printed, with no `ts`.
 
+The TUI also reconstructs bounded incidents. A transition from a working pass
+to a failing pass opens one incident. Further failing passes increase its pass
+count and retain only semantic state changes, rather than opening another
+incident each time. The first later working or degraded pass closes it as a
+recovery. The existing per-check strip retains the last 20 outcomes. Incident
+reconstruction separately retains at most 10 incidents and at most eight state
+changes inside one incident. Press `i` to inspect the
+latest incident, left/right to select another retained incident, and `w` there
+to save the selected incident as `.ndoc`. A target restart clears the incident
+timeline because the new endpoint is a new Watch session.
+
+The onset and recovery views use the same canonical snapshot conversion and
+semantic comparison as `--save` and `--compare`. A path change observed in the
+same pass as a failure is reported as a temporal coincidence. It is not called
+the cause unless the saved diagnosis carries independent causal evidence for
+that conclusion. Cancelling Watch during a failure leaves the incident active;
+it never invents a recovery that was not observed.
+
 `--check` accepts comma-separated stable probe IDs and limits the run to those probes plus the prerequisite closure from the existing DAG. `--skip` removes IDs and any dependent probes whose prerequisites are then unavailable. Both flags are repeatable and combine by union; their argument order never changes row order. Unknown or empty IDs are rejected with exit `2`, before diagnostics start, and the error lists every valid stable ID. A known ID that does not apply to the current target is harmless: `--check` may select no rows, while `--skip` changes nothing. Omitted probes do not run and do not appear in the TUI or JSON. The same selection policy is retained by `--watch`, TUI restarts, and target changes.
 
 `--iface` binds IPv4 and IPv6 probe connections and DNS lookups to the interface's first usable address of the matching family. IPv4-only and IPv6-only interfaces use only their available family; pass an exact local IP to restrict probes to that address's family.
@@ -791,6 +809,23 @@ relationships. New files validate that every observed relationship points to a
 matching check fact, that counterfactual alternatives reference evidence the
 finding carries, that not-evaluated reasons match the check state, and that no
 item is duplicated.
+
+An `.ndoc` saved from the Watch incident viewer adds an optional `incident`
+field to the same v1 snapshot. The root snapshot is the first failing pass. The
+incident holds its start and optional recovery time, the number of failing
+passes, the last working or degraded run before onset when one exists, the
+latest distinct failing run when the failure evolved, and the first recovered
+run. These nested states are complete canonical snapshots. Differences are not
+stored beside them; readers derive onset and recovery changes with the normal
+snapshot comparison rules, so stored answers cannot drift from stored evidence.
+
+The incident field is an additive v1 extension, so the schema remains
+`netdoc.snapshot.v1`. Older files continue to load with no incident information,
+and no reader may infer history that was never recorded. New incident artifacts
+validate UTC RFC 3339 timestamps, chronology, failing and non-failing state
+roles, and the one-level nesting bound. An active incident has no recovery time
+or recovery state. Incident export remains bounded to the onset plus at most
+the pre-failure, latest distinct failing, and recovered snapshots.
 
 Remediation text is deliberately not stored. Fix advice lives on the check rows as `fix`, and the structured next action is regenerable from a finding's `id` together with `tool.os`, so a snapshot does not carry a second copy to fall out of step.
 

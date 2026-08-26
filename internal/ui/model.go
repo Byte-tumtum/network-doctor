@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
+	"github.com/heymaikol/network-doctor/internal/incident"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
 )
 
@@ -149,6 +150,10 @@ type model struct {
 	// "" when it is disabled; every probe rebuild reuses it.
 	publicDNS string
 	version   string
+	// snapshotCheck and snapshotSkip preserve the user's selection spelling
+	// for incident artifacts. The applied selection maps above have no order.
+	snapshotCheck []string
+	snapshotSkip  []string
 	// probeTimeout bounds one probe. It belongs to this model, so a second
 	// diagnosis elsewhere in the process cannot change what this run uses.
 	probeTimeout time.Duration
@@ -244,6 +249,13 @@ type model struct {
 	toolbox    bool // --toolbox: chain deferred until 'r'
 	watch      bool
 	runHistory map[diagnostic.ProbeID][]diagnostic.Status
+	incidents  incident.Timeline
+	// Incident inspection is a small read-only viewer alongside the existing
+	// job-output viewer. The timeline itself remains owned by Update.
+	incidentViewing  bool
+	incidentSelected int
+	incidentVP       viewport.Model
+	now              func() time.Time
 
 	// notice is one-line feedback from export or the Ctrl+C quit hint.
 	notice         string
@@ -296,6 +308,14 @@ func WithProbeTimeout(d time.Duration) Option {
 	}
 }
 
+// WithSnapshotSelection preserves the CLI spelling in incident artifacts.
+func WithSnapshotSelection(check, skip []string) Option {
+	return func(m *model) {
+		m.snapshotCheck = append([]string(nil), check...)
+		m.snapshotSkip = append([]string(nil), skip...)
+	}
+}
+
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
 func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
@@ -319,6 +339,7 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 		histPath:     histFile,
 		version:      version,
 		probeTimeout: diagnostic.DefaultProbeTimeout,
+		now:          time.Now,
 		width:        100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
 	for _, opt := range opts {
@@ -475,6 +496,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.incidentViewing {
+			m.refreshIncidentViewport(false)
+		}
 		if m.viewing {
 			m.refreshViewport()
 		}
@@ -519,6 +543,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.entering {
 			return m.handlePromptKey(msg)
+		}
+		if m.incidentViewing {
+			return m.handleIncidentKey(msg)
 		}
 		if m.viewing {
 			return m.handleViewKey(msg)
@@ -775,6 +802,7 @@ func (m *model) recordRun() {
 		}
 		m.runHistory[p.ID] = history
 	}
+	m.recordIncident(m.incidentNow())
 }
 
 func (m model) watchCmd() tea.Cmd {
