@@ -46,7 +46,12 @@ const (
 	SectionTool      = "tool"
 	SectionOptions   = "options"
 	SectionDiagnosis = "diagnosis"
-	SectionCheck     = "check"
+	// SectionPaths is how traffic left the machine: which interface each kind
+	// of traffic took, and whether two kinds took the same one. It is derived
+	// from the route decisions the checks recorded rather than stored a second
+	// time, so it can never describe a different run than they do.
+	SectionPaths = "paths"
+	SectionCheck = "check"
 )
 
 // Direction is set only where the vocabulary has an ordering to move along:
@@ -154,6 +159,7 @@ func Snapshots(before, after snapshot.Snapshot) Comparison {
 	diffTool(d, before.Tool, after.Tool)
 	diffOptions(d, before.Options, after.Options)
 	diffDiagnosis(d, before, after)
+	diffPaths(d, before, after)
 	c.Checks = diffChecks(d, before.Checks, after.Checks)
 	c.Changes = d.changes
 	return c
@@ -557,6 +563,7 @@ func diffObserved(d *diff, id string, before, after snapshot.Observed) {
 	d.field(SectionCheck, id, path+"portal.redirect_url", id+" captive portal sign-in URL",
 		portalURL(before.Portal), portalURL(after.Portal))
 	diffAttempts(d, id, path, before.Attempts, after.Attempts)
+	diffRoutes(d, id, path, before.Routes, after.Routes)
 	// A clock reading is a measurement, and its milliseconds drift between two
 	// runs of a correct clock. Compared at whole-second resolution: that keeps
 	// the sign and the magnitude the diagnosis reasons about, and drops the
@@ -659,4 +666,184 @@ func attemptsByIP(attempts []snapshot.Attempt) map[string]snapshot.Attempt {
 		}
 	}
 	return byIP
+}
+
+// The route intelligence half of the comparison.
+//
+// Two things are compared, and they answer different questions. Per
+// destination, below, is what the operating system decided for one address:
+// which prefix matched, which interface it chose, what the next hop was. That
+// is exact, and it is keyed by the address, so a destination present on one
+// side only is reported as such rather than as a changed path.
+//
+// The paths section above it is the derived reading: which interface each kind
+// of traffic left by, and whether two kinds left by the same one. It exists
+// because the exact comparison cannot answer "the target moved onto the VPN"
+// when the resolver handed back a different address between the two runs, and
+// that question is the one a person asks first. Nothing stores it; it is
+// computed from the same routes both times, so the two cannot disagree.
+
+// diffRoutes compares the route decisions on one check row, keyed by the
+// destination they were made for. The destination is the identity, because a
+// route decision is per address by construction.
+func diffRoutes(d *diff, id, path string, before, after []snapshot.Route) {
+	beforeByDst := routesByDestination(before)
+	afterByDst := routesByDestination(after)
+	for _, dst := range mergedOrder(routeDestinations(before), routeDestinations(after)) {
+		b, inBefore := beforeByDst[dst]
+		a, inAfter := afterByDst[dst]
+		if inBefore != inAfter {
+			d.member(SectionCheck, id, path+"routes."+dst, id+" route to", dst, inAfter)
+			continue
+		}
+		routePath := path + "routes." + dst + "."
+		label := id + " route to " + dst + " "
+		d.field(SectionCheck, id, routePath+"unreachable", label+"has no route", yesNo(b.Unreachable), yesNo(a.Unreachable))
+		d.field(SectionCheck, id, routePath+"prefix", label+"matched prefix", b.Prefix, a.Prefix)
+		d.field(SectionCheck, id, routePath+"interface", label+"interface", b.Interface, a.Interface)
+		d.field(SectionCheck, id, routePath+"gateway", label+"next hop", b.Gateway, a.Gateway)
+		d.field(SectionCheck, id, routePath+"source", label+"source address", b.Source, a.Source)
+		// Metric is absent on a platform that reports none, and 0 is a real
+		// metric, so the two are spelled differently rather than both as "0".
+		d.field(SectionCheck, id, routePath+"metric", label+"metric", metricWord(b.Metric), metricWord(a.Metric))
+		d.field(SectionCheck, id, routePath+"table", label+"routing table", b.Table, a.Table)
+		d.field(SectionCheck, id, routePath+"tunnel", label+"tunnel state", b.Tunnel, a.Tunnel)
+		d.field(SectionCheck, id, routePath+"tunnel_kind", label+"tunnel kind", b.TunnelKind, a.TunnelKind)
+		d.field(SectionCheck, id, routePath+"reason", label+"selection reason", b.Reason, a.Reason)
+		// The link's own MTU. A change here is a reconfigured or swapped link,
+		// and it is not a measured path MTU on either side.
+		d.field(SectionCheck, id, routePath+"interface_mtu", label+"interface MTU", mtuWord(b.InterfaceMTU), mtuWord(a.InterfaceMTU))
+		d.field(SectionCheck, id, routePath+"competing", label+"competing routes", competingWord(b.Competing), competingWord(a.Competing))
+	}
+}
+
+func routeDestinations(routes []snapshot.Route) []string {
+	out := make([]string, len(routes))
+	for i, r := range routes {
+		out[i] = r.Destination
+	}
+	return out
+}
+
+func routesByDestination(routes []snapshot.Route) map[string]snapshot.Route {
+	byDst := make(map[string]snapshot.Route, len(routes))
+	for _, r := range routes {
+		if _, seen := byDst[r.Destination]; !seen {
+			byDst[r.Destination] = r
+		}
+	}
+	return byDst
+}
+
+func metricWord(metric *int) string {
+	if metric == nil {
+		return ""
+	}
+	return strconv.Itoa(*metric)
+}
+
+func mtuWord(mtu int) string {
+	if mtu <= 0 {
+		return ""
+	}
+	return strconv.Itoa(mtu)
+}
+
+func competingWord(routes []snapshot.CompetingRoute) string {
+	items := make([]string, len(routes))
+	for i, r := range routes {
+		items[i] = r.Interface + "@" + strconv.Itoa(r.Metric)
+	}
+	return strings.Join(items, ",")
+}
+
+// diffPaths reports how traffic left the machine, in the terms a person asks
+// about: which interface the target's traffic took, whether it was tunnelled,
+// and whether the resolver's traffic went the same way.
+//
+// It is derived on both sides from the routes the checks already recorded, so
+// two snapshots written by different netdoc versions are read the same way.
+// Every value is empty when the snapshot recorded no route to derive it from,
+// which is what an older .ndoc and a platform netdoc cannot ask both produce,
+// and an empty value on both sides is not a difference.
+func diffPaths(d *diff, before, after snapshot.Snapshot) {
+	b, a := pathsOf(before), pathsOf(after)
+	d.field(SectionPaths, "", "paths.target.interface", "target interface", b.targetIface, a.targetIface)
+	d.field(SectionPaths, "", "paths.target.prefix", "target matched route", b.targetPrefix, a.targetPrefix)
+	// How that route was selected, which is the field that still answers on a
+	// platform naming no matched entry. There it is a comparison with the
+	// general path rather than a statement about prefixes, and the vocabulary
+	// keeps those apart, so this is labelled for what it is on both.
+	d.field(SectionPaths, "", "paths.target.reason", "target route selection", b.targetReason, a.targetReason)
+	d.field(SectionPaths, "", "paths.target.tunnel", "target tunnel state", b.targetTunnel, a.targetTunnel)
+	d.field(SectionPaths, "", "paths.reference.interface", "general Internet interface", b.referenceIface, a.referenceIface)
+	d.field(SectionPaths, "", "paths.resolver.interface", "resolver interface", b.resolverIface, a.resolverIface)
+	d.field(SectionPaths, "", "paths.resolver.agreement", "DNS and application traffic",
+		b.resolverAgreement, a.resolverAgreement)
+}
+
+// runPaths is the derived reading of one snapshot's route decisions.
+type runPaths struct {
+	targetIface       string
+	targetPrefix      string
+	targetReason      string
+	targetTunnel      string
+	referenceIface    string
+	resolverIface     string
+	resolverAgreement string
+}
+
+// The words the derived resolver comparison uses. They are display words for
+// a normalized state, and a split is deliberately not called a fault: split
+// DNS is a design as often as it is a problem.
+const (
+	pathsSame      = "same path"
+	pathsDifferent = "different paths"
+)
+
+func pathsOf(s snapshot.Snapshot) runPaths {
+	checks := checksByID(s.Checks)
+	target := selectedRoute(checks["target_tcp"])
+	reference := firstRoute(checks["iface"])
+	resolver := firstRoute(checks["dns"])
+	out := runPaths{
+		targetIface:    target.Interface,
+		targetPrefix:   target.Prefix,
+		targetReason:   target.Reason,
+		targetTunnel:   target.Tunnel,
+		referenceIface: reference.Interface,
+		resolverIface:  resolver.Interface,
+	}
+	if target.Unreachable {
+		out.targetPrefix = "no route"
+	}
+	if resolver.Interface != "" && target.Interface != "" {
+		out.resolverAgreement = pathsSame
+		if resolver.Interface != target.Interface {
+			out.resolverAgreement = pathsDifferent
+		}
+	}
+	return out
+}
+
+// selectedRoute is the decision for the address the check actually used, which
+// is the one the connection took. It falls back to the first recorded route,
+// because a run where every address failed still chose a path.
+func selectedRoute(check snapshot.Check) snapshot.Route {
+	if check.Observed == nil {
+		return snapshot.Route{}
+	}
+	for _, r := range check.Observed.Routes {
+		if r.Destination != "" && r.Destination == check.Observed.SelectedIP {
+			return r
+		}
+	}
+	return firstRoute(check)
+}
+
+func firstRoute(check snapshot.Check) snapshot.Route {
+	if check.Observed == nil || len(check.Observed.Routes) == 0 {
+		return snapshot.Route{}
+	}
+	return check.Observed.Routes[0]
 }

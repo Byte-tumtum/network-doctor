@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -524,5 +525,56 @@ func TestSnapshotPreservesCounterfactualDiagnosisAndAttemptEvidence(t *testing.T
 	attempts := decoded.Checks[3].Observed.Attempts
 	if len(attempts) != 2 || attempts[0].Cause != ConnectionCauseUnreachable || attempts[0].Aborted {
 		t.Errorf("attempt evidence = %+v", attempts)
+	}
+}
+
+// Route decisions reach the artifact field for field, and a field the platform
+// never supplied stays out of it rather than landing as a zero.
+func TestBuildSnapshotCarriesRouteDecisions(t *testing.T) {
+	tunnel := tunneled(decisionTo("198.51.100.7", "wg0", "10.20.0.0/16"), "wireguard")
+	tunnel.Source, tunnel.MTU, tunnel.Table = net.ParseIP("10.20.0.2"), 1420, "table 51820"
+	tunnel.Metric, tunnel.MetricKnown = 0, true
+	tunnel.Reason = RouteReasonMoreSpecific
+	tunnel.Competing = []CompetingRoute{{Iface: "wlan0", Metric: 600}}
+	unreachable := RouteDecision{Destination: net.ParseIP("203.0.113.9"), Family: counterfactualIPv4, Unreachable: true}
+	probes := []Probe{{ID: ProbeTargetTCP, Name: "Target"}}
+	res := map[ProbeID]ProbeResult{ProbeTargetTCP: {Status: StatusFail, Dur: time.Millisecond, Routes: []RouteDecision{tunnel, unreachable}}}
+	s := BuildSnapshot(nil, probes, res)
+	got := s.Checks[0].Observed.Routes
+	if len(got) != 2 {
+		t.Fatalf("routes = %+v, want two", got)
+	}
+	want := snapshot.Route{
+		Destination: "198.51.100.7", Family: "ipv4", Interface: "wg0", Source: "10.20.0.2",
+		Prefix: "10.20.0.0/16", Metric: got[0].Metric, Table: "table 51820", InterfaceMTU: 1420,
+		Tunnel: snapshot.TunnelStateTunnel, TunnelKind: "wireguard", Reason: "more_specific_than_default",
+		Competing: []snapshot.CompetingRoute{{Interface: "wlan0", Metric: 600}},
+	}
+	if !reflect.DeepEqual(got[0], want) {
+		t.Errorf("converted route =\n%+v\nwant\n%+v", got[0], want)
+	}
+	if got[0].Metric == nil || *got[0].Metric != 0 {
+		t.Errorf("a known metric of 0 converted to %v, want a recorded zero", got[0].Metric)
+	}
+	if got[1].Metric != nil || got[1].Interface != "" || !got[1].Unreachable {
+		t.Errorf("an unreachable destination converted to %+v, want no invented fields", got[1])
+	}
+}
+
+// A run on a platform netdoc cannot ask writes no routes key at all, which a
+// reader must not confuse with a destination that had no route.
+func TestBuildSnapshotOmitsRoutesWhenThePlatformAnsweredNothing(t *testing.T) {
+	probes := []Probe{{ID: ProbeTargetTCP, Name: "Target"}}
+	res := map[ProbeID]ProbeResult{ProbeTargetTCP: {Status: StatusPass, Dur: time.Millisecond}}
+	s := BuildSnapshot(nil, probes, res)
+	if s.Checks[0].Observed != nil && s.Checks[0].Observed.Routes != nil {
+		t.Errorf("routes = %+v, want none", s.Checks[0].Observed.Routes)
+	}
+	data, err := snapshot.Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "routes") {
+		t.Errorf("a run with no route decisions wrote a routes key:\n%s", data)
 	}
 }

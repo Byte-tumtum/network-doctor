@@ -1118,6 +1118,28 @@ func TestReportJSONContract(t *testing.T) {
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"no default route","verdict":"network","findings":[{"id":"offline","focus":"internet_tcp","remediation":{"id":"restore_default_route","action":"Restore a default route","why":"nothing leads off this network","steps":["renew the lease"],"command":["ip","route"],"expect":"a default route"}},{"id":"quic_unavailable","remediation":{"id":"expect_tcp_fallback","action":"expect TCP"}}],"ok":false}`,
 		},
 		{
+			// Routes are additive and serialize last on a check row. A metric
+			// that was read and one that was not are different things: the
+			// pointer keeps 0 from being written as absence, and absence from
+			// being written as 0.
+			name: "routes",
+			rep: report.Report{
+				Checks: []report.Check{{
+					ID: "target_tcp",
+					Routes: []report.Route{
+						{
+							Destination: "198.51.100.7", Family: "ipv4", Interface: "wg0", Source: "10.20.0.2",
+							Prefix: "10.20.0.0/16", Metric: new(int), Table: "table 51820", InterfaceMTU: 1420,
+							Tunnel: "tunnel", TunnelKind: "wireguard", Reason: "more_specific_than_default",
+							Competing: []report.CompetingRoute{{Interface: "wlan0", Metric: 600}},
+						},
+						{Destination: "203.0.113.9", Family: "ipv4", Unreachable: true},
+					},
+				}},
+			},
+			want: `{"version":"","target":null,"checks":[{"id":"target_tcp","name":"","status":"","ms":0,"detail":"","routes":[{"destination":"198.51.100.7","family":"ipv4","interface":"wg0","source":"10.20.0.2","prefix":"10.20.0.0/16","metric":0,"table":"table 51820","interface_mtu":1420,"tunnel":"tunnel","tunnel_kind":"wireguard","reason":"more_specific_than_default","competing":[{"interface":"wlan0","metric":600}]},{"destination":"203.0.113.9","family":"ipv4","unreachable":true}]}],"summary":"","verdict":"","ok":false}`,
+		},
+		{
 			name: "empty",
 			rep:  report.Report{Checks: []report.Check{{}}},
 			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"","verdict":"","ok":false}`,

@@ -471,6 +471,13 @@ func decodeDiagnosis(res ExecResult) (*Diagnosis, error) {
 		if check.Families != nil {
 			d.Checks[i].Families = &DiagnosisFamilies{IPv4: check.Families.IPv4, IPv6: check.Families.IPv6}
 		}
+		for _, r := range check.Routes {
+			d.Checks[i].Routes = append(d.Checks[i].Routes, DiagnosisRoute{
+				Destination: r.Destination, Family: r.Family, Interface: r.Interface, Gateway: r.Gateway,
+				Source: r.Source, Prefix: r.Prefix, Tunnel: r.Tunnel, TunnelKind: r.TunnelKind,
+				Unreachable: r.Unreachable, Reason: r.Reason,
+			})
+		}
 		if check.Attempts != nil {
 			d.Checks[i].Attempts = make([]DiagnosisAttempt, len(check.Attempts))
 			for j, attempt := range check.Attempts {

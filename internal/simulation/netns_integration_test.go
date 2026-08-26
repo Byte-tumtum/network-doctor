@@ -2436,6 +2436,75 @@ func TestHealthyRoutedNetworkScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// Route intelligence has to answer for the network the probe is actually on.
+// The routed scenario puts the client behind a gateway on a segment the host
+// does not have, so a route decision naming that gateway can only have come
+// from inside the namespace: a lookup that leaked to the host would answer
+// with the developer's own default route instead.
+func TestRouteDecisionsAnswerForTheNamespaceNotTheHost(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "healthy-routed-network")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v", rep.Result, rep.Error, rep.Suggestions)
+	}
+	target := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeTargetTCP))
+	if len(target.Routes) == 0 {
+		t.Fatalf("target_tcp recorded no route decision: %+v", target)
+	}
+	route := target.Routes[0]
+	if route.Destination != "10.77.2.20" || route.Gateway != "10.77.1.1" {
+		t.Errorf("route = %+v, want the target reached through the client's own gateway", route)
+	}
+	// The device name inside a namespace is generated, so what is asserted is
+	// that there is one and that it is the same link the interface row picked.
+	iface := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeIface))
+	if len(iface.Routes) == 0 || route.Interface == "" || route.Interface != iface.Routes[0].Interface {
+		t.Errorf("route interface = %q, want the same namespace link the interface row selected: %+v", route.Interface, iface.Routes)
+	}
+	if route.Unreachable {
+		t.Errorf("a reachable target was recorded as having no route: %+v", route)
+	}
+	// Nothing in this scenario encapsulates, and netdoc must not say otherwise
+	// merely because the links are virtual.
+	for _, id := range []string{string(diagnostic.ProbeIface), string(diagnostic.ProbeDNS), string(diagnostic.ProbeTargetTCP)} {
+		for _, r := range diagnosisCheck(rep.Tests[0], id).Routes {
+			if r.Tunnel != "" && r.Tunnel != "direct" {
+				t.Errorf("%s reported %q on a scenario with no tunnels: %+v", id, r.Tunnel, r)
+			}
+			// Against a real kernel, on the platform whose lookups name no
+			// matched entry: a reason that says which entry won may only
+			// appear beside the entry it names. This is what stops the
+			// echoed request length, or a path that merely differs from the
+			// general one, from being read back as a prefix decision.
+			if r.Prefix == "" && (r.Reason == "default_route" || r.Reason == "more_specific_than_default" ||
+				r.Reason == "host_route") {
+				t.Errorf("%s claimed reason %q with no matched entry to support it: %+v", id, r.Reason, r)
+			}
+		}
+	}
+	assertCleanedUp(t, rep)
+}
+
+// A scenario with no default route is netdoc's own no-route case, and it has
+// to be recorded as the kernel saying so rather than as an empty path.
+func TestRouteDecisionsRecordAMissingDefaultRoute(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "no-default-route")
+	iface := diagnosisCheck(rep.Tests[0], string(diagnostic.ProbeIface))
+	if len(iface.Routes) == 0 {
+		t.Skipf("this kernel reported no route decision for the general Internet endpoints: %+v", iface)
+	}
+	for _, r := range iface.Routes {
+		if !r.Unreachable {
+			t.Errorf("route = %+v, want the kernel reporting that there is none", r)
+		}
+		if r.Interface != "" || r.Gateway != "" {
+			t.Errorf("an unreachable destination carries a path: %+v", r)
+		}
+	}
+	assertCleanedUp(t, rep)
+}
+
 // The PMTU black hole is only a black hole if size is the only thing that
 // decides whether a packet survives. This asserts that from netdoc's own
 // output: the same client, the same two routers and the same destination, with

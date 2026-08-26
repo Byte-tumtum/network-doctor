@@ -845,6 +845,38 @@ func TestDiagnosisIDsAreDocumented(t *testing.T) {
 	}
 }
 
+// TestObservationVocabulariesAreDocumented keeps the rest of the published
+// vocabulary in step with its documentation, for the same reason the diagnosis
+// IDs are: an observation, a route reason, and a tunnel state all reach a
+// consumer through the JSON report and the .ndoc file. The empty value in each
+// is skipped, since absence is documented as a state rather than as a word.
+func TestObservationVocabulariesAreDocumented(t *testing.T) {
+	docs, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, vocabulary := range []struct{ file, typeName string }{
+		{"finding.go", "ObservationID"},
+		{"route.go", "RouteReason"},
+		{"route.go", "TunnelState"},
+	} {
+		for _, spec := range declaredConstants(t, vocabulary.file, vocabulary.typeName) {
+			for i, name := range spec.Names {
+				value, err := strconv.Unquote(spec.Values[i].(*ast.BasicLit).Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value == "" {
+					continue
+				}
+				if !strings.Contains(string(docs), "`"+value+"`") {
+					t.Errorf("%s (%q) is not documented in docs/reference.md", name.Name, value)
+				}
+			}
+		}
+	}
+}
+
 // TestCollateralFollowsTheSameInterpretation checks the property that makes
 // Collateral a view rather than a second opinion: it never dims the row the
 // diagnosis blames, and it says nothing at all about a run that has not

@@ -164,10 +164,16 @@ type ProbeResult struct {
 	Source      net.IP
 	Iface       string
 	Network     string // connected Wi-Fi SSID, empty when wired/unknown
-	Attempts    []Attempt
-	Dur         time.Duration // wall time the probe took; zero for probes that never ran
-	Detail      string
-	Fix         string
+	// Routes are the operating system's own route decisions for the
+	// destinations this row is about: the reference Internet endpoints on the
+	// interface row, the configured resolver on the DNS row, and every
+	// resolved address on the target row. Empty where the platform cannot
+	// answer, which is never the same as "there is no route".
+	Routes   []RouteDecision
+	Attempts []Attempt
+	Dur      time.Duration // wall time the probe took; zero for probes that never ran
+	Detail   string
+	Fix      string
 	// timedOut marks an HTTP/HTTPS failure that was a timeout, which is half
 	// the PMTU black-hole correlation. TLS reports the same fact through
 	// Cause, so it has no flag of its own.
@@ -355,6 +361,17 @@ type netops struct {
 	// routeCause classifies a failed direct path from OS route/neighbor state.
 	// Nil keeps deterministic probe unit tests independent of the host.
 	routeCause func(net.IP) string
+	// routeFor asks the operating system which route one destination takes.
+	// Nil, or a false second return, means this platform cannot answer, and
+	// every consumer then reports nothing rather than a guessed path.
+	routeFor func(net.IP) (RouteDecision, bool)
+	// defaultRoutes lists this family's usable default routes, which is what
+	// lets a decision name the competitor it beat. Nil on a platform that
+	// exposes no comparable preference.
+	defaultRoutes func(family string) []defaultRouteState
+	// routes memoizes routeFor for one pass. BuildProbesFromSources installs a
+	// fresh one per pass, so Watch Mode never serves a stale path.
+	routes *routeCache
 }
 
 // SourceAddresses are the usable IPv4 and IPv6 addresses selected by
@@ -391,7 +408,9 @@ var defaultOps = &netops{
 	portalCheck: func(ctx context.Context) (int, string, time.Time, error) {
 		return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
 	},
-	routeCause: routeFailureCause,
+	routeCause:    routeFailureCause,
+	routeFor:      lookupRouteDecision,
+	defaultRoutes: defaultRoutesFor,
 }
 
 // ResolveSource resolves an interface name to one usable address per family,
@@ -477,8 +496,14 @@ func containsSources(addrs []net.Addr, want *SourceAddresses) bool {
 	return found4 && found6
 }
 
+// opsFromSources copies the package-level ops for one pass, and binds every
+// dial to the selected interface's addresses when there is a selection. A copy
+// is taken even with no selection, because a pass owns its own route cache.
 func opsFromSources(sources *SourceAddresses) *netops {
 	o := *defaultOps
+	if sources == nil {
+		return &o
+	}
 	copySources := &SourceAddresses{
 		IPv4: append(net.IP(nil), sources.IPv4...),
 		IPv6: append(net.IP(nil), sources.IPv6...),
@@ -713,10 +738,14 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 // probe out of the DAG altogether, since a skipped row would still have had to dial
 // to be skipped.
 func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS string) []Probe {
-	o := defaultOps
-	if sources != nil {
-		o = opsFromSources(sources)
-	}
+	// A copy either way, so the per-pass route cache installed below belongs
+	// to this pass rather than to the package-level ops every pass shares.
+	o := opsFromSources(sources)
+	// One cache per pass. Route intelligence is asked the same question by
+	// several probes, and a pass must not pay for the same kernel lookup more
+	// than once; a later pass must not be answered from an earlier one, since
+	// the whole point of Watch Mode is to see the route change.
+	o.routes = newRouteCache(o.routeFor)
 	probes := o.buildProbes(t, publicDNS)
 	for i := range probes {
 		probes[i].Run = wrapRun(probes[i].Run)
@@ -757,7 +786,15 @@ func cleanResult(r ProbeResult) ProbeResult {
 // buildProbes assembles the DAG. publicDNSIP names the second-opinion
 // resolver; "" leaves the row out entirely rather than emitting a skipped one.
 func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
-	iface := Probe{ID: ProbeIface, Name: "Interface", Run: o.ifaceProbe}
+	// The interface row carries the run's reference paths: where traffic to
+	// the general Internet goes, per family. Every other route decision in the
+	// run is explained against these, so they belong on the row that is about
+	// the machine's own links rather than on any one destination's row.
+	iface := Probe{ID: ProbeIface, Name: "Interface", Run: func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult {
+		r := o.ifaceProbe(ctx, deps)
+		r.Routes = o.referenceRouteDecisions()
+		return r
+	}}
 	network := Probe{ID: ProbeSSID, Name: "Wi-Fi network", Deps: []ProbeID{ProbeIface}, Run: o.ssidProbe}
 	internet := Probe{ID: ProbeInternet, Name: "Internet (TCP egress)", Deps: []ProbeID{ProbeIface}, Run: o.internetProbe}
 	quicProbe := Probe{ID: ProbeQUIC, Name: "QUIC / UDP 443", Deps: []ProbeID{ProbeIface}, Run: o.quicProbe(ConnectivityProbeHost, quicProbePort)}
@@ -1526,27 +1563,34 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 		}
 		ips, server, err := o.lookupIPRetrying(ctx, host)
 		// "which server told me this" is the first question on a split-DNS or
-		// router-vs-Pi-hole setup, and often the whole answer.
+		// router-vs-Pi-hole setup, and often the whole answer. Where the
+		// resolver's address is known, the path to it is recorded too: a
+		// resolver reached over one interface while the application traffic
+		// leaves by another is the shape of split DNS, and it is not visible
+		// from either row alone.
 		via, paren := "", ""
 		if server != "" {
 			via = " via " + dnsServerLabel(server)
 			paren = " (via " + dnsServerLabel(server) + ")"
 		}
+		routes := o.explainedRouteDecisions(o.referenceRouteDecisions(), resolverIP(server))
 		if err != nil {
 			r.Status = StatusFail
 			r.Cause = dnsFailureCause(err)
 			r.DNSNotFound = dnsNotFound(err)
 			r.Detail = "cannot resolve " + host + via + ": " + err.Error()
 			r.Fix = dnsFix(runtime.GOOS)
+			r.Routes = routes
 			return r
 		}
 		if len(ips) == 0 {
 			r.Status = StatusFail
 			r.DNSNotFound = true
 			r.Detail, r.Fix = "no A/AAAA records for "+host+via, "no address returned: check the hostname / DNS"
+			r.Routes = routes
 			return r
 		}
-		r.Status, r.Addrs = StatusPass, ips
+		r.Status, r.Addrs, r.Routes = StatusPass, ips, routes
 		r.Detail = host + " → " + joinIPs(ips) + paren
 		return r
 	}
@@ -1612,6 +1656,10 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			r.Status, r.Detail = StatusFail, "no resolved addresses"
 			return r
 		}
+		// Per address, never per hostname: a name whose A and AAAA records
+		// leave by different interfaces is exactly the case this exists to
+		// keep visible, and one decision for the hostname would erase it.
+		routes := o.explainedRouteDecisions(o.referenceRouteDecisions(), addrs...)
 		v4addrs, v6addrs := splitFamilies(addrs)
 		type familyResult struct {
 			conn     net.Conn
@@ -1649,6 +1697,7 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 			}
 			src, iface, ambiguous := o.pathIdentity(ctx, conn, sel, port)
 			r.Status, r.SelectedIP, r.Source, r.Iface, r.ifaceAmbiguous = StatusPass, sel, src, iface, ambiguous
+			r.Routes = routes
 			r.Detail = fmt.Sprintf("connected to %s:%d in %dms (src %s %s)", sel, port, Ms(rtt), src, iface)
 			// Failed addresses within a family that did connect are partial
 			// reachability. A whole failed family is reconciled later against the
@@ -1676,6 +1725,7 @@ func (o *netops) targetTCPProbe(port int) func(context.Context, map[ProbeID]Prob
 		// All addresses failed: deterministic fallback path = first address.
 		src, iface, ambiguous := o.pathIdentity(ctx, nil, addrs[0], port)
 		r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, src, iface, ambiguous
+		r.Routes = routes
 		tried := make([]net.IP, len(r.Attempts))
 		for i, a := range r.Attempts {
 			tried[i] = a.IP

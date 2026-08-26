@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -599,5 +600,136 @@ func TestDecodeRefusesRowsEncodeWouldRefuseToWrite(t *testing.T) {
 	// selection produces one.
 	if _, err := Decode([]byte(`{"schema":"` + Schema + `","checks":[],"ok":true}`)); err != nil {
 		t.Errorf("Decode refused a run with no checks: %v", err)
+	}
+}
+
+// routeCheck is one row carrying route decisions, so the tests below state
+// only the part they are about.
+func routeCheck(id string, routes ...Route) Check {
+	return Check{ID: id, Status: StatusFail, Ran: true, DurationMs: 1, Observed: &Observed{Routes: routes}}
+}
+
+func metricOf(n int) *int { return &n }
+
+// Route decisions survive a round trip field for field, including the ones
+// whose absence has to stay distinguishable from a zero.
+func TestRoundTripPreservesRouteDecisions(t *testing.T) {
+	routes := []Route{
+		{
+			Destination: "198.51.100.7", Family: "ipv4", Interface: "wg0",
+			Source: "10.20.0.2", Prefix: "10.20.0.0/16", Metric: metricOf(0),
+			Table: "table 51820", InterfaceMTU: 1420, Tunnel: TunnelStateTunnel,
+			TunnelKind: "wireguard", Reason: "more_specific_than_default",
+			Competing: []CompetingRoute{{Interface: "wlan0", Metric: 600}},
+		},
+		{Destination: "2001:db8::7", Family: "ipv6", Unreachable: true},
+		{Destination: "192.168.1.1", Family: "ipv4", Interface: "eth0", Gateway: "192.168.1.1", Tunnel: TunnelStateDirect},
+	}
+	s := Snapshot{Schema: Schema, Checks: []Check{routeCheck("target_tcp", routes...)}}
+	data, err := Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := back.Checks[0].Observed.Routes
+	if !reflect.DeepEqual(got, routes) {
+		t.Errorf("routes did not survive the round trip:\n%+v\nwant\n%+v", got, routes)
+	}
+	// A metric of 0 is a real metric and must not come back as absence, and an
+	// unreported metric must not come back as 0.
+	if got[0].Metric == nil || *got[0].Metric != 0 {
+		t.Errorf("metric 0 came back as %v, want a recorded zero", got[0].Metric)
+	}
+	if got[1].Metric != nil {
+		t.Errorf("an unreported metric came back as %v, want absent", *got[1].Metric)
+	}
+	if !strings.Contains(string(data), `"gateway"`) {
+		t.Error("a recorded gateway was dropped from the encoding")
+	}
+	if strings.Contains(string(data), `"interface_mtu":0`) {
+		t.Errorf("an unknown interface MTU was written as zero:\n%s", data)
+	}
+}
+
+// A snapshot written before route intelligence existed still loads, reads as
+// "this run recorded no route decisions", and does not gain any on the way
+// back out.
+func TestDecodePreRouteV1DoesNotInventRoutes(t *testing.T) {
+	data := []byte(`{"schema":"` + Schema + `","checks":[{"id":"target_tcp","status":"FAIL","ran":true,"duration_ms":1,"observed":{"addresses":["198.51.100.7"]}}],"ok":false}`)
+	s, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode pre-route v1: %v", err)
+	}
+	if s.Checks[0].Observed.Routes != nil {
+		t.Fatalf("an old snapshot gained routes: %+v", s.Checks[0].Observed.Routes)
+	}
+	reencoded, err := Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(reencoded), "routes") {
+		t.Errorf("round trip invented routes:\n%s", reencoded)
+	}
+}
+
+// Every route observation has to be verifiable against the row that carries
+// it, in both directions: a real one is accepted, and one the row cannot
+// support is refused rather than written to a file that reads as evidence.
+func TestRouteObservationsAreVerifiedAgainstTheirOwnRow(t *testing.T) {
+	tunnel := Route{Destination: "198.51.100.7", Family: "ipv4", Interface: "wg0", Tunnel: TunnelStateTunnel, TunnelKind: "wireguard", InterfaceMTU: 1420}
+	direct := Route{Destination: "1.1.1.1", Family: "ipv4", Interface: "eth0", Tunnel: TunnelStateDirect}
+	v6 := Route{Destination: "2001:db8::7", Family: "ipv6", Interface: "eth0", Tunnel: TunnelStateDirect}
+	noRoute := Route{Destination: "203.0.113.9", Family: "ipv4", Unreachable: true}
+	cases := []struct {
+		name  string
+		check Check
+		e     CausalEvidence
+		want  bool
+	}{
+		{"tunnel on the row that took it", routeCheck("target_tcp", tunnel), CausalEvidence{Observation: ObservationRouteTunneled, Value: "wg0"}, true},
+		{"tunnel claimed for the wrong interface", routeCheck("target_tcp", tunnel), CausalEvidence{Observation: ObservationRouteTunneled, Value: "eth0"}, false},
+		{"tunnel claimed on a direct row", routeCheck("iface", direct), CausalEvidence{Observation: ObservationRouteTunneled, Value: "eth0"}, false},
+		{"direct on the row that took it", routeCheck("iface", direct), CausalEvidence{Observation: ObservationRouteDirect, Value: "eth0"}, true},
+		{"direct claimed for an unclassified interface", routeCheck("iface", Route{Interface: "eth0"}), CausalEvidence{Observation: ObservationRouteDirect, Value: "eth0"}, false},
+		{"no route to the named destination", routeCheck("target_tcp", noRoute), CausalEvidence{Observation: ObservationRouteUnreachable, Value: "203.0.113.9"}, true},
+		{"no route claimed for a reachable destination", routeCheck("target_tcp", tunnel), CausalEvidence{Observation: ObservationRouteUnreachable, Value: "198.51.100.7"}, false},
+		{"path differs from the named other path", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRoutePathDiffers, Value: "wg0"}, true},
+		{"path differs from itself", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRoutePathDiffers, Value: "eth0"}, false},
+		{"path differs with no other path named", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRoutePathDiffers}, false},
+		{"families on different interfaces", routeCheck("target_tcp", tunnel, v6), CausalEvidence{Observation: ObservationRouteFamilySplit}, true},
+		{"families on the same interface", routeCheck("target_tcp", direct, v6), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
+		{"single stack claims no split", routeCheck("target_tcp", direct), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
+		{"interface MTU on the row that has one", routeCheck("target_tcp", tunnel), CausalEvidence{Observation: ObservationRouteInterfaceMTU, Value: "wg0"}, true},
+		{"interface MTU claimed where none was read", routeCheck("target_tcp", direct), CausalEvidence{Observation: ObservationRouteInterfaceMTU, Value: "eth0"}, false},
+		{"a route observation on a row with no routes", Check{ID: "dns", Status: StatusFail, Ran: true, DurationMs: 1}, CausalEvidence{Observation: ObservationRouteTunneled, Value: "wg0"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := observationMatches(c.e, c.check); got != c.want {
+				t.Errorf("observationMatches(%+v) = %v, want %v", c.e, got, c.want)
+			}
+		})
+	}
+}
+
+// The validator refuses a file whose route evidence the file itself does not
+// support, so an artifact cannot claim a tunnel it never recorded.
+func TestEncodeRefusesUnsupportedRouteEvidence(t *testing.T) {
+	s := Snapshot{
+		Schema: Schema,
+		Checks: []Check{routeCheck("target_tcp", Route{Destination: "198.51.100.7", Family: "ipv4", Interface: "eth0", Tunnel: TunnelStateDirect})},
+		Diagnosis: Diagnosis{
+			Verdict: "network", Summary: "unreachable",
+			Findings: []Finding{{
+				ID: "target_unreachable", Verdict: "network", Summary: "unreachable", Focus: "target_tcp",
+				CausalEvidence: []CausalEvidence{{Kind: EvidenceSupport, Check: "target_tcp", Observation: ObservationRouteTunneled, Value: "wg0"}},
+			}},
+		},
+	}
+	if _, err := Encode(s); err == nil {
+		t.Error("a tunnel claim with no tunnel in the file was written anyway")
 	}
 }

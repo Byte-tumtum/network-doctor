@@ -109,6 +109,37 @@ type Check struct {
 	Network    string    `json:"network,omitempty"`
 	Portal     *Portal   `json:"portal,omitempty"`
 	Attempts   []Attempt `json:"attempts,omitempty"`
+	// Routes are the operating system's own route decisions for the
+	// destinations this check is about, one per destination address. Additive
+	// and omitted where the platform cannot answer, which is never the same as
+	// "no route": an entry with unreachable set says that.
+	Routes []Route `json:"routes,omitempty"`
+}
+
+// Route is one destination's selected path as the operating system reported
+// it. An absent optional field means the platform did not supply it, never
+// zero: metric is a pointer because 0 is a real route metric.
+type Route struct {
+	Destination string `json:"destination"`
+	Family      string `json:"family,omitempty"`
+	Interface   string `json:"interface,omitempty"`
+	Gateway     string `json:"gateway,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Prefix      string `json:"prefix,omitempty"`
+	Metric      *int   `json:"metric,omitempty"`
+	Table       string `json:"table,omitempty"`
+	// InterfaceMTU is the selected link's own MTU, never a measured path MTU.
+	InterfaceMTU int              `json:"interface_mtu,omitempty"`
+	Tunnel       string           `json:"tunnel,omitempty"`
+	TunnelKind   string           `json:"tunnel_kind,omitempty"`
+	Unreachable  bool             `json:"unreachable,omitempty"`
+	Reason       string           `json:"reason,omitempty"`
+	Competing    []CompetingRoute `json:"competing,omitempty"`
+}
+
+type CompetingRoute struct {
+	Interface string `json:"interface,omitempty"`
+	Metric    int    `json:"metric"`
 }
 
 // A family the selected --iface source has no address for was never dialed, so

@@ -8,6 +8,7 @@ package ui
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -242,5 +243,103 @@ func TestWatchStripIsAbsentBeforeTheFirstRecordedPass(t *testing.T) {
 	}
 	if containsRow(detailsRows(v), "History:") {
 		t.Errorf("Details drew a history line with no history:\n%s", v)
+	}
+}
+
+// Every route observation renders as a sentence about the path, and none of
+// them renders as a failure of the row that recorded it: a tunnel is not a
+// fault, and a split path is a difference rather than a verdict.
+func TestRouteObservationsRenderAsPathSentences(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	// The row records the kernel having named wg0 a wireguard device, which is
+	// what lets the sentence about it be stated rather than suggested.
+	m.results[diagnostic.ProbeTargetTCP] = diagnostic.ProbeResult{Routes: []diagnostic.RouteDecision{{
+		Destination: net.ParseIP("198.51.100.7"), Iface: "wg0",
+		Tunnel: diagnostic.TunnelKnown, TunnelKind: "wireguard",
+	}}}
+	m.results[diagnostic.ProbeDNS] = diagnostic.ProbeResult{}
+	for _, tt := range []struct {
+		evidence diagnostic.CausalEvidence
+		want     string
+		// glyph: only a destination with no route is a failure. A tunnel, a
+		// split path, and a narrow link are readings about the path, and the
+		// panel must not present them as things that went wrong.
+		glyph string
+	}{
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationRouteTunneled, Value: "wg0"}, "through the tunnel wg0", "!"},
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationRouteDirect, Value: "eth0"}, "eth0, which is not reported as a tunnel", "✓"},
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationRouteUnreachable, Value: "198.51.100.7"}, "no route to 198.51.100.7", "✗"},
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeDNS,
+			Observation: diagnostic.ObservationRoutePathDiffers, Value: "wg0"}, "different path from the target traffic on wg0", "!"},
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationRouteFamilySplit}, "IPv4 and IPv6 over different interfaces", "!"},
+		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
+			Observation: diagnostic.ObservationRouteInterfaceMTU, Value: "wg0"}, "link MTU is smaller than the general path's", "!"},
+	} {
+		got := m.causalEvidenceLine(tt.evidence)
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("line = %q, want %q", got, tt.want)
+		}
+		if !strings.HasPrefix(got, tt.glyph) {
+			t.Errorf("line = %q, want it to start with %q", got, tt.glyph)
+		}
+	}
+}
+
+// The tunnel sentence is only as strong as the evidence behind the row's
+// tunnel state. A kind the operating system named is a fact to repeat; a link
+// that merely has the shape of a tunnel is a guess, and a mobile broadband
+// modem has the same shape, so the app must not tell the user they are on a
+// VPN because an interface is point-to-point.
+func TestShapeOnlyTunnelsAreNotStatedAsFact(t *testing.T) {
+	tunneled := diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport,
+		Check: diagnostic.ProbeTargetTCP, Observation: diagnostic.ObservationRouteTunneled, Value: "utun3"}
+	route := diagnostic.RouteDecision{Destination: net.ParseIP("198.51.100.7"), Iface: "utun3"}
+
+	for _, tt := range []struct {
+		name  string
+		state diagnostic.TunnelState
+		want  string
+		deny  string
+	}{
+		{"named by the operating system", diagnostic.TunnelKnown, "left through the tunnel utun3", "shape"},
+		{"shape only", diagnostic.TunnelLikely, "which has the shape of a tunnel", "through the tunnel"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(mustTarget(t, "example.com:443"), false)
+			route.Tunnel = tt.state
+			m.results[diagnostic.ProbeTargetTCP] = diagnostic.ProbeResult{Routes: []diagnostic.RouteDecision{route}}
+			got := m.causalEvidenceLine(tunneled)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("line = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, tt.deny) {
+				t.Errorf("line = %q, must not contain %q", got, tt.deny)
+			}
+		})
+	}
+}
+
+// A tunnel a probe took shows up in the Details panel for that row, and never
+// on the Checks row: it is evidence about the path, not the outcome.
+func TestRouteDecisionsAreDetailsOnly(t *testing.T) {
+	m := evidenceModel(t)
+	r := m.results[diagnostic.ProbeDNS]
+	r.Routes = []diagnostic.RouteDecision{{
+		Destination: net.ParseIP("192.0.2.53"), Family: "ipv4", Iface: "wg0",
+		Prefix: netip.MustParsePrefix("10.20.0.0/16"), Tunnel: diagnostic.TunnelKnown, TunnelKind: "wireguard",
+	}}
+	m.results[diagnostic.ProbeDNS] = r
+	_, v := renderAt(t, m)
+	if !containsRow(detailsRows(v), "route 192.0.2.53: 10.20.0.0/16 dev wg0 (wireguard)") {
+		t.Errorf("Details lost the route decision:\n%s", v)
+	}
+	for _, row := range checksRows(v) {
+		if strings.Contains(row, "wg0") || strings.Contains(row, "10.20.0.0/16") {
+			t.Errorf("a route decision leaked into a Checks row: %q\n%s", row, v)
+		}
 	}
 }

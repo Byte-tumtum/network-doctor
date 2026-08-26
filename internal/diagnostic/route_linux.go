@@ -1,0 +1,436 @@
+//go:build linux
+
+package diagnostic
+
+import (
+	"encoding/binary"
+	"errors"
+	"net"
+	"net/netip"
+	"os"
+	"strconv"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// Route intelligence on Linux asks the kernel the same question `ip route get`
+// asks: an RTM_GETROUTE request carrying one destination, answered by the FIB
+// lookup the kernel would perform for a real packet. That is deliberate. The
+// alternative is reading every table and every policy rule and reimplementing
+// the selection, which would be a second, worse copy of the kernel's answer,
+// and which would be wrong the moment a rule netdoc did not model exists.
+//
+// The socket is netlink, not a subprocess. The routing table is not
+// human-readable output to parse here: it is a machine interface the kernel
+// serves without privileges, and it is namespace-aware, so a lookup made
+// inside one of the simulator's network namespaces answers for that namespace.
+
+// netlinkTimeout bounds one kernel exchange. A local socket answers in
+// microseconds; this exists so a wedged one cannot spend a probe's budget.
+const netlinkTimeout = 500 * time.Millisecond
+
+// netlinkReplyMax bounds one reply. A route answer is a few hundred bytes and
+// a link answer with all its statistics is a few thousand.
+const netlinkReplyMax = 64 << 10
+
+const (
+	nlMsgHdrLen    = unix.SizeofNlMsghdr
+	rtMsgLen       = unix.SizeofRtMsg
+	ifInfoMsgLen   = unix.SizeofIfInfomsg
+	rtAttrHdrLen   = unix.SizeofRtAttr
+	iflaLinkInfo   = 0x12 // IFLA_LINKINFO
+	iflaInfoKind   = 0x1  // IFLA_INFO_KIND, nested inside IFLA_LINKINFO
+	iflaIfName     = 0x3  // IFLA_IFNAME
+	iflaMTU        = 0x4  // IFLA_MTU
+	rtmFLookupTbl  = 0x1000
+	netlinkAlignTo = 4
+)
+
+func nlAlign(n int) int { return (n + netlinkAlignTo - 1) &^ (netlinkAlignTo - 1) }
+
+// routeFailureCause and the route decision below read different things for
+// different questions, so they stay separate: one classifies a failed default
+// path from the whole table, the other asks about one destination.
+
+// lookupRouteDecision asks the kernel which route one destination takes.
+func lookupRouteDecision(dst net.IP) (RouteDecision, bool) {
+	addr, ok := netip.AddrFromSlice(dst)
+	if !ok {
+		return RouteDecision{}, false
+	}
+	addr = addr.Unmap()
+	family, raw := uint8(unix.AF_INET), addr.AsSlice()
+	if !addr.Is4() {
+		family = unix.AF_INET6
+	}
+	// dst_len is the length of the address supplied, which is how a lookup
+	// asks about one host rather than about a prefix.
+	body := make([]byte, rtMsgLen)
+	body[0] = family
+	body[1] = uint8(len(raw) * 8) // #nosec G115 -- an IP address is 4 or 16 bytes, so this is 32 or 128
+	binary.NativeEndian.PutUint32(body[8:], rtmFLookupTbl)
+	body = append(body, rtAttr(unix.RTA_DST, raw)...)
+
+	replies, err := netlinkExchange(unix.RTM_GETROUTE, body)
+	if err != nil {
+		if unreachableNetlinkError(err) {
+			return RouteDecision{Unreachable: true}, true
+		}
+		return RouteDecision{}, false
+	}
+	return parseRouteReply(replies, addr)
+}
+
+// parseRouteReply reads the kernel's answer into a decision. It takes the
+// first RTM_NEWROUTE in the reply: a lookup for one destination is answered
+// with one route, and a multipath route reports its chosen next hop there.
+func parseRouteReply(replies []netlinkMessage, dst netip.Addr) (RouteDecision, bool) {
+	for _, msg := range replies {
+		if msg.Type != unix.RTM_NEWROUTE || len(msg.Data) < rtMsgLen {
+			continue
+		}
+		out := RouteDecision{}
+		// The three route types that answer "nothing leads there". RTN_THROW
+		// is deliberately not among them: it tells the kernel to abandon this
+		// table and carry on with the next rule, so a later table may well
+		// route the destination, and reporting it as no route would be netdoc
+		// answering a question the lookup had not finished asking. An
+		// unresolved throw comes back as ENETUNREACH instead, which is caught
+		// where the exchange fails.
+		switch msg.Data[7] { // rtm_type
+		case unix.RTN_UNREACHABLE, unix.RTN_BLACKHOLE, unix.RTN_PROHIBIT:
+			out.Unreachable = true
+			return out, true
+		}
+		// The matched prefix is deliberately not read here. A route lookup
+		// reply carries rtm_dst_len, but the kernel echoes the length the
+		// request asked about rather than the length of the entry it matched:
+		// every answer to a host lookup comes back as /32 or /128, whatever
+		// the table holds. Reconstructing a prefix from it would report every
+		// destination as a host route, so Prefix stays unset on this platform
+		// and routeReason answers from the path instead.
+		// rtm_table is a byte and saturates at 253 for a table id that needs
+		// RTA_TABLE to be expressed, so the attribute wins where both exist.
+		table := uint32(msg.Data[4])
+		for _, attr := range netlinkAttrs(msg.Data[rtMsgLen:]) {
+			switch attr.Type {
+			case unix.RTA_OIF:
+				if len(attr.Value) >= 4 {
+					out.Iface, out.MTU, out.TunnelKind = linkFacts(int(binary.NativeEndian.Uint32(attr.Value)))
+				}
+			case unix.RTA_GATEWAY:
+				out.Gateway = netlinkIP(attr.Value)
+			// A next hop in the other address family, which is how an IPv4
+			// route reached through an IPv6 neighbour is expressed. It is a
+			// next hop like any other, and reading only RTA_GATEWAY would
+			// leave the decision looking gatewayless and be reported as
+			// on-link when the kernel named a router.
+			case unix.RTA_VIA:
+				if out.Gateway == nil {
+					out.Gateway = netlinkVia(attr.Value)
+				}
+			case unix.RTA_PREFSRC:
+				out.Source = netlinkIP(attr.Value)
+			case unix.RTA_PRIORITY:
+				if len(attr.Value) >= 4 {
+					out.Metric, out.MetricKnown = int(binary.NativeEndian.Uint32(attr.Value)), true
+				}
+			case unix.RTA_TABLE:
+				if len(attr.Value) >= 4 {
+					table = binary.NativeEndian.Uint32(attr.Value)
+				}
+			}
+		}
+		out.Table = routeTableName(table)
+		out.Tunnel, out.TunnelKind = classifyTunnel(linkClassificationFacts(out.Iface, out.TunnelKind))
+		return out, true
+	}
+	return RouteDecision{}, false
+}
+
+// routeTableName spells the routing table a decision came from. The three the
+// kernel reserves get their names; any other id is reported as its number,
+// because a numbered table is exactly what policy routing installs and a
+// diagnosis that hid the number would hide the whole point. The main table is
+// reported as empty, since a decision from it is the unremarkable case and
+// saying so on every row would be noise.
+func routeTableName(id uint32) string {
+	switch id {
+	case unix.RT_TABLE_UNSPEC, unix.RT_TABLE_MAIN:
+		return ""
+	case unix.RT_TABLE_LOCAL:
+		return "local"
+	case unix.RT_TABLE_DEFAULT:
+		return "default"
+	}
+	return "table " + strconv.FormatUint(uint64(id), 10)
+}
+
+// linkFacts reads one interface's name, MTU, and kernel-reported device kind
+// by index. Everything it cannot read stays zero, which every caller reads as
+// unknown rather than as a value.
+func linkFacts(index int) (name string, mtu int, kind string) {
+	if index <= 0 {
+		return "", 0, ""
+	}
+	body := make([]byte, ifInfoMsgLen)
+	body[0] = unix.AF_UNSPEC
+	// #nosec G115 -- guarded above: a positive interface index is a uint32 in the kernel
+	binary.NativeEndian.PutUint32(body[4:], uint32(index)) // ifi_index
+	replies, err := netlinkExchange(unix.RTM_GETLINK, body)
+	if err != nil {
+		// The kernel knows this index; a failed query is a broken socket, not
+		// a missing interface, so fall back to the portable interface list
+		// rather than reporting an unnamed path.
+		if ifi, err := net.InterfaceByIndex(index); err == nil {
+			return ifi.Name, ifi.MTU, ""
+		}
+		return "", 0, ""
+	}
+	for _, msg := range replies {
+		if msg.Type != unix.RTM_NEWLINK || len(msg.Data) < ifInfoMsgLen {
+			continue
+		}
+		for _, attr := range netlinkAttrs(msg.Data[ifInfoMsgLen:]) {
+			switch attr.Type {
+			case iflaIfName:
+				name = nullTerminated(attr.Value)
+			case iflaMTU:
+				if len(attr.Value) >= 4 {
+					mtu = int(binary.NativeEndian.Uint32(attr.Value))
+				}
+			case iflaLinkInfo:
+				// IFLA_INFO_KIND is the kernel's own name for the device type
+				// ("wireguard", "tun", "gre", "bridge"). It is the structural
+				// answer that keeps tunnel detection off interface names.
+				for _, nested := range netlinkAttrs(attr.Value) {
+					if nested.Type == iflaInfoKind {
+						kind = nullTerminated(nested.Value)
+					}
+				}
+			}
+		}
+		return name, mtu, kind
+	}
+	return "", 0, ""
+}
+
+// linkClassificationFacts assembles what classifyTunnel reads. The kernel kind
+// comes from netlink above; the shape comes from the portable interface list,
+// which is what answers for a device the kernel named no kind for.
+func linkClassificationFacts(name, kind string) ifaceFacts {
+	f := ifaceFacts{Name: name, Kind: kind}
+	if name == "" {
+		return f
+	}
+	ifi, err := net.InterfaceByName(name)
+	if err != nil {
+		return f
+	}
+	f.PointToPoint = ifi.Flags&net.FlagPointToPoint != 0
+	f.Loopback = ifi.Flags&net.FlagLoopback != 0
+	f.NoLinkLayer = len(ifi.HardwareAddr) == 0
+	return f
+}
+
+// defaultRoutesFor reuses the /proc reading the failed-egress classification
+// already does, so the competing default routes a decision is explained
+// against come from the same view of the table as everything else.
+//
+// That view is partial, and the caller is written around it. /proc/net/route
+// is the main table only, so an IPv4 default route in a table policy routing
+// installed does not appear here; /proc/net/ipv6_route spans the tables but,
+// like its IPv4 counterpart, shows no rule that selects between them. Nothing
+// downstream treats what comes back as the full set of candidate routes, and
+// the reason vocabulary never claims a metric settled a decision unless a
+// competitor was actually seen.
+func defaultRoutesFor(family string) []defaultRouteState {
+	if family == counterfactualIPv6 {
+		raw, err := os.ReadFile(procIPv6Routes)
+		if err != nil {
+			return nil
+		}
+		return parseIPv6DefaultRoutes(raw)
+	}
+	raw, err := os.ReadFile(procIPv4Routes)
+	if err != nil {
+		return nil
+	}
+	return parseDefaultRoutes(raw)
+}
+
+// netlinkMessage is one message out of a netlink reply, split from the stream
+// here rather than borrowed from a helper so the same walker serves route
+// messages, link messages, and the nested attributes inside them.
+type netlinkMessage struct {
+	Type uint16
+	Data []byte
+}
+
+type netlinkAttr struct {
+	Type  uint16
+	Value []byte
+}
+
+// netlinkAttrs walks a run of rtattr structures. A length that does not fit
+// what is left ends the walk rather than panicking: this parses bytes from the
+// kernel, and a parser for kernel bytes still has to be a parser.
+func netlinkAttrs(b []byte) []netlinkAttr {
+	var out []netlinkAttr
+	for len(b) >= rtAttrHdrLen {
+		length := int(binary.NativeEndian.Uint16(b[0:2]))
+		if length < rtAttrHdrLen || length > len(b) {
+			return out
+		}
+		out = append(out, netlinkAttr{
+			Type:  binary.NativeEndian.Uint16(b[2:4]) & 0x3fff, // strip NESTED/BYTEORDER
+			Value: b[rtAttrHdrLen:length],
+		})
+		aligned := nlAlign(length)
+		if aligned >= len(b) {
+			return out
+		}
+		b = b[aligned:]
+	}
+	return out
+}
+
+// netlinkMessages splits a reply buffer into messages, and reports the kernel's
+// own error when the reply is one.
+func netlinkMessages(b []byte) ([]netlinkMessage, error) {
+	var out []netlinkMessage
+	for len(b) >= nlMsgHdrLen {
+		length := int(binary.NativeEndian.Uint32(b[0:4]))
+		msgType := binary.NativeEndian.Uint16(b[4:6])
+		if length < nlMsgHdrLen || length > len(b) {
+			return out, nil
+		}
+		data := b[nlMsgHdrLen:length]
+		switch msgType {
+		case unix.NLMSG_DONE:
+			return out, nil
+		case unix.NLMSG_ERROR:
+			if len(data) < 4 {
+				return out, errors.New("netlink error message is truncated")
+			}
+			// The kernel reports errno negated. Zero is the acknowledgement
+			// that a request with no reply body succeeded.
+			// #nosec G115 -- the kernel writes a negated errno here, so the
+			// round trip through int32 is the documented encoding rather than
+			// a narrowing conversion.
+			code := int32(binary.NativeEndian.Uint32(data[0:4]))
+			if code != 0 {
+				return out, unix.Errno(-code) // #nosec G115 -- a negated errno is small and positive once flipped
+			}
+			return out, nil
+		default:
+			out = append(out, netlinkMessage{Type: msgType, Data: data})
+		}
+		aligned := nlAlign(length)
+		if aligned >= len(b) {
+			return out, nil
+		}
+		b = b[aligned:]
+	}
+	return out, nil
+}
+
+// netlinkExchange sends one request and reads one reply. The socket is opened
+// and closed per exchange: the run's route cache means a pass makes a handful
+// of these, and a short-lived socket cannot outlive the namespace it was
+// opened in.
+func netlinkExchange(msgType uint16, body []byte) ([]netlinkMessage, error) {
+	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return nil, err
+	}
+	timeout := unix.NsecToTimeval(int64(netlinkTimeout))
+	// A missing timeout option is not worth abandoning the query over; the
+	// only cost is that a wedged kernel socket would block, which the option
+	// exists to prevent and which does not happen on a working one.
+	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &timeout)
+
+	request := make([]byte, nlMsgHdrLen+len(body))
+	// #nosec G115 -- the request is a header plus a body this file builds, tens of bytes
+	binary.NativeEndian.PutUint32(request[0:4], uint32(len(request)))
+	binary.NativeEndian.PutUint16(request[4:6], msgType)
+	binary.NativeEndian.PutUint16(request[6:8], unix.NLM_F_REQUEST)
+	binary.NativeEndian.PutUint32(request[8:12], 1)
+	copy(request[nlMsgHdrLen:], body)
+	if err := unix.Sendto(fd, request, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, netlinkReplyMax)
+	n, _, err := unix.Recvfrom(fd, buf, 0)
+	if err != nil {
+		return nil, err
+	}
+	return netlinkMessages(buf[:n])
+}
+
+// rtAttr encodes one attribute, padded to the netlink alignment.
+func rtAttr(attrType uint16, value []byte) []byte {
+	out := make([]byte, nlAlign(rtAttrHdrLen+len(value)))
+	// #nosec G115 -- every attribute this file writes is an address or a word
+	binary.NativeEndian.PutUint16(out[0:2], uint16(rtAttrHdrLen+len(value)))
+	binary.NativeEndian.PutUint16(out[2:4], attrType)
+	copy(out[rtAttrHdrLen:], value)
+	return out
+}
+
+// unreachableNetlinkError separates the kernel saying "there is no route" from
+// every other reason a query can fail. Only the first is evidence; the rest
+// leave route intelligence silent rather than reporting an outage that is
+// really a broken socket.
+func unreachableNetlinkError(err error) bool {
+	return errors.Is(err, unix.ENETUNREACH) || errors.Is(err, unix.EHOSTUNREACH) ||
+		errors.Is(err, unix.ENETDOWN)
+}
+
+func netlinkIP(b []byte) net.IP {
+	if len(b) != net.IPv4len && len(b) != net.IPv6len {
+		return nil
+	}
+	ip := append(net.IP(nil), b...)
+	if ip.IsUnspecified() {
+		return nil
+	}
+	return ip
+}
+
+// netlinkVia reads an rtvia: a two-byte address family followed by an address
+// in that family. Anything else, including a family whose address length does
+// not match, is no next hop rather than a guess at one.
+func netlinkVia(b []byte) net.IP {
+	if len(b) < 2 {
+		return nil
+	}
+	addr := b[2:]
+	switch binary.NativeEndian.Uint16(b) {
+	case unix.AF_INET:
+		if len(addr) != net.IPv4len {
+			return nil
+		}
+	case unix.AF_INET6:
+		if len(addr) != net.IPv6len {
+			return nil
+		}
+	default:
+		return nil
+	}
+	return netlinkIP(addr)
+}
+
+func nullTerminated(b []byte) string {
+	for i, c := range b {
+		if c == 0 {
+			return string(b[:i])
+		}
+	}
+	return string(b)
+}

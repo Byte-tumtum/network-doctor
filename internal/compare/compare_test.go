@@ -796,3 +796,186 @@ func TestEmptyCollectionsEncodeAsArrays(t *testing.T) {
 		t.Errorf("a run with no checks does not encode empty rows as an array: %s", data)
 	}
 }
+
+// withRoutes puts route decisions on one row of the real fixture, so the
+// comparison under test reads the artifact netdoc actually writes.
+func withRoutes(t *testing.T, s *snapshot.Snapshot, id string, routes ...snapshot.Route) {
+	t.Helper()
+	c := check(t, s, id)
+	if c.Observed == nil {
+		c.Observed = &snapshot.Observed{}
+	}
+	c.Observed.Routes = routes
+}
+
+func onEth0(dst, prefix string) snapshot.Route {
+	return snapshot.Route{Destination: dst, Family: "ipv4", Interface: "eth0", Prefix: prefix, Tunnel: snapshot.TunnelStateDirect}
+}
+
+func onWG0(dst, prefix string) snapshot.Route {
+	return snapshot.Route{Destination: dst, Family: "ipv4", Interface: "wg0", Prefix: prefix, Tunnel: snapshot.TunnelStateTunnel, TunnelKind: "wireguard"}
+}
+
+// The headline case: between two captures the target moved onto a tunnel. The
+// comparison reports it in normalized words rather than route syntax.
+func TestCompareReportsTheTargetMovingOntoATunnel(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	selected := check(t, &before, "target_tcp").Observed.SelectedIP
+	b, a := onEth0(selected, "0.0.0.0/0"), onWG0(selected, "10.20.0.0/16")
+	b.Reason, a.Reason = "default_route", "more_specific_than_default"
+	withRoutes(t, &before, "target_tcp", b)
+	withRoutes(t, &after, "target_tcp", a)
+	c := Snapshots(before, after)
+	for _, want := range []struct{ path, before, after string }{
+		{"paths.target.interface", "eth0", "wg0"},
+		{"paths.target.prefix", "0.0.0.0/0", "10.20.0.0/16"},
+		{"paths.target.reason", "default_route", "more_specific_than_default"},
+		{"paths.target.tunnel", "direct", "tunnel"},
+	} {
+		change := changeAt(t, c, want.path)
+		if change.Before != want.before || change.After != want.after {
+			t.Errorf("%s = %q -> %q, want %q -> %q", want.path, change.Before, change.After, want.before, want.after)
+		}
+		if change.Section != SectionPaths {
+			t.Errorf("%s landed in section %q, want %q", want.path, change.Section, SectionPaths)
+		}
+	}
+}
+
+// DNS and application traffic parting company is reported as what it is: a
+// change in whether the two agree, and not a fault.
+func TestCompareReportsDNSAndApplicationTrafficParting(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	selected := check(t, &before, "target_tcp").Observed.SelectedIP
+	withRoutes(t, &before, "target_tcp", onEth0(selected, "0.0.0.0/0"))
+	withRoutes(t, &before, "dns", onEth0("192.168.1.1", "192.168.1.0/24"))
+	withRoutes(t, &after, "target_tcp", onWG0(selected, "10.20.0.0/16"))
+	withRoutes(t, &after, "dns", onEth0("192.168.1.1", "192.168.1.0/24"))
+	change := changeAt(t, Snapshots(before, after), "paths.resolver.agreement")
+	if change.Before != pathsSame || change.After != pathsDifferent {
+		t.Errorf("resolver agreement = %q -> %q, want %q -> %q", change.Before, change.After, pathsSame, pathsDifferent)
+	}
+	if strings.Contains(strings.ToLower(change.Summary), "wrong") || strings.Contains(strings.ToLower(change.Summary), "broken") {
+		t.Errorf("the summary calls a split a fault: %q", change.Summary)
+	}
+}
+
+// Per destination, the exact decision is compared field by field.
+func TestCompareReportsTheChangedRouteFields(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	b := onEth0("198.51.100.7", "0.0.0.0/0")
+	b.Gateway, b.Source, b.InterfaceMTU, b.Table, b.Reason = "192.168.1.1", "192.168.1.20", 1500, "", "default_route"
+	metric := 100
+	b.Metric = &metric
+	a := onWG0("198.51.100.7", "10.20.0.0/16")
+	a.Source, a.InterfaceMTU, a.Table, a.Reason = "10.20.0.2", 1420, "table 51820", "more_specific_than_default"
+	a.Competing = []snapshot.CompetingRoute{{Interface: "wlan0", Metric: 600}}
+	withRoutes(t, &before, "target_tcp", b)
+	withRoutes(t, &after, "target_tcp", a)
+	c := Snapshots(before, after)
+	for _, path := range []string{
+		"checks.target_tcp.observed.routes.198.51.100.7.prefix",
+		"checks.target_tcp.observed.routes.198.51.100.7.interface",
+		"checks.target_tcp.observed.routes.198.51.100.7.gateway",
+		"checks.target_tcp.observed.routes.198.51.100.7.source",
+		"checks.target_tcp.observed.routes.198.51.100.7.metric",
+		"checks.target_tcp.observed.routes.198.51.100.7.table",
+		"checks.target_tcp.observed.routes.198.51.100.7.tunnel",
+		"checks.target_tcp.observed.routes.198.51.100.7.tunnel_kind",
+		"checks.target_tcp.observed.routes.198.51.100.7.reason",
+		"checks.target_tcp.observed.routes.198.51.100.7.interface_mtu",
+		"checks.target_tcp.observed.routes.198.51.100.7.competing",
+	} {
+		changeAt(t, c, path)
+	}
+	// A metric that was read and one that was not are different things, and
+	// neither is spelled as the other.
+	if got := changeAt(t, c, "checks.target_tcp.observed.routes.198.51.100.7.metric"); got.Before != "100" || got.After != "" {
+		t.Errorf("metric change = %q -> %q, want 100 -> absent", got.Before, got.After)
+	}
+}
+
+// A destination on one side only is reported as such, not as a path that moved.
+func TestCompareReportsARouteDestinationOnOneSideOnly(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	withRoutes(t, &before, "target_tcp", onEth0("198.51.100.7", "0.0.0.0/0"))
+	withRoutes(t, &after, "target_tcp", onEth0("198.51.100.7", "0.0.0.0/0"), onWG0("198.51.100.8", "10.20.0.0/16"))
+	c := Snapshots(before, after)
+	change := changeAt(t, c, "checks.target_tcp.observed.routes.198.51.100.8")
+	if change.Kind != KindAdded || change.After != "198.51.100.8" {
+		t.Errorf("added destination = %+v, want an added member", change)
+	}
+	for _, other := range c.Changes {
+		if strings.HasPrefix(other.Path, "checks.target_tcp.observed.routes.198.51.100.8.") {
+			t.Errorf("a destination that exists on one side only was also compared field by field: %+v", other)
+		}
+	}
+}
+
+// An old artifact with no routes compares cleanly against itself, and against
+// a newer one it reports a gained reading rather than a changed path.
+func TestCompareHandlesSnapshotsWithoutRoutes(t *testing.T) {
+	old := fixture(t)
+	mustNotChange(t, Snapshots(old, old), "a snapshot with no route decisions compared to itself")
+	newer := fixture(t)
+	withRoutes(t, &newer, "target_tcp", onWG0(check(t, &newer, "target_tcp").Observed.SelectedIP, "10.20.0.0/16"))
+	c := Snapshots(old, newer)
+	change := changeAt(t, c, "paths.target.interface")
+	if change.Kind != KindAdded || change.Before != "" || change.After != "wg0" {
+		t.Errorf("target interface = %+v, want an added reading", change)
+	}
+	// Nothing may claim the resolver agreed or disagreed on a side that
+	// recorded no path for it.
+	for _, other := range c.Changes {
+		if other.Path == "paths.resolver.agreement" {
+			t.Errorf("an unanswerable question was reported as a difference: %+v", other)
+		}
+	}
+}
+
+// A platform that names no matched entry, which is Linux, still reports the
+// split: the selection carries it when the prefix cannot. The words are the
+// weaker pair that platform's evidence supports, and the comparison passes
+// them through rather than upgrading them into a claim about prefixes.
+func TestCompareReportsASplitWithNoMatchedPrefix(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	selected := check(t, &before, "target_tcp").Observed.SelectedIP
+	b, a := onEth0(selected, ""), onWG0(selected, "")
+	b.Reason, a.Reason = "same_path_as_default", "differs_from_default_path"
+	withRoutes(t, &before, "target_tcp", b)
+	withRoutes(t, &after, "target_tcp", a)
+	c := Snapshots(before, after)
+	if got := changeAt(t, c, "paths.target.reason"); got.Before != "same_path_as_default" || got.After != "differs_from_default_path" {
+		t.Errorf("reason = %q -> %q, want the split", got.Before, got.After)
+	}
+	for _, other := range c.Changes {
+		if other.Path == "paths.target.prefix" {
+			t.Errorf("a prefix neither side recorded was reported as a difference: %+v", other)
+		}
+	}
+}
+
+// A destination the run recorded as having no route is reported as that, and
+// never as an empty path.
+func TestCompareReportsARouteThatDisappeared(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	selected := check(t, &before, "target_tcp").Observed.SelectedIP
+	withRoutes(t, &before, "target_tcp", onEth0(selected, "0.0.0.0/0"))
+	withRoutes(t, &after, "target_tcp", snapshot.Route{Destination: selected, Family: "ipv4", Unreachable: true})
+	c := Snapshots(before, after)
+	if got := changeAt(t, c, "paths.target.prefix"); got.After != "no route" {
+		t.Errorf("matched route = %q -> %q, want it to say there is none", got.Before, got.After)
+	}
+	if got := changeAt(t, c, "checks.target_tcp.observed.routes."+selected+".unreachable"); got.Before != "no" || got.After != "yes" {
+		t.Errorf("unreachable = %q -> %q, want no -> yes", got.Before, got.After)
+	}
+}
+
+// Two identical runs are identical however much route intelligence they carry.
+func TestCompareIsQuietWhenRoutesDidNotMove(t *testing.T) {
+	s := fixture(t)
+	withRoutes(t, &s, "target_tcp", onWG0("198.51.100.7", "10.20.0.0/16"))
+	withRoutes(t, &s, "iface", onEth0("1.1.1.1", "0.0.0.0/0"))
+	withRoutes(t, &s, "dns", onEth0("192.168.1.1", "192.168.1.0/24"))
+	mustNotChange(t, Snapshots(s, s), "a run compared against itself with route decisions on every row")
+}

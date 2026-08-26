@@ -1,0 +1,611 @@
+package diagnostic
+
+import (
+	"net"
+	"net/netip"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+)
+
+// TunnelState is how sure netdoc is that the interface a route selected
+// encapsulates what leaves through it. It is deliberately three-valued rather
+// than a boolean, because "the kernel named this device a tunnel" and "this
+// device looks like one" are different claims and only the first one is safe to
+// repeat back to a user as fact.
+//
+// The empty state is not "no tunnel". It is "nobody classified this", which is
+// what every platform that cannot see device metadata reports, and what a
+// consumer must read as unknown rather than as direct.
+type TunnelState string
+
+const (
+	// TunnelUnknown is the zero value: the interface was never classified.
+	TunnelUnknown TunnelState = ""
+	// TunnelDirect is an ordinary interface, including a virtual one the
+	// kernel named and that carries no encapsulation of its own: a bridge, a
+	// VLAN, a bond.
+	TunnelDirect TunnelState = "direct"
+	// TunnelLikely is a link with no link layer of its own, or a
+	// point-to-point one, on a platform that would not name its kind. Almost
+	// every tunnel looks like this, and so does a mobile broadband modem, so
+	// it is evidence and never an assertion that a VPN is in use.
+	TunnelLikely TunnelState = "likely"
+	// TunnelKnown is a device whose kind the operating system itself reports
+	// as an encapsulating one. Kind carries which.
+	TunnelKnown TunnelState = "tunnel"
+)
+
+// Tunneled reports whether this path leaves through something that
+// encapsulates it, at either confidence. Callers that need the distinction
+// read Tunnel; this is for the questions where "wrapped in something" is the
+// whole question, such as whether two paths agree.
+func (r RouteDecision) Tunneled() bool { return r.Tunnel == TunnelKnown || r.Tunnel == TunnelLikely }
+
+// RouteReason names why one route was the one selected, in the vocabulary a
+// diagnosis can branch on. It is derived from the decision the kernel already
+// made plus, where one was taken, the decision for general Internet traffic:
+// netdoc never re-runs the kernel's selection algorithm to second-guess it.
+//
+// It is empty whenever the evidence does not support any of these, which is
+// the common case on a platform that reports no matched prefix.
+type RouteReason string
+
+const (
+	RouteReasonUnknown RouteReason = ""
+	// RouteReasonNoRoute is the kernel reporting that nothing leads to this
+	// destination at all.
+	RouteReasonNoRoute RouteReason = "no_route"
+	// RouteReasonDefault is the destination matching the default route. It is
+	// reported only where the platform names the entry that matched, because
+	// nothing else proves which entry that was.
+	RouteReasonDefault RouteReason = "default_route"
+	// RouteReasonMoreSpecific is a route narrower than a default route
+	// matching this destination, which is the entry-level statement of the
+	// split-tunnel case. It too is reported only where the platform names the
+	// matched entry: a path that merely differs from the general one does not
+	// prove that prefix length is what decided it.
+	RouteReasonMoreSpecific RouteReason = "more_specific_than_default"
+	// RouteReasonSamePathAsDefault is this destination leaving by the same
+	// interface and next hop that general Internet traffic leaves by. It says
+	// nothing about which entry matched, because a platform that names no
+	// prefix cannot tell a default route from a narrower one pointing the same
+	// way.
+	RouteReasonSamePathAsDefault RouteReason = "same_path_as_default"
+	// RouteReasonDiffersFromDefault is this destination leaving by a different
+	// interface or next hop than general Internet traffic, with no evidence of
+	// what made the kernel choose differently.
+	//
+	// This is the honest answer where the matched entry is unnamed, and it is
+	// deliberately weaker than more_specific_than_default. A policy rule, a
+	// separate routing table, a VRF, source-specific routing, and a multipath
+	// route picking a different next hop all produce exactly this observation
+	// without any narrower prefix being involved: a rule sending one
+	// destination to a table whose winning entry is itself a default route
+	// looks identical from here. Reading it as longest-prefix matching would
+	// be netdoc explaining a kernel decision it did not witness.
+	RouteReasonDiffersFromDefault RouteReason = "differs_from_default_path"
+	// RouteReasonOnLink is a destination on a directly attached network, with
+	// no next hop between here and it.
+	RouteReasonOnLink RouteReason = "on_link"
+	// RouteReasonHostRoute is a route installed for this single address.
+	RouteReasonHostRoute RouteReason = "host_route"
+	// RouteReasonMetric is several routes covering the destination equally,
+	// settled by preference. Only reported where the platform both exposes
+	// metrics and let netdoc see more than one candidate.
+	RouteReasonMetric RouteReason = "lower_metric"
+)
+
+// CompetingRoute is one route that covered the same destination and lost. It
+// exists to explain a decision, not to mirror a routing table: it is recorded
+// only where a competitor actually bears on the answer, and never as a dump.
+type CompetingRoute struct {
+	Iface  string
+	Metric int
+}
+
+// RouteDecision is one destination's selected path, as the operating system
+// reported its own decision.
+//
+// Every field is what some platform can answer and some cannot. A field the
+// platform did not supply keeps its zero value and means "not known here",
+// never "zero". That is why Metric has MetricKnown beside it: 0 is a real
+// metric on Linux and on Windows, so absence cannot be spelled as 0.
+//
+// Nothing in this struct is inferred by netdoc from a routing table it read
+// itself. The prefix is the prefix the kernel said it matched, the interface
+// is the interface the kernel said it chose, and Reason is the only derived
+// field, drawn from those plus the decision taken for general Internet traffic.
+type RouteDecision struct {
+	// Destination is the address the lookup was for, which is the identity of
+	// this decision: route intelligence is per address, never per hostname.
+	Destination net.IP
+	// Family is "ipv4" or "ipv6", the same vocabulary the report already uses
+	// for per-family reachability.
+	Family string
+	Iface  string
+	// Gateway is the next hop, nil when the destination is on-link.
+	Gateway net.IP
+	// Source is the local address the kernel would select for this path.
+	Source net.IP
+	// Prefix is the route entry that matched. The zero Prefix is unknown, and
+	// IsValid tells those apart from ::/0, which is a real answer.
+	Prefix netip.Prefix
+	// Metric is the selected route's preference, valid only with MetricKnown.
+	Metric      int
+	MetricKnown bool
+	// Table names the routing table or routing domain the decision came from,
+	// empty where the platform has one table or does not say which it used.
+	Table string
+	// MTU is the selected interface's MTU. It is the link's own number and is
+	// never a claim about the end-to-end path MTU; the path_mtu probe is the
+	// only thing that measures that.
+	MTU        int
+	Tunnel     TunnelState
+	TunnelKind string
+	// Unreachable is the kernel answering that there is no route.
+	Unreachable bool
+	// Reason is why this route won, filled by routeReason.
+	Reason RouteReason
+	// Competing are the routes that lost, where seeing them is what explains
+	// the decision. Usually empty.
+	Competing []CompetingRoute
+}
+
+// routeFamily is the address family label a decision carries, matching the
+// FamilyIPv4/FamilyIPv6 vocabulary the rest of the report uses.
+func routeFamily(ip net.IP) string {
+	if ip.To4() != nil {
+		return counterfactualIPv4
+	}
+	return counterfactualIPv6
+}
+
+// ifaceFacts is what tunnel classification reads. It is gathered per platform
+// so that the judgement itself stays one function with one table of cases,
+// testable without a network stack of any particular kind.
+type ifaceFacts struct {
+	Name string
+	// Kind is the device kind the operating system itself reports, empty on a
+	// platform or a device that names none. This is the field that separates a
+	// known tunnel from a guess, and it is why there is no list of product
+	// names anywhere in this package.
+	Kind         string
+	PointToPoint bool
+	Loopback     bool
+	// NoLinkLayer means the interface has no hardware address. Tunnels
+	// normally do not; Ethernet-like devices, TAP included, do.
+	NoLinkLayer bool
+}
+
+// encapsulatingKinds are the kernel link kinds that wrap traffic in another
+// packet. They are kernel-facing names, not vendor names: every VPN that
+// presents a normal tunnel device lands on one of these regardless of who
+// shipped it, and a product that installs an ordinary Ethernet device is
+// deliberately not detected rather than guessed at from its name.
+var encapsulatingKinds = []string{
+	"geneve", "gre", "gretap", "ip6gre", "ip6tnl", "ipip", "ppp",
+	"sit", "tun", "vti", "vti6", "vxlan", "wireguard", "xfrm",
+}
+
+// classifyTunnel decides how much netdoc may claim about one interface.
+//
+// A kind the operating system reported settles it in both directions: a kind
+// that encapsulates is a tunnel, and a kind that does not, such as a bridge or
+// a VLAN, is direct even when it is virtual. Only a device the platform would
+// not name falls through to shape, and shape can only ever reach "likely",
+// because a point-to-point link with no link layer is what a tunnel looks like
+// and also what a mobile broadband modem looks like.
+func classifyTunnel(f ifaceFacts) (TunnelState, string) {
+	switch {
+	case f.Name == "":
+		return TunnelUnknown, ""
+	case f.Loopback:
+		return TunnelDirect, ""
+	case f.Kind != "":
+		if slices.Contains(encapsulatingKinds, f.Kind) {
+			return TunnelKnown, f.Kind
+		}
+		return TunnelDirect, ""
+	case f.PointToPoint || f.NoLinkLayer:
+		return TunnelLikely, ""
+	}
+	return TunnelDirect, ""
+}
+
+// routeReason explains a selected route against the decision general Internet
+// traffic took. reference is the zero value when no such decision was
+// available, and then only the reasons that need no comparison are reachable.
+//
+// It answers from two kinds of evidence, and they are not interchangeable.
+// Where the platform names the route entry that matched, that entry settles
+// which entry won, and only there may this say a prefix decided anything.
+// Where it does not, and Linux does not, all that is left is comparing this
+// decision with the one the kernel gave for general Internet traffic, and that
+// comparison can only report whether the two paths agree. Both are the
+// operating system's own answers; nothing here reads a routing table and
+// re-runs the selection to second-guess them, and nothing is reported that
+// neither kind of evidence supports.
+//
+// The ordering matters. A destination with no route has no reason to explain,
+// and a host route is a more specific statement than on-link, so those come
+// first. A named prefix that beats the default and leaves by a different
+// interface is the split-tunnel case, and calling it on-link would lose the
+// only interesting part of it; a gatewayless route on the interface general
+// traffic already uses is an attached network and is reported as on-link.
+// Nothing here claims a metric decided anything unless a competitor was
+// actually observed.
+func routeReason(r, reference RouteDecision) RouteReason {
+	switch {
+	case r.Unreachable:
+		return RouteReasonNoRoute
+	case len(r.Competing) > 0 && r.MetricKnown:
+		return RouteReasonMetric
+	case r.Prefix.IsValid() && r.Prefix.Bits() == r.Prefix.Addr().BitLen():
+		return RouteReasonHostRoute
+	case r.Prefix.IsValid() && r.Prefix.Bits() == 0:
+		return RouteReasonDefault
+	case beatsDefaultElsewhere(r, reference):
+		return RouteReasonMoreSpecific
+	case r.Iface == "":
+		return RouteReasonUnknown
+	case r.Gateway == nil:
+		return RouteReasonOnLink
+	// A named prefix between a default route and a host route is a narrower
+	// entry whatever path it points down, including the interface general
+	// traffic already uses. The platform said which entry matched, so this is
+	// read off the entry rather than off the comparison below.
+	case r.Prefix.IsValid():
+		return RouteReasonMoreSpecific
+	case reference.Iface == "":
+		return RouteReasonUnknown
+	case samePath(r, reference):
+		return RouteReasonSamePathAsDefault
+	}
+	return RouteReasonDiffersFromDefault
+}
+
+// beatsDefaultElsewhere reports the split-tunnel shape as the platforms that
+// name the matched entry describe it: general traffic falls through to a
+// default route, and this destination is covered by a narrower one that leaves
+// by a different interface.
+func beatsDefaultElsewhere(r, reference RouteDecision) bool {
+	return r.Prefix.IsValid() && r.Prefix.Bits() > 0 &&
+		reference.Prefix.IsValid() && reference.Prefix.Bits() == 0 &&
+		r.Iface != "" && reference.Iface != "" && r.Iface != reference.Iface
+}
+
+// samePath reports that two decisions leave by the same interface through the
+// same next hop, which is as much as a platform that names no matched entry
+// can say about two destinations taking the same way out.
+func samePath(a, b RouteDecision) bool {
+	return a.Iface == b.Iface && a.Gateway.Equal(b.Gateway)
+}
+
+// routeCache memoizes the operating system's route answers for the length of
+// one diagnostic pass. Several probes ask about the same destination, and a
+// kernel lookup repeated inside one pass cannot honestly report two different
+// networks.
+//
+// It is created per BuildProbesFromSources call, which is once per pass, so
+// Watch Mode gets a fresh cache every time and a route that really changes
+// between passes is seen as a change rather than served from here.
+type routeCache struct {
+	lookup func(net.IP) (RouteDecision, bool)
+	mu     sync.Mutex
+	// answers holds a pointer so that "the platform could not answer" is
+	// cached as nil rather than retried by every later probe.
+	answers map[string]*RouteDecision
+	// reference is the pass's yardstick, computed once because three probe
+	// rows read it and it costs a second look at the default routes.
+	referenceOnce sync.Once
+	reference     []RouteDecision
+}
+
+func newRouteCache(lookup func(net.IP) (RouteDecision, bool)) *routeCache {
+	return &routeCache{lookup: lookup, answers: map[string]*RouteDecision{}}
+}
+
+func (c *routeCache) get(dst net.IP) (RouteDecision, bool) {
+	if c == nil || c.lookup == nil || dst == nil {
+		return RouteDecision{}, false
+	}
+	key := dst.String()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached, seen := c.answers[key]; seen {
+		if cached == nil {
+			return RouteDecision{}, false
+		}
+		return *cached, true
+	}
+	decision, ok := c.lookup(dst)
+	if !ok {
+		c.answers[key] = nil
+		return RouteDecision{}, false
+	}
+	decision.Destination = append(net.IP(nil), dst...)
+	decision.Family = routeFamily(dst)
+	c.answers[key] = &decision
+	return decision, true
+}
+
+// maxRouteLookups bounds what one probe row may ask the kernel, so a hostname
+// with a long answer cannot turn route intelligence into a scan. It matches
+// maxAttempts, since a destination netdoc will not dial is one whose path it
+// has no observation to correlate.
+const maxRouteLookups = maxAttempts
+
+// routeDecisions looks up a bounded, deduplicated list of destinations and
+// returns only the answers the platform actually gave. The order follows the
+// destinations as passed, so a row's routes read in the order the probe cared
+// about them.
+func (o *netops) routeDecisions(dsts ...net.IP) []RouteDecision {
+	if o.routes == nil {
+		return nil
+	}
+	var out []RouteDecision
+	seen := map[string]bool{}
+	for _, dst := range dsts {
+		if dst == nil || len(out) >= maxRouteLookups {
+			continue
+		}
+		key := dst.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if decision, ok := o.routes.get(dst); ok {
+			out = append(out, decision)
+		}
+	}
+	return out
+}
+
+// referenceRouteDecisions are the paths general Internet traffic takes, one
+// per address family. They are the yardstick every other decision in the run
+// is read against: without them "the target uses a tunnel" is a fact about one
+// machine's interface list, and with them it is a statement about how this
+// destination differs from everything else.
+//
+// The endpoints are the ones the direct-egress probe already dials, so the
+// route being described is a route the run also exercised.
+func (o *netops) referenceRouteDecisions() []RouteDecision {
+	if o.routes == nil {
+		return nil
+	}
+	o.routes.referenceOnce.Do(func() { o.routes.reference = o.collectReferenceRoutes() })
+	return o.routes.reference
+}
+
+func (o *netops) collectReferenceRoutes() []RouteDecision {
+	var dsts []net.IP
+	if len(o.compatibleSourceIPs(internetEndpoints4)) > 0 {
+		dsts = append(dsts, internetEndpoints4[0])
+	}
+	if len(o.compatibleSourceIPs(internetEndpoints6)) > 0 {
+		dsts = append(dsts, internetEndpoints6[0])
+	}
+	out := o.routeDecisions(dsts...)
+	for i := range out {
+		out[i].Competing = o.competingDefaults(out[i])
+		out[i].Reason = routeReason(out[i], RouteDecision{})
+	}
+	return out
+}
+
+// competingDefaults names the other default routes of this family when the
+// decision fell through to one, and there is more than one to choose between.
+// It reuses the per-platform default-route reading the failed-egress
+// classification already does, so no second view of the routing table exists.
+//
+// It stays silent unless a competitor is genuinely there: one default route is
+// not a competition, and a platform that reports no metrics cannot say which
+// of several would win, so it names none.
+//
+// The prefix gate is what keeps this honest, and it is stricter than it looks.
+// Naming losers only makes sense once the winner is known to be a default
+// route, which means only where the platform named the matched entry, and the
+// per-platform default-route readings behind it see one view of the tables at
+// best: Linux reads the main table for IPv4 and no policy rules at all, so a
+// route in a table a rule selected is not among these. What comes out is a
+// short list of other default routes that were available, never an enumeration
+// of every route that could have covered the destination.
+func (o *netops) competingDefaults(selected RouteDecision) []CompetingRoute {
+	if o.defaultRoutes == nil || !selected.Prefix.IsValid() || selected.Prefix.Bits() != 0 || !selected.MetricKnown {
+		return nil
+	}
+	routes := o.defaultRoutes(selected.Family)
+	var out []CompetingRoute
+	for _, r := range routes {
+		if r.iface == selected.Iface && r.metric == selected.Metric {
+			continue
+		}
+		out = append(out, CompetingRoute{Iface: r.iface, Metric: r.metric})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Metric != out[j].Metric {
+			return out[i].Metric < out[j].Metric
+		}
+		return out[i].Iface < out[j].Iface
+	})
+	if len(out) > maxCompetingRoutes {
+		out = out[:maxCompetingRoutes]
+	}
+	return out
+}
+
+// maxCompetingRoutes bounds the losers recorded beside a decision. A handful
+// explains a choice; a full table is the routing dump this deliberately is not.
+const maxCompetingRoutes = 4
+
+// explainedRouteDecisions looks up destinations and fills each one's Reason
+// against the run's reference path for that family.
+func (o *netops) explainedRouteDecisions(reference []RouteDecision, dsts ...net.IP) []RouteDecision {
+	out := o.routeDecisions(dsts...)
+	for i := range out {
+		out[i].Reason = routeReason(out[i], routeByFamily(reference, out[i].Family))
+	}
+	return out
+}
+
+// routeByFamily picks the decision for one address family out of a list, and
+// reports the zero decision when the list holds none. The zero value is safe
+// to read: every consumer treats an invalid prefix and an empty interface as
+// unknown.
+func routeByFamily(routes []RouteDecision, family string) RouteDecision {
+	for _, r := range routes {
+		if r.Family == family {
+			return r
+		}
+	}
+	return RouteDecision{}
+}
+
+// routeFor finds the decision for one exact destination.
+func routeFor(routes []RouteDecision, dst net.IP) (RouteDecision, bool) {
+	for _, r := range routes {
+		if r.Destination.Equal(dst) {
+			return r, true
+		}
+	}
+	return RouteDecision{}, false
+}
+
+// selectedTargetRoute is the path the target connection actually took, which
+// is the route for the address the probe selected. It falls back to the first
+// recorded target route so a run where every address failed still has a path
+// to talk about, since the kernel chose one regardless of the outcome.
+func selectedTargetRoute(res map[ProbeID]ProbeResult) (RouteDecision, bool) {
+	r := res[ProbeTargetTCP]
+	if len(r.Routes) == 0 {
+		return RouteDecision{}, false
+	}
+	if r.SelectedIP != nil {
+		if decision, ok := routeFor(r.Routes, r.SelectedIP); ok {
+			return decision, true
+		}
+	}
+	return r.Routes[0], true
+}
+
+// pathsDiffer reports whether two selected paths leave this machine
+// differently, and says nothing when either path is unknown.
+//
+// The comparison is the selected interface and nothing else. Tunnel state
+// cannot add to it: the two paths are classified by the same table on the same
+// host, so one interface name has one state, and comparing states where the
+// names already match could only ever answer "no". A policy rule that splits
+// two destinations down the same interface is real and is not visible here,
+// which is why this reports a difference and never the absence of one.
+func pathsDiffer(a, b RouteDecision) (bool, bool) {
+	if a.Iface == "" || b.Iface == "" {
+		return false, false
+	}
+	return a.Iface != b.Iface, true
+}
+
+// splitTunnelState says how the target's path relates to the path general
+// traffic takes, in a vocabulary a diagnosis and a comparison can share.
+// Empty means the two paths agree, or that there was not enough to compare.
+func splitTunnelState(target, reference RouteDecision) string {
+	if target.Iface == "" || reference.Iface == "" ||
+		target.Tunnel == TunnelUnknown || reference.Tunnel == TunnelUnknown {
+		return ""
+	}
+	switch {
+	case target.Tunneled() && !reference.Tunneled():
+		return SplitTargetTunneled
+	case !target.Tunneled() && reference.Tunneled():
+		return SplitTargetBypassesTunnel
+	}
+	return ""
+}
+
+// The split-routing vocabulary. These are observations about how two paths
+// differ, never verdicts: a machine on a split tunnel is working as designed
+// far more often than it is broken.
+const (
+	SplitTargetTunneled       = "target_tunneled"
+	SplitTargetBypassesTunnel = "target_bypasses_tunnel"
+)
+
+// familyPathsDiffer reports whether the target's IPv4 and IPv6 addresses leave
+// by different interfaces. It needs a decision in both families to say
+// anything, which a single-stack host never has.
+func familyPathsDiffer(routes []RouteDecision) (bool, bool) {
+	v4, v6 := routeByFamily(routes, counterfactualIPv4), routeByFamily(routes, counterfactualIPv6)
+	return pathsDiffer(v4, v6)
+}
+
+// narrowerPathMTU reports the target path's interface MTU when it is smaller
+// than the one general traffic leaves through, which is the shape an
+// encapsulated path has. It is interface MTU on both sides and nothing else:
+// this never claims to be the end-to-end path MTU, which only the path_mtu
+// probe measures.
+func narrowerPathMTU(target, reference RouteDecision) (int, bool) {
+	if target.MTU <= 0 || reference.MTU <= 0 || target.MTU >= reference.MTU {
+		return 0, false
+	}
+	return target.MTU, true
+}
+
+// Summary renders one decision as the single line a details panel can show.
+// It is display text; nothing parses it back, and the structured fields above
+// are what the snapshot and the JSON report carry.
+func (r RouteDecision) Summary() string {
+	if r.Unreachable {
+		return "no route"
+	}
+	parts := []string{}
+	if r.Prefix.IsValid() {
+		parts = append(parts, r.Prefix.String())
+	}
+	if r.Iface != "" {
+		parts = append(parts, "dev "+r.Iface)
+	}
+	if r.Gateway != nil {
+		parts = append(parts, "via "+r.Gateway.String())
+	}
+	if r.Tunneled() {
+		kind := r.TunnelKind
+		if kind == "" {
+			kind = "tunnel"
+		}
+		parts = append(parts, "("+kind+")")
+	}
+	return strings.Join(parts, " ")
+}
+
+// resolverIP reads the address out of the resolver dial target the Go resolver
+// reported, and returns nil for anything that is not one. The value comes from
+// the resolver's own dial hook, so it is already an address and never a name,
+// but it is parsed rather than trusted: nil simply means no resolver path is
+// recorded for this run.
+//
+// A loopback resolver is deliberately one of those cases. A local stub, which
+// is what 127.0.0.53 and friends are on most Linux desktops, is reached over
+// lo by definition, and lo is not the interface application traffic uses. The
+// path to the stub is therefore always different and never means what "the
+// resolver is reached over another interface" is supposed to mean: the stub's
+// own upstream path is the interesting one and netdoc cannot see it. Recording
+// no resolver path is the honest answer, and the row still names the server it
+// talked to.
+func resolverIP(server string) net.IP {
+	if server == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(server)
+	ip := net.ParseIP(host)
+	if err != nil {
+		ip = net.ParseIP(server)
+	}
+	if ip == nil || ip.IsLoopback() {
+		return nil
+	}
+	return ip
+}

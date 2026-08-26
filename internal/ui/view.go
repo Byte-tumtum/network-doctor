@@ -407,6 +407,14 @@ func (m model) detailRows(deferred bool) []string {
 		if r.Source != nil {
 			body.WriteString(faintStyle.Render("src "+r.Source.String()+" "+r.Iface) + "\n")
 		}
+		// One line per destination the operating system was asked about, and
+		// only where it answered. A platform that cannot answer shows nothing
+		// here rather than a row of empty fields.
+		for _, route := range r.Routes {
+			if summary := route.Summary(); summary != "" {
+				body.WriteString(faintStyle.Render("  route "+route.Destination.String()+": "+summary) + "\n")
+			}
+		}
 		for _, a := range r.Attempts {
 			st := "ok"
 			if a.Err != nil {
@@ -473,15 +481,30 @@ func (m model) causalEvidenceLine(e diagnostic.CausalEvidence) string {
 func evidenceGlyph(observation diagnostic.ObservationID) string {
 	switch observation {
 	case diagnostic.ObservationStatusPass, diagnostic.ObservationDNSAnswers,
-		diagnostic.ObservationFamilyReachable, diagnostic.ObservationAddressSucceeded:
+		diagnostic.ObservationFamilyReachable, diagnostic.ObservationAddressSucceeded,
+		diagnostic.ObservationRouteDirect:
 		return "✓"
-	case diagnostic.ObservationStatusWarn, diagnostic.ObservationClockOffset:
+	case diagnostic.ObservationStatusWarn, diagnostic.ObservationClockOffset,
+		diagnostic.ObservationRouteTunneled, diagnostic.ObservationRoutePathDiffers,
+		diagnostic.ObservationRouteFamilySplit, diagnostic.ObservationRouteInterfaceMTU:
+		// A tunnel, a split path, and a narrow link are observations about the
+		// path, not failures of the row that recorded them.
 		return "!"
 	case diagnostic.ObservationStatusSkip, diagnostic.ObservationStatusNA:
 		return "⊘"
 	default:
 		return "✗"
 	}
+}
+
+// routeTunnelNamed reports whether the operating system itself called this
+// row's route out of iface an encapsulating device, as opposed to the link
+// merely looking like one. It is the difference between a sentence netdoc may
+// state and one it may only suggest.
+func routeTunnelNamed(r diagnostic.ProbeResult, iface string) bool {
+	return slices.ContainsFunc(r.Routes, func(route diagnostic.RouteDecision) bool {
+		return route.Iface == iface && route.Tunnel == diagnostic.TunnelKnown
+	})
 }
 
 func (m model) observationLine(e diagnostic.CausalEvidence) string {
@@ -525,6 +548,46 @@ func (m model) observationLine(e diagnostic.CausalEvidence) string {
 		return name + " reached " + e.Value
 	case diagnostic.ObservationAddressFailed:
 		return name + " could not reach " + e.Value
+	case diagnostic.ObservationRouteTunneled:
+		// How sure this sentence may sound is the row's own tunnel state. The
+		// operating system naming the device an encapsulating kind is a fact
+		// to repeat; a link that merely has the shape of a tunnel is a guess,
+		// and a mobile broadband modem has the same shape.
+		if e.Value == "" {
+			return name + " left through a tunnel"
+		}
+		if ok && routeTunnelNamed(r, e.Value) {
+			return name + " left through the tunnel " + e.Value
+		}
+		return name + " left over " + e.Value + ", which has the shape of a tunnel"
+	case diagnostic.ObservationRouteDirect:
+		// The counterpart claim, and a weaker one than it reads: nothing
+		// classified this link as encapsulating, which is not the same as
+		// having established that nothing encapsulates it. A VPN that presents
+		// an ordinary Ethernet device lands here.
+		if e.Value != "" {
+			return name + " left over " + e.Value + ", which is not reported as a tunnel"
+		}
+		return name + " left over a link that is not reported as a tunnel"
+	case diagnostic.ObservationRouteUnreachable:
+		if e.Value != "" {
+			return name + " has no route to " + e.Value
+		}
+		return name + " has no route to its destination"
+	case diagnostic.ObservationRoutePathDiffers:
+		if e.Value != "" {
+			return name + " takes a different path from the target traffic on " + e.Value
+		}
+		return name + " takes a different path from the target traffic"
+	case diagnostic.ObservationRouteFamilySplit:
+		return name + " reaches IPv4 and IPv6 over different interfaces"
+	case diagnostic.ObservationRouteInterfaceMTU:
+		// The link's own MTU against the general path's link MTU. Neither side
+		// is a measured path MTU, and this never says it is.
+		if e.Value != "" {
+			return name + " left over " + e.Value + ", whose link MTU is smaller than the general path's"
+		}
+		return name + " left over a link whose MTU is smaller than the general path's"
 	case diagnostic.ObservationStatusSkip:
 		return name + " was skipped"
 	case diagnostic.ObservationStatusNA:

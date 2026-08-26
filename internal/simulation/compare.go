@@ -68,6 +68,26 @@ type DiagnosisCheck struct {
 	Fix      string             `json:"fix"`
 	Families *DiagnosisFamilies `json:"address_families,omitempty"`
 	Attempts []DiagnosisAttempt `json:"attempts,omitempty"`
+	// Routes is netdoc's record of the operating system's own route decision
+	// for each destination this row is about. The simulator carries it through
+	// so a scenario can be checked against the path netdoc says it took, which
+	// inside a namespace is the namespace's own answer and not the host's.
+	Routes []DiagnosisRoute `json:"routes,omitempty"`
+}
+
+// DiagnosisRoute is the simulator's view of one route decision. It keeps only
+// the fields a scenario can be checked against; the artifact carries the rest.
+type DiagnosisRoute struct {
+	Destination string `json:"destination"`
+	Family      string `json:"family,omitempty"`
+	Interface   string `json:"interface,omitempty"`
+	Gateway     string `json:"gateway,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Prefix      string `json:"prefix,omitempty"`
+	Tunnel      string `json:"tunnel,omitempty"`
+	TunnelKind  string `json:"tunnel_kind,omitempty"`
+	Unreachable bool   `json:"unreachable,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type DiagnosisAttempt struct {

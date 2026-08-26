@@ -196,6 +196,30 @@ func assertEvidenceObservation(t *testing.T, selected DiagnosisID, evidence Caus
 		for _, attempt := range r.Attempts {
 			observed = observed || attempt.IP.String() == evidence.Value && attempt.Err != nil && !isCanceledAttempt(attempt)
 		}
+	// Every route observation is a fact about this row's own recorded
+	// decisions. A cross-row claim has to be spelled as one item per row, so
+	// there is nothing here that reaches into another result to be verified.
+	case ObservationRouteTunneled:
+		observed = slices.ContainsFunc(r.Routes, func(d RouteDecision) bool {
+			return d.Iface == evidence.Value && d.Tunneled()
+		})
+	case ObservationRouteDirect:
+		observed = slices.ContainsFunc(r.Routes, func(d RouteDecision) bool {
+			return d.Iface == evidence.Value && d.Tunnel == TunnelDirect
+		})
+	case ObservationRouteUnreachable:
+		observed = slices.ContainsFunc(r.Routes, func(d RouteDecision) bool {
+			return d.Unreachable && d.Destination.String() == evidence.Value
+		})
+	case ObservationRoutePathDiffers:
+		observed = len(r.Routes) > 0 && r.Routes[0].Iface != "" && r.Routes[0].Iface != evidence.Value
+	case ObservationRouteFamilySplit:
+		split, known := familyPathsDiffer(r.Routes)
+		observed = known && split
+	case ObservationRouteInterfaceMTU:
+		observed = slices.ContainsFunc(r.Routes, func(d RouteDecision) bool {
+			return d.Iface == evidence.Value && d.MTU > 0
+		})
 	}
 	if !observed {
 		t.Errorf("evidence references an observation that did not occur: %+v from %+v", evidence, r)

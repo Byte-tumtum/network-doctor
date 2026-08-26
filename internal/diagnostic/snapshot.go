@@ -155,6 +155,7 @@ func observedFrom(r ProbeResult) *snapshot.Observed {
 		}
 		o.Attempts = append(o.Attempts, attempt)
 	}
+	o.Routes = snapshotRoutes(r.Routes)
 	if r.clockOffset != 0 {
 		ms := r.clockOffset.Milliseconds()
 		o.ClockOffsetMs = &ms
@@ -166,4 +167,47 @@ func observedFrom(r ProbeResult) *snapshot.Observed {
 		return nil
 	}
 	return &o
+}
+
+// snapshotRoutes copies the run's route decisions into the artifact, one field
+// at a time for the same reason every other conversion here is written out:
+// renaming a runtime field must be a compile error, not a silent change to a
+// published file.
+//
+// A field the platform never supplied stays absent. Metric is the field where
+// that matters most, since 0 is a real metric, so it is written only when the
+// run actually read one.
+func snapshotRoutes(routes []RouteDecision) []snapshot.Route {
+	var out []snapshot.Route
+	for _, r := range routes {
+		item := snapshot.Route{
+			Destination:  r.Destination.String(),
+			Family:       r.Family,
+			Interface:    r.Iface,
+			Table:        r.Table,
+			InterfaceMTU: r.MTU,
+			Tunnel:       string(r.Tunnel),
+			TunnelKind:   r.TunnelKind,
+			Unreachable:  r.Unreachable,
+			Reason:       string(r.Reason),
+		}
+		if r.Gateway != nil {
+			item.Gateway = r.Gateway.String()
+		}
+		if r.Source != nil {
+			item.Source = r.Source.String()
+		}
+		if r.Prefix.IsValid() {
+			item.Prefix = r.Prefix.String()
+		}
+		if r.MetricKnown {
+			metric := r.Metric
+			item.Metric = &metric
+		}
+		for _, competing := range r.Competing {
+			item.Competing = append(item.Competing, snapshot.CompetingRoute{Interface: competing.Iface, Metric: competing.Metric})
+		}
+		out = append(out, item)
+	}
+	return out
 }

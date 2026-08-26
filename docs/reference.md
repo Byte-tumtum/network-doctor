@@ -474,7 +474,17 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 }
 ```
 
-`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`. `target_tcp.address_families` records the same states for a dual-stack target after comparison with the host's independent family paths. Under `--iface` or an explicit source address, a family the selected source has no address for is never dialed and its key is omitted, meaning untested rather than unreachable. A target family is also omitted when the target publishes it but the host did not prove a usable local path for it. A selection leaving no usable family at all reports the whole egress row as `N/A`, as the QUIC and encrypted-DNS rows already do. A configured egress family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed QUIC, encrypted-DNS, proxy, and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; QUIC uses `timeout` or `quic_handshake_failure`, encrypted DNS uses `timeout` or `encrypted_dns_unavailable`, while TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. Failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`, read from the local routing and neighbor tables on Linux, macOS, and Windows. macOS route entries carry no preference metric, so `preferred_route_failed` comes only from Linux and Windows, and `gateway_unreachable` needs a neighbor cache entry that exists and shows the next hop unresolved, so an unseen next hop leaves the weaker `selected_path_failed` rather than a guess. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable, so they are safe to script against. Exit codes follow the table in [README.md](../README.md#exit-codes) (`ok: false` ⇒ exit `1`).
+`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`, `routes`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`. `target_tcp.address_families` records the same states for a dual-stack target after comparison with the host's independent family paths. Under `--iface` or an explicit source address, a family the selected source has no address for is never dialed and its key is omitted, meaning untested rather than unreachable. A target family is also omitted when the target publishes it but the host did not prove a usable local path for it. A selection leaving no usable family at all reports the whole egress row as `N/A`, as the QUIC and encrypted-DNS rows already do. A configured egress family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed QUIC, encrypted-DNS, proxy, and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; QUIC uses `timeout` or `quic_handshake_failure`, encrypted DNS uses `timeout` or `encrypted_dns_unavailable`, while TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. Failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`, read from the local routing and neighbor tables on Linux, macOS, and Windows. macOS route entries carry no preference metric, so `preferred_route_failed` comes only from Linux and Windows, and `gateway_unreachable` needs a neighbor cache entry that exists and shows the next hop unresolved, so an unseen next hop leaves the weaker `selected_path_failed` rather than a guess. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable, so they are safe to script against. Exit codes follow the table in [README.md](../README.md#exit-codes) (`ok: false` ⇒ exit `1`).
+
+`routes` is the operating system's own route decision for each destination the check was about, one entry per address, since route selection is per address and not per hostname. netdoc asks the kernel the same question `ip route get` asks and records the answer; it does not read a routing table and re-run the selection itself, and it never dumps one. The lookups are unprivileged and bounded: the general Internet endpoints on the `iface` row, the system resolver on the `dns` row, and each resolved target address on the `target_tcp` row.
+
+Each entry carries `destination`, `family`, and whatever the platform supplied: `interface`, `gateway` (absent when the destination is on-link), `source`, `prefix` (the route entry that matched), `metric`, `table`, `interface_mtu`, `tunnel`, `tunnel_kind`, `unreachable`, `reason`, and `competing`. An absent field means the platform did not supply it and is never to be read as zero, which is why `metric` is omitted rather than written as `0` where none was reported. `routes` itself is absent on a platform netdoc cannot ask, which is not the same as having no route: `"unreachable": true` is how "no route" is said.
+
+`tunnel` is `tunnel` when the operating system itself names the device an encapsulating kind (`tunnel_kind` then carries which: `wireguard`, `tun`, `gre`, `ppp`, and so on), `likely` when the link only has the shape of one, and `direct` for an ordinary interface. It is absent when nothing classified the interface, which reads as unknown and not as direct. There is no list of VPN product names anywhere in netdoc; a product that installs an ordinary Ethernet device is deliberately not detected rather than guessed at.
+
+`prefix` is the route entry the operating system said it matched, and it is present only where the platform reports one. macOS and Windows do; Linux does not. A Linux route lookup echoes the length the query asked about rather than the length of the entry it matched, so every answer to a host lookup comes back at the full address length whatever the table holds. Reading that back as a matched prefix would report every destination as a host route, so the field stays absent there rather than carrying a number the kernel never meant. Everything that follows from a named entry follows only on the platforms that name one: `competing` and a `lower_metric` reason need both the entry and a preference metric, so they come from Windows alone today, and even there the list is the other default routes that were available rather than an enumeration of every route that could have covered the destination. netdoc reads no policy rules on any platform.
+
+`reason` is the only derived field, and it is what answers where `prefix` cannot. It is drawn from the route entry where the platform names one, and otherwise from comparing this destination's decision with the decision the same kernel gave for general Internet traffic, which is two answers from the operating system rather than a guess about its table. Those two kinds of evidence do not support the same claims, and the vocabulary keeps them apart. `default_route` (the destination matched the default route), `more_specific_than_default` (a narrower entry than a default route matched it, which is the split-tunnel case at the level of the routing table), `host_route`, and `lower_metric` are statements about which entry won, and are reported only where the platform named it. `same_path_as_default` (this destination leaves by the same interface and next hop as general Internet traffic) and `differs_from_default_path` (it leaves by a different one) are the weaker answers available where the entry is unnamed, and they say nothing about why. That distinction is not pedantry: a policy rule, a separate routing table, a VRF, source-specific routing, or a multipath route choosing another next hop each send one destination down a different path with no narrower prefix anywhere in it, and a rule pointing at a table whose winning entry is itself a default route is indistinguishable from here. `on_link` (no next hop between here and the destination) and `no_route` are read from the decision itself on every platform. `interface_mtu` is the selected link's own MTU and is never the end-to-end path MTU, which only the `path_mtu` row measures.
 
 Resolver failures can add `dns_timeout` or `dns_temporary_failure`; a target TCP
 check whose every attempted address explicitly refuses the connection adds
@@ -559,11 +569,36 @@ The observation vocabulary is `status_pass`, `status_warn`, `status_fail`,
 `status_skip`, `status_not_applicable`, `cause`, `dns_answers`,
 `dns_not_found`, `captive_portal`, `timeout`, `clock_offset`,
 `status_downgraded`, `family_reachable`, `family_failed`,
-`address_succeeded`, and `address_failed`. Not-evaluated reasons are `prerequisite_failed`,
+`address_succeeded`, `address_failed`, `route_tunneled`, `route_direct`,
+`route_unreachable`, `route_path_differs`, `route_family_split`, and
+`route_interface_mtu`. Not-evaluated reasons are `prerequisite_failed`,
 `not_selected`, `not_applicable`, and `incomplete`. A skipped, not-applicable,
 missing, or incomplete check is never enough to rule out a cause. An absent
 `causal_evidence` field means this producer did not record an explanation; it
 does not mean the listed alternatives were tested.
+
+The six `route_*` observations describe the path a row's own traffic took, and
+each is a fact about that one row: which interface it left by, whether that
+interface encapsulates, and whether the operating system had a route at all.
+None of them is a verdict. A tunnel is not a fault, and no diagnosis is reached
+because one exists; route observations only ever attach to a conclusion the
+checks had already proved on their own. Where the interesting fact is that two
+rows took different paths, it is recorded as two observations, one on each row,
+because a single item must be checkable against the row that carries it:
+`route_path_differs` on the `dns` row names the target's interface in `value`,
+and a split tunnel appears as `route_tunneled` on one row beside `route_direct`
+on the other. Both of those read exactly as strongly as the row's `tunnel`
+state: where the operating system named the device kind, the app says the
+traffic left through that tunnel, and where only the link's shape suggested it,
+the app says the link has the shape of one, since a mobile broadband modem has
+the same shape. `route_direct` is the absence of any such classification and
+never a proof that nothing encapsulates the path, which is why a VPN presenting
+an ordinary Ethernet device is not detected. A resolver on loopback records no
+path at all: a local stub is reached over `lo` by definition, so it would
+always look like a different path while its own upstream path, the one that
+matters, stays invisible. `route_interface_mtu` reports that the selected link
+is narrower than the one general traffic uses; it is the link's own MTU, never
+a measured path MTU.
 
 The same interpretation branch creates the diagnosis and its causal items.
 There is no pass that receives a final diagnosis ID and reconstructs plausible
@@ -741,6 +776,8 @@ An `INCOMPLETE` row is never a pass, and a run holding one is never `"ok": true`
 
 `ran` answers a narrower question, and only that one: did the probe body execute. It is what `duration_ms` alone cannot say, since a check that finished in under a millisecond also reports `0`. A skipped row and an incomplete row both report `ran: false`, so `ran` is not how a reader tells them apart; `status` is.
 
+`observed.routes` holds the same per-destination route decisions the JSON report documents above, in the same shape and with the same rule that an absent field is unknown rather than zero. It is an additive optional field: a snapshot written before it existed simply has none, and every reader treats that as "this run recorded no route decisions", never as "there was no route". Nothing stores a routing table; the entries are the answers to the bounded set of lookups the run already had to make.
+
 Within a check, `observed` is what the probe measured and `derived` is what the cross-probe reasoning pass did to that row afterwards. Only `status_downgraded` lives under `derived` today: it marks an observed egress failure that was relaxed to a Warn because another path proved the network still carries traffic. Its presence is the signal that the row's status is a conclusion rather than a reading. `cause`, `verdict`, and the finding IDs use exactly the vocabularies documented for [JSON output](#json-output) and [diagnosis findings](#diagnosis-findings).
 
 Findings also persist their optional `causal_evidence` and `counterfactual`
@@ -769,6 +806,7 @@ Treat the file as network information about the machine that produced it. It del
 - the target hostname as typed, which may be a private or internal name
 - the proxy host and port from `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`, where one is configured
 - the second-opinion resolver, and the local clock's offset from the captive-portal endpoint's
+- per-destination route decisions under `observed.routes`: the interface chosen, the next hop, the local source address, the matched prefix, the routing table's name, and the interfaces of any competing default routes. These describe the local network's shape, and a tunnel's device kind says a VPN is in use
 
 It contains no credentials. Userinfo in a target is rejected by the parser before a run starts, and the proxy rows record only the proxy's host and port, never the username or password from a proxy URL. Probe text is sanitized on the way out of the runner, so a hostile hostname or server banner lands in the file as inert bytes.
 
@@ -800,6 +838,22 @@ The comparison is semantic, not a JSON diff. Every field it reads is named in th
 | Checks | membership, `status`, `cause`, `ran`, and `deps` in order |
 | Reasoning | `derived.status_downgraded`, so an inferred outcome and a measured one are not read as the same state |
 | Evidence | everything under `observed`: resolved addresses and connection attempts as **sets**, and the selected address, source address, interface, SSID, resolver, per-family reachability, captive-portal state, and timeout flags as values |
+| Routes | `observed.routes` keyed by destination address, so a destination present on one side only is reported as such rather than as a changed path; then that entry's matched prefix, interface, next hop, source, metric, table, tunnel state and kind, selection reason, interface MTU, and competing routes |
+| Paths | the derived reading of those routes: the target's interface, matched route, selection reason and tunnel state, the general Internet interface, the resolver's interface, and whether DNS and application traffic took the same path |
+
+The paths section is derived from the routes both snapshots already carry rather than stored a second time, so the two can never describe different runs, and two files written by different netdoc versions are read the same way. It answers the question a person asks first, in normalized words rather than an operating system's route syntax:
+
+```text
+target interface changed from wlan0 to wg0
+target matched route changed from 0.0.0.0/0 to 10.20.0.0/16
+target route selection changed from same_path_as_default to differs_from_default_path
+target tunnel state changed from direct to tunnel
+DNS and application traffic changed from same path to different paths
+```
+
+The matched route is reported only where both snapshots recorded one, which on Linux is neither of them. The line above it carries the same news there, in the weaker words that platform can support: a destination that stops taking the way out general traffic takes is a changed selection whether or not the entry behind it can be named.
+
+A split between DNS and application traffic is reported as a difference and nothing more. Split DNS is a design as often as it is a fault, and the comparison says what moved, never whose fault it is.
 
 Absence is never collapsed into a zero. `SKIP`, `N/A`, and `INCOMPLETE` stay three different things that happened to a row. A resolver that answered with no records is not the same as one that did not answer. A captive portal that advertised no sign-in URL is not the same as no portal, so interception is its own field rather than something inferred from an empty URL. A second opinion switched off with `--public-dns ""` is reported as a removal, not as a change to nothing.
 

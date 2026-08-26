@@ -791,6 +791,45 @@ var timeNow = time.Now
 // buildReport flattens probe results into the stable JSON shape, preserving
 // probe order. OK means "no check failed"; Warn, Skip, and N/A don't count
 // against it, same as everywhere else in the app.
+// reportRoutes copies the run's route decisions into the JSON contract, field
+// by field for the same reason the snapshot conversion is written out: the
+// published shape must not follow a runtime struct by accident. Every field the
+// platform did not supply stays absent rather than becoming zero.
+func reportRoutes(routes []diagnostic.RouteDecision) []report.Route {
+	var out []report.Route
+	for _, r := range routes {
+		item := report.Route{
+			Destination:  r.Destination.String(),
+			Family:       r.Family,
+			Interface:    r.Iface,
+			Table:        r.Table,
+			InterfaceMTU: r.MTU,
+			Tunnel:       string(r.Tunnel),
+			TunnelKind:   r.TunnelKind,
+			Unreachable:  r.Unreachable,
+			Reason:       string(r.Reason),
+		}
+		if r.Gateway != nil {
+			item.Gateway = r.Gateway.String()
+		}
+		if r.Source != nil {
+			item.Source = r.Source.String()
+		}
+		if r.Prefix.IsValid() {
+			item.Prefix = r.Prefix.String()
+		}
+		if r.MetricKnown {
+			metric := r.Metric
+			item.Metric = &metric
+		}
+		for _, competing := range r.Competing {
+			item.Competing = append(item.Competing, report.CompetingRoute{Interface: competing.Iface, Metric: competing.Metric})
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) report.Report {
 	rep := report.Report{Version: version, Checks: []report.Check{}, OK: true}
 	if t != nil {
@@ -837,6 +876,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 			}
 			c.Attempts = append(c.Attempts, ra)
 		}
+		c.Routes = reportRoutes(r.Routes)
 		rep.Checks = append(rep.Checks, c)
 	}
 	// One interpretation, read for every diagnostic field the report carries,

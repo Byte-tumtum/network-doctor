@@ -113,6 +113,20 @@ const (
 	ObservationFamilyFailed     ObservationID = "family_failed"
 	ObservationAddressSucceeded ObservationID = "address_succeeded"
 	ObservationAddressFailed    ObservationID = "address_failed"
+	// Route observations. Each one is a fact about the path this row's own
+	// traffic takes, so it can be checked against the row that recorded it.
+	// A statement about two paths is made by two items, one per row, rather
+	// than by one item nobody can verify from either.
+	//
+	// None of these is a verdict. A tunnel in the path is the normal state of
+	// a machine on a VPN, and route evidence exists to explain a conclusion
+	// the probes already reached, never to reach one on its own.
+	ObservationRouteTunneled     ObservationID = "route_tunneled"
+	ObservationRouteDirect       ObservationID = "route_direct"
+	ObservationRouteUnreachable  ObservationID = "route_unreachable"
+	ObservationRoutePathDiffers  ObservationID = "route_path_differs"
+	ObservationRouteFamilySplit  ObservationID = "route_family_split"
+	ObservationRouteInterfaceMTU ObservationID = "route_interface_mtu"
 )
 
 type CounterfactualVariable string

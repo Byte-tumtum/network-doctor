@@ -72,6 +72,9 @@ func Interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 		}
 		d.Findings = append(d.Findings, finding)
 	}
+	// Route intelligence lands last, and only ever as evidence on a
+	// conclusion the branches above already reached.
+	attachRouteEvidence(&d, order, res)
 	// The row a caller should point at, which is the row the diagnosis names
 	// when it names one and otherwise the first failure. A verdict about no
 	// single row still leaves a reader wanting somewhere to look.
