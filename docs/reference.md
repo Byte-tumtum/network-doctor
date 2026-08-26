@@ -867,7 +867,10 @@ Creation is local-only. Network Doctor does not upload, submit, encrypt, or
 send the file. The user chooses whether and how to share it. `--support` can be
 combined with `--json`, but not with `--save`, `--watch`, `--toolbox`, or peer
 mode. It prints one confirmation on standard error after the sanitized file is
-written.
+written. The policy applies to the file rather than to the stream: a combined
+`--json` run still prints the ordinary full-fidelity report on standard output,
+because that stream is live output for scripts rather than something prepared
+for sharing. Share the `.ndoc`, not a captured report.
 
 The policy sanitizes the target spelling and hostname, Wi-Fi SSIDs, interface
 and custom route-table names, local names and search domains found in text,
