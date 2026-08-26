@@ -29,6 +29,7 @@ _arguments \
   '(--compare -compare)'{--compare,-compare}'[compare two saved snapshots (.ndoc); runs no probes]' \
   '*'{--peer-listen,-peer-listen}'[listen for an authenticated peer on an exact IP\:port]:address:' \
   '(--peer-connect -peer-connect)'{--peer-connect,-peer-connect}'[read a temporary pairing string and run a two-ended diagnosis]' \
+  '(--via -via)'{--via,-via}'[run the checks on this SSH destination instead of on this machine]:destination:_hosts' \
   '*'{--check,-check}'[run stable probe IDs (comma-separated; repeatable)]:probe IDs:' \
   '*'{--skip,-skip}'[skip stable probe IDs (comma-separated; repeatable)]:probe IDs:' \
   '(--iface -iface)'{--iface,-iface}'[bind probes to an interface name or exact local IP]:interface:_netdoc_ifaces' \

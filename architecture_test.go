@@ -14,14 +14,18 @@ func TestPackageLayering(t *testing.T) {
 	// Internal dependencies must descend this order. Incident reconstruction
 	// reads comparisons but no probes, and UI may present it. Peer transport and
 	// simulation remain peers. Live diagnosis and snapshot comparison are peers:
-	// comparison reads artifacts, never probes. Checking every direct edge also
-	// rules out a transitive path to the same or a higher layer.
+	// comparison reads artifacts, never probes. Remote execution joins them
+	// there: it moves the two published artifacts over SSH and runs no probe of
+	// its own, so it depends on the schemas and never on the probe engine.
+	// Checking every direct edge also rules out a transitive path to the same or
+	// a higher layer.
 	layers := map[string]int{
 		"internal/textsafe":   0,
 		"internal/report":     0,
 		"internal/snapshot":   0,
 		"internal/compare":    1,
 		"internal/diagnostic": 1,
+		"internal/remote":     1,
 		"internal/incident":   2,
 		"internal/peer":       2,
 		"internal/simulation": 2,

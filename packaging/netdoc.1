@@ -18,6 +18,11 @@ netdoc \- diagnose network connectivity and explain where the connection breaks
 .B \-compare
 .I before.ndoc after.ndoc
 .RI [ \-json ]
+.br
+.B netdoc
+.BI \-via " destination"
+.RI [ flags ]
+.RI [ target ]
 .SH DESCRIPTION
 .B netdoc
 diagnoses network connectivity layer by layer and reports where the path
@@ -206,6 +211,58 @@ for the separate
 .B netdoc.peer.v1
 result schema.
 .TP
+.BI \-via " destination"
+Run the checks on an SSH destination instead of on this machine, and present
+the finished diagnosis here. The
+.I destination
+is passed to the system
+.BR ssh (1)
+client exactly as typed, so
+.I ~/.ssh/config
+aliases,
+.IR user @ host ,
+ports, identity files,
+.BR ProxyJump ,
+and agent authentication all behave as they do for a direct
+.B ssh
+invocation. netdoc parses no SSH configuration of its own.
+.IP
+The SSH host must already have a
+.B netdoc
+on the
+.B PATH
+of a non-interactive SSH session, new enough to speak the remote protocol.
+netdoc installs nothing and changes nothing there. Set
+.B NETDOC_VIA_COMMAND
+to an explicit path when the executable is not on that
+.BR PATH .
+Nothing is copied to the SSH host and no shell command is assembled from user
+input: the remote command line is a fixed string, and the run settings travel
+as structured data on standard input.
+.IP
+The far end runs the same probes, reaches the same diagnosis, and returns the
+same report and snapshot a local run produces, so
+.BR \-json ,
+.BR \-save ,
+and
+.B \-support
+behave as they always do and the snapshot records the remote machine's
+operating system and architecture. An
+.B \-iface
+value names an interface on the SSH host, and is resolved there.
+.IP
+Implies headless operation, so it needs no terminal. Cannot be combined with
+.BR \-toolbox ,
+.BR \-watch ,
+.BR \-compare ,
+or peer mode. The exit code is the remote diagnosis: a check that failed on the
+SSH host exits
+.BR 1 ,
+exactly as it would locally, while an SSH connection or remote protocol failure
+exits
+.B 2
+and says which it was, so the two are never confused.
+.TP
 .BI \-check " probe[,probe...]"
 Run only the named stable probe IDs and the prerequisite closure derived from
 the probe DAG. May be repeated; values are combined without changing canonical
@@ -331,6 +388,27 @@ it means the two snapshots differ, which is an answer rather than a failure.
 Bad arguments, a target or pairing input the parser rejected, a snapshot
 .B \-compare
 could not read, or no terminal on standard output to run the terminal UI on.
+Under
+.B \-via
+it also means the diagnosis never happened: the SSH connection failed, no
+usable
+.B netdoc
+ran on the SSH host, or the two ends could not agree on the remote protocol. A
+remote run that did happen and found a broken network exits
+.BR 1 .
+.SH ENVIRONMENT
+.TP
+.B NETDOC_VIA_COMMAND
+The
+.B netdoc
+executable to start on the SSH host under
+.BR \-via ,
+read on the local machine and defaulting to
+.BR netdoc .
+Use it when the SSH host's installation is not on the
+.B PATH
+of a non-interactive session. The value must be a plain path with no spaces or
+shell punctuation, so that it means the same thing to every remote shell.
 .SH PEER SECURITY AND REACHABILITY
 Each listening run creates a new Ed25519 TLS certificate and a random 256-bit
 session token. The pairing string carries direct endpoint addresses, the
@@ -379,6 +457,18 @@ Keep SSH on a nonstandard port with an explicit scheme:
 .RS 4
 .EX
 netdoc ssh://host:2222
+.EE
+.RE
+.PP
+Diagnose a remote machine's network from here, through an
+.I ~/.ssh/config
+alias:
+.PP
+.RS 4
+.EX
+netdoc \-\-via server example.com
+netdoc \-\-via server \-\-json \-\-check dns,target_tcp example.com
+netdoc \-\-via server \-\-save remote.ndoc example.com
 .EE
 .RE
 .PP

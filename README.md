@@ -229,6 +229,7 @@ netdoc --watch host     # TUI: re-run continuously and track intermittent failur
 netdoc --json --watch host  # headless: one JSON report per line, until interrupted
 netdoc --check dns,target_tcp,tls example.com  # run only these IDs and their prerequisites
 netdoc --skip internet_tcp,quic_udp_443 example.com  # omit these probe branches
+netdoc --via server host  # run the checks on an SSH host and show the result here
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
 netdoc --no-history host          # don't read or save the target history file
@@ -406,6 +407,35 @@ Changes:
 
 The comparison is semantic, not a JSON diff: capture times, probe durations, and derived sentences full of measurements are not differences, and resolved addresses, connection attempts, and the `--check` selection are compared as sets, so a reordering is not one either. It exits `0` when the two runs describe the same state and `1` when they do not, so `netdoc --compare a.ndoc b.ndoc` is usable as a question in a script. `--json` prints the same comparison as `netdoc.comparison.v1` instead of the table. Details, including the ignored fields and the different-target behavior, are in **[docs/reference.md](docs/reference.md#comparing-two-snapshots)**.
 
+### Remote diagnosis over SSH
+
+`--via` runs the checks on another machine and presents the finished diagnosis here. It is for the laptop across the office, the build agent, or the VM whose network is broken in a way you cannot reproduce on yours:
+
+```sh
+netdoc --via server example.com
+```
+
+The destination goes to your own `ssh` client exactly as typed, so `~/.ssh/config` aliases, `user@host`, ports, identity files, `ProxyJump`, and agent authentication all behave the way they do for `ssh server`. netdoc parses no SSH configuration of its own and copies nothing to the SSH host.
+
+```text
+Diagnosed on server by netdoc 1.14.0 (windows/amd64)
+version: 1.14.0
+target: example.com:443 (tls+http)
+verdict: PASS: All checks passed. example.com:443 looks healthy.
+
+checks:
+  [PASS] Interface: interface Wi-Fi is up
+  [PASS] Internet (TCP egress): IPv4 egress via 1.1.1.1 in 15ms (src 192.168.1.240 Wi-Fi)
+  [PASS] DNS example.com: example.com → 172.66.147.243 (via 192.168.1.254)
+  ...
+```
+
+The far end runs the same probes, reaches the same diagnosis with the same evidence, and hands back the same report and snapshot a local run produces, so `--json`, `--save`, and `--support` behave as they always do. A saved snapshot records the machine that actually probed, which means `netdoc --compare local.ndoc remote.ndoc` reads across the two machines and says `operating system changed from linux to windows`. `--iface` names an interface on the SSH host and is resolved there.
+
+The SSH host needs its own `netdoc` on the `PATH` of a non-interactive SSH session; set `NETDOC_VIA_COMMAND` to an explicit path when it is installed somewhere else. netdoc installs nothing and changes nothing there.
+
+A remote network that fails a check exits `1`, exactly as a local one does. An SSH connection that never opened, a missing remote `netdoc`, or a remote too old to speak the protocol exits `2` and says which it was, so a broken network is never confused with a broken connection. Details, including the protocol and what is and is not forwarded, are in **[docs/reference.md](docs/reference.md#remote-diagnosis-over-ssh)**.
+
 ### Two-ended peer diagnosis
 
 Peer mode compares independently observed traffic in both directions instead
@@ -452,6 +482,7 @@ diagnosis, timeout, and JSON contract in
 | Peer diagnostic failed, stayed incomplete, or the session errored | `1` |
 | Quit before the chain finished | `1` |
 | Bad arguments, pairing-input reject, validation reject, or no terminal for the TUI | `2` |
+| `--via`: SSH failed, no usable `netdoc` on the SSH host, or a remote protocol mismatch | `2` |
 
 ```sh
 netdoc github.com || echo "path to github is broken"
@@ -478,7 +509,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), and semantic snapshot comparison (`--compare`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), remote diagnosis over SSH (`--via`), report copy/save.
 
 ## Built with
 

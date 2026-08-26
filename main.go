@@ -24,6 +24,7 @@ import (
 	"github.com/heymaikol/network-doctor/internal/compare"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/peer"
+	"github.com/heymaikol/network-doctor/internal/remote"
 	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/snapshot"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
@@ -205,6 +206,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if secret, ok := os.LookupEnv(ui.AskpassEnv); ok {
 		return askpass(args, secret, os.Getenv(ui.AskpassHostEnv), os.Getenv(ui.AskpassProxyEnv) != "", stdout, stderr)
 	}
+	// The far end of --via, checked before the flag set exists. It is not a
+	// flag: it never appears in --help, on a man page, or in a completion,
+	// because it is one netdoc talking to another and there is nothing for a
+	// person to spell here. Nothing may be combined with it either, which is
+	// what makes the remote command line a fixed string with no user text in
+	// it. From here on its stdout is the protocol and carries one JSON object;
+	// everything meant for a human goes to stderr.
+	if len(args) > 0 && remote.IsWorkerFlag(args[0]) {
+		if len(args) != 1 {
+			fmt.Fprintf(stderr, "netdoc: %s takes no other arguments\n", remote.WorkerFlag)
+			return 2
+		}
+		return runRemoteWorker(context.Background(), stdout, stderr)
+	}
 	fs := flag.NewFlagSet("netdoc", flag.ContinueOnError)
 	// Buffered, not stderr: the flag package quotes nothing, so an undefined
 	// flag name made of escape bytes would land on the terminal verbatim.
@@ -222,6 +237,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var peerListen peerListenList
 	fs.Var(&peerListen, "peer-listen", "listen for one authenticated peer on exact `IP:port`; repeat for the other address family")
 	peerConnect := fs.Bool("peer-connect", false, "read a temporary pairing string securely and run a two-ended diagnosis")
+	viaDest := fs.String("via", "", "run the checks on this SSH `destination` instead of on this machine")
 	iface := fs.String("iface", "", "bind probes to an interface name or exact local IP")
 	publicDNS := fs.String("public-dns", diagnostic.DefaultPublicDNS, "second-opinion DNS resolver IP; empty skips that check")
 	var checks, skips probeList
@@ -287,7 +303,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if peerMode {
 		setFlags := setFlagNames(fs)
-		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save", "support"} {
+		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save", "support", "via"} {
 			if setFlags[name] {
 				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with peer mode\n", name)
 				return 2
@@ -309,6 +325,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *jsonOut && *toolbox {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
+	}
+	// --via is headless, and both of these are the interactive session it does
+	// not have. -watch is the sharper one: a watch is a session that keeps
+	// re-running, and re-running it would be one SSH connection per pass, which
+	// is a different feature and not this one.
+	if *viaDest != "" {
+		setFlags := setFlagNames(fs)
+		for _, name := range []string{"toolbox", "watch"} {
+			if setFlags[name] {
+				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with -via\n", name)
+				return 2
+			}
+		}
 	}
 	if *save != "" && *support != "" {
 		fmt.Fprintln(stderr, "netdoc: -save and -support cannot be combined")
@@ -359,8 +388,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		*publicDNS = ip.String() // canonical form, so the row label matches the probe
 	}
+	// Not resolved for --via: -iface names an interface on the machine the
+	// probes run on, and for a remote run that is the far end. The spelling is
+	// forwarded and the remote resolves it with this same function, so the flag
+	// keeps meaning what it means rather than quietly binding a local NIC.
 	var sources *diagnostic.SourceAddresses
-	if *iface != "" {
+	if *iface != "" && *viaDest == "" {
 		var err error
 		sources, err = diagnostic.ResolveSource(*iface)
 		if err != nil {
@@ -397,14 +430,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	h := headless{
+		target: t, sources: sources, iface: *iface, selection: selection,
+		check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
+		watch: *watch, json: *jsonOut, save: artifact, support: *support != "",
+	}
+	// --via is headless for the same reason -json is: the run is over by the
+	// time this process has anything to show. There is no live scheduling to
+	// watch either, because the probes are running on another machine.
+	if *viaDest != "" {
+		h.via, h.viaCommand = *viaDest, os.Getenv(remote.CommandEnv)
+		return runVia(context.Background(), h, stdout, stderr)
+	}
+
 	// -save runs headless for the same reason -json does: a snapshot is a
 	// finished run, and the TUI's run is not finished until the user leaves it.
 	if *jsonOut || artifact != "" {
-		return runHeadless(context.Background(), headless{
-			target: t, sources: sources, selection: selection,
-			check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
-			watch: *watch, json: *jsonOut, save: artifact, support: *support != "",
-		}, stdout, stderr)
+		return runHeadless(context.Background(), h, stdout, stderr)
 	}
 
 	// With no terminal on stdout the TUI has nowhere to draw: bubbletea would
@@ -461,6 +503,7 @@ func historyFile(disabled bool) string {
 // ParseTarget accepts, and the flags.
 func printUsage(w io.Writer, fs *flag.FlagSet) {
 	fmt.Fprint(w, `Usage: netdoc [flags] [target]
+       netdoc --via ssh-destination [flags] [target]
        netdoc --peer-listen IP:port [--peer-listen IP:port]
        netdoc --peer-connect [--json]
        netdoc --compare before.ndoc after.ndoc [--json]
@@ -468,6 +511,12 @@ func printUsage(w io.Writer, fs *flag.FlagSet) {
 Diagnoses network connectivity layer by layer. With no target it runs the
 generic checks; with a target it also probes that endpoint. Flags may be
 given before or after the target.
+
+--via runs the checks on an SSH destination and presents the finished
+diagnosis here. The destination goes to the system ssh client as typed, so
+~/.ssh/config aliases work; the SSH host needs its own netdoc on the PATH of a
+non-interactive session, or NETDOC_VIA_COMMAND set to its path. It is headless
+and needs no terminal.
 
 Peer mode is headless. The listener prints a temporary direct-connect pairing
 string; the connector reads it from a hidden prompt so it does not enter argv.
@@ -611,7 +660,7 @@ func setFlagNames(fs *flag.FlagSet) map[string]bool {
 // settings that produced them are already recorded in the files, and letting
 // one be named again here would suggest it applied to something.
 var compareIncompatibleFlags = []string{
-	"toolbox", "watch", "save", "support", "peer-listen", "peer-connect",
+	"toolbox", "watch", "save", "support", "peer-listen", "peer-connect", "via",
 	"check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
 }
 
@@ -680,8 +729,12 @@ var runAll = diagnostic.RunAll
 // same settings the JSON report does, and a second copy of them passed
 // alongside would be a second chance for the two to disagree.
 type headless struct {
-	target    *diagnostic.Target
-	sources   *diagnostic.SourceAddresses
+	target  *diagnostic.Target
+	sources *diagnostic.SourceAddresses
+	// iface is the -iface binding as the user spelled it, kept beside the
+	// resolved sources for the same reason check and skip are kept beside the
+	// selection: a remote run forwards the spelling and resolves it there.
+	iface     string
 	selection diagnostic.ProbeSelection
 	// check and skip are the selection as the user spelled it. selection holds
 	// the same IDs as sets, which have no order to record.
@@ -696,6 +749,10 @@ type headless struct {
 	// save is the .ndoc destination, empty when no snapshot was asked for.
 	save    string
 	support bool
+	// via is the SSH destination the probes run on, empty for a local run.
+	// viaCommand overrides the netdoc to start there.
+	via        string
+	viaCommand string
 }
 
 // runHeadless runs the probe DAG headless, prints the JSON report when one was
@@ -771,17 +828,298 @@ func runHeadless(ctx context.Context, h headless, stdout, stderr io.Writer) int 
 	}
 }
 
+// remoteRun is stubbed in tests, which have no SSH server to talk to.
+var remoteRun = remote.Run
+
+// workerStdin is the protocol's inbound channel, stubbed in tests.
+var workerStdin io.Reader = os.Stdin
+
+// runVia performs the diagnosis on another machine and presents it here.
+//
+// Nothing about the answer is re-derived locally. The report and the snapshot
+// that come back were built and interpreted on the machine that ran the
+// probes, which is the only machine that can interpret them: the remediation
+// for a finding is chosen by operating system, and a Windows laptop's advice is
+// not this Linux box's to rewrite. What is decided here is what a local run
+// decides for itself, which is how the answer is presented and what the process
+// exits with.
+//
+// Exit code is the ordinary contract, and deliberately: a remote network that
+// fails a check is exit 1, exactly as a local one is, while a connection that
+// never delivered a diagnosis is exit 2, the environment-is-wrong code. Those
+// two must not be confusable, because "the network you asked about is broken"
+// and "I could not reach the machine to ask" are opposite conclusions.
+func runVia(parent context.Context, h headless, stdout, stderr io.Writer) int {
+	// The same interruption path a headless run uses. Cancelling kills the ssh
+	// process, which drops the channel, which is the EOF the remote worker
+	// stops on, so a Ctrl-C here does not leave probes running over there.
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	req := remote.Request{
+		Iface:     h.iface,
+		PublicDNS: h.publicDNS,
+		TimeoutMs: h.timeout.Milliseconds(),
+		Check:     h.check.strings(),
+		Skip:      h.skip.strings(),
+	}
+	// The spelling the user typed, not netdoc's parse of it: the remote parses
+	// it again with the same parser, so what gets probed is what was asked for
+	// and one build's idea of a target cannot be imposed on another's.
+	if h.target != nil {
+		req.Target = h.target.Raw
+	}
+	resp, err := remoteRun(ctx, h.via, h.viaCommand, req)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc: -via:", err)
+		// An interrupted run is exit 1, the code quitting before the chain
+		// finished already spends locally. Only a transport that failed on its
+		// own is the environment-is-wrong 2, and the difference is whether this
+		// process was the one that stopped it.
+		if ctx.Err() != nil {
+			return 1
+		}
+		return 2
+	}
+	// Provenance on stderr, never stdout: with -json, stdout stays the report
+	// and nothing else, byte for byte what a local run leaves in a pipe.
+	fmt.Fprintf(stderr, "Diagnosed on %s by netdoc %s (%s/%s)\n", textsafe.Clean(h.via),
+		textsafe.Clean(resp.Tool.Version), textsafe.Clean(resp.Tool.OS), textsafe.Clean(resp.Tool.Arch))
+
+	rep := *resp.Report
+	switch {
+	case h.json:
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rep); err != nil {
+			fmt.Fprintln(stderr, "netdoc:", err)
+			return 1
+		}
+	case h.save == "":
+		// The one presentation --via adds. A local run with neither -json nor
+		// an artifact has the TUI; a remote one has no live run to draw, so the
+		// finished report is written out instead. A run asked for an artifact
+		// stays silent on stdout, the same as a local -save does.
+		fmt.Fprint(stdout, reportText(rep))
+	}
+	if h.save != "" {
+		if err := saveSnapshot(h, *resp.Snapshot); err != nil {
+			flagName := "-save"
+			if h.support {
+				flagName = "-support"
+			}
+			fmt.Fprintln(stderr, "netdoc:", flagName+":", textsafe.Clean(err.Error()))
+			return 2
+		}
+		if h.support {
+			fmt.Fprintf(stderr, "Sanitized support snapshot written to %q\n", textsafe.Clean(h.save))
+		}
+	}
+	if rep.OK {
+		return 0
+	}
+	return 1
+}
+
+// reportText renders a finished report for a person: the verdict, what to do
+// about it, then every check row with its detail and its fix. It is the shape
+// the terminal UI's shareable report already uses, so a --via run and a copied
+// TUI report read the same way.
+//
+// It lives here rather than in internal/report because that package is the
+// schema and nothing else, and because this is the layer that knows the output
+// is going to a terminal: every string below arrived from a probe and can quote
+// a hostname, a TLS subject, or a captive portal's redirect, so every string is
+// cleaned before it is printed.
+//
+// Nothing is interpreted on the way through. Each line is a field of the
+// report, decided by whichever netdoc ran the probes.
+func reportText(r report.Report) string {
+	clean := textsafe.Clean
+	var b strings.Builder
+	if v := clean(r.Version); v != "" {
+		fmt.Fprintf(&b, "version: %s\n", v)
+	}
+	if r.Target != nil {
+		fmt.Fprintf(&b, "target: %s:%d (%s)\n", clean(r.Target.Host), r.Target.Port, clean(r.Target.Protocol))
+	} else {
+		b.WriteString("target: none (general connection check)\n")
+	}
+	fmt.Fprintf(&b, "verdict: %s: %s\n", verdictWord(r.Verdict), clean(r.Summary))
+	// The advice the report already carries, never a second opinion assembled
+	// here: it was chosen on the machine that ran the probes, by that machine's
+	// operating system, and it is a suggestion to read rather than to run.
+	if rem := primaryRemediation(r); rem != nil {
+		fmt.Fprintf(&b, "next action: %s\n", clean(rem.Action))
+		if rem.Why != "" {
+			b.WriteString("  why: " + clean(rem.Why) + "\n")
+		}
+		for _, step := range rem.Steps {
+			b.WriteString("  step: " + clean(step) + "\n")
+		}
+		if len(rem.Command) > 0 {
+			b.WriteString("  run (suggested, not executed): " + clean(strings.Join(rem.Command, " ")) + "\n")
+		}
+		if rem.Expect != "" {
+			b.WriteString("  expect: " + clean(rem.Expect) + "\n")
+		}
+	}
+	b.WriteString("\nchecks:\n")
+	for _, c := range r.Checks {
+		fmt.Fprintf(&b, "  [%s] %s: %s\n", clean(c.Status), clean(c.Name), clean(c.Detail))
+		if c.Fix != "" && (c.Status == diagnostic.StatusFail.String() || c.Status == diagnostic.StatusWarn.String()) {
+			b.WriteString("        fix: " + clean(c.Fix) + "\n")
+		}
+		if c.Portal != nil && c.Portal.RedirectURL != "" {
+			b.WriteString("        portal: " + clean(c.Portal.RedirectURL) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// verdictWord turns the machine-readable verdict into the word the status
+// column already uses, so a reader is not asked to learn a second vocabulary
+// for the same outcomes. A verdict this build cannot name reads as FAIL rather
+// than as nothing: an unrecognized verdict is not one to present as healthy.
+func verdictWord(verdict string) string {
+	switch verdict {
+	case diagnostic.VerdictOK:
+		return diagnostic.StatusPass.String()
+	case diagnostic.VerdictDegraded:
+		return diagnostic.StatusWarn.String()
+	}
+	return diagnostic.StatusFail.String()
+}
+
+// primaryRemediation is the advice for the finding the summary is about, which
+// is the only finding that carries any: the report fills it in for the primary
+// finding alone.
+func primaryRemediation(r report.Report) *report.Remediation {
+	for _, f := range r.Findings {
+		if f.Remediation != nil {
+			return f.Remediation
+		}
+	}
+	return nil
+}
+
+// runRemoteWorker is the other end of --via, running on the machine being
+// diagnosed. It reads one request, runs it, and writes one response.
+//
+// Its exit status is about the protocol and not about the network: a completed
+// exchange is 0 even when every check failed, because the diagnosis travels
+// inside the response and the local side spends the exit code for it. ssh
+// hands the remote status back to the local process, and a worker that failed
+// the exchange for a bad connection would be indistinguishable from one that
+// answered "this network is broken".
+func runRemoteWorker(parent context.Context, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	tool := snapshot.Tool{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH}
+	if err := remote.Serve(ctx, workerStdin, stdout, tool, diagnoseRemote); err != nil {
+		// The response never landed, so there is nothing structured to say it
+		// with. stderr is all that is left, and ssh delivers it to the caller.
+		fmt.Fprintln(stderr, "netdoc:", textsafe.Clean(err.Error()))
+		return 1
+	}
+	return 0
+}
+
+// diagnoseRemote turns one remote request into the same headless run netdoc
+// performs for itself, using the same parsers, the same probe graph, and the
+// same report and snapshot builders. There is no remote-only diagnosis path,
+// and that is the point: --via cannot drift from a local run, because there is
+// nothing for it to drift from.
+//
+// Every field of the request is untrusted text that arrived over a pipe, so
+// every field goes through the validation the CLI applies to the same flag.
+// A rejection is returned rather than printed: the local side is the one with a
+// terminal, and it prints what comes back.
+func diagnoseRemote(ctx context.Context, req remote.Request) (*report.Report, *snapshot.Snapshot, error) {
+	h := headless{
+		iface:     req.Iface,
+		publicDNS: req.PublicDNS,
+		timeout:   time.Duration(req.TimeoutMs) * time.Millisecond,
+	}
+	if h.timeout <= 0 {
+		return nil, nil, errors.New("-timeout must be positive")
+	}
+	if req.Target != "" {
+		t, err := diagnostic.ParseTarget(req.Target)
+		if err != nil {
+			return nil, nil, err
+		}
+		h.target = t
+	}
+	if req.PublicDNS != "" {
+		ip := net.ParseIP(req.PublicDNS)
+		if ip == nil {
+			return nil, nil, fmt.Errorf("-public-dns: %q is not an IP address", textsafe.Clean(req.PublicDNS))
+		}
+		// Canonicalized here for the same reason a local run canonicalizes it,
+		// and it has to be the same reason: the row label has to match the
+		// probe, and the snapshot records this text for a later comparison to
+		// read. A remote run that kept the user's spelling would differ from a
+		// local one over a setting neither of them changed.
+		h.publicDNS = ip.String()
+	}
+	for _, list := range []struct {
+		dst *probeList
+		ids []string
+	}{{&h.check, req.Check}, {&h.skip, req.Skip}} {
+		for _, id := range list.ids {
+			if err := list.dst.Set(id); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	h.selection = diagnostic.ProbeSelection{Check: h.check.set(), Skip: h.skip.set()}
+	if err := h.selection.Validate(); err != nil {
+		return nil, nil, err
+	}
+	// Resolved here and nowhere else: -iface names an interface on this
+	// machine, and this is the machine the probes run on.
+	if req.Iface != "" {
+		sources, err := diagnostic.ResolveSource(req.Iface)
+		if err != nil {
+			return nil, nil, fmt.Errorf("-iface: %s", textsafe.Clean(err.Error()))
+		}
+		h.sources = sources
+	}
+
+	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
+	results := runAll(ctx, probes, h.timeout)
+	if ctx.Err() != nil {
+		// Cancelled mid-pass, which for a worker means the local side went
+		// away. Every probe failed because we stopped it, so reporting that
+		// pass would be a lie, the same judgement a local interrupted run makes.
+		return nil, nil, errors.New("the run was interrupted before it finished")
+	}
+	rep := buildReport(h.target, probes, results)
+	s := buildSnapshotArtifact(h, probes, results)
+	return &rep, &s, nil
+}
+
 // snapshotWriteFile is stubbed in tests that need the write itself to fail.
 var snapshotWriteFile = snapshot.WriteFile
 
 // writeSnapshot builds the portable artifact for a finished run and saves it.
+func writeSnapshot(h headless, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) error {
+	return saveSnapshot(h, buildSnapshotArtifact(h, probes, results))
+}
+
+// buildSnapshotArtifact is the portable artifact for a finished run.
 //
 // The conversion from probe results lives in internal/diagnostic, which is the
 // only package that can read its own evidence. What is added here is what
 // describes the invocation rather than the network: which build ran, when, and
 // the settings that decide what the probes did, so a later comparison can tell
 // a changed network from a differently configured run.
-func writeSnapshot(h headless, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) error {
+//
+// It stops short of the privacy policy and the write, so the worker behind
+// --via can hand the same artifact back over the wire and let the machine that
+// asked for it decide what to keep.
+func buildSnapshotArtifact(h headless, probes []diagnostic.Probe, results map[diagnostic.ProbeID]diagnostic.ProbeResult) snapshot.Snapshot {
 	s := diagnostic.BuildSnapshot(h.target, probes, results)
 	s.Tool = snapshot.Tool{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH}
 	s.CreatedAt = timeNow().UTC().Format(time.RFC3339)
@@ -803,6 +1141,14 @@ func writeSnapshot(h headless, probes []diagnostic.Probe, results map[diagnostic
 		}
 		s.Options.Source = &source
 	}
+	return s
+}
+
+// saveSnapshot applies the run's privacy policy and writes the artifact. It is
+// the last step for a local run and for a remote one alike: a --via snapshot is
+// built and stamped by the machine that probed, and sanitizing it is a decision
+// about what leaves this machine, so it is made here either way.
+func saveSnapshot(h headless, s snapshot.Snapshot) error {
 	if h.support {
 		s = snapshot.SanitizeForSupport(s)
 	}

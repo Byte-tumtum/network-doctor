@@ -29,6 +29,12 @@ _netdoc() {
             COMPREPLY=($(compgen -f -- "$cur"))
             return
             ;;
+        -via | --via)
+            # An SSH destination, so the same names ssh itself would take:
+            # ~/.ssh/config aliases and known hosts, which bash enumerates.
+            COMPREPLY=($(compgen -A hostname -- "$cur"))
+            return
+            ;;
         -public-dns | --public-dns)
             # An IP address, or the empty string to skip the check. Neither is
             # enumerable, so offer nothing rather than local filenames.
@@ -55,6 +61,7 @@ _netdoc() {
         -compare --compare
         -peer-listen --peer-listen
         -peer-connect --peer-connect
+        -via --via
         -check --check
         -skip --skip
         -iface --iface

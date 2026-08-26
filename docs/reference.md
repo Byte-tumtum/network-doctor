@@ -90,6 +90,8 @@ it never invents a recovery that was not observed.
 
 `--check` accepts comma-separated stable probe IDs and limits the run to those probes plus the prerequisite closure from the existing DAG. `--skip` removes IDs and any dependent probes whose prerequisites are then unavailable. Both flags are repeatable and combine by union; their argument order never changes row order. Unknown or empty IDs are rejected with exit `2`, before diagnostics start, and the error lists every valid stable ID. A known ID that does not apply to the current target is harmless: `--check` may select no rows, while `--skip` changes nothing. Omitted probes do not run and do not appear in the TUI or JSON. The same selection policy is retained by `--watch`, TUI restarts, and target changes.
 
+`--via` runs the checks on an SSH destination rather than on the local machine; see [Remote diagnosis over SSH](#remote-diagnosis-over-ssh). It is headless, so it needs no terminal, and it cannot be combined with `--toolbox`, `--watch`, `--compare`, or peer mode. Every other flag keeps its meaning, applied on the far end.
+
 `--iface` binds IPv4 and IPv6 probe connections and DNS lookups to the interface's first usable address of the matching family. IPv4-only and IPv6-only interfaces use only their available family; pass an exact local IP to restrict probes to that address's family.
 
 The path drill-downs follow the same selection where the native tool supports it. On Linux and macOS, `ping`, `traceroute`, `mtr`, and `curl` use the selected interface name, or the selected address when `--iface` names an exact IP. Windows tools bind by source address instead: `pathping` and `curl.exe` use the resolved address, while `ping` and `tracert` can do so only for IPv6 destinations. `curl.exe` cannot bind by interface name, but can use that interface's resolved source address.
@@ -1065,3 +1067,104 @@ A snapshot holds only what the run gathered, so a comparison can only report wha
 - **VPN and tunnel state as such.** There is no tunnel field; a VPN shows up as the interface name and source address on the rows that observed them, which is usually enough to see it, and never enough to name it.
 
 Adding fields to the snapshot for the sake of a fuller comparison is deliberately not done here. Each one is a change to a published format, and a comparison is worth more trustworthy than complete.
+
+## Remote diagnosis over SSH
+
+`--via <ssh-destination>` performs the diagnosis on another machine and presents it here:
+
+```sh
+netdoc --via server example.com
+netdoc --via server --json --check dns,target_tcp example.com
+netdoc --via server --save remote.ndoc example.com
+```
+
+It is remote *execution*, not remote monitoring: one connection, one run, one answer. There is no daemon, no agent, no installation step, and no persistent state on either machine.
+
+### How it runs
+
+The local netdoc starts the system `ssh` client with a fixed argument list:
+
+```text
+ssh -T <destination> netdoc --remote-worker
+```
+
+No local shell is involved: `ssh` is executed directly with those arguments as separate `argv` elements, never as a command string. The destination is passed through exactly as typed, so `~/.ssh/config` aliases, `user@host`, `ssh://` URLs, ports, `IdentityFile`, `ProxyJump`, and agent authentication behave the way they do for a direct `ssh` invocation. netdoc reads no SSH configuration itself and reimplements none of it. Password, passphrase, and host-key prompts still reach your terminal, because `ssh` reads those from the terminal rather than from the pipe the protocol uses.
+
+`--remote-worker` puts the far end in worker mode. It is not a flag: it is recognized before any flag parsing, accepts nothing alongside it, and appears in no help output, because it is one netdoc talking to another. That is also what keeps the remote command line a fixed string: the target, the timeout, the probe selection, and every other setting travel as structured data on standard input, so no user text is ever spelled into a command a remote shell will read. The same invocation is therefore correct whether the SSH host's default shell is POSIX `sh`, `cmd.exe`, or PowerShell.
+
+The `-T` is deliberate. The exchange is a byte protocol on a pipe, and a pseudo-terminal would be free to translate line endings inside it.
+
+### The remote protocol
+
+One JSON request in, one JSON response out, over the SSH session's standard input and output.
+
+The request carries the run settings as the user spelled them: target, `--iface`, `--public-dns`, `--timeout`, `--check`, and `--skip`. Nothing is pre-resolved locally, because the machine that will run the probes is the one that has to resolve it. `--iface` is the clearest case: it names an interface on the SSH host, so the local machine has no business resolving it against its own NICs.
+
+The response carries the two artifacts netdoc already publishes, built on the far end by the ordinary code paths:
+
+- the `--json` report, exactly as that machine would print it, and
+- the `.ndoc` snapshot, stamped with that machine's build, operating system, and architecture.
+
+Both are versioned external contracts in their own right, which is why the SSH protocol does not define a third schema over the probe structs. The envelope adds only what neither artifact says: which protocol version is being spoken, which build answered, and whether the remote could run the request at all.
+
+The diagnosis is reached on the machine that probed, and never recomputed locally. This matters: the remediation for a finding is chosen by operating system, so a Windows host's advice is not a Linux client's to rewrite. The local side transports, presents, and decides the exit code, which is what a local run does with its own results.
+
+The envelope's `protocol` and `error` fields are fixed for all time, at every version. A netdoc that cannot speak the version it was handed still has to be able to say so in a way the version that asked understands, and that is only true if those two keys never move. The version itself moves for a change an existing peer would misread; adding an optional field is not that, and neither side rejects unknown keys.
+
+### Standard output is the protocol
+
+On the SSH host, worker-mode standard output carries one JSON object and nothing else: no banners, no progress, no logs, no terminal formatting, no human-readable text of any kind. Anything meant for a person goes to standard error, where `ssh` delivers it to the caller.
+
+Locally, the same discipline holds in the other direction. The provenance line naming the SSH host and the remote build goes to standard error, so `netdoc --via server --json host` leaves standard output byte-for-byte the report a local `--json` run leaves in a pipe.
+
+### Exit codes
+
+The exit code is netdoc's, not `ssh`'s. A completed protocol exchange is a transport success, whatever the diagnosis concluded, and the worker exits `0` even when every check failed. The local side then applies the ordinary contract:
+
+| Situation | Exit |
+|---|---|
+| The remote run completed with no failed row | `0` |
+| The remote run had a failed row | `1` |
+| The local run was interrupted before the answer arrived | `1` |
+| `ssh` could not open the connection | `2` |
+| No usable `netdoc` ran on the SSH host | `2` |
+| The two ends do not speak the same remote protocol | `2` |
+| The remote refused the request (a rejected target, an unknown probe ID) | `2` |
+
+The separation is the point. "The network you asked about is broken" and "I could not reach the machine to ask" are opposite conclusions, and a script must never confuse them. Each `2` says which one it was and quotes what the remote itself said.
+
+### The remote executable
+
+The SSH host must already have a `netdoc` on the `PATH` of a non-interactive SSH session, new enough to know worker mode. netdoc does not install it, copy it, or modify anything on the far end.
+
+`NETDOC_VIA_COMMAND` overrides the program to start. It is read on the local machine, never sent anywhere, and is for an installation that is not on that `PATH`, which is common enough on Windows and on macOS under a non-login shell. The value must be a plain path: letters, digits, and `. _ - / \ : + @ ~`, with no whitespace and no shell punctuation. That restriction is what lets one value mean the same thing to every remote shell, and a path containing a space is refused rather than guessed at.
+
+When the remote produces no usable response, the error names the likely causes and quotes the remote's own standard error, which is what distinguishes a missing executable from one too old to know the flag:
+
+```text
+netdoc: -via: server: netdoc did not run on the SSH host (ssh exited 2)
+  flag provided but not defined: -remote-worker
+  run 'netdoc --help' for usage
+Install netdoc on the SSH host and make sure it is on the PATH of a
+non-interactive SSH session, or set NETDOC_VIA_COMMAND to its full path.
+The netdoc there also has to be new enough to know --remote-worker.
+```
+
+### Cancellation
+
+Interrupting a `--via` run terminates the local `ssh` process, which drops the channel, which closes the worker's standard input on the far end. The worker treats the end of that stream as the caller having gone away and cancels the running probes, so a cancelled run does not leave a diagnosis finishing on a machine nobody is listening to. The local process exits `1`, the code quitting before the chain finished already spends.
+
+### What crosses the wire, and what does not
+
+The request holds only the run settings, all of which the user typed. The response holds the report and the snapshot, which is the same information a local run would leave on this machine anyway. Nothing else is collected, and no file on either machine is read on the strength of a path the other end supplied.
+
+`--support` sanitization runs locally, on the snapshot that came back. That is deliberate: which artifact is safe to share is a decision about what leaves *your* machine, and it is the same decision, applied the same way, as for a local run. As locally, only the file is sanitized; a combined `--json` run still prints the full-fidelity report.
+
+Both ends bound what they will read from the other, and neither trusts the other's text: a response is one JSON object within a size cap, anything after it is a protocol violation, and every string that reaches a terminal is stripped of escape sequences and control characters first.
+
+### Limits
+
+- One connection per run. `--watch` is not combinable with `--via`, because a watch that reconnected on every pass is a different feature.
+- There is no live progress. The probes run on the far end and the answer arrives when the run is finished, which is why `--via` is headless rather than a remote terminal UI.
+- The probe IDs given to `--check` and `--skip` are validated locally as well as remotely, so a probe ID that exists only on a newer remote netdoc is rejected before the connection opens.
+- The drill-down tools, the LAN map, and the SSH login form are terminal UI features and are not part of a remote run.
