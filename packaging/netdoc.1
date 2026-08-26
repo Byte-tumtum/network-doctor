@@ -128,9 +128,33 @@ A snapshot contains network information about the machine that ran it,
 including addresses, interface names, and the connected Wi\-Fi network name.
 It carries no credentials.
 .TP
+.BI \-support " file"
+Run the checks headless and write a sanitized support snapshot to
+.IR file .
+This uses the same versioned
+.B .ndoc
+format as
+.BR \-save ,
+with explicit redaction metadata. Hostnames, SSIDs, interface and route table
+names, the machine's own hostname and account name, paths, URL userinfo and
+queries, credential-bearing text, and IP addresses other than public DNS
+resolvers are sanitized. Repeated values keep
+one pseudonym within the file so routes, DNS answers, and incident states can
+still be related. No data is uploaded.
+.IP
+Cannot be combined with
+.BR \-save ,
+.BR \-watch ,
+or
+.BR \-toolbox .
+The file is readable JSON and should still be inspected before sharing in a
+particularly sensitive environment.
+.TP
 .B \-compare
 Compare two diagnostic snapshots written by
 .B \-save
+or
+.B \-support
 and report what changed between them. The two files are given as arguments, the
 earlier or known-good run first. Runs no probes and opens no socket: everything
 reported comes out of the two artifacts, so a comparison works on a machine that

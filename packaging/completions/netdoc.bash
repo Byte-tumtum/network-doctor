@@ -23,9 +23,9 @@ _netdoc() {
             COMPREPLY=($(compgen -W "default vim" -- "$cur"))
             return
             ;;
-        -save | --save)
-            # A path to write the snapshot to, so this is the one flag whose
-            # value really is a local filename.
+        -save | --save | -support | --support)
+            # A path to write the snapshot to, so these values really are
+            # local filenames.
             COMPREPLY=($(compgen -f -- "$cur"))
             return
             ;;
@@ -51,6 +51,7 @@ _netdoc() {
         -json --json
         -watch --watch
         -save --save
+        -support --support
         -compare --compare
         -peer-listen --peer-listen
         -peer-connect --peer-connect

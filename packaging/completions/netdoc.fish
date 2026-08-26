@@ -13,8 +13,9 @@ complete -c netdoc -o toolbox -l toolbox -d 'Start in toolbox mode'
 complete -c netdoc -o json -l json -d 'Run the checks headless and print a JSON report'
 complete -c netdoc -o watch -l watch -d 'Continuously re-run checks'
 # -F re-enables the file completion the -f above suppressed: this one value is
-# a path to write, not a target.
+# paths to write, not targets.
 complete -c netdoc -o save -l save -r -F -d 'Write a diagnostic snapshot (.ndoc) to a file'
+complete -c netdoc -o support -l support -r -F -d 'Write a sanitized support snapshot (.ndoc) to a file'
 complete -c netdoc -o compare -l compare -d 'Compare two saved snapshots (.ndoc); runs no probes'
 # The two arguments of --compare are local files, so file completion comes back
 # for a bare word once that flag is on the line.

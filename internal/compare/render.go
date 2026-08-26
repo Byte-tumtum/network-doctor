@@ -22,13 +22,21 @@ func (c Comparison) Text() string {
 		b.WriteString("These snapshots observed different targets: " +
 			clean(display(c.Before.Target)) + " before, " + clean(display(c.After.Target)) + " after.\n\n")
 	}
-	writeTable(&b, "", [][3]string{
+	rows := [][3]string{
 		{"Target", c.Before.Target, c.After.Target},
 		{"Captured", c.Before.CreatedAt, c.After.CreatedAt},
 		{"Tool", toolWord(c.Before), toolWord(c.After)},
 		{"Verdict", c.Before.Verdict, c.After.Verdict},
 		{"Overall", okWord(c.Before.OK), okWord(c.After.OK)},
-	})
+	}
+	// Only when one of them is: on two ordinary snapshots this row would say
+	// "full" twice on every comparison anybody ever runs, which is noise. On a
+	// support artifact it is the one thing a reader has to know before reading
+	// a single hostname or address below.
+	if c.Before.Sanitized || c.After.Sanitized {
+		rows = append(rows, [3]string{"Fidelity", fidelityWord(c.Before.Sanitized), fidelityWord(c.After.Sanitized)})
+	}
+	writeTable(&b, "", rows)
 	if len(c.Checks) > 0 {
 		b.WriteString("\n")
 		rows := make([][3]string, 0, len(c.Checks))
@@ -87,6 +95,15 @@ func toolWord(s Side) string {
 		parts = append(parts, s.Tool.OS+"/"+s.Tool.Arch)
 	}
 	return strings.Join(parts, " ")
+}
+
+// fidelityWord names what a side's values are: the machine's own, or stand-ins
+// chosen for sharing.
+func fidelityWord(sanitized bool) string {
+	if sanitized {
+		return "sanitized"
+	}
+	return "full"
 }
 
 func plural(n int, word string) string {

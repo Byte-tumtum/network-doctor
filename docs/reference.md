@@ -751,9 +751,10 @@ In the TUI the same advice appears in the Details panel of the row the diagnosis
 ```sh
 netdoc --save incident.ndoc github.com      # just the artifact
 netdoc --json --save incident.ndoc github.com  # the report on stdout too
+netdoc --support support.ndoc github.com    # sanitized for sharing
 ```
 
-A snapshot is one finished run, recorded so it can be reopened later without probing anything again: the target as you typed it and as netdoc parsed it, the run settings, every check with its status, timings and evidence, and the diagnosis that was drawn from them. It is meant for the failure you cannot reproduce on demand, for attaching to a bug report, and for [comparing two runs](#comparing-two-snapshots).
+A snapshot is one finished run, recorded so it can be reopened later without probing anything again: the target as you typed it and as netdoc parsed it, the run settings, every check with its status, timings and evidence, and the diagnosis that was drawn from them. It is meant for the failure you cannot reproduce on demand and for [comparing two runs](#comparing-two-snapshots). Use `--support` instead when preparing a file to share.
 
 `--save` implies headless operation, so it needs no terminal, and it is independent of `--json`: give both to get the usual report on stdout as well. It cannot be combined with `--watch` (a snapshot is a finished run, and a watch never finishes) or with `--toolbox`. The snapshot never changes the diagnosis or the exit code: a run that fails still exits `1` and still saves. A destination whose directory does not exist is rejected with exit `2` before any probe runs, and a write that fails once attempted also exits `2`, since the artifact the run was for does not exist. The file is written through a temporary file in the same directory and renamed into place, so a failed write leaves any previous snapshot intact rather than a truncated one.
 
@@ -782,6 +783,12 @@ The file is JSON, indented and newline-terminated, so it reads in a pager and di
 ```
 
 `schema` is the first field and the artifact's identity. A reader must check it before anything else and refuse a schema it does not know, rather than guessing at the fields underneath. The version moves only for a change an older reader would misread, such as a renamed field, a changed unit, or a changed meaning; adding an optional field is not that, so decoders ignore keys they do not recognize and treat every absent optional field as "not known" rather than as zero.
+
+A support snapshot adds `"redaction": {"sanitized": true, "policy":
+"support-v1"}`. Absence means a full-fidelity snapshot. Readers use this
+metadata rather than guessing from placeholder-looking values. The field is an
+additive v1 extension, so the schema stays `netdoc.snapshot.v1` and older v1
+files continue to load unchanged.
 
 `options` records only the settings that decide what the probes did: the per-check timeout, the second-opinion resolver (empty when `--public-dns ""` switched that row off), the `--check`/`--skip` selection in the order it was given, and the `--iface` binding netdoc resolved. `check`, `skip`, and `source` are absent when the run used none of them. Flags that only affect presentation are not recorded, because a comparison never reads them.
 
@@ -845,7 +852,96 @@ Treat the file as network information about the machine that produced it. It del
 
 It contains no credentials. Userinfo in a target is rejected by the parser before a run starts, and the proxy rows record only the proxy's host and port, never the username or password from a proxy URL. Probe text is sanitized on the way out of the runner, so a hostile hostname or server banner lands in the file as inert bytes.
 
-Redaction is not implemented yet. Until it is, look at a snapshot before sharing it: the fields above are grouped under `observed` on each check precisely so a later redaction pass can act on them predictably.
+## Support snapshots
+
+`--support file` runs the same headless diagnosis as `--save`, then applies the
+`support-v1` policy to the structured snapshot before the normal `.ndoc`
+encoder writes it:
+
+```sh
+netdoc --support support.ndoc github.com
+jq '.redaction, .target, .checks' support.ndoc
+```
+
+Creation is local-only. Network Doctor does not upload, submit, encrypt, or
+send the file. The user chooses whether and how to share it. `--support` can be
+combined with `--json`, but not with `--save`, `--watch`, `--toolbox`, or peer
+mode. It prints one confirmation on standard error after the sanitized file is
+written.
+
+The policy sanitizes the target spelling and hostname, Wi-Fi SSIDs, interface
+and custom route-table names, local names and search domains found in text,
+filesystem paths, URL hosts, paths, queries and userinfo, credential-bearing
+headers and values, private-key blocks, and certificate names found in derived
+text. The machine's own hostname and account name are pseudonymized too. Those
+two are in no field of the format and have no shape a pattern could match, so
+they are read from the system and registered before the snapshot is walked;
+a machine answering to both `buildbox.corp` and `buildbox` gets one alias for
+the two, and a name that identifies a role rather than a person or a machine
+(`root`, `localhost`, `admin`) is left alone. It applies to check names, details, fixes, attempt errors, diagnosis and
+finding summaries, counterfactual values, captive-portal URLs, and every
+snapshot nested in an incident. Passwords, bearer or basic credentials,
+cookies, proxy credentials, tokens, and private keys are replaced rather than
+copied.
+
+Pseudonyms are assigned in stable traversal order within one artifact. The same
+hostname, SSID, interface, route table, path, address, or prefix therefore gets
+the same alias everywhere in that file, including incident before, during, and
+recovered states. Different originals get different aliases. No original-to-
+alias map, salt, key, or reversible secret is stored, and aliases are not meant
+to be stable across separately created support files.
+
+IP addresses follow an explicit policy:
+
+- Public second-opinion DNS resolver addresses remain exact because resolver
+  choice is diagnostic evidence and does not identify the local endpoint.
+- All other IPv4 and IPv6 addresses are replaced with valid reserved
+  pseudonyms. Separate ranges preserve whether an original was loopback,
+  link-local, private, multicast, or public. Equality is preserved, so a
+  gateway that is also a resolver or an address repeated across DNS, attempts,
+  routes, and incident states still compares as one host.
+- Route prefixes receive distinct repeatable pseudonyms. Default routes remain
+  `0.0.0.0/0` or `::/0`. Prefix lengths of at least `/16` for IPv4 and `/48`
+  for IPv6 are retained; broader prefixes are narrowed to those bounds so
+  distinct aliases do not collapse.
+- Ports, address-family results, route selection reasons, tunnel state and
+  device kind, MTU, metrics, and whether routes or paths agree remain intact.
+- A field the format declares as an address that does not hold one is written
+  as `<address-redacted>` rather than passed to the text pass. The text pass
+  keeps what it does not recognize, which is right for a sentence and wrong for
+  a field that should have held an address.
+
+The sanitizer constructs a new snapshot field by field. New schema fields are
+therefore omitted from support output until they are deliberately classified,
+rather than inheriting full-fidelity behavior by accident. Ordinary `--save`
+artifacts and live output are not changed.
+
+That classification is enforced rather than remembered. A test walks the schema
+by reflection, puts a distinct sentinel in every string it declares, sanitizes,
+and fails on any sentinel that survives serialization without being listed in
+one of two sets: the fields kept verbatim because they are a closed vocabulary,
+a build fact, or a timestamp, and the fields that hold a human sentence and are
+rewritten by pattern. A field added to the format later belongs to neither set,
+so it fails the test until somebody decides which it is.
+
+To see that a file was prepared for sharing, read its `redaction` object, or
+hand it to `--compare`, which names each side as `full` or `sanitized`:
+
+```sh
+jq .redaction support.ndoc
+netdoc --compare support.ndoc support.ndoc
+```
+
+Support snapshots intentionally retain exact capture times, Network Doctor
+version, operating system and architecture, selected probe IDs, ports,
+durations, statuses, causes, findings, and the broad network relationships
+above. They remain loadable and comparable like normal `.ndoc` files. The file
+is readable JSON, so inspect it with `less`, an editor, or `jq` before sharing
+when working in a particularly sensitive environment. Free-form probe errors
+can originate in operating-system and network libraries; `support-v1` covers
+known identifiers plus credential, URL, path, address, hostname, and
+certificate patterns, but cannot assign meaning to an arbitrary opaque string
+that carries no identifying syntax.
 
 ## Comparing two snapshots
 
@@ -856,7 +952,7 @@ netdoc --compare good.ndoc bad.ndoc         # the table
 netdoc --compare --json good.ndoc bad.ndoc  # the same comparison, machine-readable
 ```
 
-It runs no probes and opens no socket. Everything reported comes out of the two artifacts, so a comparison works long after the fact and on a machine that has never seen either network. It is headless, needs no terminal, and cannot be combined with any flag that describes a run netdoc would perform (`--toolbox`, `--watch`, `--save`, `--check`, `--skip`, `--iface`, `--public-dns`, `--no-history`, `--keys`, `--timeout`, and either peer flag). Those settings are already recorded in the files.
+It runs no probes and opens no socket. Everything reported comes out of the two artifacts, so a comparison works long after the fact and on a machine that has never seen either network. It is headless, needs no terminal, and cannot be combined with any flag that describes a run netdoc would perform (`--toolbox`, `--watch`, `--save`, `--support`, `--check`, `--skip`, `--iface`, `--public-dns`, `--no-history`, `--keys`, `--timeout`, and either peer flag). Those settings are already recorded in the files.
 
 Exit `0` means the two snapshots describe the same diagnostic state, `1` means they differ, and `2` means an argument or an artifact was unusable. A snapshot that records a failed run is not itself an error here: the question `--compare` answers is whether anything moved, not whether the network is healthy.
 
@@ -950,6 +1046,8 @@ The report states direct facts about the two readings and stops there. "The DNS 
 `path` is a difference's stable identity, spelled as the field path inside the snapshot, so two runs name the same difference the same way and a script can key on it. `kind` is `added`, `removed`, or `changed`, and it is what says whether an empty `before` or `after` is an absent value: an `added` change always has an empty `before` and a non-empty `after`, and `changed` has neither empty. Both keys are always present, so an empty string is a value rather than a key a reader has to interpret.
 
 `checks` is every check in either snapshot, unchanged rows included, so the same document answers "what stayed the same". Its `kind` is about the status alone, while `differs` is true whenever anything about that check moved, including evidence underneath a status that held. `direction` is `better` or `worse` where the outcomes have an ordering, and absent otherwise.
+
+A side carries `"sanitized": true` when that artifact was written by `--support`, read from the file's own [redaction metadata](#support-snapshots) rather than guessed from values that look like placeholders. The key is absent on a full-fidelity snapshot. The text report grows a `Fidelity` row saying `full` or `sanitized` for each side, but only when one of them is: on two ordinary snapshots it would say the same word twice on every comparison anybody ever runs. Comparing two support artifacts is meaningful, and comparing a support artifact against a full-fidelity one is not: the same host is a hostname on one side and a pseudonym on the other, so every value differs.
 
 An empty `changes` array is the machine-readable form of "no meaningful differences", and it is what exit `0` means.
 

@@ -216,6 +216,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	toolbox := fs.Bool("toolbox", false, "start in toolbox mode")
 	jsonOut := fs.Bool("json", false, "run the checks headless and print a JSON report")
 	save := fs.String("save", "", "run the checks headless and write a diagnostic snapshot to `file` (.ndoc)")
+	support := fs.String("support", "", "run the checks headless and write a sanitized support snapshot to `file` (.ndoc)")
 	compareMode := fs.Bool("compare", false, "compare two saved snapshots given as arguments; runs no probes")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	var peerListen peerListenList
@@ -286,7 +287,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if peerMode {
 		setFlags := setFlagNames(fs)
-		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save"} {
+		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save", "support"} {
 			if setFlags[name] {
 				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with peer mode\n", name)
 				return 2
@@ -309,9 +310,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
 	}
-	if *save != "" {
+	if *save != "" && *support != "" {
+		fmt.Fprintln(stderr, "netdoc: -save and -support cannot be combined")
+		return 2
+	}
+	artifact, artifactFlag := *save, "-save"
+	if *support != "" {
+		artifact, artifactFlag = *support, "-support"
+	}
+	if artifact != "" {
 		if *toolbox {
-			fmt.Fprintln(stderr, "netdoc: -save and -toolbox cannot be combined")
+			fmt.Fprintf(stderr, "netdoc: %s and -toolbox cannot be combined\n", artifactFlag)
 			return 2
 		}
 		// A snapshot is one finished run, and -watch never finishes: writing
@@ -319,21 +328,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// not a decision to make silently. Recording a watch is its own
 		// feature, and this is not it.
 		if *watch {
-			fmt.Fprintln(stderr, "netdoc: -save and -watch cannot be combined")
+			fmt.Fprintf(stderr, "netdoc: %s and -watch cannot be combined\n", artifactFlag)
 			return 2
 		}
 		// Checked before any probe runs: a snapshot into a directory that is
 		// not there is a typo, and finding out after several seconds of
 		// network traffic helps nobody. This is the argument check every other
 		// flag gets, not a claim that the write will succeed.
-		if dir := filepath.Dir(*save); dir != "" {
+		if dir := filepath.Dir(artifact); dir != "" {
 			info, err := os.Stat(dir)
 			if err != nil {
-				fmt.Fprintln(stderr, "netdoc: -save:", textsafe.Clean(err.Error()))
+				fmt.Fprintln(stderr, "netdoc:", artifactFlag+":", textsafe.Clean(err.Error()))
 				return 2
 			}
 			if !info.IsDir() {
-				fmt.Fprintf(stderr, "netdoc: -save: %s is not a directory\n", textsafe.Clean(dir))
+				fmt.Fprintf(stderr, "netdoc: %s: %s is not a directory\n", artifactFlag, textsafe.Clean(dir))
 				return 2
 			}
 		}
@@ -390,11 +399,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// -save runs headless for the same reason -json does: a snapshot is a
 	// finished run, and the TUI's run is not finished until the user leaves it.
-	if *jsonOut || *save != "" {
+	if *jsonOut || artifact != "" {
 		return runHeadless(context.Background(), headless{
 			target: t, sources: sources, selection: selection,
 			check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
-			watch: *watch, json: *jsonOut, save: *save,
+			watch: *watch, json: *jsonOut, save: artifact, support: *support != "",
 		}, stdout, stderr)
 	}
 
@@ -464,7 +473,7 @@ Peer mode is headless. The listener prints a temporary direct-connect pairing
 string; the connector reads it from a hidden prompt so it does not enter argv.
 
 Compare mode is headless and runs no probes: it reads two snapshots written by
---save and reports what changed between them. It exits 0 when they describe the
+--save or --support and reports what changed between them. It exits 0 when they describe the
 same state and 1 when they do not.
 
 Target forms:
@@ -602,7 +611,7 @@ func setFlagNames(fs *flag.FlagSet) map[string]bool {
 // settings that produced them are already recorded in the files, and letting
 // one be named again here would suggest it applied to something.
 var compareIncompatibleFlags = []string{
-	"toolbox", "watch", "save", "peer-listen", "peer-connect",
+	"toolbox", "watch", "save", "support", "peer-listen", "peer-connect",
 	"check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
 }
 
@@ -685,7 +694,8 @@ type headless struct {
 	// want the artifact, the report, or both.
 	json bool
 	// save is the .ndoc destination, empty when no snapshot was asked for.
-	save string
+	save    string
+	support bool
 }
 
 // runHeadless runs the probe DAG headless, prints the JSON report when one was
@@ -739,8 +749,15 @@ func runHeadless(ctx context.Context, h headless, stdout, stderr io.Writer) int 
 		// either way, and only the exit code says the artifact is missing.
 		if h.save != "" {
 			if err := writeSnapshot(h, probes, results); err != nil {
-				fmt.Fprintln(stderr, "netdoc: -save:", textsafe.Clean(err.Error()))
+				flagName := "-save"
+				if h.support {
+					flagName = "-support"
+				}
+				fmt.Fprintln(stderr, "netdoc:", flagName+":", textsafe.Clean(err.Error()))
 				return 2
+			}
+			if h.support {
+				fmt.Fprintf(stderr, "Sanitized support snapshot written to %q\n", textsafe.Clean(h.save))
 			}
 		}
 		if !h.watch {
@@ -785,6 +802,9 @@ func writeSnapshot(h headless, probes []diagnostic.Probe, results map[diagnostic
 			source.IPv6 = h.sources.IPv6.String()
 		}
 		s.Options.Source = &source
+	}
+	if h.support {
+		s = snapshot.SanitizeForSupport(s)
 	}
 	return snapshotWriteFile(h.save, s)
 }

@@ -24,7 +24,8 @@ _arguments \
   '(--toolbox -toolbox --json -json)'{--toolbox,-toolbox}'[start in toolbox mode]' \
   '(--json -json --toolbox -toolbox)'{--json,-json}'[run the checks headless and print a JSON report]' \
   '(--watch -watch)'{--watch,-watch}'[continuously re-run checks]' \
-  '(--save -save)'{--save,-save}'[write a diagnostic snapshot (.ndoc) to a file]:file:_files' \
+  '(--save -save --support -support)'{--save,-save}'[write a diagnostic snapshot (.ndoc) to a file]:file:_files' \
+  '(--support -support --save -save)'{--support,-support}'[write a sanitized support snapshot (.ndoc) to a file]:file:_files' \
   '(--compare -compare)'{--compare,-compare}'[compare two saved snapshots (.ndoc); runs no probes]' \
   '*'{--peer-listen,-peer-listen}'[listen for an authenticated peer on an exact IP\:port]:address:' \
   '(--peer-connect -peer-connect)'{--peer-connect,-peer-connect}'[read a temporary pairing string and run a two-ended diagnosis]' \

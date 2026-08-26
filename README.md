@@ -223,6 +223,7 @@ netdoc https://host:80  # explicit scheme selects the protocol (→ TLS + HTTPS 
 netdoc ssh://host:2222  # explicit scheme keeps SSH on a nonstandard port
 netdoc --json host      # headless: one JSON report on stdout (scripts, CI, bug reports)
 netdoc --save incident.ndoc host  # headless: save the finished run as a snapshot file
+netdoc --support support.ndoc host  # headless: save a sanitized snapshot for sharing
 netdoc --compare good.ndoc bad.ndoc  # headless: report what changed between two snapshots
 netdoc --watch host     # TUI: re-run continuously and track intermittent failures
 netdoc --json --watch host  # headless: one JSON report per line, until interrupted
@@ -343,7 +344,23 @@ the last pre-failure run, the latest distinct failing state, and the recovery
 run when one was observed. Older v1 files have no incident field and continue
 to load as ordinary snapshots.
 
-A snapshot is network information about the machine that produced it: addresses, the source interface, the connected Wi-Fi network name. It carries no credentials, and nothing is uploaded anywhere. There is no redaction pass yet, so read one before sharing it. Full format, versioning rules, and the field-by-field privacy note are in **[docs/reference.md](docs/reference.md#diagnostic-snapshots)**.
+A normal snapshot is full-fidelity network information about the machine that
+produced it. Use `--support` when the file is meant to be shared:
+
+```sh
+netdoc --support support.ndoc github.com
+less support.ndoc
+```
+
+Support creation is entirely local. It pseudonymizes hostnames, SSIDs,
+interfaces, the machine's own name and account, local and destination
+addresses, route prefixes, paths, URLs, and credential-bearing text while
+keeping repeated values related. Public DNS
+resolver addresses, timestamps, ports, platform data, statuses, timings, and
+network structure remain because they are useful to diagnosis. The file carries
+explicit `support-v1` redaction metadata. Inspect it before sharing if the
+environment is particularly sensitive. Full policy and format details are in
+**[docs/reference.md](docs/reference.md#support-snapshots)**.
 
 ### Comparing two snapshots
 
@@ -461,7 +478,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`) and semantic snapshot comparison (`--compare`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), and semantic snapshot comparison (`--compare`), report copy/save.
 
 ## Built with
 

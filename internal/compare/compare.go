@@ -104,6 +104,12 @@ type Side struct {
 	Verdict string `json:"verdict"`
 	Summary string `json:"summary"`
 	OK      bool   `json:"ok"`
+	// Sanitized is true when this side was prepared for sharing with --support.
+	// It is read from the artifact's own redaction metadata and never inferred
+	// from values that happen to look like placeholders. A comparison of two
+	// sanitized files is still meaningful, but the names and addresses in it
+	// are pseudonyms, and a reader has to be told which it is looking at.
+	Sanitized bool `json:"sanitized,omitempty"`
 }
 
 // CheckRow is one probe's outcome on both sides. Before and After are the
@@ -169,6 +175,7 @@ func sideOf(s snapshot.Snapshot) Side {
 	return Side{
 		CreatedAt: s.CreatedAt, Tool: s.Tool, Target: targetDisplay(s.Target),
 		Verdict: s.Diagnosis.Verdict, Summary: s.Diagnosis.Summary, OK: s.OK,
+		Sanitized: s.Redaction != nil && s.Redaction.Sanitized,
 	}
 }
 

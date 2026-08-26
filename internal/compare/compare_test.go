@@ -90,6 +90,28 @@ func TestIdenticalSnapshotsHaveNoDifferences(t *testing.T) {
 	}
 }
 
+func TestSanitizedSupportSnapshotComparesNormally(t *testing.T) {
+	s := fixture(t)
+	s.Options.Source = &snapshot.Source{Interface: "private-wg", IPv4: "10.20.30.40"}
+	if len(s.Checks) > 0 {
+		s.Checks[0].Detail = "host=private-machine path=/home/private-user/config"
+	}
+	s = snapshot.SanitizeForSupport(s)
+	data, err := snapshot.Encode(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Snapshots(decoded, decoded)
+	mustNotChange(t, c, "a sanitized support snapshot compared with itself")
+	if decoded.Redaction == nil || !decoded.Redaction.Sanitized {
+		t.Fatalf("decoded support snapshot has no redaction metadata: %+v", decoded.Redaction)
+	}
+}
+
 // The headline case: one probe's outcome moves and nothing else does.
 func TestOneProbeStatusChange(t *testing.T) {
 	before, after := fixture(t), fixture(t)
@@ -978,4 +1000,22 @@ func TestCompareIsQuietWhenRoutesDidNotMove(t *testing.T) {
 	withRoutes(t, &s, "iface", onEth0("1.1.1.1", "0.0.0.0/0"))
 	withRoutes(t, &s, "dns", onEth0("192.168.1.1", "192.168.1.0/24"))
 	mustNotChange(t, Snapshots(s, s), "a run compared against itself with route decisions on every row")
+}
+
+// A support artifact says so in structured metadata, and the report a reader
+// opens has to say so too: every hostname and address below it is a stand-in.
+func TestSanitizedSideIsNamedInTheReport(t *testing.T) {
+	plain := fixture(t)
+	if got := Snapshots(plain, plain).Text(); strings.Contains(got, "Fidelity") {
+		t.Errorf("two ordinary snapshots reported fidelity, which is noise:\n%s", got)
+	}
+	sanitized := snapshot.SanitizeForSupport(fixture(t))
+	c := Snapshots(plain, sanitized)
+	if !c.After.Sanitized || c.Before.Sanitized {
+		t.Errorf("sanitized = before %v, after %v; want only after", c.Before.Sanitized, c.After.Sanitized)
+	}
+	text := c.Text()
+	if !strings.Contains(text, "Fidelity") || !strings.Contains(text, "sanitized") || !strings.Contains(text, "full") {
+		t.Errorf("comparison did not name which side is sanitized:\n%s", text)
+	}
 }

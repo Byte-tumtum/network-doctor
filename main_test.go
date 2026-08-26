@@ -1436,6 +1436,44 @@ func TestRunSaveWritesSnapshot(t *testing.T) {
 	if len(s.Checks) == 0 || !s.OK {
 		t.Errorf("snapshot = %d checks, ok=%v", len(s.Checks), s.OK)
 	}
+	if s.Redaction != nil {
+		t.Errorf("ordinary -save snapshot has redaction metadata: %+v", s.Redaction)
+	}
+}
+
+func TestRunSupportWritesSanitizedSnapshot(t *testing.T) {
+	stubPassingRun(t)
+	fixedNow(t, "2026-03-04T05:06:07Z")
+	path := filepath.Join(t.TempDir(), "support.ndoc")
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--support", path, "unique-support-target.example"}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Sanitized support snapshot written") {
+		t.Errorf("stderr = %q, want sanitized confirmation", stderr.String())
+	}
+	// #nosec G304 -- path is this test's temporary support snapshot.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "unique-support-target.example") {
+		t.Fatalf("support snapshot leaked the target hostname:\n%s", data)
+	}
+	s, err := snapshot.Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if s.Redaction == nil || !s.Redaction.Sanitized || s.Redaction.Policy != snapshot.SupportRedactionPolicy {
+		t.Errorf("redaction = %+v", s.Redaction)
+	}
+	if s.Target == nil || s.Target.Host == "" || s.Target.Host == "unique-support-target.example" {
+		t.Errorf("target = %+v, want a pseudonymized target", s.Target)
+	}
 }
 
 // The probe selection is what makes two snapshots comparable or not, so it is
@@ -1500,6 +1538,16 @@ func TestRunSaveLeavesJSONReportUnchanged(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("no snapshot written alongside the report: %v", err)
+	}
+
+	supportPath := filepath.Join(t.TempDir(), "support.ndoc")
+	var withSupport bytes.Buffer
+	stderr.Reset()
+	if got := run([]string{"--json", "--support", supportPath, "example.com"}, &withSupport, &stderr); got != 0 {
+		t.Fatalf("support exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if withSupport.String() != plain.String() {
+		t.Errorf("-support changed the JSON report:\n%s\nwant:\n%s", withSupport.String(), plain.String())
 	}
 }
 
@@ -1599,6 +1647,10 @@ func TestRunSaveRejectsIncompatibleFlags(t *testing.T) {
 		{"watch", []string{"--save", path, "--watch", "example.com"}, "-save and -watch"},
 		{"toolbox", []string{"--save", path, "--toolbox"}, "-save and -toolbox"},
 		{"peer mode", []string{"--save", path, "--peer-connect"}, "-save cannot be combined with peer mode"},
+		{"support and save", []string{"--save", path, "--support", path, "example.com"}, "-save and -support"},
+		{"support watch", []string{"--support", path, "--watch", "example.com"}, "-support and -watch"},
+		{"support toolbox", []string{"--support", path, "--toolbox"}, "-support and -toolbox"},
+		{"support peer mode", []string{"--support", path, "--peer-connect"}, "-support cannot be combined with peer mode"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -127,11 +127,25 @@ type Snapshot struct {
 	// OK means no check failed, the same rule as the JSON report and the exit
 	// code. Warn, Skip, and N/A do not count against it.
 	OK bool `json:"ok"`
+	// Redaction is present only when this artifact was intentionally prepared
+	// for sharing. Its absence means the snapshot is full fidelity.
+	Redaction *Redaction `json:"redaction,omitempty"`
 	// Incident is present when this run is the first failing pass of a watch
 	// incident, and it carries the runs around that failure. Absent on every
 	// ordinary snapshot, which is what a one-shot --save writes.
 	Incident *Incident `json:"incident,omitempty"`
 }
+
+// Redaction identifies the privacy policy applied before serialization.
+// Sanitized is explicit so readers never infer privacy from placeholder-like
+// values, and Policy lets a reader name the exact guarantees in effect.
+type Redaction struct {
+	Sanitized bool   `json:"sanitized"`
+	Policy    string `json:"policy"`
+}
+
+// SupportRedactionPolicy is the redaction contract used by support artifacts.
+const SupportRedactionPolicy = "support-v1"
 
 // Incident is one failure a watch session observed, recorded around the run
 // that carries it: the snapshot this hangs off is the incident's onset, the
@@ -502,6 +516,9 @@ func stamped(s Snapshot) Snapshot {
 // as one where a row simply had nothing to say. A reader that accepted what the
 // writer refuses is a reader whose invariants are only true by luck.
 func validate(s Snapshot) error {
+	if s.Redaction != nil && (!s.Redaction.Sanitized || s.Redaction.Policy != SupportRedactionPolicy) {
+		return fmt.Errorf("snapshot has invalid redaction metadata")
+	}
 	checks := make(map[string]Check, len(s.Checks))
 	for _, c := range s.Checks {
 		switch {
@@ -612,6 +629,10 @@ func validateIncident(s Snapshot) error {
 		}
 		if state.record.Schema != Schema {
 			return fmt.Errorf("snapshot incident %s state has schema %q, want %q", state.name, state.record.Schema, Schema)
+		}
+		if (s.Redaction == nil) != (state.record.Redaction == nil) ||
+			s.Redaction != nil && *s.Redaction != *state.record.Redaction {
+			return fmt.Errorf("snapshot incident %s state has different redaction metadata from its onset", state.name)
 		}
 		if state.record.OK == state.failing {
 			return fmt.Errorf("snapshot incident %s state reports ok=%v, which is not what that point in an incident is", state.name, state.record.OK)

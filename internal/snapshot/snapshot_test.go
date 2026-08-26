@@ -426,6 +426,9 @@ func TestIncidentValidationRejectsImpossibleHistory(t *testing.T) {
 		{"recovery mismatch", func(s *Snapshot) { s.Incident.Recovered.CreatedAt = "2026-08-25T12:04:07Z" }, "does not match"},
 		{"nested schema", func(s *Snapshot) { s.Incident.Before.Schema = "netdoc.snapshot.v2" }, "has schema"},
 		{"nested incident", func(s *Snapshot) { s.Incident.Before.Incident = &Incident{} }, "incident of its own"},
+		{"mixed redaction", func(s *Snapshot) {
+			s.Redaction = &Redaction{Sanitized: true, Policy: SupportRedactionPolicy}
+		}, "different redaction metadata"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
