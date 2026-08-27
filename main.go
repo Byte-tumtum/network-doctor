@@ -15,7 +15,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/heymaikol/network-doctor/internal/compare"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/peer"
+	"github.com/heymaikol/network-doctor/internal/profile"
 	"github.com/heymaikol/network-doctor/internal/remote"
 	"github.com/heymaikol/network-doctor/internal/report"
 	"github.com/heymaikol/network-doctor/internal/snapshot"
@@ -221,6 +224,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRemoteWorker(context.Background(), stdout, stderr)
 	}
 	fs := flag.NewFlagSet("netdoc", flag.ContinueOnError)
+	profiles := profile.Builtins()
 	// Buffered, not stderr: the flag package quotes nothing, so an undefined
 	// flag name made of escape bytes would land on the terminal verbatim.
 	var flagErr bytes.Buffer
@@ -235,6 +239,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	compareMode := fs.Bool("compare", false, "compare two saved snapshots given as arguments; runs no probes")
 	twoSided := fs.Bool("two-sided", false, "read two saved snapshots of one target as two machines and place the failure; runs no probes")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
+	profileName := fs.String("profile", "", "run a service `profile` ("+strings.Join(profiles.Names(), ", ")+"; use list to describe them)")
 	var peerListen peerListenList
 	fs.Var(&peerListen, "peer-listen", "listen for one authenticated peer on exact `IP:port`; repeat for the other address family")
 	peerConnect := fs.Bool("peer-connect", false, "read a temporary pairing string securely and run a two-ended diagnosis")
@@ -287,6 +292,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "netdoc", version)
 		return 0
 	}
+	if setFlagNames(fs)["profile"] && *profileName == "" {
+		fmt.Fprintln(stderr, "netdoc: -profile needs a name; use -profile list to see available profiles")
+		return 2
+	}
+	if *profileName == "list" {
+		setFlags := setFlagNames(fs)
+		delete(setFlags, "profile")
+		if len(positional) != 0 || len(setFlags) != 0 {
+			fmt.Fprintln(stderr, "netdoc: -profile list cannot be combined with a target or other flags")
+			return 2
+		}
+		printProfiles(stdout, profiles)
+		return 0
+	}
+	var profilePlan *profile.Plan
 	// Before every other mode, and before a single probe flag is validated:
 	// both readings of two saved snapshots read files and touch the network at
 	// no point, so the settings that decide what probes do have nothing to say
@@ -305,6 +325,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *twoSided {
 		return runTwoSided(positional, setFlagNames(fs), *jsonOut, stdout, stderr)
 	}
+	if *profileName != "" {
+		definition, ok := profiles.Lookup(*profileName)
+		if !ok {
+			fmt.Fprintf(stderr, "netdoc: -profile: unknown profile %q; available profiles: %s\n", textsafe.Clean(*profileName), strings.Join(profiles.Names(), ","))
+			return 2
+		}
+		rawTarget := ""
+		if len(positional) == 1 {
+			rawTarget = positional[0]
+		}
+		plan, err := definition.Plan(rawTarget)
+		if err != nil {
+			fmt.Fprintln(stderr, "netdoc: -profile:", textsafe.Clean(err.Error()))
+			return 2
+		}
+		profilePlan = &plan
+	}
 	if *timeout <= 0 {
 		fmt.Fprintln(stderr, "netdoc: -timeout must be positive")
 		return 2
@@ -316,7 +353,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if peerMode {
 		setFlags := setFlagNames(fs)
-		for _, name := range []string{"toolbox", "watch", "check", "skip", "public-dns", "no-history", "keys", "save", "support", "via"} {
+		for _, name := range []string{"toolbox", "watch", "profile", "check", "skip", "public-dns", "no-history", "keys", "save", "support", "via"} {
 			if setFlags[name] {
 				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with peer mode\n", name)
 				return 2
@@ -338,6 +375,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *jsonOut && *toolbox {
 		fmt.Fprintln(stderr, "netdoc: -json and -toolbox cannot be combined")
 		return 2
+	}
+	if profilePlan != nil {
+		setFlags := setFlagNames(fs)
+		for _, name := range []string{"toolbox", "keys"} {
+			if setFlags[name] {
+				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with -profile; profiles are headless\n", name)
+				return 2
+			}
+		}
+		if *watch && !*jsonOut {
+			fmt.Fprintln(stderr, "netdoc: -watch with -profile requires -json")
+			return 2
+		}
 	}
 	// --via is headless, and both of these are the interactive session it does
 	// not have. -watch is the sharper one: a watch is a session that keeps
@@ -423,7 +473,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var t *diagnostic.Target
-	if len(positional) == 1 {
+	if profilePlan == nil && len(positional) == 1 {
 		parsed, err := diagnostic.ParseTarget(positional[0])
 		if err != nil {
 			fmt.Fprintln(stderr, "netdoc:", err)
@@ -447,6 +497,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		target: t, sources: sources, iface: *iface, selection: selection,
 		check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
 		watch: *watch, json: *jsonOut, save: artifact, support: *support != "",
+	}
+	if profilePlan != nil {
+		h.via, h.viaCommand = *viaDest, os.Getenv(remote.CommandEnv)
+		return runProfile(context.Background(), h, *profilePlan, stdout, stderr)
 	}
 	// --via is headless for the same reason -json is: the run is over by the
 	// time this process has anything to show. There is no live scheduling to
@@ -516,6 +570,8 @@ func historyFile(disabled bool) string {
 // ParseTarget accepts, and the flags.
 func printUsage(w io.Writer, fs *flag.FlagSet) {
 	fmt.Fprint(w, `Usage: netdoc [flags] [target]
+       netdoc --profile github
+       netdoc --profile ssh target
        netdoc --via ssh-destination [flags] [target]
        netdoc --peer-listen IP:port [--peer-listen IP:port]
        netdoc --peer-connect [--json]
@@ -525,6 +581,9 @@ func printUsage(w io.Writer, fs *flag.FlagSet) {
 Diagnoses network connectivity layer by layer. With no target it runs the
 generic checks; with a target it also probes that endpoint. Flags may be
 given before or after the target.
+
+--profile runs a built-in service plan headlessly. Use --profile list to see
+which profiles need a target and which fixed endpoints they test.
 
 --via runs the checks on an SSH destination and presents the finished
 diagnosis here. The destination goes to the system ssh client as typed, so
@@ -548,6 +607,17 @@ Target forms:
 `+diagnostic.TargetForms+"\n\nFlags:\n")
 	fs.SetOutput(w)
 	fs.PrintDefaults()
+}
+
+func printProfiles(w io.Writer, registry profile.Registry) {
+	fmt.Fprintln(w, "Available service profiles:")
+	for _, definition := range registry.List() {
+		target := "no target"
+		if definition.Target == profile.TargetRequired {
+			target = "target required"
+		}
+		fmt.Fprintf(w, "  %s (%s): %s\n", definition.Name, target, definition.Description)
+	}
 }
 
 var readPeerPairing = readPeerPairingFromStdin
@@ -681,7 +751,7 @@ func setFlagNames(fs *flag.FlagSet) map[string]bool {
 // something.
 var artifactReadingFlags = []string{
 	"toolbox", "watch", "save", "support", "peer-listen", "peer-connect", "via",
-	"check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
+	"profile", "check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
 }
 
 // rejectRunFlags refuses the settings that cannot apply to a reading of two
@@ -909,6 +979,225 @@ func runHeadless(ctx context.Context, h headless, stdout, stderr io.Writer) int 
 		case <-time.After(ui.WatchEvery):
 		}
 	}
+}
+
+type profileComponentOutput struct {
+	report   report.Report
+	snapshot snapshot.Snapshot
+	tool     snapshot.Tool
+	err      error
+}
+
+// runProfile executes each finite component plan through the ordinary
+// headless machinery. Local components run concurrently, but remote components
+// stay sequential so SSH prompts cannot collide. Output remains in registry
+// order either way.
+func runProfile(parent context.Context, base headless, plan profile.Plan, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	enc := json.NewEncoder(stdout)
+	if !base.watch {
+		enc.SetIndent("", "  ")
+	}
+	code := 1
+	for {
+		result, snapshots, tools, err := runProfilePass(ctx, base, plan)
+		if err != nil {
+			if ctx.Err() != nil {
+				return code
+			}
+			fmt.Fprintln(stderr, "netdoc: -profile:", textsafe.Clean(err.Error()))
+			return 2
+		}
+		code = 0
+		if !result.OK {
+			code = 1
+		}
+		if base.watch {
+			result.Ts = time.Now().UTC().Format(time.RFC3339)
+		}
+		if base.via != "" && len(tools) > 0 {
+			fmt.Fprintf(stderr, "Diagnosed %d profile components on %s by netdoc %s (%s/%s)\n", len(tools),
+				textsafe.Clean(base.via), textsafe.Clean(tools[0].Version), textsafe.Clean(tools[0].OS), textsafe.Clean(tools[0].Arch))
+		}
+		switch {
+		case base.json:
+			if err := enc.Encode(result); err != nil {
+				fmt.Fprintln(stderr, "netdoc:", err)
+				return 1
+			}
+		case base.save == "":
+			fmt.Fprint(stdout, profileText(result))
+		}
+		if base.save != "" {
+			artifact := buildProfileArtifact(result, snapshots)
+			if base.support {
+				artifact = snapshot.SanitizeProfileForSupport(artifact)
+			}
+			if err := profileSnapshotWriteFile(base.save, artifact); err != nil {
+				flagName := "-save"
+				if base.support {
+					flagName = "-support"
+				}
+				fmt.Fprintln(stderr, "netdoc:", flagName+":", textsafe.Clean(err.Error()))
+				return 2
+			}
+			if base.support {
+				fmt.Fprintf(stderr, "Sanitized support profile snapshot written to %q\n", textsafe.Clean(base.save))
+			}
+		}
+		if !base.watch {
+			return code
+		}
+		select {
+		case <-ctx.Done():
+			return code
+		case <-time.After(ui.WatchEvery):
+		}
+	}
+}
+
+func runProfilePass(ctx context.Context, base headless, plan profile.Plan) (profile.Result, []snapshot.Snapshot, []snapshot.Tool, error) {
+	outputs := make([]profileComponentOutput, len(plan.Runs))
+	run := func(i int, spec profile.Run) {
+		h := base
+		h.target = spec.Target
+		h.selection, h.check = profileSelection(spec, base.check, base.skip)
+		outputs[i] = diagnoseProfileComponent(ctx, h)
+	}
+	if base.via != "" {
+		for i, spec := range plan.Runs {
+			run(i, spec)
+			if outputs[i].err != nil {
+				break
+			}
+		}
+	} else {
+		var wg sync.WaitGroup
+		for i, spec := range plan.Runs {
+			wg.Go(func() { run(i, spec) })
+		}
+		wg.Wait()
+	}
+	if ctx.Err() != nil {
+		return profile.Result{}, nil, nil, ctx.Err()
+	}
+	reports := make([]report.Report, len(outputs))
+	snapshots := make([]snapshot.Snapshot, len(outputs))
+	tools := make([]snapshot.Tool, len(outputs))
+	for i, output := range outputs {
+		if output.err != nil {
+			return profile.Result{}, nil, nil, fmt.Errorf("%s: %w", plan.Runs[i].Label, output.err)
+		}
+		reports[i], snapshots[i], tools[i] = output.report, output.snapshot, output.tool
+	}
+	result, err := profile.BuildResult(plan, reports)
+	return result, snapshots, tools, err
+}
+
+func profileSelection(spec profile.Run, extra, skip probeList) (diagnostic.ProbeSelection, probeList) {
+	selection, check := profile.ComposeSelection(spec, extra, skip)
+	return selection, probeList(check)
+}
+
+func diagnoseProfileComponent(ctx context.Context, h headless) profileComponentOutput {
+	if h.via != "" {
+		req := remote.Request{
+			Target: h.target.Raw, Iface: h.iface, PublicDNS: h.publicDNS,
+			TimeoutMs: h.timeout.Milliseconds(), Check: h.check.strings(), Skip: h.skip.strings(),
+		}
+		resp, err := remoteRun(ctx, h.via, h.viaCommand, req)
+		if err != nil {
+			return profileComponentOutput{err: err}
+		}
+		return profileComponentOutput{report: *resp.Report, snapshot: *resp.Snapshot, tool: resp.Tool}
+	}
+	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
+	results := runAll(ctx, probes, h.timeout)
+	if ctx.Err() != nil {
+		return profileComponentOutput{err: ctx.Err()}
+	}
+	s := buildSnapshotArtifact(h, probes, results)
+	return profileComponentOutput{report: buildReport(h.target, probes, results), snapshot: s, tool: s.Tool}
+}
+
+func buildProfileArtifact(result profile.Result, snapshots []snapshot.Snapshot) snapshot.ProfileSnapshot {
+	artifact := snapshot.ProfileSnapshot{
+		Schema: snapshot.ProfileSchema, CreatedAt: timeNow().UTC().Format(time.RFC3339),
+		Tool:       snapshot.Tool{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH},
+		Profile:    snapshot.ProfileIdentity{Name: result.Profile, Version: result.ProfileVersion, Title: result.Title},
+		Components: make([]snapshot.ProfileComponent, len(result.Components)),
+		Aggregate:  snapshot.ProfileAggregate{Status: result.Aggregate.Status, Summary: result.Aggregate.Summary},
+		OK:         result.OK,
+	}
+	for i, component := range result.Components {
+		artifact.Components[i] = snapshot.ProfileComponent{
+			ID: component.ID, Label: component.Label, Focus: component.Focus, Status: component.Status,
+			Fallback: component.Fallback, Snapshot: snapshots[i],
+		}
+	}
+	if result.Aggregate.Finding != nil {
+		artifact.Aggregate.Finding = &snapshot.ProfileFinding{
+			ID:                 result.Aggregate.Finding.ID,
+			AffectedComponents: append([]string(nil), result.Aggregate.Finding.AffectedComponents...),
+			WorkingComponents:  append([]string(nil), result.Aggregate.Finding.WorkingComponents...),
+		}
+	}
+	return artifact
+}
+
+var profileSnapshotWriteFile = snapshot.WriteProfileFile
+
+func profileText(result profile.Result) string {
+	clean := textsafe.Clean
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s profile\n\n", clean(result.Title))
+	for _, component := range result.Components {
+		endpoint := "unknown target"
+		if component.Target != nil {
+			endpoint = net.JoinHostPort(clean(component.Target.Host), strconv.Itoa(component.Target.Port))
+		}
+		fmt.Fprintf(&b, "[%s] %s  %s\n", clean(component.Status), clean(component.Label), endpoint)
+	}
+	fmt.Fprintf(&b, "\nverdict: %s: %s\n", clean(result.Aggregate.Status), clean(result.Aggregate.Summary))
+	for _, component := range result.Components {
+		if component.Status == profile.StatusPass {
+			continue
+		}
+		fmt.Fprintf(&b, "\n%s evidence:\n", clean(component.Label))
+		if component.Report.Summary != "" {
+			fmt.Fprintf(&b, "  summary: %s\n", clean(component.Report.Summary))
+		}
+		if len(component.Report.Findings) > 0 {
+			fmt.Fprintf(&b, "  finding: %s\n", clean(component.Report.Findings[0].ID))
+		}
+		for _, check := range profileEvidenceChecks(component) {
+			fmt.Fprintf(&b, "  [%s] %s: %s\n", clean(check.Status), clean(check.Name), clean(check.Detail))
+		}
+	}
+	return b.String()
+}
+
+func profileEvidenceChecks(component profile.Component) []report.Check {
+	ids := []string{component.Focus}
+	if len(component.Report.Findings) > 0 && len(component.Report.Findings[0].Evidence) > 0 {
+		ids = component.Report.Findings[0].Evidence
+	}
+	var checks []report.Check
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		for _, check := range component.Report.Checks {
+			if check.ID == id {
+				checks = append(checks, check)
+				break
+			}
+		}
+	}
+	return checks
 }
 
 // remoteRun is stubbed in tests, which have no SSH server to talk to.

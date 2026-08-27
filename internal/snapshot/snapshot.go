@@ -34,6 +34,12 @@ import (
 // means, or changing a unit is that, and takes netdoc.snapshot.v2.
 const Schema = "netdoc.snapshot.v1"
 
+// ProfileSchema identifies an .ndoc artifact that contains several ordinary
+// snapshots plus their service-profile interpretation. It is separate from
+// Schema so a single-run reader never mistakes a multi-run artifact for one
+// diagnosis.
+const ProfileSchema = "netdoc.profile.v1"
+
 // Extension is the conventional file suffix. Nothing here enforces it: the
 // schema string in the file is the identity, not the name it was saved under.
 const Extension = ".ndoc"
@@ -134,6 +140,47 @@ type Snapshot struct {
 	// incident, and it carries the runs around that failure. Absent on every
 	// ordinary snapshot, which is what a one-shot --save writes.
 	Incident *Incident `json:"incident,omitempty"`
+}
+
+// ProfileSnapshot is one finished service-profile run. Each component is a
+// complete ordinary snapshot, so existing diagnostic evidence keeps its
+// original schema and meaning.
+type ProfileSnapshot struct {
+	Schema     string             `json:"schema"`
+	CreatedAt  string             `json:"created_at"`
+	Tool       Tool               `json:"tool"`
+	Profile    ProfileIdentity    `json:"profile"`
+	Components []ProfileComponent `json:"components"`
+	Aggregate  ProfileAggregate   `json:"aggregate"`
+	OK         bool               `json:"ok"`
+	Redaction  *Redaction         `json:"redaction,omitempty"`
+}
+
+type ProfileIdentity struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Title   string `json:"title"`
+}
+
+type ProfileComponent struct {
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Focus    string   `json:"focus"`
+	Status   string   `json:"status"`
+	Fallback string   `json:"fallback_for,omitempty"`
+	Snapshot Snapshot `json:"snapshot"`
+}
+
+type ProfileAggregate struct {
+	Status  string          `json:"status"`
+	Summary string          `json:"summary"`
+	Finding *ProfileFinding `json:"finding,omitempty"`
+}
+
+type ProfileFinding struct {
+	ID                 string   `json:"id"`
+	AffectedComponents []string `json:"affected_components,omitempty"`
+	WorkingComponents  []string `json:"working_components,omitempty"`
 }
 
 // Redaction identifies the privacy policy applied before serialization.
@@ -484,6 +531,105 @@ func Encode(s Snapshot) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// EncodeProfile renders a multi-run profile artifact without changing the
+// single-run snapshot contract.
+func EncodeProfile(profile ProfileSnapshot) ([]byte, error) {
+	profile.Schema = ProfileSchema
+	for i := range profile.Components {
+		profile.Components[i].Snapshot = stamped(profile.Components[i].Snapshot)
+	}
+	if err := validateProfile(profile); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(profile); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func validProfileName(name string) bool {
+	if name == "" || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, r := range name[1:] {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validStatus(status string) bool {
+	switch status {
+	case StatusPass, StatusWarn, StatusFail, StatusSkip, StatusNA:
+		return true
+	}
+	return false
+}
+
+func validAggregateStatus(status string) bool {
+	return status == StatusPass || status == StatusWarn || status == StatusFail
+}
+
+func validateProfile(profile ProfileSnapshot) error {
+	if profile.Schema != ProfileSchema {
+		return fmt.Errorf("profile snapshot has schema %q, want %q", profile.Schema, ProfileSchema)
+	}
+	if !validProfileName(profile.Profile.Name) || profile.Profile.Version < 1 || profile.Profile.Title == "" {
+		return fmt.Errorf("profile snapshot has invalid profile identity")
+	}
+	if len(profile.Components) == 0 {
+		return fmt.Errorf("profile snapshot has no components")
+	}
+	if !validAggregateStatus(profile.Aggregate.Status) || profile.Aggregate.Summary == "" || profile.OK == (profile.Aggregate.Status == StatusFail) {
+		return fmt.Errorf("profile snapshot has invalid aggregate result")
+	}
+	if profile.Redaction != nil && (!profile.Redaction.Sanitized || profile.Redaction.Policy != SupportRedactionPolicy) {
+		return fmt.Errorf("profile snapshot has invalid redaction metadata")
+	}
+	ids := make(map[string]bool, len(profile.Components))
+	for _, component := range profile.Components {
+		if component.ID == "" || component.Label == "" || component.Focus == "" || !validStatus(component.Status) || ids[component.ID] {
+			return fmt.Errorf("profile snapshot has invalid component %q", component.ID)
+		}
+		ids[component.ID] = true
+		if component.Snapshot.Schema != Schema {
+			return fmt.Errorf("profile component %q has schema %q, want %q", component.ID, component.Snapshot.Schema, Schema)
+		}
+		if err := validate(component.Snapshot); err != nil {
+			return fmt.Errorf("profile component %q: %w", component.ID, err)
+		}
+		if (profile.Redaction == nil) != (component.Snapshot.Redaction == nil) ||
+			profile.Redaction != nil && *profile.Redaction != *component.Snapshot.Redaction {
+			return fmt.Errorf("profile component %q has different redaction metadata", component.ID)
+		}
+	}
+	for _, component := range profile.Components {
+		if component.Fallback != "" && (!ids[component.Fallback] || component.Fallback == component.ID) {
+			return fmt.Errorf("profile component %q has invalid fallback reference %q", component.ID, component.Fallback)
+		}
+	}
+	if profile.Aggregate.Finding != nil {
+		finding := profile.Aggregate.Finding
+		if finding.ID == "" {
+			return fmt.Errorf("profile snapshot aggregate finding has no ID")
+		}
+		for _, list := range [][]string{finding.AffectedComponents, finding.WorkingComponents} {
+			seen := map[string]bool{}
+			for _, id := range list {
+				if !ids[id] || seen[id] {
+					return fmt.Errorf("profile snapshot aggregate finding references invalid component %q", id)
+				}
+				seen[id] = true
+			}
+		}
+	}
+	return nil
 }
 
 // stamped puts this build's schema on the snapshot and on every run record
@@ -862,6 +1008,37 @@ func Decode(data []byte) (Snapshot, error) {
 	return s, nil
 }
 
+// DecodeProfile reads a multi-run profile .ndoc artifact. Decode remains the
+// single-run reader, so old callers cannot silently discard profile components.
+func DecodeProfile(data []byte) (ProfileSnapshot, error) {
+	var head struct {
+		Schema string `json:"schema"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return ProfileSnapshot{}, fmt.Errorf("not a Network Doctor profile snapshot: %w", err)
+	}
+	if head.Schema != ProfileSchema {
+		return ProfileSnapshot{}, UnsupportedProfileSchemaError{Found: head.Schema}
+	}
+	var profile ProfileSnapshot
+	if err := json.Unmarshal(data, &profile); err != nil {
+		return ProfileSnapshot{}, err
+	}
+	if err := validateProfile(profile); err != nil {
+		return ProfileSnapshot{}, err
+	}
+	return profile, nil
+}
+
+type UnsupportedProfileSchemaError struct{ Found string }
+
+func (e UnsupportedProfileSchemaError) Error() string {
+	if e.Found == "" {
+		return "not a Network Doctor profile snapshot (no schema field, want " + ProfileSchema + ")"
+	}
+	return fmt.Sprintf("unsupported profile snapshot schema %q, this build reads %s", e.Found, ProfileSchema)
+}
+
 // WriteFile saves a snapshot at path, replacing whatever was there.
 //
 // The bytes land in a temporary file in the same directory and are renamed
@@ -879,6 +1056,19 @@ func WriteFile(path string, s Snapshot) error {
 	if err != nil {
 		return err
 	}
+	return writeFile(path, data)
+}
+
+// WriteProfileFile atomically saves a multi-run profile snapshot.
+func WriteProfileFile(path string, profile ProfileSnapshot) error {
+	data, err := EncodeProfile(profile)
+	if err != nil {
+		return err
+	}
+	return writeFile(path, data)
+}
+
+func writeFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".netdoc-snapshot-*")
 	if err != nil {

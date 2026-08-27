@@ -132,6 +132,39 @@ func TestSupportSanitizesEveryUnclassifiedSchemaString(t *testing.T) {
 	}
 }
 
+func TestProfileSupportSanitizesEveryUnclassifiedSchemaString(t *testing.T) {
+	pinLocalIdentity(t)
+	var profile ProfileSnapshot
+	sentinels := map[string]string{}
+	fillSchema(t, reflect.ValueOf(&profile).Elem(), "", sentinels)
+	data, err := json.Marshal(SanitizeProfileForSupport(profile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePolicy := map[string]bool{
+		".Schema": true, ".CreatedAt": true, ".Tool.Version": true, ".Tool.OS": true, ".Tool.Arch": true,
+		".Profile.Name": true, ".Profile.Title": true, ".Components[0].ID": true, ".Components[0].Label": true,
+		".Components[0].Focus": true, ".Components[0].Status": true, ".Components[0].Fallback": true,
+		".Aggregate.Status": true, ".Aggregate.Summary": true, ".Aggregate.Finding.ID": true,
+		".Aggregate.Finding.AffectedComponents[0]": true, ".Aggregate.Finding.WorkingComponents[0]": true,
+		".Redaction.Policy": true,
+	}
+	for path, sentinel := range sentinels {
+		if !strings.Contains(string(data), sentinel) {
+			continue
+		}
+		if nested, ok := strings.CutPrefix(path, ".Components[0].Snapshot"); ok {
+			nested = incidentTrimmed(nested)
+			if retainedBySupportPolicy[nested] || proseBySupportPolicy[nested] {
+				continue
+			}
+		}
+		if !profilePolicy[path] {
+			t.Errorf("support profile snapshot kept %s verbatim without a policy classification", path)
+		}
+	}
+}
+
 // TestSupportPolicySetsNameOnlyRealFields keeps both sets honest in the other
 // direction: a renamed or deleted field must not leave a stale entry behind,
 // quietly exempting whatever takes that path next.

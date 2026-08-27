@@ -33,6 +33,13 @@ var (
 // output type field by field so a new snapshot field is omitted from support
 // artifacts until it is deliberately classified here.
 func SanitizeForSupport(s Snapshot) Snapshot {
+	r := newRedactor()
+	r.collectSnapshot(s)
+	r.finishCollection()
+	return r.snapshot(s)
+}
+
+func newRedactor() *redactor {
 	r := &redactor{
 		aliases:        map[string]map[string]string{},
 		ips:            map[string]string{},
@@ -45,9 +52,44 @@ func SanitizeForSupport(s Snapshot) Snapshot {
 		ipCounters:     map[string]uint32{},
 	}
 	r.seedLocalIdentity()
-	r.collectSnapshot(s)
+	return r
+}
+
+func (r *redactor) finishCollection() {
 	sort.SliceStable(r.prefixOrder, func(i, j int) bool { return r.prefixOrder[i].Bits() > r.prefixOrder[j].Bits() })
-	return r.snapshot(s)
+}
+
+// SanitizeProfileForSupport applies one redaction mapping across every
+// component, so the same endpoint keeps the same pseudonym throughout the
+// artifact.
+func SanitizeProfileForSupport(profile ProfileSnapshot) ProfileSnapshot {
+	r := newRedactor()
+	for _, component := range profile.Components {
+		r.collectSnapshot(component.Snapshot)
+	}
+	r.finishCollection()
+	out := ProfileSnapshot{
+		Schema: profile.Schema, CreatedAt: profile.CreatedAt,
+		Tool:       Tool{Version: r.text(profile.Tool.Version), OS: profile.Tool.OS, Arch: profile.Tool.Arch},
+		Profile:    ProfileIdentity{Name: profile.Profile.Name, Version: profile.Profile.Version, Title: r.text(profile.Profile.Title)},
+		Components: make([]ProfileComponent, len(profile.Components)),
+		Aggregate:  ProfileAggregate{Status: profile.Aggregate.Status, Summary: r.text(profile.Aggregate.Summary)},
+		OK:         profile.OK, Redaction: &Redaction{Sanitized: true, Policy: SupportRedactionPolicy},
+	}
+	for i, component := range profile.Components {
+		out.Components[i] = ProfileComponent{
+			ID: component.ID, Label: r.text(component.Label), Focus: component.Focus,
+			Status: component.Status, Fallback: component.Fallback, Snapshot: r.snapshot(component.Snapshot),
+		}
+	}
+	if profile.Aggregate.Finding != nil {
+		out.Aggregate.Finding = &ProfileFinding{
+			ID:                 profile.Aggregate.Finding.ID,
+			AffectedComponents: append([]string(nil), profile.Aggregate.Finding.AffectedComponents...),
+			WorkingComponents:  append([]string(nil), profile.Aggregate.Finding.WorkingComponents...),
+		}
+	}
+	return out
 }
 
 // localIdentity is this machine's own name and account name. It is a variable

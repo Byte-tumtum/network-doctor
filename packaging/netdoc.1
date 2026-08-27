@@ -1,10 +1,17 @@
-.TH NETDOC 1 "2026-08-25" "network-doctor" "User Commands"
+.TH NETDOC 1 "2026-08-26" "network-doctor" "User Commands"
 .SH NAME
 netdoc \- diagnose network connectivity and explain where the connection breaks
 .SH SYNOPSIS
 .B netdoc
 .RI [ flags ]
 .RI [ target ]
+.br
+.B netdoc
+.BI \-profile " github"
+.br
+.B netdoc
+.BI \-profile " ssh|smtp|web"
+.I target
 .br
 .B netdoc
 .BI \-peer\-listen " IP:port"
@@ -112,6 +119,72 @@ those lines carry an extra
 .B ts
 field (RFC 3339, UTC) and are otherwise the one-shot report unchanged.
 .TP
+.BI \-profile " name"
+Run a built-in service diagnostic plan headlessly. Use
+.B \-profile list
+to show the available profiles and whether they require a target. Profiles
+compose ordinary target runs and preserve each run's checks, findings, causal
+evidence, route decisions, and remediation.
+.IP
+The built-ins are
+.BR github ,
+which independently tests GitHub web, API, direct SSH on port 22, and alternate
+SSH on port 443;
+.BR ssh ,
+which tests the requested SSH port (22 by default) with DNS, route, TCP,
+path-MTU, and banner evidence;
+.BR smtp ,
+which tests SMTP relay on port 25 and message submission on port 587; and
+.BR web ,
+which tests HTTPS (443 by default) and plain HTTP on port 80 as independent
+paths. Explicit ports
+replace the primary port for
+.BR ssh ,
+.BR smtp ,
+and
+.BR web .
+.IP
+Profiles need no terminal. Their text and JSON identify every component and
+give one aggregate status and finding. With
+.BR \-json ,
+the schema is
+.BR netdoc.profile-report.v1 .
+With
+.BR \-save
+or
+.BR \-support ,
+the
+.B netdoc.profile.v1
+artifact contains a complete
+.B netdoc.snapshot.v1
+snapshot for every component. Existing single-run snapshots remain unchanged.
+.IP
+The profile's probes are the minimum selection. Explicit
+.B \-check
+values are added to every component, and
+.B \-skip
+then removes named probes and their dependents. A skipped component service
+check is reported as
+.BR SKIP ;
+the aggregate remains
+.B WARN
+when another component works and becomes
+.B FAIL
+when none does. The timeout, source interface, public resolver, and support
+redaction policy apply independently to every component.
+.IP
+Combined with
+.BR \-watch ,
+profiles require
+.B \-json
+and stream one aggregate object per pass. Profiles cannot be combined with
+.BR \-toolbox ,
+.BR \-keys ,
+peer mode,
+.BR \-compare ,
+or
+.BR \-two-sided .
+.TP
 .BI \-save " file"
 Run the checks headless and write a diagnostic snapshot of the finished run to
 .IR file ,
@@ -137,6 +210,16 @@ cannot be written exits
 A snapshot contains network information about the machine that ran it,
 including addresses, interface names, and the connected Wi\-Fi network name.
 It carries no credentials.
+.IP
+Under
+.BR \-profile ,
+the file instead uses the separate
+.B netdoc.profile.v1
+envelope described above. Profile artifacts are not accepted by
+.B \-compare
+or
+.BR \-two-sided ;
+those modes compare one target run at a time.
 .TP
 .BI \-support " file"
 Run the checks headless and write a sanitized support snapshot to
@@ -151,6 +234,9 @@ queries, credential-bearing text, and IP addresses other than public DNS
 resolvers are sanitized. Repeated values keep
 one pseudonym within the file so routes, DNS answers, and incident states can
 still be related. No data is uploaded.
+.IP
+For a profile artifact, one mapping is shared by every component, so the same
+host, interface, address, or route keeps the same pseudonym across the plan.
 .IP
 Cannot be combined with
 .BR \-save ,
@@ -292,6 +378,14 @@ operating system and architecture. An
 .B \-iface
 value names an interface on the SSH host, and is resolved there.
 .IP
+With
+.BR \-profile ,
+the local process sends one ordinary remote protocol request per profile
+component. The profile name is never added to the protocol or a remote shell
+command, so a remote netdoc that already speaks protocol version 1 can run the
+components even if it predates profiles. The returned ordinary reports and
+snapshots are aggregated locally without reinterpreting their findings.
+.IP
 Implies headless operation, so it needs no terminal. Cannot be combined with
 .BR \-toolbox ,
 .BR \-watch ,
@@ -307,12 +401,17 @@ and says which it was, so the two are never confused.
 .BI \-check " probe[,probe...]"
 Run only the named stable probe IDs and the prerequisite closure derived from
 the probe DAG. May be repeated; values are combined without changing canonical
-probe order.
+probe order. Under
+.BR \-profile ,
+these probes are added to each component's minimum selection.
 .TP
 .BI \-skip " probe[,probe...]"
 Omit the named stable probe IDs. Dependents whose prerequisite chain is then
 unavailable are omitted too. May be repeated and combined with
 .BR \-check .
+Under
+.BR \-profile ,
+skip takes precedence over both the profile minimum and explicit checks.
 Unknown or empty IDs are rejected before diagnostics start, and the error lists
 every valid stable ID. A known ID that does not apply to the current target is
 harmless: it selects no row with
@@ -482,6 +581,17 @@ Diagnose the path to a host, over HTTP, TLS, and HTTPS:
 .RS 4
 .EX
 netdoc github.com
+.EE
+.RE
+.PP
+Diagnose GitHub's independent service paths, or an SSH server with its route,
+path-MTU, and banner evidence:
+.PP
+.RS 4
+.EX
+netdoc \-\-profile github
+netdoc \-\-profile ssh server.example.com
+netdoc \-\-via ideapad \-\-profile github \-\-json
 .EE
 .RE
 .PP

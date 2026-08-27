@@ -28,6 +28,7 @@ func TestPackageLayering(t *testing.T) {
 		"internal/remote":     1,
 		"internal/incident":   2,
 		"internal/peer":       2,
+		"internal/profile":    2,
 		"internal/simulation": 2,
 		"internal/ui":         3,
 	}

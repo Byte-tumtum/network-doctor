@@ -106,6 +106,158 @@ The target parser has two independent axes: **port** (explicit `:port` > scheme 
 
 The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. `--no-history` turns that off for one run: the file is neither read nor written, so the targets you type stay in that session only. It leaves an existing file untouched, so exit `netdoc` and delete it to clear what is already saved.
 
+## Service profiles
+
+`--profile` turns a service troubleshooting question into a finite plan of
+ordinary Network Doctor runs:
+
+```sh
+netdoc --profile github
+netdoc --profile ssh server.example.com
+netdoc --profile smtp mail.example.com
+netdoc --profile web status.example.com
+netdoc --profile list
+```
+
+Profiles are typed orchestration, not protocol implementations. Every
+component goes through `ParseTarget`, `BuildProbesFromSources`,
+`ProbeSelection`, the normal dependency closure and timeout runner,
+`Interpret`, the causal-evidence and counterfactual passes, remediation, JSON
+report conversion, and snapshot conversion. Profile code opens no socket and
+duplicates no DNS, TCP, TLS, HTTP, SSH, SMTP, routing, VPN, or path-MTU logic.
+
+### Built-in plans
+
+The initial registry has four lowercase, version-1 profiles. Its order is
+stable and is also the component output order.
+
+| Profile | Target | Components |
+|---|---|---|
+| `github` | Forbidden; the endpoints are canonical | `web`: HTTPS at `github.com:443`; `api`: HTTPS at `api.github.com:443`; `ssh`: SSH banner at `github.com:22`; `ssh-alt`: SSH banner at `ssh.github.com:443` |
+| `ssh` | Required | One requested SSH endpoint, using port 22 when omitted, with its DNS, route, TCP, path-MTU, and banner evidence |
+| `smtp` | Required | SMTP banner at the requested port, or relay port 25 when omitted; an independent SMTP banner on submission port 587. When 587 is primary, port 25 is the comparison path |
+| `web` | Required | Certificate-validated HTTPS at the requested port, or 443 when omitted; an independent plain HTTP response on port 80 |
+
+GitHub's web and API components issue the existing bounded, redirect-free
+HTTP `HEAD` checks. The profile does not claim a Git repository operation or
+an authenticated API request. The SMTP profile does not claim STARTTLS or
+implicit-TLS SMTP support because those primitives do not exist in the
+ordinary engine. These limits keep the profile answers tied to evidence the
+current diagnostic layer can actually collect.
+
+Each component's minimum selection contains its service probe plus the
+existing direct-Internet, environment-proxy, public-DNS, and path-MTU context.
+The dependency closure supplies interface, target DNS, TCP, and TLS where
+needed. This context lets the component's existing findings distinguish a
+local egress problem, proxy-only network, resolver problem, route or VPN path,
+target port failure, path-MTU evidence, TLS failure, and application-layer
+failure without profile-specific networking code.
+
+### Aggregate result
+
+The component status comes from the service check and its ordinary report. A
+component is `PASS` when its service check and report are healthy, `WARN` when
+the path works with degraded evidence, `FAIL` when the component run fails,
+and `SKIP` when selection removed the service check or a prerequisite made it
+unavailable.
+
+The aggregate is `PASS` only when every component passes. It is `WARN` when at
+least one component still works and another is unavailable, skipped, or
+degraded. It is `FAIL` when no component completes its service check. A working
+declared fallback, currently GitHub's SSH-over-443 path, produces the stable
+`<profile>_fallback_available` finding; an unavailable fallback beside a
+working primary produces
+`<profile>_fallback_unavailable`; other partial and total failures use
+`<profile>_partial_reachability` and `<profile>_unreachable`. Findings carry
+stable affected and working component IDs. The detailed cause remains the
+ordinary report finding and causal evidence inside each component.
+
+Human output lists every component and endpoint, then the aggregate verdict.
+For affected components it shows the existing finding ID and the check rows
+that support it. It does not replace the evidence model with profile prose.
+
+The JSON shape keeps profile state as data and embeds each unchanged ordinary
+report:
+
+```json
+{
+  "schema": "netdoc.profile-report.v1",
+  "profile": "smtp",
+  "profile_version": 1,
+  "title": "SMTP",
+  "description": "Tests SMTP relay and message-submission banner paths independently.",
+  "components": [
+    {
+      "id": "smtp",
+      "label": "SMTP service on port 25",
+      "target": {"host": "mail.example.com", "port": 25, "protocol": "smtp"},
+      "focus": "smtp_banner",
+      "status": "FAIL",
+      "report": {"version": "1.2.3", "target": {"host": "mail.example.com", "port": 25, "protocol": "smtp"}, "checks": [], "summary": "…", "verdict": "service", "ok": false}
+    },
+    {
+      "id": "submission",
+      "label": "Message submission on port 587",
+      "target": {"host": "mail.example.com", "port": 587, "protocol": "smtp"},
+      "focus": "smtp_banner",
+      "status": "PASS",
+      "report": {"version": "1.2.3", "target": {"host": "mail.example.com", "port": 587, "protocol": "smtp"}, "checks": [], "summary": "…", "verdict": "ok", "ok": true}
+    }
+  ],
+  "aggregate": {
+    "status": "WARN",
+    "summary": "Some SMTP components are unavailable or degraded while others work.",
+    "finding": {"id": "smtp_partial_reachability", "affected_components": ["smtp"], "working_components": ["submission"]}
+  },
+  "ok": true
+}
+```
+
+Branch on `schema`, `profile`, `profile_version`, component `id` and `status`,
+and aggregate finding `id`. Component `report` contains the stable ordinary
+check, finding, causal-evidence, counterfactual, route, and remediation fields;
+derived sentences remain display text.
+
+### Flags and execution modes
+
+- `--json` emits one `netdoc.profile-report.v1` object. Non-profile JSON stays
+  the existing `report.Report` byte shape.
+- `--save` writes a `netdoc.profile.v1` `.ndoc` containing the identity and
+  aggregate plus one complete `netdoc.snapshot.v1` per component.
+- `--support` applies `support-v1` locally with one pseudonym mapping shared by
+  all embedded snapshots. Combined `--json` output remains full fidelity, the
+  same as an ordinary support run.
+- `--watch` is supported with `--json` and streams one compact profile object
+  per pass with `ts`. A profile has no multi-pane TUI, so profile watch without
+  `--json` is rejected. As with ordinary remote execution, `--watch` and
+  `--via` cannot be combined.
+- `--via` sends one ordinary remote protocol version 1 request per component.
+  Targets and selections travel as JSON data, never shell text. The remote
+  binary does not need to know the profile name, so a version-1 remote worker
+  that predates profiles can still run the component plans. Reports and
+  snapshots are interpreted on the remote OS and aggregated locally.
+- `--iface`, `--public-dns`, and `--timeout` apply independently to every
+  component. Interface names are resolved on the machine that probes, as in
+  every ordinary local or remote run.
+- A profile's check list is its minimum plan. Explicit `--check` IDs are added
+  to every component, with duplicates removed. `--skip` takes precedence over
+  the profile minimum and explicit checks, then the normal dependency-removal
+  rules apply.
+- Profiles are headless and never read or write TUI target history.
+  `--no-history` is accepted and therefore redundant rather than becoming an
+  incompatibility.
+- `--toolbox` and `--keys` require the single-run TUI and are rejected with a
+  profile. Peer mode is a different live two-machine protocol and is also
+  rejected. `--compare` and `--two-sided` currently accept only single-run
+  snapshots and reject the separate profile artifact schema.
+
+Target requirements are checked before any probe starts. `github` rejects a
+positional target rather than silently replacing a canonical endpoint. The
+other profiles reject a missing target. A scheme that conflicts with the
+profile, such as `https://host` under `--profile ssh`, is rejected rather than
+reinterpreted. Profile endpoints are finite, deterministic, documented, and
+limited to the selected service, so a plan cannot become a port scan.
+
 ## Peer diagnosis
 
 Peer mode is a separate, headless two-ended diagnosis. It does not run the
@@ -1193,7 +1345,10 @@ netdoc --via server --json --check dns,target_tcp example.com
 netdoc --via server --save remote.ndoc example.com
 ```
 
-It is remote *execution*, not remote monitoring: one connection, one run, one answer. There is no daemon, no agent, no installation step, and no persistent state on either machine.
+It is remote *execution*, not remote monitoring: one connection and one answer
+for an ordinary target run. A profile uses one such connection per component
+and aggregates the completed answers. There is no daemon, no agent, no
+installation step, and no persistent state on either machine.
 
 ### How it runs
 
@@ -1279,7 +1434,9 @@ Both ends bound what they will read from the other, and neither trusts the other
 
 ### Limits
 
-- One connection per run. `--watch` is not combinable with `--via`, because a watch that reconnected on every pass is a different feature.
+- One connection per ordinary run and per profile component. `--watch` is not
+  combinable with `--via`, because a watch that reconnected on every pass is a
+  different feature.
 - There is no live progress. The probes run on the far end and the answer arrives when the run is finished, which is why `--via` is headless rather than a remote terminal UI.
 - The probe IDs given to `--check` and `--skip` are validated locally as well as remotely, so a probe ID that exists only on a newer remote netdoc is rejected before the connection opens.
 - The drill-down tools, the LAN map, and the SSH login form are terminal UI features and are not part of a remote run.

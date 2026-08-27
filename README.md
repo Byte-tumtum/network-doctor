@@ -36,6 +36,8 @@ host or service:
 ```sh
 netdoc github.com       # DNS → TCP → TLS → HTTP diagnosis
 netdoc github.com:22    # SSH path and banner diagnosis
+netdoc --profile github # GitHub web, API, and both SSH paths
+netdoc --profile ssh server.example.com # SSH path, route, MTU, and banner evidence
 netdoc --watch host     # catch intermittent failures
 netdoc --json host      # structured report for scripts or bug reports
 netdoc --peer-listen 192.168.1.20:4242  # offer one direct, authenticated peer session
@@ -57,6 +59,54 @@ meaningful changes while the failure continues, and the first recovered state.
 Press `i` after an incident appears to inspect what changed at onset and
 recovery, the diagnosis and its causal evidence, or save the selected incident
 as a portable `.ndoc` with `w`.
+
+## Service profiles
+
+A service profile answers a service-specific troubleshooting question by
+composing ordinary Network Doctor runs. Each component still uses the same
+target parser, probe DAG, dependency closure, route and VPN evidence,
+diagnosis, findings, and remediation as `netdoc target`.
+
+```sh
+netdoc --profile github
+netdoc --profile ssh server.example.com
+netdoc --profile smtp mail.example.com
+netdoc --profile web status.example.com
+netdoc --profile list
+```
+
+The built-ins are deliberately small:
+
+- `github` needs no target. It independently tests HTTPS at `github.com:443`,
+  HTTPS at `api.github.com:443`, SSH at `github.com:22`, and GitHub's alternate
+  SSH endpoint at `ssh.github.com:443`. It does not claim to perform a Git
+  repository operation.
+- `ssh target` tests the requested SSH endpoint, using port 22 by default, and
+  keeps the DNS, route, TCP, path-MTU, and banner evidence together.
+- `smtp target` tests SMTP banners on relay port 25 and submission port 587.
+  An explicit target port becomes the primary path. It does not claim STARTTLS
+  or implicit-TLS SMTP support that the diagnostic engine does not have.
+- `web target` tests certificate-validated HTTPS on port 443 by default and an
+  independent plain-HTTP response on port 80. An explicit target port becomes
+  the HTTPS path. Plain HTTP is reported as a separate path, not recommended as
+  a secure fallback.
+
+Every component also retains the relevant Internet, environment-proxy,
+public-DNS, and path-MTU context. The aggregate result identifies working and
+affected component IDs, while each component keeps its full ordinary report
+and causal evidence.
+
+Profiles are headless. Add `--json` for `netdoc.profile-report.v1`, `--save`
+for a `netdoc.profile.v1` `.ndoc`, or `--support` for the same artifact with one
+redaction mapping across all component snapshots. `--via` runs each component
+through the existing remote protocol, so the profile describes what to test
+and the SSH destination describes where to test it.
+
+`--check` adds probes to every component's minimum plan. `--skip` takes
+precedence and removes probes plus their dependents. `--timeout`, `--iface`,
+`--public-dns`, and `--no-history` keep their normal meanings. Profile watch is
+available as `--profile ... --json --watch`; it is not combined with `--via`,
+matching the existing remote watch restriction.
 
 ## Install
 
@@ -553,7 +603,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), two-sided failure localization across two machines (`--two-sided`), remote diagnosis over SSH (`--via`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, built-in service profiles (`--profile`), two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), two-sided failure localization across two machines (`--two-sided`), remote diagnosis over SSH (`--via`), report copy/save.
 
 ## Built with
 

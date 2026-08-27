@@ -23,6 +23,10 @@ _netdoc() {
             COMPREPLY=($(compgen -W "default vim" -- "$cur"))
             return
             ;;
+        -profile | --profile)
+            COMPREPLY=($(compgen -W "github ssh smtp web list" -- "$cur"))
+            return
+            ;;
         -save | --save | -support | --support)
             # A path to write the snapshot to, so these values really are
             # local filenames.
@@ -58,6 +62,7 @@ _netdoc() {
         -toolbox --toolbox
         -json --json
         -watch --watch
+        -profile --profile
         -save --save
         -support --support
         -compare --compare

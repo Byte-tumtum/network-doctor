@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heymaikol/network-doctor/internal/profile"
 	"github.com/heymaikol/network-doctor/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -439,6 +440,32 @@ func TestShippedSurfacesOfferTheRealKeyPresets(t *testing.T) {
 	}
 	if got := manKeyPresets(string(data)); !slices.Equal(got, want) {
 		t.Errorf("packaging/netdoc.1 documents -keys values %v, want %v", got, want)
+	}
+}
+
+func TestShippedSurfacesOfferTheRealProfiles(t *testing.T) {
+	want := append(profile.Builtins().Names(), "list")
+	completions := []struct {
+		path, pattern string
+	}{
+		{"packaging/completions/netdoc.bash", `(?s)-profile \| --profile\).*?compgen -W "([^"]*)".*?\n\s*;;`},
+		{"packaging/completions/netdoc.zsh", `(?m)^.*\{--profile,-profile\}.*:profile:\(([^)]*)\).*$`},
+		{"packaging/completions/netdoc.fish", `(?m)^complete -c netdoc [^\n]* -l profile [^\n]*\\\n[ \t]*-a '([^']*)'$`},
+	}
+	for _, completion := range completions {
+		if got := completionVocabulary(t, completion.path, completion.pattern); !slices.Equal(got, want) {
+			t.Errorf("%s offers -profile values %v, want %v", completion.path, got, want)
+		}
+	}
+	data, err := os.ReadFile("packaging/netdoc.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := manOptionBody(string(data), "profile")
+	for _, name := range want {
+		if !strings.Contains(body, name) {
+			t.Errorf("packaging/netdoc.1 does not document profile %q", name)
+		}
 	}
 }
 
