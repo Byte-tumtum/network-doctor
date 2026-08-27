@@ -1531,8 +1531,8 @@ func saveSnapshot(h headless, s snapshot.Snapshot) error {
 var timeNow = time.Now
 
 // buildReport flattens probe results into the stable JSON shape, preserving
-// probe order. OK means "no check failed"; Warn, Skip, and N/A don't count
-// against it, same as everywhere else in the app.
+// probe order. OK means "no check failed and every check reported"; Warn, Skip,
+// and N/A don't count against it, same as everywhere else in the app.
 // reportRoutes copies the run's route decisions into the JSON contract, field
 // by field for the same reason the snapshot conversion is written out: the
 // published shape must not follow a runtime struct by accident. Every field the
@@ -1580,15 +1580,27 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 	order := make([]diagnostic.ProbeID, len(probes))
 	for i, p := range probes {
 		order[i] = p.ID
-		r := results[p.ID]
-		rep.OK = rep.OK && r.Status != diagnostic.StatusFail
-		if r.Status == diagnostic.StatusFail && rep.FailedStage == "" {
+		// reported, not the result itself, is the fact this loop turns on: a
+		// missing entry yields the zero ProbeResult, and its Status is
+		// StatusPass. The report is a published format, so the absence of an
+		// observation is written as its own value instead of inheriting a Go
+		// zero, exactly as BuildSnapshot does for the .ndoc artifact.
+		r, reported := results[p.ID]
+		status := report.StatusIncomplete
+		if reported {
+			status = r.Status.String()
+		}
+		// An unreported check is not a clean one. The run answered for one
+		// fewer probe than it was asked, and ok is the field a script reads
+		// first.
+		rep.OK = rep.OK && reported && r.Status != diagnostic.StatusFail
+		if reported && r.Status == diagnostic.StatusFail && rep.FailedStage == "" {
 			rep.FailedStage = string(p.ID)
 		}
 		c := report.Check{
 			ID:      string(p.ID),
 			Name:    p.Name,
-			Status:  r.Status.String(),
+			Status:  status,
 			Cause:   r.Cause,
 			Ms:      diagnostic.Ms(r.Dur),
 			Detail:  r.Detail,

@@ -857,6 +857,86 @@ func TestBuildReportFloorsSubMillisecondChecks(t *testing.T) {
 	}
 }
 
+// A probe the run never reported is the absence of an observation, not an
+// observation, and --json is a published format: it has to say so in its own
+// value rather than inherit the Go zero of diagnostic.Status, which is PASS.
+// This checks the raw JSON, because a consumer reads that and not the Go struct
+// that made it; an unmarshal into report.Check would agree with whatever the
+// encoder did.
+func TestSerializedStatusDistinguishesReportedPassFromUnreportedCheck(t *testing.T) {
+	probes := []diagnostic.Probe{
+		{ID: diagnostic.ProbeIface, Name: "Interface"},
+		{ID: diagnostic.ProbeInternet, Name: "Internet"},
+		{ID: diagnostic.ProbeQUIC, Name: "QUIC / UDP 443"},
+	}
+	// The QUIC row is the one the run never reached: it is in the check set
+	// and absent from the results map, which is exactly what a cancelled run
+	// leaves behind.
+	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
+		diagnostic.ProbeIface:    {Status: diagnostic.StatusPass, Dur: 2 * time.Millisecond},
+		diagnostic.ProbeInternet: {Status: diagnostic.StatusSkip},
+	}
+	blob, err := json.Marshal(buildReport(nil, probes, results))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Checks []map[string]json.RawMessage `json:"checks"`
+		OK     json.RawMessage              `json:"ok"`
+	}
+	if err := json.Unmarshal(blob, &raw); err != nil {
+		t.Fatal(err)
+	}
+	// Literal strings on purpose. Renaming a constant must not be able to
+	// change what a consumer reads without this failing.
+	want := []struct{ id, status string }{
+		{"iface", `"PASS"`},
+		{"internet_tcp", `"SKIP"`},
+		{"quic_udp_443", `"INCOMPLETE"`},
+	}
+	// The unreported row keeps its place in checks rather than being dropped,
+	// so a reader can still see the check existed and was not reached.
+	if len(raw.Checks) != len(want) {
+		t.Fatalf("%d rows encoded, want %d: %s", len(raw.Checks), len(want), blob)
+	}
+	for i, w := range want {
+		if got := string(raw.Checks[i]["id"]); got != `"`+w.id+`"` {
+			t.Fatalf("row %d id = %s", i, got)
+		}
+		if got := string(raw.Checks[i]["status"]); got != w.status {
+			t.Errorf("%s status = %s, want %s", w.id, got, w.status)
+		}
+	}
+	// The whole point, stated as the thing a consumer would do wrong.
+	if string(raw.Checks[2]["status"]) == `"PASS"` {
+		t.Error("an unreported check serialized as a pass")
+	}
+	// And a script reads ok before it reads any row.
+	if string(raw.OK) != "false" {
+		t.Errorf("ok = %s, want false, with an unreported check in the report", raw.OK)
+	}
+
+	// A reported pass stays a pass: filling the same row in restores the run
+	// that answered for every probe it was asked about.
+	results[diagnostic.ProbeQUIC] = diagnostic.ProbeResult{Status: diagnostic.StatusPass, Dur: 3 * time.Millisecond}
+	complete, err := json.Marshal(buildReport(nil, probes, results))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(complete, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw.Checks[2]["status"]); got != `"PASS"` {
+		t.Errorf("reported quic status = %s, want \"PASS\"", got)
+	}
+	if string(raw.OK) != "true" {
+		t.Errorf("ok = %s, want true, with every check reported", raw.OK)
+	}
+	if bytes.Contains(complete, []byte("INCOMPLETE")) {
+		t.Errorf("a fully reported run emitted an incomplete row: %s", complete)
+	}
+}
+
 func TestBuildReportAddsAddressFamilyEvidenceWithoutChangingOtherRows(t *testing.T) {
 	probes := []diagnostic.Probe{{ID: diagnostic.ProbeInternet, Name: "Internet"}, {ID: diagnostic.ProbeIface, Name: "Interface"}}
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{

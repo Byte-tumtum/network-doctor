@@ -1,8 +1,23 @@
 // Package report defines netdoc's stable machine-readable report contract.
 package report
 
+// StatusIncomplete is the one status value no probe can return. It marks a
+// check that the run built but that never reported a result at all, which is
+// what a cancelled or interrupted run leaves behind. It exists because the
+// alternative is worse: diagnostic.Status has PASS as its Go zero value, so a
+// missing result would otherwise serialize as a passing check, and a report is
+// evidence. An incomplete row is not a skipped row either; nothing decided to
+// leave it out, the run just ended first. A report holding one is never ok.
+//
+// The vocabulary is written down here rather than borrowed from the runtime
+// status type for the same reason the snapshot format writes down its own: a
+// consumer decides what a row means by comparing against these, never by
+// trusting a Go zero value.
+const StatusIncomplete = "INCOMPLETE"
+
 // Report is the stable JSON object emitted by netdoc -json. Its field names
-// and status vocabulary (PASS/WARN/FAIL/SKIP/N/A) are compatibility-sensitive.
+// and status vocabulary (PASS/WARN/FAIL/SKIP/N/A, plus INCOMPLETE for a check
+// that never reported) are compatibility-sensitive.
 type Report struct {
 	Version string `json:"version"`
 	// Ts is set only under -json -watch, where the output is a stream and each
