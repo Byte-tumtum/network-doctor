@@ -179,14 +179,19 @@ type ifaceFacts struct {
 	NoLinkLayer bool
 }
 
-// encapsulatingKinds are the kernel link kinds that wrap traffic in another
-// packet. They are kernel-facing names, not vendor names: every VPN that
+// encapsulatingKinds are the link kinds that wrap traffic in another packet.
+// They are operating-system-facing names, not vendor names: every VPN that
 // presents a normal tunnel device lands on one of these regardless of who
 // shipped it, and a product that installs an ordinary Ethernet device is
 // deliberately not detected rather than guessed at from its name.
+//
+// Most of these are Linux kernel link kinds. "tunnel" is the name Windows
+// gives IF_TYPE_TUNNEL, which is the one interface type that means
+// encapsulation on its own, so every kind a platform can report here has to be
+// present or that platform's tunnels read as direct links.
 var encapsulatingKinds = []string{
 	"geneve", "gre", "gretap", "ip6gre", "ip6tnl", "ipip", "ppp",
-	"sit", "tun", "vti", "vti6", "vxlan", "wireguard", "xfrm",
+	"sit", "tun", "tunnel", "vti", "vti6", "vxlan", "wireguard", "xfrm",
 }
 
 // classifyTunnel decides how much netdoc may claim about one interface.

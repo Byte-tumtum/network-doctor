@@ -36,6 +36,7 @@ func TestClassifyTunnelTrustsTheKernelKindAndGuessesOnlyFromShape(t *testing.T) 
 		{"wireguard", ifaceFacts{Name: "wg0", Kind: "wireguard", PointToPoint: true, NoLinkLayer: true}, TunnelKnown, "wireguard"},
 		{"tun", ifaceFacts{Name: "tun0", Kind: "tun", NoLinkLayer: true}, TunnelKnown, "tun"},
 		{"gre", ifaceFacts{Name: "gre1", Kind: "gre"}, TunnelKnown, "gre"},
+		{"windows IF_TYPE_TUNNEL", ifaceFacts{Name: "vpn0", Kind: "tunnel"}, TunnelKnown, "tunnel"},
 		{"bridge is virtual but not a tunnel", ifaceFacts{Name: "br0", Kind: "bridge"}, TunnelDirect, ""},
 		{"vlan is virtual but not a tunnel", ifaceFacts{Name: "eth0.7", Kind: "vlan"}, TunnelDirect, ""},
 		{"ordinary ethernet", ifaceFacts{Name: "eth0"}, TunnelDirect, ""},
