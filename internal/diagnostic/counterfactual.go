@@ -145,7 +145,7 @@ func addressCounterfactual(t *Target, res map[ProbeID]ProbeResult) (DiagnosisFin
 	states := effectiveTargetFamilies(res)
 	for _, attempt := range r.Attempts {
 		if attempt.Err == nil || attempt.Aborted || attemptCause(attempt) == ConnectionCauseCanceled ||
-			attempt.IP.Equal(r.SelectedIP) || !containsResolvedIP(resolved, attempt.IP) || !attemptFamilyObserved(states, attempt.IP) {
+			attempt.IP.Equal(r.SelectedIP) || !containsResolvedIP(resolved, attempt.IP) || !attemptFamilyReachable(states, attempt.IP) {
 			continue
 		}
 		alternativeEvidence := addressEvidence(attempt.IP, ObservationAddressFailed)
@@ -175,11 +175,14 @@ func familyLabel(family string) string {
 	return "IPv6"
 }
 
-func attemptFamilyObserved(families FamilyConnectivity, ip net.IP) bool {
+// attemptFamilyReachable reports whether the attempt's address family is proved
+// reachable. A failure inside a family that is itself down is explained by the
+// family counterfactual, so it must not also surface as a sick backend address.
+func attemptFamilyReachable(families FamilyConnectivity, ip net.IP) bool {
 	if ip.To4() != nil {
-		return families.IPv4 != ""
+		return families.IPv4 == FamilyReachable
 	}
-	return families.IPv6 != ""
+	return families.IPv6 == FamilyReachable
 }
 
 func containsResolvedIP(ips []net.IP, want net.IP) bool {

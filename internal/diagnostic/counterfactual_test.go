@@ -254,3 +254,27 @@ func TestCounterfactualEvidenceIsDeterministicAndReferencesObservedRows(t *testi
 		}
 	}
 }
+
+func TestProvedFamilyFailureIsNotAlsoASickBackendAddress(t *testing.T) {
+	v4, v6 := net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1")
+	target := &Target{Host: "example.com", Port: 443, Proto: ProtoNone}
+	res := map[ProbeID]ProbeResult{
+		ProbeIface: ok(StatusPass),
+		ProbeInternet: {Status: StatusPass,
+			Families: &FamilyConnectivity{IPv4: FamilyReachable, IPv6: FamilyReachable}},
+		ProbeDNS: {Status: StatusPass, Addrs: []net.IP{v4, v6}},
+		ProbeTargetTCP: {Status: StatusWarn, SelectedIP: v4,
+			Families: &FamilyConnectivity{IPv4: FamilyReachable, IPv6: FamilyUnreachable},
+			Attempts: []Attempt{
+				{IP: v6, Err: errors.New("unreachable"), Cause: ConnectionCauseUnreachable},
+				{IP: v4},
+			}},
+	}
+	d := Interpret(target, []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP}, res)
+	if _, found := findingByID(d, DiagnosisIPv6TargetUnreachable); !found {
+		t.Fatalf("findings = %+v, want the IPv6 family finding", d.Findings)
+	}
+	if finding, found := findingByID(d, DiagnosisPartialReachability); found {
+		t.Errorf("the down family also became a failed backend address: %+v", finding)
+	}
+}
