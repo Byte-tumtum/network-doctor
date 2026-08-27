@@ -233,6 +233,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	save := fs.String("save", "", "run the checks headless and write a diagnostic snapshot to `file` (.ndoc)")
 	support := fs.String("support", "", "run the checks headless and write a sanitized support snapshot to `file` (.ndoc)")
 	compareMode := fs.Bool("compare", false, "compare two saved snapshots given as arguments; runs no probes")
+	twoSided := fs.Bool("two-sided", false, "read two saved snapshots of one target as two machines and place the failure; runs no probes")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	var peerListen peerListenList
 	fs.Var(&peerListen, "peer-listen", "listen for one authenticated peer on exact `IP:port`; repeat for the other address family")
@@ -273,7 +274,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// One argument everywhere except -compare, which reads two files rather
 	// than probing one target.
 	allowed := 1
-	if *compareMode {
+	if *compareMode || *twoSided {
 		allowed = 2
 	}
 	if len(positional) > allowed {
@@ -286,11 +287,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "netdoc", version)
 		return 0
 	}
-	// Before every other mode, and before a single probe flag is validated: a
-	// comparison reads two files and touches the network at no point, so the
-	// settings that decide what probes do have nothing to say about it.
+	// Before every other mode, and before a single probe flag is validated:
+	// both readings of two saved snapshots read files and touch the network at
+	// no point, so the settings that decide what probes do have nothing to say
+	// about them. They are two questions about one pair of artifacts, and
+	// asking both at once is asking for two commands.
+	if *compareMode && *twoSided {
+		fmt.Fprintln(stderr, "netdoc: -compare and -two-sided cannot be combined")
+		return 2
+	}
 	if *compareMode {
 		return runCompare(positional, setFlagNames(fs), *jsonOut, stdout, stderr)
+	}
+	// The second reading of the same two files, and headless and probe-free for
+	// the same reason: it asks where a failure is rather than what changed, and
+	// everything it answers with comes out of the artifacts.
+	if *twoSided {
+		return runTwoSided(positional, setFlagNames(fs), *jsonOut, stdout, stderr)
 	}
 	if *timeout <= 0 {
 		fmt.Fprintln(stderr, "netdoc: -timeout must be positive")
@@ -507,6 +520,7 @@ func printUsage(w io.Writer, fs *flag.FlagSet) {
        netdoc --peer-listen IP:port [--peer-listen IP:port]
        netdoc --peer-connect [--json]
        netdoc --compare before.ndoc after.ndoc [--json]
+       netdoc --two-sided here.ndoc there.ndoc [--json]
 
 Diagnoses network connectivity layer by layer. With no target it runs the
 generic checks; with a target it also probes that endpoint. Flags may be
@@ -524,6 +538,11 @@ string; the connector reads it from a hidden prompt so it does not enter argv.
 Compare mode is headless and runs no probes: it reads two snapshots written by
 --save or --support and reports what changed between them. It exits 0 when they describe the
 same state and 1 when they do not.
+
+--two-sided reads the same two snapshots as two machines looking at one target
+at the same time, and says whether the evidence places a failure on this side,
+on the other side, on something they share, or nowhere. It runs no probes
+either, and refuses two snapshots of different targets.
 
 Target forms:
 `+diagnostic.TargetForms+"\n\nFlags:\n")
@@ -655,13 +674,27 @@ func setFlagNames(fs *flag.FlagSet) map[string]bool {
 	return set
 }
 
-// compareIncompatibleFlags is every flag that describes a run netdoc would
-// perform. A comparison performs none: it reads two finished runs off disk. The
-// settings that produced them are already recorded in the files, and letting
-// one be named again here would suggest it applied to something.
-var compareIncompatibleFlags = []string{
+// artifactReadingFlags is every flag that describes a run netdoc would perform.
+// Neither reading of two saved snapshots performs one: both read two finished
+// runs off disk. The settings that produced them are already recorded in the
+// files, and letting one be named again here would suggest it applied to
+// something.
+var artifactReadingFlags = []string{
 	"toolbox", "watch", "save", "support", "peer-listen", "peer-connect", "via",
 	"check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
+}
+
+// rejectRunFlags refuses the settings that cannot apply to a reading of two
+// finished runs. mode is the flag that selected the reading, so the message
+// names the command the user actually typed.
+func rejectRunFlags(mode string, setFlags map[string]bool, stderr io.Writer) bool {
+	for _, name := range artifactReadingFlags {
+		if setFlags[name] {
+			fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with -%s\n", name, mode)
+			return true
+		}
+	}
+	return false
 }
 
 // runCompare reports what changed between two saved snapshots. It opens no
@@ -674,35 +707,12 @@ var compareIncompatibleFlags = []string{
 // records a failed run is not itself an error here; a comparison is about
 // change, not about health.
 func runCompare(paths []string, setFlags map[string]bool, jsonOut bool, stdout, stderr io.Writer) int {
-	for _, name := range compareIncompatibleFlags {
-		if setFlags[name] {
-			fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with -compare\n", name)
-			return 2
-		}
-	}
-	if len(paths) != 2 {
-		fmt.Fprintln(stderr, "netdoc: -compare needs two snapshot files: netdoc --compare before"+snapshot.Extension+" after"+snapshot.Extension)
+	if rejectRunFlags("compare", setFlags, stderr) {
 		return 2
 	}
-	snapshots := make([]snapshot.Snapshot, len(paths))
-	for i, path := range paths {
-		// #nosec G304 -- the path is the user's own argument, and reading the
-		// file they named is the whole command.
-		data, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Fprintln(stderr, "netdoc: -compare:", textsafe.Clean(err.Error()))
-			return 2
-		}
-		// One decoder for both files, the same one that reads a snapshot
-		// anywhere else, so the schema check and the row rules are stated once.
-		// A file this build cannot read is named, rather than reported as "a
-		// snapshot": with two arguments, which one is wrong is the useful half.
-		s, err := snapshot.Decode(data)
-		if err != nil {
-			fmt.Fprintf(stderr, "netdoc: -compare: %s: %s\n", textsafe.Clean(path), textsafe.Clean(err.Error()))
-			return 2
-		}
-		snapshots[i] = s
+	snapshots, ok := readSnapshotPair("compare", paths, "before"+snapshot.Extension+" after"+snapshot.Extension, stderr)
+	if !ok {
+		return 2
 	}
 	result := compare.Snapshots(snapshots[0], snapshots[1])
 	if jsonOut {
@@ -719,6 +729,79 @@ func runCompare(paths []string, setFlags map[string]bool, jsonOut bool, stdout, 
 		return 0
 	}
 	return 1
+}
+
+// readSnapshotPair reads the two files a snapshot reading is given. Both
+// readings take the same two arguments and refuse the same unusable files, so
+// the rules are stated once: exactly two paths, one decoder, and the file that
+// could not be read is named, because with two arguments which one is wrong is
+// the useful half.
+func readSnapshotPair(mode string, paths []string, usage string, stderr io.Writer) ([2]snapshot.Snapshot, bool) {
+	var snapshots [2]snapshot.Snapshot
+	if len(paths) != 2 {
+		fmt.Fprintf(stderr, "netdoc: -%s needs two snapshot files: netdoc --%s %s\n", mode, mode, usage)
+		return snapshots, false
+	}
+	for i, path := range paths {
+		// #nosec G304 -- the path is the user's own argument, and reading the
+		// file they named is the whole command.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "netdoc: -%s: %s\n", mode, textsafe.Clean(err.Error()))
+			return snapshots, false
+		}
+		// One decoder for both files, the same one that reads a snapshot
+		// anywhere else, so the schema check and the row rules are stated once.
+		s, err := snapshot.Decode(data)
+		if err != nil {
+			fmt.Fprintf(stderr, "netdoc: -%s: %s: %s\n", mode, textsafe.Clean(path), textsafe.Clean(err.Error()))
+			return snapshots, false
+		}
+		snapshots[i] = s
+	}
+	return snapshots, true
+}
+
+// runTwoSided reads two snapshots of one target as two machines looking at it,
+// and says which side the evidence places a failure on. Like --compare it opens
+// no socket and runs no probe: both machines already did their probing, and
+// this is the reading of what they recorded.
+//
+// Exit code says whether a failure was placed at all, which is the ordinary
+// netdoc meaning of 1 rather than --compare's "something moved": 0 when no
+// check failed on either machine, 1 when a failure was placed anywhere or the
+// evidence could not place one, and 2 when an argument or an artifact is
+// unusable. Two runs that observed different endpoints are exit 2 as well:
+// unlike a comparison, a localization across two endpoints is not a question
+// with an answer, since a row that failed against one host and passed against
+// another says nothing about which machine is at fault.
+func runTwoSided(paths []string, setFlags map[string]bool, jsonOut bool, stdout, stderr io.Writer) int {
+	if rejectRunFlags("two-sided", setFlags, stderr) {
+		return 2
+	}
+	snapshots, ok := readSnapshotPair("two-sided", paths, "here"+snapshot.Extension+" there"+snapshot.Extension, stderr)
+	if !ok {
+		return 2
+	}
+	result, err := compare.TwoSidedSnapshots(snapshots[0], snapshots[1])
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc: -two-sided:", textsafe.Clean(err.Error()))
+		return 2
+	}
+	if jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(result); err != nil {
+			fmt.Fprintln(stderr, "netdoc:", err)
+			return 1
+		}
+	} else {
+		fmt.Fprint(stdout, result.Text())
+	}
+	if result.Placed() {
+		return 1
+	}
+	return 0
 }
 
 // runAll is stubbed in tests so -json runs don't touch the network.

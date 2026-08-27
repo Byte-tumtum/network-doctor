@@ -40,6 +40,7 @@ netdoc --watch host     # catch intermittent failures
 netdoc --json host      # structured report for scripts or bug reports
 netdoc --peer-listen 192.168.1.20:4242  # offer one direct, authenticated peer session
 netdoc --peer-connect   # paste the temporary pairing string at the hidden prompt
+netdoc --two-sided here.ndoc there.ndoc  # two machines, one target: which side is it on?
 ```
 
 Run `netdoc` with no target to check the local interface, internet egress,
@@ -235,6 +236,8 @@ netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
 netdoc --no-history host          # don't read or save the target history file
 netdoc --peer-listen 192.168.1.20:4242  # wait for one directly reachable peer
 netdoc --peer-connect             # paste its temporary pairing string when prompted
+netdoc --compare before.ndoc after.ndoc  # what changed between two saved runs
+netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 ```
 
 `--timeout` overrides the per-check probe timeout. `--check`/`--skip` select probes by stable ID plus their dependency closure; `--iface` and address-only binding follow probe traffic through the drill-down tools too. Full flag semantics, the target-parsing rules, and the history file are in **[docs/reference.md](docs/reference.md#usage-details)**.
@@ -472,6 +475,44 @@ large payload and makes no MTU claim. See the full security, privacy, protocol,
 diagnosis, timeout, and JSON contract in
 **[docs/reference.md](docs/reference.md#peer-diagnosis)**.
 
+### Two-sided diagnosis
+
+Peer mode answers one half of the two-machine question: the path between the
+two machines. The other half is a target that fails from one machine and works
+from another, and `--two-sided` answers that by reading two ordinary saved runs:
+
+```sh
+netdoc --save here.ndoc github.com                     # this machine
+netdoc --via other-host --save there.ndoc github.com   # the other machine
+netdoc --two-sided here.ndoc there.ndoc                # where is it broken?
+```
+
+```text
+Failure placed on: side A
+Every failed check passes from side B, so the failure is specific to side A's
+vantage point rather than to the endpoint alone.
+Evidence: target_tcp
+```
+
+It reads the same files `--compare` reads and asks a different question of
+them: not what changed between two runs, but which machine a failure belongs
+to. Only rows both machines measured are read, and a gap between the two
+captures, settings the runs did not share, and rows only one side has are all
+reported as caveats. Two snapshots of different targets are refused, because a
+row that failed against one host and passed against another says nothing about
+which machine is at fault. Two `--support` artifacts of one target read
+normally, since sanitization gives that endpoint the same pseudonym on both
+machines.
+
+The claim it makes is deliberately narrow. A machine's own network state, its
+path, and an endpoint that treats the two machines differently all produce the
+same evidence, so all of them are listed and none is chosen. It never says a
+firewall, router, NAT, VPN, or host is responsible: two snapshots record what
+each machine observed, not what any device in between did. Add `--json` for the
+separate `netdoc.twosided.v1` schema. The placements, the evidence contract,
+and how the three two-machine commands divide the work are in
+**[docs/reference.md](docs/reference.md#two-sided-diagnosis)**.
+
 ### Exit codes
 
 | Situation | Exit |
@@ -480,6 +521,9 @@ diagnosis, timeout, and JSON contract in
 | Peer tests completed with authenticated traffic passing both ways | `0` |
 | Any failed row | `1` |
 | Peer diagnostic failed, stayed incomplete, or the session errored | `1` |
+| `--two-sided`: no check failed on either machine | `0` |
+| `--two-sided`: a failure was placed, or the evidence could not place one | `1` |
+| `--two-sided`: the two snapshots observed different targets | `2` |
 | Quit before the chain finished | `1` |
 | Bad arguments, pairing-input reject, validation reject, or no terminal for the TUI | `2` |
 | `--via`: SSH failed, no usable `netdoc` on the SSH host, or a remote protocol mismatch | `2` |
@@ -509,7 +553,7 @@ The site is built from `docs/` and from the [wiki](https://github.com/heymaikol/
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), remote diagnosis over SSH (`--via`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), two-sided failure localization across two machines (`--two-sided`), remote diagnosis over SSH (`--via`), report copy/save.
 
 ## Built with
 

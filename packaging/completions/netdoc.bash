@@ -44,9 +44,11 @@ _netdoc() {
 
     # Targets are hostnames, URLs, and IP literals, none of them enumerable, so
     # a non-flag word completes to nothing rather than to local filenames. The
-    # exception is --compare, whose two arguments are local snapshot files.
+    # exceptions are --compare and --two-sided, whose two arguments are local
+    # snapshot files.
     if [[ $cur != -* ]]; then
-        if [[ " ${COMP_WORDS[*]} " == *" -compare "* || " ${COMP_WORDS[*]} " == *" --compare "* ]]; then
+        if [[ " ${COMP_WORDS[*]} " == *" -compare "* || " ${COMP_WORDS[*]} " == *" --compare "* ||
+              " ${COMP_WORDS[*]} " == *" -two-sided "* || " ${COMP_WORDS[*]} " == *" --two-sided "* ]]; then
             COMPREPLY=($(compgen -f -- "$cur"))
         fi
         return
@@ -59,6 +61,7 @@ _netdoc() {
         -save --save
         -support --support
         -compare --compare
+        -two-sided --two-sided
         -peer-listen --peer-listen
         -peer-connect --peer-connect
         -via --via

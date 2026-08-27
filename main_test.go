@@ -1766,6 +1766,181 @@ func comparableSnapshot() snapshot.Snapshot {
 	}
 }
 
+// --two-sided reads the same two artifacts as --compare and answers the other
+// question about them: not what moved, but which machine a failure belongs to.
+func TestRunTwoSidedPlacesTheFailure(t *testing.T) {
+	dir := t.TempDir()
+	here := comparableSnapshot()
+	here.Checks[1].Status = snapshot.StatusFail
+	here.Diagnosis.Verdict, here.OK = "dns", false
+	there := comparableSnapshot()
+	therePath := writeSnapshotFile(t, dir, "there", there)
+	herePath := writeSnapshotFile(t, dir, "here", here)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--two-sided", herePath, therePath}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"Network Doctor two-sided diagnosis", "Failure placed on: side A", "side A only"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Nothing failing on either machine is the healthy answer and spends the
+// ordinary success code, not --compare's "the two files agree".
+func TestRunTwoSidedExitsZeroWhenNothingFailed(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--two-sided", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "neither side") {
+		t.Errorf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunTwoSidedJSON(t *testing.T) {
+	dir := t.TempDir()
+	here := comparableSnapshot()
+	here.Checks[1].Status = snapshot.StatusFail
+	here.OK = false
+	herePath := writeSnapshotFile(t, dir, "here", here)
+	therePath := writeSnapshotFile(t, dir, "there", comparableSnapshot())
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--two-sided", "--json", herePath, therePath}, &stdout, &stderr); got != 1 {
+		t.Fatalf("exit = %d, want 1; stderr: %s", got, stderr.String())
+	}
+	var doc struct {
+		Schema    string `json:"schema"`
+		Diagnosis struct {
+			ID   string `json:"id"`
+			Side string `json:"side"`
+		} `json:"diagnosis"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("decode: %v\n%s", err, stdout.String())
+	}
+	if doc.Schema != compare.TwoSidedSchema {
+		t.Errorf("schema = %q, want %q", doc.Schema, compare.TwoSidedSchema)
+	}
+	if doc.Diagnosis.Side != compare.SideA || doc.Diagnosis.ID != compare.TwoSidedOneSideFails {
+		t.Errorf("diagnosis = %+v", doc.Diagnosis)
+	}
+}
+
+// The one rule --two-sided has that --compare does not: two endpoints seen once
+// each cannot be read as one endpoint seen twice, and the refusal names both.
+func TestRunTwoSidedRefusesDifferentTargets(t *testing.T) {
+	dir := t.TempDir()
+	other := comparableSnapshot()
+	other.Target.Host = "other.example"
+	herePath := writeSnapshotFile(t, dir, "here", comparableSnapshot())
+	otherPath := writeSnapshotFile(t, dir, "other", other)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--two-sided", herePath, otherPath}, &stdout, &stderr); got != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "other.example") || !strings.Contains(stderr.String(), "example.com") {
+		t.Errorf("stderr does not name both endpoints: %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("a refusal wrote to stdout: %q", stdout.String())
+	}
+}
+
+func TestRunTwoSidedArgumentErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	for _, args := range [][]string{
+		{"--two-sided"},
+		{"--two-sided", path},
+		{"--two-sided", path, path, path},
+		{"--two-sided", filepath.Join(dir, "missing.ndoc"), path},
+	} {
+		t.Run(strings.Join(args[1:], " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(args, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+			}
+		})
+	}
+}
+
+// A reading of two finished runs performs none, so every flag that describes a
+// run netdoc would perform is refused, and so is the other reading.
+func TestRunTwoSidedRejectsRunFlagsAndCompare(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	for _, args := range [][]string{
+		{"--toolbox"}, {"--watch"}, {"--save", filepath.Join(dir, "out.ndoc")},
+		{"--support", filepath.Join(dir, "out.ndoc")}, {"--check", "dns"}, {"--skip", "dns"},
+		{"--iface", "lo"}, {"--public-dns", "9.9.9.9"}, {"--no-history"}, {"--keys", "vim"},
+		{"--timeout", "1s"}, {"--peer-connect"}, {"--peer-listen", "127.0.0.1:0"},
+		{"--via", "somewhere"}, {"--compare"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			full := append([]string{"--two-sided"}, args...)
+			full = append(full, path, path)
+			if got := run(full, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "cannot be combined") {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+		})
+	}
+	// -json is the one flag that does apply, and it is not refused.
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--two-sided", "--json", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("--json exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+}
+
+// Peer mode is the other two-machine answer, and it runs probes on two live
+// machines. Naming a reading of saved artifacts alongside it is a request for
+// two different commands at once, and it is refused rather than silently
+// resolved to one of them.
+func TestPeerModeAndTwoSidedCannotBeCombined(t *testing.T) {
+	for _, args := range [][]string{
+		{"--peer-connect", "--two-sided"},
+		{"--peer-listen", "127.0.0.1:0", "--two-sided"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := run(args, &stdout, &stderr); got != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", got, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "cannot be combined") {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+		})
+	}
+}
+
+// The reading opens no socket, exactly as --compare does not: every value it
+// reports came out of the two files.
+func TestRunTwoSidedRunsNoProbes(t *testing.T) {
+	dir := t.TempDir()
+	path := writeSnapshotFile(t, dir, "run", comparableSnapshot())
+	restore := runAll
+	runAll = func(context.Context, []diagnostic.Probe, time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+		t.Fatal("--two-sided ran the probe DAG")
+		return nil
+	}
+	defer func() { runAll = restore }()
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"--two-sided", path, path}, &stdout, &stderr); got != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+}
+
 func TestRunCompareReportsWhatChanged(t *testing.T) {
 	dir := t.TempDir()
 	before := comparableSnapshot()

@@ -114,6 +114,11 @@ connection coordinates independent TCP, TLS, and application-payload attempts
 in both directions, exchanges those observations as data, and runs one combined
 truth table on each machine.
 
+It answers one half of the two-machine question: the path **between** the two
+machines. For the other half, a target that fails from one machine and works
+from the other, see [two-sided diagnosis](#two-sided-diagnosis), which reads two
+ordinary saved runs and needs no live connection between the machines at all.
+
 ### Pairing workflow
 
 The listening machine binds one exact local unicast address. Port zero asks the
@@ -1067,6 +1072,116 @@ A snapshot holds only what the run gathered, so a comparison can only report wha
 - **VPN and tunnel state as such.** There is no tunnel field; a VPN shows up as the interface name and source address on the rows that observed them, which is usually enough to see it, and never enough to name it.
 
 Adding fields to the snapshot for the sake of a fuller comparison is deliberately not done here. Each one is a change to a published format, and a comparison is worth more trustworthy than complete.
+
+## Two-sided diagnosis
+
+`--two-sided` reads the same two `.ndoc` files `--compare` reads and asks the other question about them: not what changed between two runs, but **which machine a failure belongs to**.
+
+```sh
+netdoc --save here.ndoc github.com                     # this machine
+netdoc --via other-host --save there.ndoc github.com   # the other machine
+netdoc --two-sided here.ndoc there.ndoc                # where is it broken?
+```
+
+The two files are arguments, this machine's run first. It runs no probes and opens no socket: both machines already did their probing, and this is the reading of what they recorded. The second file can come from anywhere a snapshot comes from, whether that is `--via` over SSH or a run somebody did by hand and sent you, so the reading works even when the other machine is one you cannot log in to.
+
+Exit `0` means no check failed on either machine, `1` means a failure was placed or the evidence could not place one, and `2` means an argument or an artifact was unusable. It is headless, needs no terminal, and cannot be combined with `--compare` or with any flag that describes a run netdoc would perform.
+
+### Why it is a separate command from `--compare`
+
+The two readings draw opposite conclusions from the same row moving. A check that is `PASS` in one file and `FAIL` in the other is a change over time to a comparison and a difference between two vantage points to a localization, and a reader has to have said which they meant. `--compare` deliberately never claims that one reading caused another; `--two-sided` exists to say which side the evidence puts a failure on, which is a claim, so the two are separate commands with separate schemas and separate exit-code meanings.
+
+There is one rule `--two-sided` has that `--compare` does not: **two snapshots of different targets are refused with exit `2`.** A comparison of two endpoints is a question with an answer, and a localization across two endpoints is not, because a row that failed against one host and passed against another says nothing about which machine is at fault. Two generic runs with no target are one question asked from two places, so those are read.
+
+[Support artifacts](#support-snapshots) follow from that rule rather than needing one of their own. Sanitization renames the target, and it assigns the same pseudonym to the same endpoint on both machines, so two `--support` artifacts of one target read normally and a sanitized file paired with a full-fidelity one is refused as two different targets. That is the right outcome either way: the pair whose names line up is the pair whose rows can be set against each other.
+
+### What it reads, and what it refuses to read
+
+Only rows **both machines measured** are read. `PASS`, `WARN`, and `FAIL` are measured outcomes; `SKIP`, `N/A`, and `INCOMPLETE` are three different reasons nothing was measured, and none of them is evidence about a machine. A check present in only one file is not comparable either. Every unread row is marked `comparable: false` and counted in the caveats, so a reading never quietly rests on a row that was not there.
+
+`WARN` is a row that worked, the same reading the snapshot's own `ok` field and netdoc's exit code take. A warned row is not a failure to place.
+
+### Placements
+
+| ID | `side` | What the evidence proves |
+|----|--------|--------------------------|
+| `two_sided_no_failure` | `none` | no check that both machines measured failed on either of them |
+| `two_sided_one_side_fails` | `a` or `b` | every failed check passes from the other machine, so the failure is specific to that machine's vantage point |
+| `two_sided_one_side_fails_more` | `a` or `b` | some checks fail from both machines and one fails others besides, so at least one failure is specific to that machine |
+| `two_sided_shared_failure` | `shared` | every failed check fails from both machines, which places it on neither one in particular |
+| `two_sided_divergent_failures` | `both` | each machine fails checks the other passes, which is two findings rather than one failure to place |
+| `two_sided_no_comparable_checks` | `unknown` | no check produced a measured outcome on both machines |
+
+### What a placement does and does not prove
+
+"Specific to side A's vantage point" is the strongest claim two snapshots support, and it is narrower than it sounds. Side A's own network state, side A's path, and an endpoint that treats the two machines differently all produce exactly this evidence, so all of them are listed as alternatives and none is chosen. Every placement except an unqualified pass carries `ambiguous: true`.
+
+It never claims a firewall, router, NAT, VPN, or host is responsible. Two snapshots cannot establish that: they record what each machine observed, not what any device in between did. A `--two-sided` reading is a statement about **which machine**, never about **which box**.
+
+It also cannot see anything the snapshots do not carry, which is the same list as [what a comparison cannot tell you yet](#what-a-comparison-cannot-tell-you-yet).
+
+### Caveats
+
+Conditions that weaken the reading are reported as caveats rather than left for the reader to notice. They are prose for a person and are not parsed back:
+
+- **A gap between the two captures.** Anything that changed in between is inside the evidence. Runs started together produce no caveat; the gap is reported from a minute upward, in minutes, hours, or days.
+- **Settings the two runs did not share.** Different probe timeouts (a timed-out row may be a shorter budget rather than a slower path), different second-opinion resolvers (the public DNS row asked two different questions), or a different `--check`/`--skip` selection. The selection is compared as a set, so a reordering is not a caveat.
+- **Rows only one side measured**, counted.
+- **Mixed fidelity**, when one side is a sanitized `--support` artifact and the other is full fidelity, because the names and addresses are then not comparable. This arises only for two generic runs: on a targeted run, sanitization renames the target itself, so the pair fails the same-target rule above and is refused before any row is read.
+
+Two machines is the premise, so a different operating system, architecture, or netdoc build on the other side is the expected case and is never a caveat.
+
+### How it relates to peer mode and `--via`
+
+Two machines produce six kinds of observation. netdoc gathers them with commands that do not overlap, and then reads two of the groups together:
+
+| Observation | Where it comes from |
+|---|---|
+| this machine's own network state, and this machine to the target | an ordinary local run, saved with `--save` |
+| the other machine's own network state, and the other machine to the target | the same ordinary run over there, `--via` being the way to start it from here |
+| this machine to the other machine, and the other machine back | [peer mode](#peer-diagnosis) |
+
+| Reading | Command |
+|---|---|
+| where a failure against the target is, given the first two rows | `--two-sided` |
+| whether the path between the two machines fails in one direction or both | peer mode's own combined diagnosis |
+
+Peer mode and `--two-sided` answer different halves of "is the failure on this machine, on the other machine, or between them". Peer mode measures the path **between the two machines** directly, with live authenticated traffic in both directions, and is the only one of the three that can prove directional asymmetry. `--two-sided` reads two finished ordinary diagnoses and places a failure **against a target** on one machine or the other. Neither reads the other's output, and neither is a substitute for it: peer mode makes no claim about a target, and `--two-sided` makes no claim about the path between the two machines.
+
+`--two-sided` needs no direct reachability between the two machines and no pairing string, because nothing is exchanged live. Peer mode needs both, because something is.
+
+### Machine-readable two-sided reading
+
+`--json` prints the reading as its own versioned document, separate from the snapshot and comparison schemas because scripts consume it:
+
+```json
+{
+  "schema": "netdoc.twosided.v1",
+  "a": {"created_at": "2026-03-04T05:06:07Z", "tool": {"version": "1.2.3", "os": "linux", "arch": "amd64"},
+        "target": "github.com:443 tls+http", "verdict": "service", "summary": "…", "ok": false},
+  "b": {"created_at": "2026-03-04T05:06:09Z", "tool": {"version": "1.2.3", "os": "windows", "arch": "amd64"},
+        "target": "github.com:443 tls+http", "verdict": "ok", "summary": "…", "ok": true},
+  "same_target": true,
+  "checks": [
+    {"id": "iface", "a": "PASS", "b": "PASS", "comparable": true},
+    {"id": "target_tcp", "a": "FAIL", "b": "PASS", "comparable": true},
+    {"id": "ssid", "a": "N/A", "b": "N/A", "comparable": false}
+  ],
+  "caveats": ["1 check did not produce a measured outcome on both machines and was not read."],
+  "diagnosis": {
+    "id": "two_sided_one_side_fails",
+    "side": "a",
+    "summary": "Every failed check passes from side B, so the failure is specific to side A's vantage point rather than to the endpoint alone.",
+    "evidence": ["target_tcp"],
+    "ambiguous": true,
+    "alternatives": ["side A's own network state", "side A's path to the endpoint",
+                     "the endpoint treating the two machines differently, by address or by policy",
+                     "the endpoint or the path changing between the two runs"]
+  }
+}
+```
+
+`checks` is every check in either snapshot, in the order side A executed them, followed by the ones only side B had. `comparable` is what says whether the placement was allowed to read the row. Field names, the `side` and ID vocabularies, and the meaning of the exit code are stable for this schema. `caveats` and `summary` are derived sentences and are never parsed back; branch on `diagnosis.id`, `diagnosis.side`, and `diagnosis.evidence`. `same_target` is always `true` in a document that exists at all, since the other case is refused, and it is carried so the document is self-describing.
 
 ## Remote diagnosis over SSH
 

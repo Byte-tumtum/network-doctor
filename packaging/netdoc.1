@@ -20,6 +20,11 @@ netdoc \- diagnose network connectivity and explain where the connection breaks
 .RI [ \-json ]
 .br
 .B netdoc
+.B \-two\-sided
+.I here.ndoc there.ndoc
+.RI [ \-json ]
+.br
+.B netdoc
 .BI \-via " destination"
 .RI [ flags ]
 .RI [ target ]
@@ -193,6 +198,42 @@ which prints the separate
 .B netdoc.comparison.v1
 schema instead of the table. Cannot be combined with any flag that describes a
 run netdoc would perform.
+.TP
+.B \-two\-sided
+Read two diagnostic snapshots of one target as two machines looking at it, and
+say which side the evidence places a failure on. The two files are given as
+arguments, this machine's run first. Runs no probes and opens no socket, the
+same as
+.BR \-compare ,
+and asks a different question of the same two files: not what changed between
+two runs, but whether a failure belongs to one machine, the other, something
+they share, or nowhere the evidence can place it.
+.IP
+Only rows both machines measured are read. A check that failed on one side and
+passed on the other places the failure on that side's vantage point, which
+means its own network state, its path, or an endpoint that treats the two
+machines differently; it never names a firewall, router, NAT, VPN, or host as
+the cause, because two snapshots cannot establish one. Conditions that weaken
+the reading, such as a gap between the two captures or settings the runs did
+not share, are reported as caveats.
+.IP
+Two snapshots of different targets are refused with exit
+.BR 2 ,
+unlike
+.BR \-compare ,
+which allows them: a row that failed against one host and passed against
+another says nothing about which machine is at fault. Exit
+.B 0
+means no check failed on either machine and
+.B 1
+means a failure was placed or the evidence could not place one. Headless, so it
+needs no terminal, and independent of
+.BR \-json ,
+which prints the separate
+.B netdoc.twosided.v1
+schema instead of the table. Cannot be combined with
+.B \-compare
+or with any flag that describes a run netdoc would perform.
 .TP
 .BI \-peer\-listen " IP:port"
 Open one temporary authenticated peer session on an exact local unicast IP and

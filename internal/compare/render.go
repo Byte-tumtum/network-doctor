@@ -117,19 +117,25 @@ func writeTable(b *strings.Builder, heading string, rows [][3]string) {
 	writeTableWithNotes(b, heading, rows, make([]string, len(rows)))
 }
 
-// writeTableWithNotes lays out the label, BEFORE, and AFTER columns at widths
-// taken from the widest cell, so the table fits its own contents rather than a
-// guessed terminal width. Trailing spaces are trimmed, which keeps the output
-// stable to compare and paste into a bug report.
 func writeTableWithNotes(b *strings.Builder, heading string, rows [][3]string, notes []string) {
+	writeColumns(b, heading, "BEFORE", "AFTER", rows, notes)
+}
+
+// writeColumns lays out the label column and two value columns at widths taken
+// from the widest cell, so the table fits its own contents rather than a
+// guessed terminal width. Trailing spaces are trimmed, which keeps the output
+// stable to compare and paste into a bug report. The two column headings are
+// the caller's, because two readings of the same pair of snapshots name their
+// sides differently: one has a before and an after, the other has two machines.
+func writeColumns(b *strings.Builder, heading, leftHeading, rightHeading string, rows [][3]string, notes []string) {
 	const gap = 2
-	label, before, after := width(heading), width("BEFORE"), width("AFTER")
+	label, before, after := width(heading), width(leftHeading), width(rightHeading)
 	for _, row := range rows {
 		label = max(label, width(clean(row[0])))
 		before = max(before, width(clean(display(row[1]))))
 		after = max(after, width(clean(display(row[2]))))
 	}
-	b.WriteString(strings.TrimRight(pad(heading, label+gap)+pad("BEFORE", before+gap)+"AFTER", " ") + "\n")
+	b.WriteString(strings.TrimRight(pad(heading, label+gap)+pad(leftHeading, before+gap)+rightHeading, " ") + "\n")
 	for i, row := range rows {
 		line := pad(clean(row[0]), label+gap) + pad(clean(display(row[1])), before+gap)
 		if notes[i] == "" {

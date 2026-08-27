@@ -17,9 +17,11 @@ complete -c netdoc -o watch -l watch -d 'Continuously re-run checks'
 complete -c netdoc -o save -l save -r -F -d 'Write a diagnostic snapshot (.ndoc) to a file'
 complete -c netdoc -o support -l support -r -F -d 'Write a sanitized support snapshot (.ndoc) to a file'
 complete -c netdoc -o compare -l compare -d 'Compare two saved snapshots (.ndoc); runs no probes'
-# The two arguments of --compare are local files, so file completion comes back
-# for a bare word once that flag is on the line.
+complete -c netdoc -o two-sided -l two-sided -d 'Read two saved snapshots (.ndoc) as two machines; runs no probes'
+# The two arguments of --compare and --two-sided are local files, so file
+# completion comes back for a bare word once either flag is on the line.
 complete -c netdoc -n '__fish_seen_argument -o compare -l compare' -F
+complete -c netdoc -n '__fish_seen_argument -o two-sided -l two-sided' -F
 complete -c netdoc -o peer-listen -l peer-listen -r -d 'Listen for an authenticated peer on an exact IP:port (repeatable)'
 complete -c netdoc -o peer-connect -l peer-connect -d 'Read a temporary pairing string and run a two-ended diagnosis'
 complete -c netdoc -o via -l via -r -f \

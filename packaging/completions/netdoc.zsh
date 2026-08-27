@@ -17,7 +17,8 @@ _netdoc_ifaces() {
 # spellings below (-json) would be read as stacked letters.
 # Targets are hostnames, URLs, and IP literals, none of them enumerable, so
 # the positional completes to nothing rather than to local filenames. That
-# holds for --compare's two snapshot files too: one positional spec cannot be
+# holds for the two snapshot files of --compare and --two-sided too: one
+# positional spec cannot be
 # a target here and a filename there, and offering files for every target is
 # the worse of the two mistakes.
 _arguments \
@@ -26,7 +27,8 @@ _arguments \
   '(--watch -watch)'{--watch,-watch}'[continuously re-run checks]' \
   '(--save -save --support -support)'{--save,-save}'[write a diagnostic snapshot (.ndoc) to a file]:file:_files' \
   '(--support -support --save -save)'{--support,-support}'[write a sanitized support snapshot (.ndoc) to a file]:file:_files' \
-  '(--compare -compare)'{--compare,-compare}'[compare two saved snapshots (.ndoc); runs no probes]' \
+  '(--compare -compare --two-sided -two-sided)'{--compare,-compare}'[compare two saved snapshots (.ndoc); runs no probes]' \
+  '(--two-sided -two-sided --compare -compare)'{--two-sided,-two-sided}'[read two saved snapshots (.ndoc) as two machines; runs no probes]' \
   '*'{--peer-listen,-peer-listen}'[listen for an authenticated peer on an exact IP\:port]:address:' \
   '(--peer-connect -peer-connect)'{--peer-connect,-peer-connect}'[read a temporary pairing string and run a two-ended diagnosis]' \
   '(--via -via)'{--via,-via}'[run the checks on this SSH destination instead of on this machine]:destination:_hosts' \

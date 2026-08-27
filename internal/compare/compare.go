@@ -175,8 +175,14 @@ func sideOf(s snapshot.Snapshot) Side {
 	return Side{
 		CreatedAt: s.CreatedAt, Tool: s.Tool, Target: targetDisplay(s.Target),
 		Verdict: s.Diagnosis.Verdict, Summary: s.Diagnosis.Summary, OK: s.OK,
-		Sanitized: s.Redaction != nil && s.Redaction.Sanitized,
+		Sanitized: isSanitized(s),
 	}
+}
+
+// isSanitized reads the artifact's own redaction metadata. Privacy is never
+// inferred from values that happen to look like placeholders.
+func isSanitized(s snapshot.Snapshot) bool {
+	return s.Redaction != nil && s.Redaction.Sanitized
 }
 
 // targetDisplay is the endpoint as one word for a header row. It is display
