@@ -95,6 +95,13 @@ func (m model) View() string {
 	if h := m.wrap(m.headerView()); h != "" {
 		header = h + "\n"
 	}
+	// The causal strip sits between the context and the panels: it is about
+	// the answer above it, not about the row the cursor is on. It is already
+	// laid out to the terminal width, so it is not wrapped again.
+	path := ""
+	if p := m.pathView(); p != "" {
+		path = p + "\n"
+	}
 	help := m.helpView(deferred)
 	if m.entering {
 		help = m.promptView(true)
@@ -111,7 +118,7 @@ func (m model) View() string {
 	if m.actionsOpen {
 		// The banner and the header outrank the menu, so it is given the rows
 		// they leave rather than pushing them off the top of the screen.
-		help = m.actionsView(m.height - strings.Count(banner+header, "\n"))
+		help = m.actionsView(m.height - strings.Count(banner+header+path, "\n"))
 	}
 	toolbox := m.toolboxView(false)
 	tail := help + "\n"
@@ -121,7 +128,7 @@ func (m model) View() string {
 	var fixed string
 	var avail int
 	budget := func() {
-		fixed = banner + header
+		fixed = banner + header + path
 		if body != "" {
 			fixed += "\n" + body + "\n"
 		}
@@ -146,8 +153,9 @@ func (m model) View() string {
 	}
 	// Still overflowing: shed in order of what the reader can do without. The
 	// toolbox chips lose their names first (they wrap to a row per couple of
-	// tools on a narrow terminal), then the results block scrolls down toward
-	// a single probe row, then the chips and finally the block go entirely.
+	// tools on a narrow terminal), then the results block scrolls down toward a
+	// single probe row, then the causal strip goes, then the chips and finally
+	// the block go entirely.
 	// The banner carries the answer with its Fix, Next and Evidence lines, the
 	// header carries the target that answer is about, and the help bar is the
 	// way to anywhere else, so those three never yield to the results block.
@@ -157,6 +165,14 @@ func (m model) View() string {
 	}
 	if m.height > 0 && avail < minAvail {
 		body = shrink(max(lipgloss.Height(body)+avail-minAvail, bodyMinRows))
+		budget()
+	}
+	// The strip goes once the block below it has stopped yielding rows: it is
+	// the whole path in one line, which is worth more to a reader than the
+	// probe row a scrolled list would give back, but the list is still the
+	// thing carrying the evidence.
+	if m.height > 0 && avail < minAvail && path != "" {
+		path = ""
 		budget()
 	}
 	if m.height > 0 && avail < minAvail && toolbox != "" {

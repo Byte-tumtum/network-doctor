@@ -48,10 +48,12 @@ netdoc --two-sided here.ndoc there.ndoc  # two machines, one target: which side 
 Run `netdoc` with no target to check the local interface, internet egress,
 configured proxy, public DNS, and Wi-Fi metadata. A finished run leads with the
 answer: the verdict, the fix, the tool worth reaching for next, and the one line
-of evidence the verdict rests on, above the checks that produced them. Select
-any other row to see its own evidence and suggested fix. Press `e` to replace
-the focused Details panel with the causal explanation for the diagnosis, and
-`?` for every shortcut.
+of evidence the verdict rests on, above the checks that produced them. When a
+target's path broke, a one-line target path sits under that answer, showing the
+rung that failed and the checks that never ran behind it. Select any other row
+to see its own evidence and suggested fix. Press `e` to replace the focused
+Details panel with the causal explanation for the diagnosis, and `?` for every
+shortcut.
 
 In `--watch`, Network Doctor keeps a bounded incident timeline around each
 intermittent failure. It retains the last working state, the failure onset,
