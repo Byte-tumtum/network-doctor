@@ -453,6 +453,24 @@ func (m model) chainRan() bool { return len(m.started) > 0 }
 
 func (m model) allDone() bool { return len(m.results) == len(m.probes) }
 
+// runProgress counts this pass over the plan it is actually running: done is a
+// probe the scheduler has produced a final result for (pass, warn, fail, skip,
+// and n/a all count once they exist), running is one it dispatched that has
+// not answered yet. Everything else is pending on a dependency, and neither
+// count claims it. Counting over m.probes is what makes --check, --skip, and a
+// target switch move the denominator, and what makes a watch pass describe
+// itself: doRestart empties both maps.
+func (m model) runProgress() (done, running int) {
+	for _, p := range m.probes {
+		if _, ok := m.results[p.ID]; ok {
+			done++
+		} else if m.started[p.ID] {
+			running++
+		}
+	}
+	return done, running
+}
+
 // hasJob reports whether the current slot holds a job pane worth showing:
 // either a running process or a finished/failed one still displaying output.
 func (m model) hasJob() bool { return m.cur.active != nil || m.cur.status != JobQueued }

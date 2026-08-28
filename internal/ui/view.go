@@ -233,8 +233,9 @@ func (m model) targetHP() string {
 }
 
 // headerView is the one-line context strip under the banner: target, connected
-// network, watch mode. Empty when there is nothing to say, and the caller drops
-// the line rather than rendering a blank one.
+// network, watch mode, and this pass's progress while one is running. Empty
+// when there is nothing to say, and the caller drops the line rather than
+// rendering a blank one.
 func (m model) headerView() string {
 	var parts []string
 	if m.target != nil {
@@ -254,6 +255,18 @@ func (m model) headerView() string {
 				state += fmt.Sprintf(" (%d recorded)", count)
 			}
 			parts = append(parts, state)
+		}
+	}
+	// Progress is about the pass in flight, so it goes away with the pass: a
+	// finished run says so with its verdict, and "12/12 complete" under it
+	// would be the same fact a second time. No count claims a probe that is
+	// only waiting on a dependency, and "running" is left off entirely while
+	// nothing is dispatched rather than rounded up to look busy.
+	if m.chainRan() && !m.allDone() {
+		done, running := m.runProgress()
+		parts = append(parts, fmt.Sprintf("%d/%d complete", done, len(m.probes)))
+		if running > 0 {
+			parts = append(parts, fmt.Sprintf("%d running", running))
 		}
 	}
 	if len(parts) == 0 {
