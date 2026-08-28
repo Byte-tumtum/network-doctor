@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -140,27 +141,42 @@ func TestPersistentBlockUnchangedWhileScrolling(t *testing.T) {
 // may panic, overflow the terminal, or leave a panel border hanging open, and
 // the verdict has to outlive everything below it.
 func TestConstrainedHeightDegradesCleanly(t *testing.T) {
-	for _, w := range []int{30, 60, 100} {
-		for h := 1; h <= 26; h++ {
-			m := blackHoleModel(t)
-			u, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-			nm := asModel(t, u)
-			v := nm.View()
-			if rows := lipgloss.Height(v); rows > h {
-				t.Errorf("%dx%d: view is %d display rows tall:\n%s", w, h, rows, v)
-			}
-			for _, line := range strings.Split(v, "\n") {
-				if got := lipgloss.Width(line); got > w {
-					t.Errorf("%dx%d: line is %d wide: %q", w, h, got, line)
+	// withJobs runs the same sweep with a job pane whose strip is carrying a
+	// ring of runs: the strip is a row inside a pane View already budgets, so
+	// it must not buy itself one at the verdict's expense.
+	for _, withJobs := range []bool{false, true} {
+		for _, w := range []int{30, 60, 100} {
+			for h := 1; h <= 26; h++ {
+				m := blackHoleModel(t)
+				if withJobs {
+					m.cur = jobState{name: "ping the host", status: JobRunning, active: &job{}, start: time.Now()}
+					m.otherJobs = []jobState{
+						{name: "DNS lookup", status: JobDone},
+						{name: "trace the path", status: JobFailed},
+						{name: "reverse DNS lookup", status: JobTimedOut},
+					}
+					m.cur.lines = []string{"64 bytes from host", "64 bytes from host"}
 				}
-			}
-			if n := unclosedPanels(v); n != 0 {
-				t.Errorf("%dx%d: %d panel border(s) left unclosed:\n%s", w, h, n, v)
-			}
-			// The verdict's first word survives at any height: it is the top
-			// line, and everything below it yields before it does.
-			if !strings.Contains(v, "TCP reaches") {
-				t.Errorf("%dx%d: the verdict must survive:\n%s", w, h, v)
+				u, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+				nm := asModel(t, u)
+				v := nm.View()
+				if rows := lipgloss.Height(v); rows > h {
+					t.Errorf("%dx%d jobs=%v: view is %d display rows tall:\n%s", w, h, withJobs, rows, v)
+				}
+				for _, line := range strings.Split(v, "\n") {
+					if got := lipgloss.Width(line); got > w {
+						t.Errorf("%dx%d jobs=%v: line is %d wide: %q", w, h, withJobs, got, line)
+					}
+				}
+				if n := unclosedPanels(v); n != 0 {
+					t.Errorf("%dx%d jobs=%v: %d panel border(s) left unclosed:\n%s", w, h, withJobs, n, v)
+				}
+				// The verdict's first word survives at any height: it is the
+				// top line, and everything below it, the strip included,
+				// yields before it does.
+				if !strings.Contains(v, "TCP reaches") {
+					t.Errorf("%dx%d jobs=%v: the verdict must survive:\n%s", w, h, withJobs, v)
+				}
 			}
 		}
 	}

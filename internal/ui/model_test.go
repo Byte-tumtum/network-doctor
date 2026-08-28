@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
@@ -112,6 +113,27 @@ func TestNetworkMapToggle(t *testing.T) {
 	if !strings.Contains(view, "router.lan.example") || !strings.Contains(view, "living-room-tv.lan.example") || !strings.Contains(view, "printer.office.example") || strings.Contains(view, "Domain:") {
 		t.Fatalf("mixed domains must remain visible in the network map:\n%s", view)
 	}
+
+	// The map stands in for the LAN scan's raw output, so the job pane stays
+	// hidden while it is up, and the job strip inside that pane with it. A run
+	// parked behind the map must not be leaked onto the map by the strip.
+	nm.otherJobs = []jobState{{name: "parked run", status: JobDone}}
+	view = nm.View()
+	if strings.Contains(view, "parked run") || strings.Contains(ansi.Strip(view), "› "+lanDiscoveryName) {
+		t.Fatalf("the network map must keep the raw LAN job pane hidden:\n%s", view)
+	}
+	// Hidden is not unreachable: tab still selects the parked run, and leaving
+	// the map brings the strip back with both runs on it.
+	u, _ = nm.Update(tea.KeyMsg{Type: tea.KeyTab})
+	tabbed := asModel(t, u)
+	if tabbed.networkMap || tabbed.cur.name != "parked run" {
+		t.Fatalf("tab must still reach the run parked behind the map, got %q (map=%v)", tabbed.cur.name, tabbed.networkMap)
+	}
+	strip := ansi.Strip(tabbed.jobStrip())
+	if !strings.HasPrefix(strip, "› parked run") || !strings.Contains(strip, lanDiscoveryName) {
+		t.Fatalf("leaving the map must show both runs on the strip: %q", strip)
+	}
+	nm.otherJobs = nil
 
 	u, _ = nm.Update(keyMsg("v"))
 	nm = asModel(t, u)

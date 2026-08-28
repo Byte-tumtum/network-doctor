@@ -1773,14 +1773,12 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 	return ""
 }
 
-// jobStatusLine is the "name: status" line shared by the job pane and the
-// output viewer: a live spinner + timer while running, the total duration
-// once the job has finished.
+// jobStatusLine is the "name: status" line for the selected run: a live
+// spinner + timer while running, the total duration once it has finished. It
+// is the selected run's tab in the strip below, and the strip is what the job
+// pane and the output viewer both draw.
 func (m model) jobStatusLine() string {
 	s := m.st.faint.Render(m.cur.name+": ") + m.st.status[m.cur.status].Render(m.cur.status.String())
-	if len(m.otherJobs) > 0 {
-		s += m.st.faint.Render(fmt.Sprintf(" · %d jobs · tab to switch", len(m.otherJobs)+1))
-	}
 	if m.cur.active != nil {
 		return s + " " + m.spinner.View() + m.st.faint.Render(fmt.Sprintf(" %.0fs", time.Since(m.cur.start).Seconds()))
 	}
@@ -1792,10 +1790,90 @@ func (m model) jobStatusLine() string {
 	return s
 }
 
+// jobTabNameWidth caps a parked run's name in the strip, so one long tool name
+// cannot crowd every other tab off the row. Every built-in tool name but the
+// longest fits whole.
+const jobTabNameWidth = 14
+
+// jobGlyphs is a run's lifecycle in one character, indexed by JobStatus and
+// drawn from the alphabet the probe rows already use. A cancelled run takes
+// the skip glyph, which is what cancelling one amounts to, and a run that ran
+// out of its budget takes the warn glyph rather than a second failure mark, so
+// the strip tells a timeout from a failure without asking the reader to see
+// colour.
+var jobGlyphs = [...]string{"·", "…", "✓", "✗", "⊘", "!"}
+
+// jobGlyph is how far a run got: the shared spinner while it is still
+// streaming, else its terminal glyph in that status's colour.
+func (m model) jobGlyph(j *jobState) string {
+	if j.active != nil {
+		return m.spinner.View()
+	}
+	if j.status < 0 || int(j.status) >= len(jobGlyphs) {
+		return "?"
+	}
+	return m.st.status[j.status].Render(jobGlyphs[j.status])
+}
+
+// jobStrip is the row of runs the job pane and the output viewer share, in the
+// ring order tab walks: the selected run first, keeping the whole status line,
+// then the parked ones as name + glyph chips. So tab selects the chip
+// immediately right of the selected run, and switching rotates the row left.
+// A lone run is the status line and nothing else, which leaves the "›" marker
+// as the sign that there is anywhere to switch to. Only the selected run
+// spells its status out, so no run's state is written twice on one row.
+func (m model) jobStrip() string {
+	line := m.jobStatusLine()
+	if !m.hasJob() || len(m.otherJobs) == 0 {
+		return line
+	}
+	line = m.st.sel.Render("› ") + line
+
+	chips := make([]string, len(m.otherJobs))
+	for i := range m.otherJobs {
+		chips[i] = m.st.faint.Render(ansi.Truncate(m.otherJobs[i].name, jobTabNameWidth, "…")) +
+			" " + m.jobGlyph(&m.otherJobs[i])
+	}
+	sep := m.st.faint.Render("  ·  ")
+	used, sepW := lipgloss.Width(line), lipgloss.Width(sep)
+
+	// Fill from the left in ring order, so the chips a narrow terminal keeps
+	// are the ones tab reaches first, dropping one at a time until the row
+	// fits with the counter for whatever is left over. Re-measuring the whole
+	// row per drop keeps one definition of "does it fit", and maxParkedJobs
+	// bounds how often it can run.
+	n := len(chips)
+	for m.width > 0 && n > 0 && jobStripWidth(used, sepW, chips, n) > m.width {
+		n--
+	}
+	for _, c := range chips[:n] {
+		line += sep + c
+	}
+	// The counter is the only sign the ring carries on past the last chip, so
+	// it yields only to a terminal too narrow for the selected run itself.
+	if hidden := len(chips) - n; hidden > 0 && (m.width <= 0 || jobStripWidth(used, sepW, chips, n) <= m.width) {
+		line += sep + m.st.faint.Render(fmt.Sprintf("+%d", hidden))
+	}
+	return line
+}
+
+// jobStripWidth is the display width of the strip carrying the first n chips,
+// counting the "+N" counter whenever that leaves any of them hidden.
+func jobStripWidth(used, sepW int, chips []string, n int) int {
+	total := used
+	for _, c := range chips[:n] {
+		total += sepW + lipgloss.Width(c)
+	}
+	if hidden := len(chips) - n; hidden > 0 {
+		total += sepW + lipgloss.Width(fmt.Sprintf("+%d", hidden))
+	}
+	return total
+}
+
 // viewerHeader is the command line and status above the viewport, wrapped:
 // nothing else reflows them, and vpHeight has to know how many rows they cost.
 func (m model) viewerHeader() string {
-	return m.wrap(m.st.title.Render("$ "+m.cur.display)) + "\n" + m.wrap(m.jobStatusLine())
+	return m.wrap(m.st.title.Render("$ "+m.cur.display)) + "\n" + m.wrap(m.jobStrip())
 }
 
 // outputView is the full-screen scrollable output viewer (Enter).
@@ -1956,7 +2034,7 @@ func (m model) jobView(avail int) string {
 		return "" // not even rule+title+status+note fit, so drop the pane
 	}
 	title := m.wrap(m.st.title.Render("$ " + m.cur.display))
-	status := m.wrap(m.jobStatusLine())
+	status := m.wrap(m.jobStrip())
 	tailN := jobTailLines
 	if m.height > 0 {
 		// rule, context note, trailing blank, plus however many rows the

@@ -14,11 +14,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
@@ -186,6 +189,9 @@ func TestJobStatusString(t *testing.T) {
 	if declared != len(jobStatusNames) {
 		t.Errorf("%d JobStatus constants, but %d names", declared, len(jobStatusNames))
 	}
+	if declared != len(jobGlyphs) {
+		t.Errorf("%d JobStatus constants, but %d strip glyphs", declared, len(jobGlyphs))
+	}
 }
 
 func TestJobStatusLineShowsMilliseconds(t *testing.T) {
@@ -193,6 +199,247 @@ func TestJobStatusLineShowsMilliseconds(t *testing.T) {
 	m.cur.status, m.cur.dur = JobDone, 40*time.Millisecond
 	if got := m.jobStatusLine(); !strings.Contains(got, "40ms") {
 		t.Errorf("jobStatusLine() = %q, want 40ms", got)
+	}
+}
+
+// jobStripModel is a model whose ring is these runs, the first selected, on a
+// terminal w columns wide.
+func jobStripModel(w int, runs ...jobState) model {
+	m := newModel(nil, false)
+	m.width = w
+	runs = append([]jobState(nil), runs...)
+	for i := range runs {
+		if runs[i].active != nil && runs[i].start.IsZero() {
+			runs[i].start = time.Now() // launching a run stamps this; the timer reads it
+		}
+	}
+	m.cur, m.otherJobs = runs[0], runs[1:]
+	return m
+}
+
+// ringNames is the ring in the order tab walks it: the selected run, then the
+// parked ones. It comes from the joblist iterator, so a test comparing the
+// strip against it is comparing the strip against switchJob's own order.
+func ringNames(m model) []string {
+	var names []string
+	for j := range m.jobs {
+		names = append(names, j.name)
+	}
+	return names
+}
+
+func TestJobStripRunsInRingOrder(t *testing.T) {
+	lone := jobStripModel(80, jobState{name: "ping the host", status: JobDone, dur: time.Second})
+	got := ansi.Strip(lone.jobStrip())
+	if strings.Contains(got, "›") {
+		t.Errorf("a lone run has nowhere to switch to, so it takes no marker: %q", got)
+	}
+	if !strings.Contains(got, "ping the host: done") {
+		t.Errorf("jobStrip() = %q, want the run and its status", got)
+	}
+
+	m := jobStripModel(120,
+		jobState{name: "ping the host", status: JobRunning, active: &job{}},
+		jobState{name: "DNS lookup", status: JobDone},
+		jobState{name: "trace the path", status: JobFailed},
+	)
+	got = ansi.Strip(m.jobStrip())
+	if !strings.HasPrefix(got, "› ping the host: running") {
+		t.Errorf("the selected run leads the strip, marked and spelled out: %q", got)
+	}
+	if strings.Count(got, "›") != 1 {
+		t.Errorf("exactly one tab is the selected one: %q", got)
+	}
+	at := -1
+	for _, name := range ringNames(m) {
+		i := strings.Index(got, name)
+		if i <= at {
+			t.Fatalf("strip %q does not follow the ring %v", got, ringNames(m))
+		}
+		at = i
+	}
+	// Only the selected run spells its status out; the parked ones carry a
+	// glyph, so no run's state is written twice on the row.
+	if strings.Count(got, "failed") != 0 || !strings.Contains(got, "trace the path ✗") {
+		t.Errorf("a parked run is name + glyph, not a second status word: %q", got)
+	}
+}
+
+func TestTabMovesTheSelectedTab(t *testing.T) {
+	m := jobStripModel(120,
+		jobState{name: "ping the host", status: JobDone},
+		jobState{name: "DNS lookup", status: JobDone},
+		jobState{name: "trace the path", status: JobDone},
+	)
+	if got := ansi.Strip(m.jobStrip()); !strings.HasPrefix(got, "› ping the host") {
+		t.Fatalf("strip starts marked on the selected run: %q", got)
+	}
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	nm := asModel(t, u)
+	got := ansi.Strip(nm.jobStrip())
+	if !strings.HasPrefix(got, "› DNS lookup") {
+		t.Errorf("tab must move the marker to the tab on its right: %q", got)
+	}
+	// The row rotates with the ring rather than holding a layout of its own.
+	if want := []string{"DNS lookup", "trace the path", "ping the host"}; !slices.Equal(ringNames(nm), want) {
+		t.Fatalf("ring is %v, want %v", ringNames(nm), want)
+	}
+	at := -1
+	for _, name := range ringNames(nm) {
+		i := strings.Index(got, name)
+		if i <= at {
+			t.Fatalf("strip %q does not follow the rotated ring %v", got, ringNames(nm))
+		}
+		at = i
+	}
+}
+
+// A reader without colour still has to tell a run that is working from one
+// that finished, and a clean finish from a failure, a timeout or a cancel.
+func TestJobStripTellsStatusesApartWithoutColour(t *testing.T) {
+	seen := map[string]JobStatus{}
+	for _, status := range []JobStatus{JobDone, JobFailed, JobCanceled, JobTimedOut} {
+		m := jobStripModel(120,
+			jobState{name: "selected run", status: JobDone},
+			jobState{name: "parked run", status: status},
+		)
+		glyph := ansi.Strip(m.jobGlyph(&m.otherJobs[0]))
+		if glyph == "" {
+			t.Fatalf("%s has no glyph", status)
+		}
+		if other, dup := seen[glyph]; dup {
+			t.Errorf("%s and %s share glyph %q, so colour is the only difference", status, other, glyph)
+		}
+		seen[glyph] = status
+		if got := ansi.Strip(m.jobStrip()); !strings.Contains(got, "parked run "+glyph) {
+			t.Errorf("%s: strip %q must carry glyph %q", status, got, glyph)
+		}
+	}
+	live := jobStripModel(120,
+		jobState{name: "selected run", status: JobDone},
+		jobState{name: "parked run", status: JobRunning, active: &job{}},
+	)
+	glyph := ansi.Strip(live.jobGlyph(&live.otherJobs[0]))
+	if other, terminal := seen[glyph]; terminal {
+		t.Errorf("a running run reuses %s's glyph %q", other, glyph)
+	}
+	if got := ansi.Strip(live.jobStrip()); !strings.Contains(got, "parked run "+glyph) {
+		t.Errorf("a parked run still streaming must say so: %q", got)
+	}
+}
+
+// The strip is one row at every width: it drops tabs from the tail of the ring
+// and counts them instead of wrapping into a wall.
+func TestJobStripStaysOneBoundedRow(t *testing.T) {
+	runs := []jobState{{name: "ping the host", status: JobRunning, active: &job{}}}
+	for i := 0; i < maxParkedJobs; i++ {
+		runs = append(runs, jobState{name: fmt.Sprintf("parked-%02d", i), status: JobDone})
+	}
+	for _, w := range []int{300, 200, 120, 100, 80, 60, 40, 30, 20, 10, 1} {
+		m := jobStripModel(w, runs...)
+		row := m.jobStrip()
+		plain := ansi.Strip(row)
+		if strings.Contains(plain, "\n") {
+			t.Errorf("width %d: strip wrapped into %q", w, plain)
+		}
+		if !strings.Contains(plain, "› ping the host: running") {
+			t.Errorf("width %d: the selected run must never be elided: %q", w, plain)
+		}
+		// The row fits the terminal, unless the selected run alone does not,
+		// which is the one case the pane wraps exactly as it did before.
+		sel := lipgloss.Width(m.jobStatusLine()) + lipgloss.Width("› ")
+		if got := lipgloss.Width(row); got > w && got > sel {
+			t.Errorf("width %d: strip is %d cells wide: %q", w, got, plain)
+		}
+		shown := 0
+		for i := 0; i < maxParkedJobs; i++ {
+			if strings.Contains(plain, fmt.Sprintf("parked-%02d", i)) {
+				shown++
+			}
+		}
+		// Tabs go from the tail, so what survives is what tab reaches first.
+		for i := 0; i < shown; i++ {
+			if !strings.Contains(plain, fmt.Sprintf("parked-%02d", i)) {
+				t.Errorf("width %d: elision must drop the far end of the ring: %q", w, plain)
+			}
+		}
+		hidden := 0
+		if at := strings.LastIndex(plain, "+"); at >= 0 {
+			_, _ = fmt.Sscanf(plain[at:], "+%d", &hidden)
+		}
+		// Every parked run is either a tab or in the count, as soon as the
+		// row has room for the count at all. Below that the marker is the
+		// only thing left saying there is somewhere to switch to.
+		room := sel + lipgloss.Width("  ·  ") + lipgloss.Width(fmt.Sprintf("+%d", maxParkedJobs))
+		if shown+hidden != maxParkedJobs && w >= room {
+			t.Errorf("width %d: strip accounts for %d shown and %d hidden of %d parked runs: %q",
+				w, shown, hidden, maxParkedJobs, plain)
+		}
+		if w >= 300 && shown != maxParkedJobs {
+			t.Errorf("width %d: a wide terminal shows the whole ring, got %d tabs: %q", w, shown, plain)
+		}
+		if shown == maxParkedJobs && hidden != 0 {
+			t.Errorf("width %d: nothing is hidden, so nothing should be counted: %q", w, plain)
+		}
+	}
+}
+
+// One long name must cost its own tab, never the row.
+func TestJobStripCapsLongNames(t *testing.T) {
+	long := "an extremely long tool name that would eat the whole row"
+	m := jobStripModel(120,
+		jobState{name: "ping the host", status: JobRunning, active: &job{}},
+		jobState{name: long, status: JobDone},
+		jobState{name: "DNS lookup", status: JobDone},
+	)
+	plain := ansi.Strip(m.jobStrip())
+	if strings.Contains(plain, long) {
+		t.Errorf("a long parked name must be capped: %q", plain)
+	}
+	if !strings.Contains(plain, "…") {
+		t.Errorf("a capped name must show it was cut: %q", plain)
+	}
+	if !strings.Contains(plain, "DNS lookup ✓") {
+		t.Errorf("one long name must not crowd the rest of the ring out: %q", plain)
+	}
+	if got := lipgloss.Width(m.jobStrip()); got > 120 {
+		t.Errorf("strip is %d cells wide, want at most 120: %q", got, plain)
+	}
+
+	// Capping counts display cells, not runes: twenty wide runes are forty
+	// columns, and a rune-counted cap would push this tab off the row.
+	wide := jobStripModel(46,
+		jobState{name: "ping", status: JobDone},
+		jobState{name: strings.Repeat("界", 20), status: JobDone},
+	)
+	plain = ansi.Strip(wide.jobStrip())
+	if !strings.Contains(plain, "界") {
+		t.Errorf("a wide-rune name must be capped by display width, not dropped: %q", plain)
+	}
+	if got := lipgloss.Width(wide.jobStrip()); got > 46 {
+		t.Errorf("wide-rune strip is %d cells wide, want at most 46: %q", got, plain)
+	}
+}
+
+// The viewer is a place tab still switches runs, so it carries the same strip.
+func TestOutputViewerShowsTheJobStrip(t *testing.T) {
+	m := jobStripModel(80,
+		jobState{name: "ping the host", status: JobRunning, active: &job{}, display: "ping -c 4 host"},
+		jobState{name: "DNS lookup", status: JobDone},
+	)
+	m.height, m.viewing = 24, true
+	m.cur.lines = []string{"64 bytes from host"}
+	m.refreshViewport()
+	head := ansi.Strip(m.viewerHeader())
+	if !strings.Contains(head, "› ping the host: running") || !strings.Contains(head, "DNS lookup ✓") {
+		t.Errorf("viewer header must carry the job strip: %q", head)
+	}
+	v := m.View()
+	if got := lipgloss.Height(v); got > m.height {
+		t.Errorf("viewer is %d rows tall, want at most %d:\n%s", got, m.height, v)
+	}
+	if !strings.Contains(ansi.Strip(v), "DNS lookup ✓") {
+		t.Errorf("the viewer must not hide the rest of the ring:\n%s", v)
 	}
 }
 
