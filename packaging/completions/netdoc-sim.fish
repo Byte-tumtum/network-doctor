@@ -53,7 +53,7 @@ complete -c netdoc-sim -n '__fish_seen_subcommand_from campaign' -o iteration -l
 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o case -l case -r -d 'Run exactly one derived case'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o shard -l shard -r -d 'Run zero-based shard i/N of the global cases'
-complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o generator-version -l generator-version -r -d 'Hunt generator version (default v6)' -a 'v3 v4 v5 v6'
+complete -c netdoc-sim -n '__fish_seen_subcommand_from hunt' -o generator-version -l generator-version -r -d 'Hunt generator version (default v7)' -a 'v3 v4 v5 v6 v7'
 
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o scenarios -l scenarios -r -d 'Comma-separated baselines (default: all)'
 complete -c netdoc-sim -n '__fish_seen_subcommand_from triage' -o hunt-results -l hunt-results -r -F -d 'Directory of canonical merged hunt reports'

@@ -247,7 +247,7 @@ func huntCoverageFor(version string, lane HuntLane, baseID string, cases []HuntC
 	if operators, err := huntOperatorsForLane(version, lane); err == nil {
 		for _, op := range operators {
 			coverage.Operators = append(coverage.Operators, HuntOperatorCoverage{ID: op.id,
-				Contract: string(op.findingContract), Applicable: applicable[op.id],
+				Contract: string(op.contractFor(version)), Applicable: applicable[op.id],
 				Generated: generated[op.id], Observed: observed[op.id]})
 		}
 	}
@@ -271,6 +271,6 @@ func conditionDeclared(condition NetworkCondition, version string, lane HuntLane
 		return false
 	}
 	return slices.ContainsFunc(operators, func(op mutationOperator) bool {
-		return applicable[op.id] && string(op.findingContract) == string(condition)
+		return applicable[op.id] && string(op.contractFor(version)) == string(condition)
 	})
 }

@@ -1609,6 +1609,96 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 	}
 }
 
+// TestPreferredRouteFailureConditionIsEstablishedIndependently is the oracle
+// half of the v7 promotion, on the two bases the promotion exists for. It
+// asserts the condition the way a hunt establishes it, from the simulator's own
+// evidence with the manifest nowhere in sight, and then reconciles that against
+// whatever netdoc said.
+//
+// Deliberately not written as "netdoc gets this right". The reconciliation is
+// asserted in both directions instead: a recognized condition must leave no
+// finding, and an unrecognized one must leave exactly one high-severity
+// finding naming it. That is the machinery being correct, which stays true
+// whether or not a given base currently gets the right answer, so fixing a
+// diagnosis this catches does not also break its test.
+func TestPreferredRouteFailureConditionIsEstablishedIndependently(t *testing.T) {
+	requireBackend(t)
+	netdoc, sim := buildBinaries(t)
+	for _, tc := range []struct{ name, base, family string }{
+		{"IPv4", "two-path-healthy", "ipv4"},
+		{"IPv6", "two-path-ipv6-healthy", "ipv6"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := loadHuntBase(t, tc.base)
+			op := huntOperator(t, "routing.preferred_path_failure")
+			if op.laneFor(HuntGeneratorVersion) != HuntLaneBugOracle {
+				t.Fatalf("%s is not in the bug-oracle lane at %s", op.id, HuntGeneratorVersion)
+			}
+			mutation, err := op.generate(newTestRNG(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.ID = op.id
+			manifest := GeneratedCaseManifest{Mutations: []GeneratedMutation{mutation}}
+
+			// The unmutated base must establish nothing. Two healthy defaults
+			// with a strict preference between them is the shape this condition
+			// keys on, and it is the shape this base always has, so a rule that
+			// forgot to ask whether the path is dead would fire here.
+			baseline := runLibraryScenarioDefinition(t, sim, netdoc, tc.base)
+			baselineTruth := collectObservedTruth(manifest, &baseline)
+			baselineEstablished, _, baselineComparable := caseConditions(&baseline, baselineTruth)
+			if !baselineComparable {
+				t.Fatalf("healthy %s was not a final-state comparison", tc.base)
+			}
+			if slices.Contains(baselineEstablished, ConditionPreferredRouteFailed) {
+				t.Fatalf("a healthy multipath base established %s: %+v", ConditionPreferredRouteFailed, baselineEstablished)
+			}
+
+			mutated := cloneScenario(base)
+			canonicalScenarioInput(mutated)
+			if err := applyGeneratedMutation(mutated, mutation); err != nil {
+				t.Fatal(err)
+			}
+			mutated.Name = "test-preferred-route-condition-" + tc.family
+			if err := mutated.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			rep := runScenarioDefinition(t, sim, netdoc, mutated)
+			truth := collectObservedTruth(manifest, &rep)
+			established, recognized, comparable := caseConditions(&rep, truth)
+			if !comparable {
+				t.Fatalf("the mutated %s case was not a final-state comparison", tc.base)
+			}
+			if !slices.Contains(established, ConditionPreferredRouteFailed) {
+				t.Fatalf("%s did not establish %s: established=%v faults=%v routes=%+v targets=%+v",
+					tc.base, ConditionPreferredRouteFailed, established, truth.ObservedFaults,
+					rep.Evidence.RouteTables, rep.Evidence.ControlledTargets)
+			}
+			// The two route conditions read the same table and disagree about
+			// it, so one network can never be both.
+			if slices.Contains(established, ConditionNoDefaultRoute) {
+				t.Fatalf("%s established both route conditions: %v", tc.base, established)
+			}
+			findings := unrecognizedConditionFindings(&rep, truth)
+			named := slices.ContainsFunc(findings, func(f HuntCaseFinding) bool {
+				return f.Expected == string(ConditionPreferredRouteFailed) && f.Severity == SeverityHigh &&
+					f.Category == FindingFalseNegative
+			})
+			switch {
+			case slices.Contains(recognized, ConditionPreferredRouteFailed) && named:
+				t.Fatalf("%s recognized the condition and was still accused: %+v", tc.base, findings)
+			case !slices.Contains(recognized, ConditionPreferredRouteFailed) && !named:
+				t.Fatalf("%s left the condition unrecognized and unreported: findings=%+v", tc.base, findings)
+			}
+			t.Logf("%s established=%v recognized=%v findings=%d diagnosis=%+v",
+				tc.base, established, recognized, len(findings), finalClientDiagnosis(&rep).Checks)
+			assertCleanedUp(t, baseline)
+			assertCleanedUp(t, rep)
+		})
+	}
+}
+
 // TestFamilyDropMutationsMoveHolderSideObservation validates the family oracle
 // on its own, before any hunt analysis is allowed to depend on it. It asserts
 // two layers and nothing else: the raw observation the client holder produced by

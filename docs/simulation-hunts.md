@@ -59,7 +59,7 @@ diagnosis-defect oracle. Stress cases can still expose bugs; the distinction is
 whether Hunt can automatically decide that Network Doctor's diagnosis is wrong.
 
 `--cases N` means the first N accepted case identities in the global candidate
-sequence. Generator v6 includes the lane and case coordinate in that identity,
+sequence. Generators v6 and v7 include the lane and case coordinate in that identity,
 so a lane with only a few parameterless mutation combinations can still use the
 requested execution budget. Generators v3 through v5 retain semantic duplicate
 suppression exactly as published, and their accepted case numbers can have
@@ -80,7 +80,7 @@ Run and merge all four shards locally like this:
 ```sh
 for shard in 0 1 2 3; do
   ./netdoc-sim hunt healthy --seed 20260101 --cases 60 \
-    --lane bug-oracle --shard "$shard/4" --max-faults 2 --generator-version v6 --json > "shard-$shard.json"
+    --lane bug-oracle --shard "$shard/4" --max-faults 3 --generator-version v7 --json > "shard-$shard.json"
 done
 ./netdoc-sim hunt merge shard-3.json shard-1.json shard-0.json shard-2.json > hunt.json
 ```
@@ -118,7 +118,7 @@ generator version, and reproduction command with any failure report.
 
 Artifacts from generators v3 through v5 predate lane metadata. A missing lane
 on those artifacts is deliberately interpreted as their original `all`
-operator universe, and reproduction commands print `--lane all`. Generator v6
+operator universe, and reproduction commands print `--lane all`. Generator v6 and v7
 artifacts must record `bug-oracle` or `stress`; a missing lane is rejected rather
 than inheriting the current default.
 
@@ -190,8 +190,8 @@ The current bug-oracle operators are:
 - `service.tcp_reset`, `service.tls_expired`, and
   `service.tls_hostname_mismatch`
 - `proxy.connect_refused` and `quic.udp_443_block`
-- `family.ipv4_drop`, `family.ipv6_drop`, and
-  `routing.no_default_route`
+- `family.ipv4_drop`, `family.ipv6_drop`,
+  `routing.no_default_route`, and `routing.preferred_path_failure`
 
 The current stress operators are:
 
@@ -199,8 +199,7 @@ The current stress operators are:
   `timeline.netem_spike`
 - `encrypted_dns.doh_invalid`, `http.status_503`, and
   `link.transient_down`
-- `routing.preferred_path_failure`, `routing.wrong_default_route`, and
-  `routing.missing_subnet_route`
+- `routing.wrong_default_route` and `routing.missing_subnet_route`
 - `service.connection_refused`, `service.tcp_port_blocked`, and
   `pmtu.blackhole`
 
@@ -263,12 +262,25 @@ that router forwards is read rather than guessed, and that interface must carry
 no IPv6, because `minIPv6MTU` is the floor IPv6 requires of a link and a hop
 that cannot be narrowed below it black-holes no IPv6 sender.
 
-`routing.preferred_path_failure` uses `two-path-healthy`. It lowers the
-preferred router's upstream interface, beyond the client-visible gateway, so
-the lower-metric client route remains selected. Observation requires the
-selected preferred family path to be unreachable and the controlled target on
-the distinct higher-metric alternate path to remain reachable; successful
-link-down application alone is insufficient.
+`routing.preferred_path_failure` uses `two-path-healthy` and
+`two-path-ipv6-healthy`. It lowers the preferred router's upstream interface,
+beyond the client-visible gateway, so the lower-metric client route remains
+selected. Observation requires the selected preferred family path to be
+unreachable and the controlled target on the distinct higher-metric alternate
+path to remain reachable; successful link-down application alone is
+insufficient.
+
+From v7 it is oracle-backed, and its condition wants the same three halves the
+per-mutation observation does, read without the manifest: two defaults with a
+strict preference between them in the client's own kernel table, that family
+unreachable from the client's own dial, and a controlled target answering over
+one of the other defaults. The third clause is what separates the condition
+from a network that is simply down, since two dead paths would otherwise wear
+the name of one. Recognition is `preferred_route_failed` and nothing else. The
+neighbouring route causes each carry a different repair, and this is the only
+one that says a working route is already installed and merely out-ranked, so
+answering with `no_default_route` sends the user to build something they
+already have.
 
 ### How much ground a hunt covered
 
@@ -319,12 +331,13 @@ Two more describe the shape of the faults themselves:
 - **mutation cardinality** counts the cases carrying one fault, two, and so on.
   `--max-faults` says what the run asked for; this says what the base could
   deliver, and they come apart wherever the applicable operators share conflict
-  tags. `two-path-ipv6-healthy` in the bug-oracle lane hosts four operators of
-  which three are resolver faults, so a ceiling of three still builds nothing
-  larger than a two-fault network. Reading it against the sum of the observed
-  operator counts also gives the masking: faults written into the scenario that
-  no independent evidence caught happening, because an earlier fault took the
-  path the later one needed.
+  tags. `two-path-ipv6-healthy` in the bug-oracle lane hosted four operators of
+  which three are resolver faults, so under v6 a ceiling of three still built
+  nothing larger than a two-fault network; the operator v7 promoted is what
+  gave that base a third fault to build with. Reading it against the sum of
+  the observed operator counts also gives the masking: faults written into the
+  scenario that no independent evidence caught happening, because an earlier
+  fault took the path the later one needed.
 - **multi-fault cases** counts the cases whose evidence independently confirmed
   two or more faults on the same network. It is what `--max-faults` actually
   buys, and the only number that says so. Counting established conditions
@@ -365,12 +378,23 @@ so reusing v5 would have silently repointed published case coordinates. V6 also
 includes lane and case number in case identity so a small oracle-backed operator
 universe can consume the requested case budget without a generator defect.
 
+Generator v7 promoted `routing.preferred_path_failure` into the bug-oracle
+lane. That changes which universe a permutation is drawn from on the two
+multipath bases, so doing it in place would have repointed published v6 cases
+there. The operator records the version its contract starts at instead, and
+every earlier generator keeps seeing it in the stress lane with no contract at
+all. `TestVersion6LaneMembershipSurvivesTheVersion7Promotion` pins both
+memberships, and `TestShardPreservesGlobalCaseReproductionIdentity` holds the
+same case's v6 and v7 fingerprints side by side. The promotion is also what
+gives `two-path-ipv6-healthy` an oracle condition at all: every other operator
+that base can host shares one non-condition contract.
+
 Generators v3 through v5 remain the unchanged all-operator selection path and
 retain their original semantic case fingerprints. Their manifests omit lane,
 as they always did. Case seeds are not versioned: every version derives the
 same seed from the hunt seed, base, and case number, then differs only under its
 recorded generator rules. `TestHuntGeneratorVersion3Reproduction` pins an older
-generator against a fixed manifest. New hunts default to v6 and `bug-oracle`;
+generator against a fixed manifest. New hunts default to v7 and `bug-oracle`;
 use `--generator-version` and `--lane` to select retained historical behavior
 explicitly.
 

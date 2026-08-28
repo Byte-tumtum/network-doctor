@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"cmp"
 	"net/netip"
 	"slices"
 
@@ -28,6 +29,7 @@ const (
 	ConditionProxyDestinationRefused NetworkCondition = "proxy_destination_refused"
 	ConditionQUICUDP443Blocked       NetworkCondition = "quic_udp_443_blocked"
 	ConditionNoDefaultRoute          NetworkCondition = "no_default_route"
+	ConditionPreferredRouteFailed    NetworkCondition = "preferred_route_failed"
 )
 
 // observation is everything a condition rule is allowed to look at: the
@@ -186,6 +188,78 @@ var conditionOracle = []conditionRule{
 			return flaggedCause(d, nil, diagnostic.RouteCauseNoDefaultRoute)
 		},
 	},
+	{
+		condition: ConditionPreferredRouteFailed,
+		summary:   "a client whose preferred default route goes nowhere while a lower-preference one still works",
+		evidence:  "the client's own routing table was read back from its kernel and held two defaults with a strict preference between them, the client's own dial of the preferred family's controlled endpoints did not complete, and the client's own dial of a controlled target over one of the other defaults did",
+		// Not family-scoped, for the same reason no_default_route is not:
+		// netdoc names the route fault on one row whichever family lost its
+		// preferred path.
+		observed: func(o observation) bool {
+			return preferredDefaultRouteFailedFor(o, string(familyIPv4)) ||
+				preferredDefaultRouteFailedFor(o, string(familyIPv6))
+		},
+		// The fourth word in a closed vocabulary, and the only one that says a
+		// working route is already installed and merely out-ranked. Telling this
+		// user the internet is unreachable, or that their gateway is dead, or
+		// that they have no default route, sends them to build something they
+		// already have; the repair is to stop preferring the dead path. The
+		// neighbouring route causes are therefore deliberately not accepted as
+		// other ways of saying this one.
+		recognized: func(d *Diagnosis) bool {
+			return flaggedCause(d, nil, diagnostic.RouteCausePreferredPathFailed)
+		},
+	},
+}
+
+// preferredDefaultRouteFailedFor reads the whole condition off the client's own
+// kernel and the client's own dials, and needs all three halves of the sentence
+// its name makes. Two defaults with a strict preference between them is what
+// lets "preferred" mean anything at all, and is the same shape netdoc's own
+// route classifier keys on, arrived at independently. The family being
+// unreachable is what says the preferred one goes nowhere. A controlled target
+// answering over one of the others is what says an alternate remains, and it is
+// the clause that separates this condition from a network that is simply down:
+// without it, two dead paths would wear the name of one.
+func preferredDefaultRouteFailedFor(o observation, family string) bool {
+	routes, read := kernelRouteTable(o.Evidence, o.Client, family)
+	if !read {
+		return false
+	}
+	defaults := defaultRoutesIn(routes)
+	if len(defaults) < 2 {
+		return false
+	}
+	slices.SortStableFunc(defaults, func(a, b KernelRoute) int { return cmp.Compare(a.Metric, b.Metric) })
+	preferred := defaults[0]
+	if preferred.Metric >= defaults[1].Metric {
+		return false
+	}
+	state := o.Truth.IPv6
+	if family == string(familyIPv4) {
+		state = o.Truth.IPv4
+	}
+	if state != FamilyStateUnreachable {
+		return false
+	}
+	for _, alternate := range defaults[1:] {
+		if alternate.Via != "" && alternate.Via != preferred.Via &&
+			controlledTargetReachedVia(o.Evidence, o.Client, family, alternate.Via) {
+			return true
+		}
+	}
+	return false
+}
+
+// controlledTargetReachedVia reports whether this node's own dial of a
+// simulator-owned endpoint completed over a particular next hop. The via list
+// is the path the dialing node recorded for itself, so this is the alternate
+// route being exercised rather than merely being present in a table.
+func controlledTargetReachedVia(evidence Evidence, from, family, via string) bool {
+	return slices.ContainsFunc(evidence.ControlledTargets, func(item ControlledTargetEvidence) bool {
+		return sameName(from, item.From) && sameName(family, item.Family) && item.Reachable &&
+			slices.Contains(item.Via, via)
+	})
 }
 
 // noDefaultRouteFor reads the condition entirely off the client's own kernel

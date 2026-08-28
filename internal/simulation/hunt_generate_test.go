@@ -5,6 +5,7 @@ import (
 	mathrand "math/rand"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -69,8 +70,8 @@ func TestHuntLanesPartitionTheCurrentRegistry(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, operator := range operators {
-			if operator.lane() != lane {
-				t.Errorf("%s lane selected %s operator %q", lane, operator.lane(), operator.id)
+			if operator.laneFor(HuntGeneratorVersion) != lane {
+				t.Errorf("%s lane selected %s operator %q", lane, operator.laneFor(HuntGeneratorVersion), operator.id)
 			}
 			if previous, exists := seen[operator.id]; exists {
 				t.Errorf("operator %q appears in both %s and %s", operator.id, previous, lane)
@@ -170,7 +171,7 @@ func TestPreferredPathApplicabilityDoesNotMixFamilyPathCounts(t *testing.T) {
 
 func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-healthy")
-	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, "two-path-healthy", base, 20260811, 3, 1)
+	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneBugOracle, "two-path-healthy", base, 20260811, 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +182,7 @@ func TestGenerateHuntCaseCanSelectPreferredPathFailure(t *testing.T) {
 
 func TestGenerateHuntCaseCanSelectIPv6PreferredPathFailure(t *testing.T) {
 	base := loadHuntBase(t, "two-path-ipv6-healthy")
-	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneStress, "two-path-ipv6-healthy", base, 20260811, 5, 1)
+	generated, err := generateHuntCaseInLane(HuntGeneratorVersion, HuntLaneBugOracle, "two-path-ipv6-healthy", base, 20260811, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +565,7 @@ func TestHuntCaseGenerationIsIndependentAndDeterministic(t *testing.T) {
 		t.Fatalf("lane selection changed the wrong state:\n bug   %+v\n stress %+v", bug.Manifest, stress.Manifest)
 	}
 	for _, mutation := range bug.Manifest.Mutations {
-		if huntOperator(t, mutation.ID).lane() != HuntLaneBugOracle {
+		if huntOperator(t, mutation.ID).laneFor(HuntGeneratorVersion) != HuntLaneBugOracle {
 			t.Fatalf("bug-oracle case selected stress mutation %q", mutation.ID)
 		}
 	}
@@ -606,6 +607,91 @@ func TestHuntGeneratorVersion5Reproduction(t *testing.T) {
 	}
 	if !reflect.DeepEqual(generated.Manifest, want) {
 		t.Fatalf("v5 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
+	}
+}
+
+// TestHuntGeneratorVersion7Reproduction pins the generator the promotion
+// introduced, on the base the promotion exists for. Three faults, one of them
+// the newly oracle-backed operator, so the case is also a witness that the
+// promotion raised what two-path-ipv6-healthy can build: under v6 this base
+// tops out at two, because everything else it can host shares the
+// resolver-state tag.
+func TestHuntGeneratorVersion7Reproduction(t *testing.T) {
+	generated, err := generateHuntCaseInLane("v7", HuntLaneBugOracle, "two-path-ipv6-healthy",
+		loadHuntBase(t, "two-path-ipv6-healthy"), 20260301, 4, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := GeneratedCaseManifest{
+		GeneratorVersion: "v7", Lane: HuntLaneBugOracle, BaseScenario: "two-path-ipv6-healthy",
+		HuntSeed: 20260301, Case: 4, CaseSeed: 1373114965004347960, MaxFaults: 3,
+		Mutations: []GeneratedMutation{
+			{ID: "dns.drop", Description: "make resolver routed-resolver drop responses", Service: "routed-resolver"},
+			{ID: "routing.preferred_path_failure",
+				Description: "disable ipv6 preferred router preferred-gateway upstream preferred-upstream while retaining the alternate default",
+				Node:        "preferred-gateway", TargetNode: "client", Segment: "preferred-upstream", Family: "ipv6",
+				PreferredVia: "2001:db8:79:1::1", PreferredSegment: "preferred-lan", PreferredMetric: 50,
+				AlternateVia: "2001:db8:79:3::1", AlternateSegment: "alternate-lan", AlternateMetric: 100,
+				ControlTarget: "[2001:db8:79::99]:80"},
+			{ID: "service.tcp_reset", Description: "replace target TCP port 80 with an accept-then-reset service",
+				Node: "target", TargetPort: 80},
+		},
+		CaseFingerprint: "a454e74767a29c22",
+	}
+	if !reflect.DeepEqual(generated.Manifest, want) {
+		t.Fatalf("v7 reproduction changed:\n got  %+v\n want %+v", generated.Manifest, want)
+	}
+}
+
+// TestVersion6LaneMembershipSurvivesTheVersion7Promotion is the compatibility
+// contract the promotion is built on. Moving an operator between lanes changes
+// the universe a generator draws a permutation from, so doing it in place would
+// silently repoint every published v6 case on the two bases involved. The
+// operator therefore carries the version its contract starts at, and this is
+// the test that says the two versions still disagree in exactly one place.
+func TestVersion6LaneMembershipSurvivesTheVersion7Promotion(t *testing.T) {
+	const promoted = "routing.preferred_path_failure"
+	wantVersion6BugOracle := []string{"dns.servfail", "dns.drop", "timeline.dns_outage", "service.tcp_reset",
+		"service.tls_expired", "proxy.connect_refused", "quic.udp_443_block", "family.ipv4_drop",
+		"family.ipv6_drop", "service.tls_hostname_mismatch", "routing.no_default_route"}
+	for _, tc := range []struct {
+		version   string
+		lane      HuntLane
+		wantIDs   []string
+		wantOwned bool
+	}{
+		{"v6", HuntLaneBugOracle, wantVersion6BugOracle, false},
+		{"v7", HuntLaneBugOracle, nil, true},
+		{"v6", HuntLaneStress, nil, true},
+		{"v7", HuntLaneStress, nil, false},
+	} {
+		t.Run(tc.version+"/"+string(tc.lane), func(t *testing.T) {
+			operators, err := huntOperatorsForLane(tc.version, tc.lane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := make([]string, 0, len(operators))
+			for _, op := range operators {
+				ids = append(ids, op.id)
+			}
+			if got := slices.Contains(ids, promoted); got != tc.wantOwned {
+				t.Fatalf("%s %s holds %q = %t, want %t (%v)", tc.version, tc.lane, promoted, got, tc.wantOwned, ids)
+			}
+			if tc.wantIDs != nil && !slices.Equal(ids, tc.wantIDs) {
+				t.Fatalf("%s %s operators = %v, want %v", tc.version, tc.lane, ids, tc.wantIDs)
+			}
+		})
+	}
+	// The contract itself, not merely the lane derived from it: a v6 reader of
+	// a v6 artifact must still see no contract at all on this operator, which
+	// is what keeps its coverage row and its condition declaration where they
+	// were.
+	op := huntOperator(t, promoted)
+	if got := op.contractFor("v6"); got != huntNoFindingContract {
+		t.Fatalf("v6 contract for %q = %q, want %q", promoted, got, huntNoFindingContract)
+	}
+	if got := op.contractFor("v7"); got != huntFindingContract(ConditionPreferredRouteFailed) {
+		t.Fatalf("v7 contract for %q = %q", promoted, got)
 	}
 }
 
@@ -686,8 +772,8 @@ func TestGeneratedHuntCasesValidateAndStayBounded(t *testing.T) {
 				assertMutationBounds(t, generated.Manifest)
 				for _, mutation := range generated.Manifest.Mutations {
 					op := huntOperator(t, mutation.ID)
-					if op.lane() != lane {
-						t.Errorf("%s case selected %s operator %q", lane, op.lane(), op.id)
+					if op.laneFor(HuntGeneratorVersion) != lane {
+						t.Errorf("%s case selected %s operator %q", lane, op.laneFor(HuntGeneratorVersion), op.id)
 					}
 					seen[mutation.ID] = true
 				}
@@ -879,6 +965,15 @@ func FuzzGenerateHuntCase(f *testing.F) {
 		}
 		if generated.Manifest.CaseFingerprint == "" || len(generated.Manifest.Mutations) > HuntMaxFaults {
 			t.Fatalf("unbounded manifest: %+v", generated.Manifest)
+		}
+		// Coverage accounting reads applicability from the base scenario alone,
+		// so anything the generator can draw has to be in that set or the
+		// coverage denominator is smaller than the numerator it counts into.
+		applicable := applicableHuntOperators(HuntGeneratorVersion, lane, baseID)
+		for _, mutation := range generated.Manifest.Mutations {
+			if !applicable[mutation.ID] {
+				t.Fatalf("%s generated %q, which coverage reports inapplicable", baseID, mutation.ID)
+			}
 		}
 	})
 }

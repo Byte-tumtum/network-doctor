@@ -63,7 +63,12 @@ func TestRunHuntShardsPartitionTheExistingGlobalStream(t *testing.T) {
 func TestShardPreservesGlobalCaseReproductionIdentity(t *testing.T) {
 	base := loadHuntBase(t, "healthy")
 	const caseNumber = 18
-	const wantFingerprint = "306edad66d6aff47"
+	const wantFingerprint = "03d8cb299ae4f698"
+	// The same case under the generator before the promotion. Held next to the
+	// current one because a generator version is part of case identity: v7
+	// exists precisely so that adding an operator to a lane cannot move a v6
+	// case, and this is the pair that says so on the smallest possible example.
+	const wantVersion6Fingerprint = "306edad66d6aff47"
 	direct := RunHunt(context.Background(), "healthy", base, nil,
 		HuntOptions{Seed: 20260101, Case: intPointer(caseNumber), MaxFaults: 2, DryRun: true})
 	shard := HuntShard{Index: caseNumber % 4, Count: 4}
@@ -80,6 +85,25 @@ func TestShardPreservesGlobalCaseReproductionIdentity(t *testing.T) {
 	if got := direct.Cases[0].Manifest.CaseFingerprint; got != wantFingerprint {
 		t.Fatalf("global case %d fingerprint = %s, want %s", caseNumber, got, wantFingerprint)
 	}
+	previous := RunHunt(context.Background(), "healthy", base, nil,
+		HuntOptions{Seed: 20260101, Case: intPointer(caseNumber), MaxFaults: 2, DryRun: true, GeneratorVersion: "v6"})
+	if got := previous.Cases[0].Manifest.CaseFingerprint; got != wantVersion6Fingerprint {
+		t.Fatalf("global case %d under v6 fingerprint = %s, want %s", caseNumber, got, wantVersion6Fingerprint)
+	}
+	if !reflect.DeepEqual(mutationIDs(previous.Cases[0].Manifest), mutationIDs(direct.Cases[0].Manifest)) {
+		t.Fatalf("v6 and v7 disagree on a case neither promotion touches:\n%+v\n%+v",
+			previous.Cases[0].Manifest, direct.Cases[0].Manifest)
+	}
+}
+
+// mutationIDs is the operator vocabulary of one manifest, which is the part of
+// case identity a lane change could move.
+func mutationIDs(manifest GeneratedCaseManifest) []string {
+	out := make([]string, 0, len(manifest.Mutations))
+	for _, mutation := range manifest.Mutations {
+		out = append(out, mutation.ID)
+	}
+	return out
 }
 
 func TestHistoricalGeneratorVersionSurvivesShardsAndMerge(t *testing.T) {

@@ -21,7 +21,7 @@ import (
 const (
 	// HuntGeneratorVersion is part of every manifest and seed domain. A future
 	// algorithm change must increment it instead of silently changing old cases.
-	HuntGeneratorVersion = "v6"
+	HuntGeneratorVersion = "v7"
 	huntSeedDomain       = "netdoc-sim-hunt-v3"
 	HuntMaxFaults        = 3
 	HuntMaxCases         = 500
@@ -42,7 +42,7 @@ const (
 // Literals, not HuntGeneratorVersion. A published version has to stay
 // resolvable after the constant moves on, so a bump appends an entry here
 // rather than replacing the last one.
-var huntGeneratorVersions = []string{"v3", "v4", "v5", "v6"}
+var huntGeneratorVersions = []string{"v3", "v4", "v5", "v6", "v7"}
 
 // HuntGeneratorVersions returns every generator version this build can replay.
 func HuntGeneratorVersions() []string { return slices.Clone(huntGeneratorVersions) }
@@ -211,10 +211,17 @@ type mutationOperator struct {
 	// reach. huntNoFindingContract puts it in the stress lane. It is required
 	// metadata, so a new operator cannot enter the bug-oracle lane by default.
 	findingContract huntFindingContract
-	description     string
-	conflictTags    []string
-	applicable      func(*Scenario) bool
-	generate        func(*mathrand.Rand, *Scenario) (GeneratedMutation, error)
+	// oracleSince is the generator version from which findingContract counts.
+	// Empty means it always did. It exists because promoting an operator into
+	// the bug-oracle lane changes which universe a generator draws from, and a
+	// published case has to keep materializing the mutation set it named: an
+	// operator promoted here leaves every earlier generator seeing it exactly
+	// where it was, in the stress lane with no contract at all.
+	oracleSince  string
+	description  string
+	conflictTags []string
+	applicable   func(*Scenario) bool
+	generate     func(*mathrand.Rand, *Scenario) (GeneratedMutation, error)
 }
 
 type huntFindingContract string
@@ -225,8 +232,20 @@ const (
 	huntTCPResetContract   huntFindingContract = "tcp_reset_not_distinguished"
 )
 
-func (o mutationOperator) lane() HuntLane {
-	if o.findingContract == "" || o.findingContract == huntNoFindingContract {
+// contractFor is the contract one generator version sees. Before oracleSince
+// there is none, which is the whole of what a promotion changes.
+func (o mutationOperator) contractFor(version string) huntFindingContract {
+	if o.oracleSince != "" && huntGeneratorIndex(version) < huntGeneratorIndex(o.oracleSince) {
+		return huntNoFindingContract
+	}
+	if o.findingContract == "" {
+		return huntNoFindingContract
+	}
+	return o.findingContract
+}
+
+func (o mutationOperator) laneFor(version string) HuntLane {
+	if o.contractFor(version) == huntNoFindingContract {
 		return HuntLaneStress
 	}
 	return HuntLaneBugOracle
@@ -251,7 +270,12 @@ var huntMutationRegistry = []mutationOperator{
 	{id: "family.ipv4_drop", findingContract: huntFindingContract(ConditionIPv4InternetUnreachable), description: "IPv4 path fails while IPv6 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv4Drop},
 	{id: "family.ipv6_drop", findingContract: huntFindingContract(ConditionIPv6InternetUnreachable), description: "IPv6 path fails while IPv4 remains configured", conflictTags: []string{"family-path"}, applicable: hasDualStackPath, generate: generateIPv6Drop},
 	{id: "link.transient_down", findingContract: huntNoFindingContract, description: "temporary non-client link loss", conflictTags: []string{"path-outage", "resolver-state", "timeline"}, applicable: hasNonClientDataLink, generate: generateTransientLink},
-	{id: "routing.preferred_path_failure", findingContract: huntNoFindingContract, description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasPreferredPathFailureCandidate, generate: generatePreferredPathFailure},
+	// Promoted into the bug-oracle lane in v7, which is what oracleSince says:
+	// v3 to v6 keep drawing it from the stress lane with no contract, so no
+	// published case moves. The condition it reaches is the second of netdoc's
+	// four route causes the hunt can grade, and the only oracle condition the
+	// two-path bases can host at all.
+	{id: "routing.preferred_path_failure", findingContract: huntFindingContract(ConditionPreferredRouteFailed), oracleSince: "v7", description: "preferred path fails while an alternate remains", conflictTags: []string{"path-outage", "route-choice"}, applicable: hasPreferredPathFailureCandidate, generate: generatePreferredPathFailure},
 	// v4. Appended, never interleaved: an older generator is exactly this list
 	// truncated at its own version, so where a v3 case landed cannot move.
 	{id: "service.connection_refused", since: "v4", findingContract: huntNoFindingContract, description: "nothing listens on the target port", conflictTags: []string{"target-service"}, applicable: hasBriefedHTTPTarget, generate: generateConnectionRefused},
@@ -289,7 +313,7 @@ func huntOperatorsForLane(version string, lane HuntLane) ([]mutationOperator, er
 	if lane == HuntLaneAllOperators {
 		return operators, nil
 	}
-	return slices.DeleteFunc(operators, func(op mutationOperator) bool { return op.lane() != lane }), nil
+	return slices.DeleteFunc(operators, func(op mutationOperator) bool { return op.laneFor(version) != lane }), nil
 }
 
 // DeriveHuntCaseSeed makes case N independent of every earlier PRNG stream.

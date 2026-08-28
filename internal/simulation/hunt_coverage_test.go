@@ -49,7 +49,7 @@ func TestHuntCoverageRowsFollowRegistryOrderAndAreDeterministic(t *testing.T) {
 		t.Fatalf("coverage rows = %d, want one per lane operator (%d)", len(first.Coverage.Operators), len(operators))
 	}
 	for i, op := range operators {
-		if want := op.findingContract; first.Coverage.Operators[i].ID != op.id ||
+		if want := op.contractFor(HuntGeneratorVersion); first.Coverage.Operators[i].ID != op.id ||
 			first.Coverage.Operators[i].Contract != string(want) {
 			t.Fatalf("operator row %d = %+v, want id %q contract %q", i, first.Coverage.Operators[i], op.id, want)
 		}
@@ -414,8 +414,8 @@ func TestHistoricalHuntsReproduceAndReportTheirOwnOperatorUniverse(t *testing.T)
 				if got := result.Coverage.Operators[i].ID; got != op.id {
 					t.Fatalf("%s operator row %d = %q, want %q", version, i, got, op.id)
 				}
-				if lane != HuntLaneAllOperators && op.lane() != lane {
-					t.Fatalf("%s lane %q leaked operator %q from lane %q", version, lane, op.id, op.lane())
+				if lane != HuntLaneAllOperators && op.laneFor(version) != lane {
+					t.Fatalf("%s lane %q leaked operator %q from lane %q", version, lane, op.id, op.laneFor(version))
 				}
 			}
 		})
@@ -477,7 +477,7 @@ func TestHuntCoverageReportsTheFaultCardinalityTheBaseCouldDeliver(t *testing.T)
 		why  string
 	}{
 		{"tls-valid", 3, "five conflict-free operator classes leave room for a third fault"},
-		{"two-path-ipv6-healthy", 2, "the reset is the only applicable operator outside the resolver-state tag"},
+		{"two-path-ipv6-healthy", 3, "the reset and the promoted preferred-path failure both sit outside the resolver-state tag"},
 	} {
 		t.Run(tc.base, func(t *testing.T) {
 			result := coverageOf(t, tc.base, HuntOptions{Cases: 60, Seed: 20260104, MaxFaults: 3, DryRun: true})

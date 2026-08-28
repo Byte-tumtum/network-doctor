@@ -51,7 +51,7 @@ _netdoc_sim() {
             return
             ;;
         -generator-version | --generator-version)
-            COMPREPLY=($(compgen -W "v3 v4 v5 v6" -- "$cur"))
+            COMPREPLY=($(compgen -W "v3 v4 v5 v6 v7" -- "$cur"))
             return
             ;;
         -lane | --lane)

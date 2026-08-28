@@ -940,17 +940,18 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 		huntTCPResetContract:   true,
 	}
 	wantContracts := map[string]huntFindingContract{
-		"dns.servfail":                  huntDNSFailureContract,
-		"dns.drop":                      huntDNSFailureContract,
-		"timeline.dns_outage":           huntDNSFailureContract,
-		"service.tcp_reset":             huntTCPResetContract,
-		"service.tls_expired":           huntFindingContract(ConditionTLSCertificateExpired),
-		"service.tls_hostname_mismatch": huntFindingContract(ConditionTLSHostnameMismatch),
-		"proxy.connect_refused":         huntFindingContract(ConditionProxyDestinationRefused),
-		"quic.udp_443_block":            huntFindingContract(ConditionQUICUDP443Blocked),
-		"family.ipv4_drop":              huntFindingContract(ConditionIPv4InternetUnreachable),
-		"family.ipv6_drop":              huntFindingContract(ConditionIPv6InternetUnreachable),
-		"routing.no_default_route":      huntFindingContract(ConditionNoDefaultRoute),
+		"dns.servfail":                   huntDNSFailureContract,
+		"dns.drop":                       huntDNSFailureContract,
+		"timeline.dns_outage":            huntDNSFailureContract,
+		"service.tcp_reset":              huntTCPResetContract,
+		"service.tls_expired":            huntFindingContract(ConditionTLSCertificateExpired),
+		"service.tls_hostname_mismatch":  huntFindingContract(ConditionTLSHostnameMismatch),
+		"proxy.connect_refused":          huntFindingContract(ConditionProxyDestinationRefused),
+		"quic.udp_443_block":             huntFindingContract(ConditionQUICUDP443Blocked),
+		"routing.preferred_path_failure": huntFindingContract(ConditionPreferredRouteFailed),
+		"family.ipv4_drop":               huntFindingContract(ConditionIPv4InternetUnreachable),
+		"family.ipv6_drop":               huntFindingContract(ConditionIPv6InternetUnreachable),
+		"routing.no_default_route":       huntFindingContract(ConditionNoDefaultRoute),
 	}
 	for _, rule := range conditionOracle {
 		contract := huntFindingContract(rule.condition)
@@ -966,22 +967,23 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 			t.Errorf("mutation %q has no explicit finding-contract decision", operator.id)
 			continue
 		}
+		contract := operator.contractFor(HuntGeneratorVersion)
 		want, oracleBacked := wantContracts[operator.id]
-		if oracleBacked && operator.findingContract != want {
-			t.Errorf("mutation %q contract = %q, want %q", operator.id, operator.findingContract, want)
+		if oracleBacked && contract != want {
+			t.Errorf("mutation %q contract = %q, want %q", operator.id, contract, want)
 		}
-		if !oracleBacked && operator.findingContract != huntNoFindingContract {
-			t.Errorf("stress mutation %q unexpectedly claims contract %q", operator.id, operator.findingContract)
+		if !oracleBacked && contract != huntNoFindingContract {
+			t.Errorf("stress mutation %q unexpectedly claims contract %q", operator.id, contract)
 		}
-		if operator.lane() == HuntLaneStress {
+		if operator.laneFor(HuntGeneratorVersion) == HuntLaneStress {
 			stress = append(stress, operator.id)
 			continue
 		}
 		bug = append(bug, operator.id)
-		if !contracts[operator.findingContract] {
-			t.Errorf("bug-oracle mutation %q names unknown contract %q", operator.id, operator.findingContract)
+		if !contracts[contract] {
+			t.Errorf("bug-oracle mutation %q names unknown contract %q", operator.id, contract)
 		}
-		claimed[operator.findingContract] = true
+		claimed[contract] = true
 	}
 	for contract := range contracts {
 		if !claimed[contract] {
@@ -990,9 +992,10 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 	}
 	wantBug := []string{"dns.servfail", "dns.drop", "timeline.dns_outage", "service.tcp_reset",
 		"service.tls_expired", "proxy.connect_refused", "quic.udp_443_block", "family.ipv4_drop",
-		"family.ipv6_drop", "service.tls_hostname_mismatch", "routing.no_default_route"}
+		"family.ipv6_drop", "routing.preferred_path_failure", "service.tls_hostname_mismatch",
+		"routing.no_default_route"}
 	wantStress := []string{"netem.loss", "netem.latency", "netem.jitter", "timeline.netem_spike",
-		"encrypted_dns.doh_invalid", "http.status_503", "link.transient_down", "routing.preferred_path_failure",
+		"encrypted_dns.doh_invalid", "http.status_503", "link.transient_down",
 		"service.connection_refused", "service.tcp_port_blocked", "routing.wrong_default_route",
 		"routing.missing_subnet_route", "pmtu.blackhole"}
 	if !slices.Equal(bug, wantBug) {
@@ -1000,5 +1003,161 @@ func TestEveryMutationFamilyDeclaresItsHuntPath(t *testing.T) {
 	}
 	if !slices.Equal(stress, wantStress) {
 		t.Errorf("stress operators = %v, want %v", stress, wantStress)
+	}
+}
+
+// preferredRouteEvidence is what a node holder writes down on a client whose
+// lower-metric default goes nowhere while the higher-metric one still carries a
+// controlled target. Every field is the holder's own reading: the routing table
+// came off the client's kernel and the dial was performed from inside the
+// client's namespace, so nothing here can be produced by reading a diagnosis.
+func preferredRouteEvidence() Evidence {
+	return Evidence{
+		RouteTables: []RouteTableEvidence{{Node: "client", Family: "ipv4", Routes: []KernelRoute{
+			{Destination: "default", Via: "10.79.1.1", Segment: "preferred-lan", Metric: 50},
+			{Destination: "default", Via: "10.79.3.1", Segment: "alternate-lan", Metric: 100},
+		}}},
+		ControlledTargets: []ControlledTargetEvidence{{From: "client", To: "9.9.9.9:80", Family: "ipv4",
+			Via: []string{"alternate-lan", "10.79.3.1"}, Reachable: true, Outcome: FamilyStateReachable}},
+	}
+}
+
+// TestPreferredRouteFailureIsEstablishedOnlyByAllThreeHalves pins the condition
+// to the sentence its name makes. A preference that does not exist, a family
+// that still works, and an alternate nobody reached each leave the condition
+// unestablished, because each one alone would let a different fault wear this
+// name: one dead route with no backup is no_default_route's story, a healthy
+// family is nobody's, and two dead paths are a network that is simply down.
+func TestPreferredRouteFailureIsEstablishedOnlyByAllThreeHalves(t *testing.T) {
+	unreachable := ObservedTruth{IPv4: FamilyStateUnreachable}
+	tied := preferredRouteEvidence()
+	tied.RouteTables[0].Routes[1].Metric = 50
+	single := preferredRouteEvidence()
+	single.RouteTables[0].Routes = single.RouteTables[0].Routes[:1]
+	unreadable := preferredRouteEvidence()
+	unreadable.RouteTables = nil
+	alternateDead := preferredRouteEvidence()
+	alternateDead.ControlledTargets[0].Reachable = false
+	otherVia := preferredRouteEvidence()
+	otherVia.ControlledTargets[0].Via = []string{"preferred-lan", "10.79.1.1"}
+	otherNode := preferredRouteEvidence()
+	otherNode.ControlledTargets[0].From = "someone-else"
+	otherFamily := preferredRouteEvidence()
+	otherFamily.ControlledTargets[0].Family = "ipv6"
+	for _, tc := range []struct {
+		name     string
+		evidence Evidence
+		truth    ObservedTruth
+		want     bool
+	}{
+		{"all three halves", preferredRouteEvidence(), unreachable, true},
+		{"no strict preference between the defaults", tied, unreachable, false},
+		{"only one default to prefer", single, unreachable, false},
+		{"the table was never read", unreadable, unreachable, false},
+		{"the family still reaches the internet", preferredRouteEvidence(), ObservedTruth{IPv4: FamilyStateReachable}, false},
+		{"the family was never dialed", preferredRouteEvidence(), ObservedTruth{}, false},
+		{"the alternate does not carry the target either", alternateDead, unreachable, false},
+		{"the target was reached over the failed path", otherVia, unreachable, false},
+		{"somebody else's dial", otherNode, unreachable, false},
+		{"the alternate was proven in the other family", otherFamily, unreachable, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := slices.Contains(observedConditions(observation{Evidence: tc.evidence, Truth: tc.truth, Client: "client"}),
+				ConditionPreferredRouteFailed)
+			if got != tc.want {
+				t.Fatalf("established = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPreferredRouteFailureAndNoDefaultRouteCannotBothBeEstablished holds the
+// two route conditions apart at the evidence layer rather than by convention.
+// They read the same table and disagree about it, so a run that established
+// both would mean the oracle had stopped describing one network.
+func TestPreferredRouteFailureAndNoDefaultRouteCannotBothBeEstablished(t *testing.T) {
+	empty := preferredRouteEvidence()
+	empty.RouteTables[0].Routes = nil
+	for _, tc := range []struct {
+		name     string
+		evidence Evidence
+	}{
+		{"two defaults", preferredRouteEvidence()},
+		{"no defaults", empty},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := observedConditions(observation{Evidence: tc.evidence,
+				Truth: ObservedTruth{IPv4: FamilyStateUnreachable}, Client: "client"})
+			if slices.Contains(got, ConditionPreferredRouteFailed) && slices.Contains(got, ConditionNoDefaultRoute) {
+				t.Fatalf("one routing table established both route conditions: %v", got)
+			}
+		})
+	}
+}
+
+// TestPreferredRouteFailureRecognizesOnlyItsOwnCause is the other half. The
+// four route causes are one closed vocabulary carrying four different repairs,
+// so a diagnosis that names a neighbour has given the wrong answer rather than
+// a differently worded right one, and a cause on a passing row is context.
+func TestPreferredRouteFailureRecognizesOnlyItsOwnCause(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		checks []DiagnosisCheck
+		want   bool
+	}{
+		{"its own cause on a failing row", []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+			Cause: diagnostic.RouteCausePreferredPathFailed}}, true},
+		{"its own cause on a warning row", []DiagnosisCheck{{ID: "internet_tcp", Status: "WARN",
+			Cause: diagnostic.RouteCausePreferredPathFailed}}, true},
+		{"its own cause on a passing row", []DiagnosisCheck{{ID: "internet_tcp", Status: "PASS",
+			Cause: diagnostic.RouteCausePreferredPathFailed}}, false},
+		{"no default route", []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+			Cause: diagnostic.RouteCauseNoDefaultRoute}}, false},
+		{"selected path failed", []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+			Cause: diagnostic.RouteCauseSelectedPathFailed}}, false},
+		{"gateway unreachable", []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+			Cause: diagnostic.RouteCauseGatewayUnreachable}}, false},
+		{"the family is merely unreachable", []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL",
+			Cause: diagnostic.FamilyCauseIPv4Unreachable}}, false},
+		{"a bare failing row with no cause", []DiagnosisCheck{{ID: "internet_tcp", Status: "FAIL"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := slices.Contains(recognizedConditions(oracleDiagnosis(tc.checks...)), ConditionPreferredRouteFailed)
+			if got != tc.want {
+				t.Fatalf("recognized = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPreferredRouteFailureMissReportsOneHighConfidenceFinding is the pair
+// joined up: independent truth that the diagnosis answered with a neighbouring
+// route cause is exactly the false negative a hunt exists to file, and a
+// mutation that was scheduled but never manifested is not.
+func TestPreferredRouteFailureMissReportsOneHighConfidenceFinding(t *testing.T) {
+	truth := ObservedTruth{IPv4: FamilyStateUnreachable}
+	// The family verdict is present and correct, which is what isolates the
+	// accusation: netdoc did see that IPv4 lost the internet, and still named
+	// the wrong route cause for why. This is the shape the live
+	// two-path-ipv6-healthy run produces.
+	missed := oracleReport(oracleDiagnosis(DiagnosisCheck{ID: "internet_tcp", Status: "WARN",
+		Cause:    diagnostic.RouteCauseNoDefaultRoute,
+		Families: &DiagnosisFamilies{IPv4: FamilyStateUnreachable}}), preferredRouteEvidence())
+	findings := unrecognizedConditionFindings(missed, truth)
+	if len(findings) != 1 || findings[0].Expected != string(ConditionPreferredRouteFailed) ||
+		findings[0].Severity != SeverityHigh || findings[0].Category != FindingFalseNegative {
+		t.Fatalf("missed preferred-route failure produced %+v", findings)
+	}
+	named := oracleReport(oracleDiagnosis(DiagnosisCheck{ID: "internet_tcp", Status: "WARN",
+		Cause:    diagnostic.RouteCausePreferredPathFailed,
+		Families: &DiagnosisFamilies{IPv4: FamilyStateUnreachable}}), preferredRouteEvidence())
+	if got := unrecognizedConditionFindings(named, truth); len(got) != 0 {
+		t.Fatalf("a recognized condition still produced %+v", got)
+	}
+	// Intent is not truth: the same diagnosis over a network where nothing was
+	// observed accuses nobody, however loudly a manifest names the operator.
+	if got := unrecognizedConditionFindings(oracleReport(oracleDiagnosis(
+		DiagnosisCheck{ID: "internet_tcp", Status: "PASS"}), Evidence{}), ObservedTruth{}); len(got) != 0 {
+		t.Fatalf("an unobserved mutation produced %+v", got)
 	}
 }
