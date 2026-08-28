@@ -16,21 +16,17 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
-// detailsRows is the Details panel's rows as rendered, in the side-by-side
-// layout these tests render at. Details is the right-hand panel, so its border
-// opens past column 0 while Checks opens at 0. The two are no longer padded to
-// a shared height, so a Details row taller than the Checks panel is the only
-// cell on its line, and the count of border characters before it is not fixed.
+// detailsRows is the Details section's rows as rendered, its heading and rule
+// left out. The heading is contextual, so the section is found by what its
+// heading starts with rather than by an exact title: it names the cursor row,
+// or the diagnosis when the reader has opened the "why".
 func detailsRows(v string) []string {
-	var rows []string
-	for _, line := range strings.Split(v, "\n") {
-		for col, row := range panelCells(line) {
-			if col > 0 && row != "" {
-				rows = append(rows, row)
-			}
+	for title, rows := range bodySections(v) {
+		if strings.HasPrefix(title, "Details") || strings.HasPrefix(title, "Why:") {
+			return rows
 		}
 	}
-	return rows
+	return nil
 }
 
 // containsRow reports whether any of rows carries want.

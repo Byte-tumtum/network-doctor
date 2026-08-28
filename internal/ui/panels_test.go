@@ -1,6 +1,6 @@
-// The two panels of the results block: which probes earn a Checks row, when
-// the Details panel is worth drawing at all, and the rule that neither panel
-// is padded out to the other's height.
+// The two sections of the results block: which probes earn a Checks row, when
+// Details is worth drawing at all, and the rule that neither section is padded
+// out to the other's height.
 
 package ui
 
@@ -15,35 +15,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
-
-// panelHeight is the display height of the panel whose border opens at column
-// col, its own border rows included, and 0 when no panel opens there.
-func panelHeight(v string, col int) int {
-	n := 0
-	for _, line := range strings.Split(v, "\n") {
-		runes := []rune(ansi.Strip(line))
-		if col < len(runes) && strings.ContainsRune("╭│╰", runes[col]) {
-			n++
-		}
-	}
-	return n
-}
-
-// detailsPanelCol is the display column the Details panel's border opens at in
-// the side-by-side layout, and -1 when the view drew no second panel.
-func detailsPanelCol(v string) int {
-	for _, line := range strings.Split(v, "\n") {
-		runes := []rune(ansi.Strip(line))
-		if len(runes) == 0 || runes[0] != '╭' {
-			continue
-		}
-		if second := slices.Index(runes[1:], '╭'); second >= 0 {
-			return second + 1
-		}
-		return -1
-	}
-	return -1
-}
 
 // onWireless gives a finished run the interface and Wi-Fi results of a
 // wireless machine, so the network name is there for whatever reads it.
@@ -279,16 +250,16 @@ func TestDetailsPanelIsDroppedWhenItHasNothingToSay(t *testing.T) {
 	if strings.Contains(ansi.Strip(v), "Details") {
 		t.Errorf("an empty Details panel (or its title) is still drawn:\n%s", v)
 	}
-	if n := strings.Count(v, "╭"); n != 1 {
-		t.Errorf("the block drew %d panels, want the Checks panel alone:\n%s", n, v)
+	if sections := bodySections(v); len(sections) != 1 || sections["Checks"] == nil {
+		t.Errorf("the block drew %v, want the Checks section alone:\n%s", sections, v)
 	}
 	if n := unclosedPanels(v); n != 0 {
 		t.Errorf("%d panel border(s) left unclosed:\n%s", n, v)
 	}
-	// No blank rows kept back for the panel that is not drawn: the block is
-	// exactly the Checks panel, which here is its title between two borders.
-	if h := lipgloss.Height(m.bodyView(false, 0)); h != 3 {
-		t.Errorf("the results block is %d rows tall, want 3 (border, title, border):\n%s",
+	// No blank rows kept back for the section that is not drawn: the block is
+	// exactly the Checks heading over its rule, with no rows under it.
+	if h := lipgloss.Height(m.bodyView(false, 0)); h != 2 {
+		t.Errorf("the results block is %d rows tall, want 2 (heading, rule):\n%s",
 			h, m.bodyView(false, 0))
 	}
 	// There is no row to move onto and none to blame, so every movement key has
@@ -339,10 +310,10 @@ func TestDetailsPanelComesBackWithContent(t *testing.T) {
 	}
 }
 
-// TestPanelBodyDropsAWhitespaceOnlyPanel: emptiness is measured on the text
+// TestSectionBodyDropsWhitespaceOnlyContent: emptiness is measured on the text
 // with its styling stripped, so a body that is only spaces, or only escape
 // sequences, still counts as nothing to draw.
-func TestPanelBodyDropsAWhitespaceOnlyPanel(t *testing.T) {
+func TestSectionBodyDropsWhitespaceOnlyContent(t *testing.T) {
 	title := defaultStyles.panelTitle.Render("Details: DNS")
 	for _, tc := range []struct {
 		name string
@@ -357,16 +328,16 @@ func TestPanelBodyDropsAWhitespaceOnlyPanel(t *testing.T) {
 		{"real content", []string{title, defaultStyles.faint.Render("src 192.0.2.7 eth0")}, true},
 		{"blank row above content", []string{title, "  ", "PASS: up"}, true},
 	} {
-		if got := panelBody(tc.rows) != nil; got != tc.want {
-			t.Errorf("%s: panelBody kept the panel = %v, want %v", tc.name, got, tc.want)
+		if got := sectionBody(tc.rows) != nil; got != tc.want {
+			t.Errorf("%s: sectionBody kept the section = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
 
-// TestPanelsTakeTheirOwnHeights: neither panel is padded out to match the
+// TestSectionsTakeTheirOwnHeights: neither section is padded out to match the
 // other. Whichever has more to say is taller, and the block is as tall as that
 // one rather than as tall as both.
-func TestPanelsTakeTheirOwnHeights(t *testing.T) {
+func TestSectionsTakeTheirOwnHeights(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		build  func(t *testing.T) model
@@ -380,13 +351,13 @@ func TestPanelsTakeTheirOwnHeights(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, v := renderAt(t, tc.build(t))
-			col := detailsPanelCol(v)
-			if col < 0 {
-				t.Fatalf("no Details panel to compare heights against:\n%s", v)
+			details := len(detailsRows(v))
+			if details == 0 {
+				t.Fatalf("no Details section to compare heights against:\n%s", v)
 			}
-			checks, details := panelHeight(v, 0), panelHeight(v, col)
+			checks := len(checksRows(v))
 			if checks == details {
-				t.Fatalf("both panels are %d rows tall, so one is still padded to the other:\n%s",
+				t.Fatalf("both sections are %d rows tall, so one is still padded to the other:\n%s",
 					checks, v)
 			}
 			if (details > checks) != (tc.taller == "details") {
@@ -400,11 +371,10 @@ func TestPanelsTakeTheirOwnHeights(t *testing.T) {
 	}
 }
 
-// TestUnevenPanelsStayInsideAShortTerminal: the panels no longer share a
-// height, so the taller one is what the row budget has to answer for. It still
-// closes its border at every size, and the block still yields rather than
-// overflow.
-func TestUnevenPanelsStayInsideAShortTerminal(t *testing.T) {
+// TestUnevenSectionsStayInsideAShortTerminal: the sections do not share a
+// height, so the taller one is what the row budget has to answer for. The
+// block still yields rather than overflow, at every size.
+func TestUnevenSectionsStayInsideAShortTerminal(t *testing.T) {
 	for _, width := range []int{100, 60} {
 		for _, h := range []int{40, 24, 20, 16, 12, 10, 8, 6} {
 			u, _ := evidenceModel(t).Update(tea.WindowSizeMsg{Width: width, Height: h})

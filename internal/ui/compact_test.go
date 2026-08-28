@@ -15,47 +15,81 @@ import (
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
-// panelCells splits one rendered line into the panel cells it carries, keyed
-// by the display column each cell's opening border sits at. The two panels are
-// no longer padded to a shared height, so a line may carry only the taller one
-// and a cell's position along the line no longer says which panel it belongs
-// to; the column its border opens at does.
-func panelCells(line string) map[int]string {
-	cells := map[int]string{}
+// sectionSpan is where one body section sits on screen: the display column its
+// rule starts at, and how many columns wide that rule is. The sections are not
+// boxed, so the rule under a heading is what says which columns belong to it.
+type sectionSpan struct{ col, width int }
+
+// ruleSpans is the runs of rule characters on one rendered line, or nil when
+// the line is not a rule. A rule line carries nothing but rule characters and
+// the gutter between two of them, so a row that happens to contain one is not
+// mistaken for a section boundary.
+func ruleSpans(line string) []sectionSpan {
 	runes := []rune(ansi.Strip(line))
+	var spans []sectionSpan
 	for i := 0; i < len(runes); i++ {
-		if runes[i] != '│' {
-			continue
+		switch runes[i] {
+		case '─':
+			start := i
+			for i < len(runes) && runes[i] == '─' {
+				i++
+			}
+			spans = append(spans, sectionSpan{col: start, width: i - start})
+			i--
+		case ' ':
+		default:
+			return nil
 		}
-		end := i + 1
-		for end < len(runes) && runes[end] != '│' {
-			end++
-		}
-		if end == len(runes) {
-			break
-		}
-		cells[i] = strings.TrimSpace(string(runes[i+1 : end]))
-		i = end
 	}
-	return cells
+	return spans
 }
 
-// checksRows is the Checks panel's rows as rendered, title and padding
-// removed. Checks is the panel whose border opens at column 0, in the
-// side-by-side layout and the stacked one alike. The Details panel repeats
-// probe names in its own title and status line, and a plain substring search
-// over the whole view would count those as visible rows.
-func checksRows(v string) []string {
-	var rows []string
-	for _, line := range strings.Split(v, "\n") {
-		row := panelCells(line)[0]
-		if row == "" || row == "Checks" {
+// sectionCell is the text one section's columns carry on a rendered line.
+func sectionCell(line string, sp sectionSpan) string {
+	plain := ansi.Strip(line)
+	if sp.col >= ansi.StringWidth(plain) {
+		return ""
+	}
+	return strings.TrimSpace(ansi.Cut(plain, sp.col, sp.col+sp.width))
+}
+
+// bodySections is the rendered body's sections keyed by their heading. The
+// heading sits over a rule as wide as the section's own column, and the rows
+// under it are that column's slice of the lines below, down to the blank row
+// that closes the block or the rule that opens the next section. Reading the
+// columns rather than the whole line matters side by side, where the Details
+// section repeats probe names the Checks section is not showing as rows.
+func bodySections(v string) map[string][]string {
+	lines := strings.Split(v, "\n")
+	out := map[string][]string{}
+	for i, line := range lines {
+		spans := ruleSpans(line)
+		if len(spans) == 0 || i == 0 {
 			continue
 		}
-		rows = append(rows, row)
+		for _, sp := range spans {
+			title := sectionCell(lines[i-1], sp)
+			if title == "" {
+				continue
+			}
+			rows := []string{}
+			for j := i + 1; j < len(lines); j++ {
+				if strings.TrimSpace(ansi.Strip(lines[j])) == "" || ruleSpans(lines[j]) != nil {
+					break
+				}
+				if row := sectionCell(lines[j], sp); row != "" {
+					rows = append(rows, row)
+				}
+			}
+			out[title] = rows
+		}
 	}
-	return rows
+	return out
 }
+
+// checksRows is the Checks section's rows as rendered, its heading and rule
+// left out.
+func checksRows(v string) []string { return bodySections(v)["Checks"] }
 
 // rowProbes is the probes the Checks panel gives a row to, which is not every
 // probe in the run: the Wi-Fi row is gone from the panel while its probe still

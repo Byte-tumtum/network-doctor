@@ -95,7 +95,7 @@ func (m model) View() string {
 	if h := m.wrap(m.headerView()); h != "" {
 		header = h + "\n"
 	}
-	// The causal strip sits between the context and the panels: it is about
+	// The causal strip sits between the context and the body sections: it is about
 	// the answer above it, not about the row the cursor is on. It is already
 	// laid out to the terminal width, so it is not wrapped again.
 	path := ""
@@ -130,7 +130,10 @@ func (m model) View() string {
 	budget := func() {
 		fixed = banner + header + path
 		if body != "" {
-			fixed += "\n" + body + "\n"
+			// Blank rows above and below: with no border around the sections,
+			// the space is what holds the block off the context strip over it
+			// and off the toolbox or job pane under it.
+			fixed += "\n" + body + "\n\n"
 		}
 		if toolbox != "" {
 			fixed += toolbox + "\n"
@@ -198,10 +201,10 @@ func (m model) View() string {
 	return out
 }
 
-// bodyMinRows is the shortest useful results block: both borders, the Checks
-// title, and one probe row. Below that the block is dropped rather than
-// rendered as a frame with nothing in it.
-const bodyMinRows = 4
+// bodyMinRows is the shortest useful results block: the Checks heading with
+// its rule, and one probe row. Below that the block is dropped rather than
+// rendered as a heading with nothing under it.
+const bodyMinRows = 3
 
 // consequenceLabel marks a failed row the diagnosis has already explained as
 // downstream of the failure it blames. It is spelled out rather than left to
@@ -216,15 +219,28 @@ const consequenceLabel = "consequence"
 // every terminal can see. A recovery earns it exactly as a new failure does.
 const changedLabel = "changed"
 
-// detailsMinWidth is the narrowest the Details panel is allowed to be beside
-// the Checks panel. Below it the evidence lines wrap into unreadable stubs.
+// detailsMinWidth is the narrowest the Details section is allowed to be beside
+// the Checks section. Below it the evidence lines wrap into unreadable stubs.
+// It is columns of text: the sections are not boxed, so nothing is spent on a
+// frame or on padding inside one.
 const detailsMinWidth = 36
 
-// labelRight sets label against the right edge of a row in a panel width
+// checksWidth is the Checks section's usual width beside Details, wide enough
+// for the longest probe name a targeted run draws plus its marker, glyph and
+// watch sparkline. A labelled row may claim more, up to what Details is
+// guaranteed.
+const checksWidth = 36
+
+// bodyGutter is the blank columns between the two sections in the side-by-side
+// layout. Two is enough to read them apart without a rule between them, and it
+// is all the body spends on separating them.
+const bodyGutter = 2
+
+// labelRight sets label against the right edge of a row in a section width
 // columns wide, the way the network map pairs its title with the shared
 // domain. A row too long to share its line keeps the label on a second one,
 // still at the right edge, rather than dropping it or cutting the probe name.
-// The pair stays one row as far as the panel is concerned, so it scrolls as
+// The pair stays one row as far as the section is concerned, so it scrolls as
 // one and the block's budget prices both of its display rows.
 func labelRight(row, label string, width int) string {
 	if gap := width - lipgloss.Width(row) - lipgloss.Width(label); gap > 0 {
@@ -282,26 +298,25 @@ func (m model) headerView() string {
 	return m.st.faint.Render(strings.Join(parts, "  ·  "))
 }
 
-// bodyView renders the Checks panel and, beside it, the Details panel when
+// bodyView renders the Checks section and, beside it, the Details section when
 // there is anything to put in one. They stack vertically when the terminal is
 // too narrow for two columns. rows caps the block's display height; 0 means no
 // cap. A capped block scrolls its probe list rather than being clipped from the
-// bottom, because clipping a bordered panel eats the border that closes it.
+// bottom, because a clipped section ends on a row that does not say it was cut.
 //
-// Neither panel is padded out to the other's height: each is as tall as its own
-// content, and the block is as tall as the taller of the two.
+// Neither section is padded out to the other's height: each is as tall as its
+// own content, and the block is as tall as the taller of the two.
 func (m model) bodyView(deferred bool, rows int) string {
 	shown, hiddenPass, hiddenNA := m.compactRows()
-	// The cursor row is always in shown, so the windowed panel still scrolls to
-	// the row the Details panel is describing.
+	// The cursor row is always in shown, so the windowed section still scrolls
+	// to the row the Details section is describing.
 	sel := max(slices.Index(shown, m.selected), 0)
-	pad := m.st.panel.GetHorizontalPadding()
 	// Which of the failed rows the diagnosis has already explained as
 	// downstream of another one. It is read from the current results on every
 	// render, so a watch pass that repairs the path takes the labels with it.
 	collateral := diagnostic.Collateral(m.target, m.probeOrder(), m.results)
 
-	// The rows are built before the panel has a width, because a labelled row
+	// The rows are built before the section has a width, because a labelled row
 	// is what decides that width, so the labels are placed in a second pass.
 	// A row can carry both of them: a check that changed this pass and is also
 	// downstream of another failure is two separate things worth saying.
@@ -342,86 +357,116 @@ func (m model) bodyView(deferred bool, rows int) string {
 		checks = append(checks, row)
 		labels = append(labels, text)
 		if text != "" {
-			want = max(want, lipgloss.Width(row)+1+lipgloss.Width(text)+pad)
+			want = max(want, lipgloss.Width(row)+1+lipgloss.Width(text))
 		}
 	}
-	// checkPanel is the Checks panel's rows once the panel width is settled:
-	// the labels are placed against that width, so they land at its right edge.
-	checkPanel := func(width int) []string {
+	// checksSection is the Checks rows under their heading once the section
+	// width is settled: the labels are placed against that width, so they land
+	// at its right edge.
+	checksSection := func(width int) []string {
 		out := make([]string, 0, len(checks)+2)
 		out = append(out, m.st.panelTitle.Render("Checks"))
 		for j, row := range checks {
 			if labels[j] != "" {
-				row = labelRight(row, labels[j], width-pad)
+				row = labelRight(row, labels[j], width)
 			}
 			out = append(out, row)
 		}
 		if hiddenPass+hiddenNA > 0 {
 			out = append(out, m.collapsedChecksRow(hiddenPass, hiddenNA))
 		}
-		return out
+		return sectionHead(m.st, out, width)
 	}
 
 	rightRows := m.detailRows(deferred)
-	frame := m.st.panel.GetVerticalFrameSize()
+	// column lays a section out in its own width, which is what wraps the rows
+	// and what squares the block off for a side-by-side join.
+	column := func(width int, rows []string) string {
+		return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+	}
 
 	if m.width < 80 { // too narrow for two columns, so stack
-		w := max(m.width-2, 24)
-		leftRows := checkPanel(w)
+		// Full bleed: with no frame to pay for, the section is the terminal.
+		// The fallback is for the first render, before a size is known.
+		w := m.width
+		if w <= 0 {
+			w = 24
+		}
+		leftRows := checksSection(w)
+		rightRows = sectionHead(m.st, rightRows, w)
 		stack := func(left, right []string) string {
-			panel := m.st.panel.Width(w).Render(strings.Join(left, "\n"))
 			if len(right) == 0 {
-				return panel
+				return column(w, left)
 			}
-			return lipgloss.JoinVertical(lipgloss.Left,
-				panel, m.st.panel.Width(w).Render(strings.Join(right, "\n")))
+			// A blank row between them: stacked, the gap is what says where
+			// one section ends and the next begins.
+			return column(w, left) + "\n\n" + column(w, right)
 		}
 		if rows <= 0 {
 			return stack(leftRows, rightRows)
 		}
-		// Stacked, there are two borders to pay for. Details keeps at most half
-		// of what is left, so a long attempt list cannot squeeze the checks
-		// out, and it gives its panel up entirely when the two of them still do
-		// not fit. Whether they fit is measured rather than predicted: a probe
-		// row that wraps costs a display row no row count can see coming.
-		inner := rows - 2*frame
-		if right := panelBody(fitRows(rightRows, max(inner/2, 1), w-pad)); len(right) > 0 {
-			both := stack(windowRows(m.st, leftRows, sel, inner-displayRows(right, w-pad), w-pad), right)
+		// Stacked, the gap row is the only chrome to pay for. Details keeps at
+		// most half of what is left, so a long attempt list cannot squeeze the
+		// checks out, and it gives its section up entirely when the two of them
+		// still do not fit. Whether they fit is measured rather than predicted:
+		// a probe row that wraps costs a display row no row count can see
+		// coming.
+		inner := rows - 1
+		if right := sectionBody(fitRows(rightRows, max(inner/2, 1), w)); len(right) > 0 {
+			both := stack(windowRows(m.st, leftRows, sel, inner-displayRows(right, w), w), right)
 			if lipgloss.Height(both) <= rows {
 				return both
 			}
 		}
-		// Checks on its own, so there is only one border to pay for.
-		return fitBlock(stack(windowRows(m.st, leftRows, sel, rows-frame, w-pad), nil), rows)
+		// Checks on its own, so there is no gap row to pay for.
+		return fitBlock(stack(windowRows(m.st, leftRows, sel, rows, w), nil), rows)
 	}
-	leftW := 38
+	leftW := checksWidth
 	if want > leftW {
-		// A label pushes the widest probe row past the panel's usual width,
+		// A label pushes the widest probe row past the section's usual width,
 		// and a row that wraps costs the block a display row its budget never
 		// saw coming. Take the columns those rows ask for, but never out of
-		// the width the Details panel is guaranteed beside them: a terminal
+		// the width the Details section is guaranteed beside them: a terminal
 		// with nothing to spare takes the wrap instead.
-		leftW = min(want, max(m.width-detailsMinWidth-5, leftW))
+		leftW = min(want, max(m.width-detailsMinWidth-bodyGutter, leftW))
 	}
-	leftRows := checkPanel(leftW)
-	rightW := max(m.width-leftW-5, detailsMinWidth)
+	leftRows := checksSection(leftW)
+	rightW := max(m.width-leftW-bodyGutter, detailsMinWidth)
+	rightRows = sectionHead(m.st, rightRows, rightW)
 	if rows > 0 {
-		leftRows = windowRows(m.st, leftRows, sel, rows-frame, leftW-pad)
-		rightRows = panelBody(fitRows(rightRows, rows-frame, rightW-pad))
+		leftRows = windowRows(m.st, leftRows, sel, rows, leftW)
+		rightRows = sectionBody(fitRows(rightRows, rows, rightW))
 	}
-	left := m.st.panel.Width(leftW).Render(strings.Join(leftRows, "\n"))
+	left := column(leftW, leftRows)
 	if len(rightRows) == 0 {
 		return fitBlock(left, rows)
 	}
-	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top, left, " ",
-		m.st.panel.Width(rightW).Render(strings.Join(rightRows, "\n"))), rows)
+	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top, left,
+		strings.Repeat(" ", bodyGutter), column(rightW, rightRows)), rows)
 }
 
-// detailRows is the Details panel: its title row followed by the evidence for
-// the cursor row, or nil when there is no evidence to show. A panel with
-// nothing under its title is a bordered box of whitespace, so it is left out
-// rather than drawn empty, and it comes back the moment the cursor row has
-// something to say.
+// sectionHead pins a section's title over a rule as wide as the section's own
+// column, which is what marks the body's two areas off now that neither is
+// drawn inside a border. The rule is a character rather than a colour, so the
+// boundary survives NO_COLOR and a monochrome terminal.
+//
+// Title and rule are one entry in the row list: the windowing keeps the pair
+// whole, and the block's budget prices both of its display rows. The title is
+// cut to the column rather than wrapped inside it, so that pair is always
+// exactly two rows and the two sections' rules stay on one line.
+func sectionHead(st styles, rows []string, width int) []string {
+	if len(rows) == 0 || width <= 0 {
+		return rows
+	}
+	out := slices.Clone(rows)
+	out[0] = ansi.Truncate(out[0], width, "…") + "\n" + st.faint.Render(strings.Repeat("─", width))
+	return out
+}
+
+// detailRows is the Details section: its title row followed by the evidence for
+// the cursor row, or nil when there is no evidence to show. A heading with
+// nothing under it is left out rather than drawn empty, and it comes back the
+// moment the cursor row has something to say.
 func (m model) detailRows(deferred bool) []string {
 	if deferred {
 		return []string{
@@ -439,16 +484,16 @@ func (m model) detailRows(deferred bool) []string {
 		why := m.whyLines()
 		if len(why) > 1 {
 			rows := append([]string{m.st.panelTitle.Render("Why: " + probe.Name)}, why[1:]...)
-			return panelBody(rows)
+			return sectionBody(rows)
 		}
 	}
 	var body strings.Builder
 	if r, ok := m.results[probe.ID]; ok {
 		// The answer block above is already quoting this row's finding and its
-		// remedy, a few rows higher and ahead of the panels, so the panel adds
+		// remedy, a few rows higher and ahead of the body, so Details adds
 		// only what that quote left out: it repeats the finding when the quote
 		// had to be clipped to one row, and never repeats the remedy, which is
-		// up there in full either way. A panel that says again what the answer
+		// up there in full either way. A section that says again what the answer
 		// said reads as a second, competing answer. Every other row keeps both
 		// lines, because nothing else on screen is saying them.
 		_, quoted := m.evidenceLine(r.Detail)
@@ -464,7 +509,7 @@ func (m model) detailRows(deferred bool) []string {
 		// repeated under every cursor position it would read as advice about
 		// whatever row the reader happened to land on. It goes here, above the
 		// per-attempt evidence, because a run with sixteen connection attempts
-		// must not push the one actionable block off the panel.
+		// must not push the one actionable block off the section.
 		if answered {
 			body.WriteString(m.remediationBlock())
 		}
@@ -497,7 +542,7 @@ func (m model) detailRows(deferred bool) []string {
 	}
 	rows := append([]string{m.st.panelTitle.Render("Details: " + probe.Name)},
 		strings.Split(strings.TrimRight(body.String(), "\n"), "\n")...)
-	return panelBody(rows)
+	return sectionBody(rows)
 }
 
 func (m model) whyLines() []string {
@@ -746,10 +791,10 @@ func (m model) remediation() (diagnostic.Remediation, bool) {
 	return diagnostic.Remediate(m.diagnosis(), m.results, runtime.GOOS)
 }
 
-// remediationBlock is the Details panel's remediation section, newline
+// remediationBlock is the Details remediation block, newline
 // terminated and empty when there is nothing to advise. It is progressive
 // disclosure rather than a screen of its own: the answer block above the
-// panels already carries the verdict, the row's own hint and the evidence, and
+// body already carries the verdict, the row's own hint and the evidence, and
 // this is the part a reader who wants to act on it opens the row for.
 //
 // The command is shown, never run. netdoc is a diagnostic tool, and a
@@ -784,11 +829,10 @@ func (m model) remediationBlock() string {
 	return b.String()
 }
 
-// panelBody drops a panel that has a title and nothing readable under it,
-// which the reader sees as a bordered box of whitespace. Emptiness is measured
-// on the text with its styling stripped, because a row of spaces or of escape
-// sequences alone still draws the box.
-func panelBody(rows []string) []string {
+// sectionBody drops a section that has a title and nothing readable under it.
+// Emptiness is measured on the text with its styling stripped, because a row
+// of spaces or escape sequences alone still draws an orphaned heading.
+func sectionBody(rows []string) []string {
 	if len(rows) < 2 {
 		return nil
 	}
@@ -802,7 +846,7 @@ func panelBody(rows []string) []string {
 
 // fitBlock is bodyView's last word on its own row budget: a block that still
 // does not fit is dropped, because View counts the rows it hands back and a
-// bordered panel cannot be clipped without losing the border that closes it.
+// block clipped from the bottom ends on a row that does not say it was cut.
 func fitBlock(block string, rows int) string {
 	if rows > 0 && lipgloss.Height(block) > rows {
 		return ""
@@ -810,7 +854,7 @@ func fitBlock(block string, rows int) string {
 	return block
 }
 
-// displayRows is what rows cost on screen once a panel width columns wide has
+// displayRows is what rows cost on screen once a section width columns wide has
 // wrapped them. Budgeting in logical rows instead undercounts every row that
 // wraps, which is how a narrow terminal used to overflow its own row budget.
 func displayRows(rows []string, width int) int {
@@ -821,9 +865,9 @@ func displayRows(rows []string, width int) int {
 	return total
 }
 
-// rowCost is what one row costs on screen once a panel width columns wide has
+// rowCost is what one row costs on screen once a section width columns wide has
 // wrapped it. Lip Gloss breaks on word boundaries, so dividing the row's width
-// by the panel's undercounts every row that has to break early at a space.
+// by the section's undercounts every row that has to break early at a space.
 // Render it at that width and count instead: the renderer is the only oracle
 // that cannot drift from what actually lands on screen.
 func rowCost(row string, width int) int {
@@ -844,11 +888,11 @@ func fitRows(rows []string, n, width int) []string {
 	return rows
 }
 
-// windowRows fits a panel's rows into n display rows in a panel width columns
-// wide. rows[0] is the panel title and stays pinned; the list below it scrolls
-// so that sel, an index into that list, is always on screen. A truncated list
-// spends its last row saying how many it hid, since nothing else on the panel
-// admits that it goes on.
+// windowRows fits a section's rows into n display rows in a section width
+// columns wide. rows[0] is the section title and stays pinned; the list below
+// it scrolls so that sel, an index into that list, is always on screen. A
+// truncated list spends its last row saying how many it hid, since nothing
+// else in the section admits that it goes on.
 func windowRows(st styles, rows []string, sel, n, width int) []string {
 	if len(rows) < 2 || displayRows(rows, width) <= n {
 		return rows // a bare title has nothing to scroll
@@ -859,12 +903,12 @@ func windowRows(st styles, rows []string, sel, n, width int) []string {
 	// budget shows the reader a row they did not select, or no rows at all. So
 	// it is spent first and the rest grows outward from it, downward first. A
 	// cursor row that overruns the budget on its own leaves fitBlock to drop
-	// the block, which beats a panel pointing at the wrong row.
+	// the block, which beats a section pointing at the wrong row.
 	budget := n - rowCost(rows[0], width) - rowCost(list[sel], width)
 	lo, hi := sel, sel+1
 	// The "… N more" line costs rows of its own, priced at the widest count it
 	// could carry, and it yields to the last row the list can still show: a
-	// panel with the cursor in it beats a panel that only says how much it is
+	// section with the cursor in it beats one that only says how much it is
 	// hiding.
 	cost := rowCost(st.faint.Render(fmt.Sprintf("… %d more", len(list))), width)
 	marker := budget >= cost

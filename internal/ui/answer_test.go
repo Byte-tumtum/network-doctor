@@ -205,9 +205,9 @@ func lineWith(lines []string, want string) int {
 	return -1
 }
 
-// firstPanelLine is where the results block starts: the top border of the
-// Checks panel, which is the first row of probe machinery on screen.
-func firstPanelLine(lines []string) int { return lineWith(lines, "╭") }
+// firstBodyLine is where the results block starts: the Checks heading, which
+// is the first row of probe machinery on screen.
+func firstBodyLine(lines []string) int { return lineWith(lines, "Checks") }
 
 // answerLead is a fragment of a banner line long enough to identify it and
 // short enough to survive the wrap the full-width block goes through.
@@ -229,7 +229,7 @@ func TestAnswerLeadsTheCompletedView(t *testing.T) {
 			m := s.build(t)
 			_, v := renderAt(t, m)
 			lines := viewLines(v)
-			panel := firstPanelLine(lines)
+			panel := firstBodyLine(lines)
 			if panel < 0 {
 				t.Fatalf("no results block on screen:\n%s", v)
 			}
@@ -427,7 +427,7 @@ func TestHealthyCompletionIsConcise(t *testing.T) {
 	if collapsedRow(v) == "" {
 		t.Errorf("a healthy run still lists its passing checks one by one:\n%s", v)
 	}
-	if panel := firstPanelLine(lines); panel < 0 || panel > 3 {
+	if panel := firstBodyLine(lines); panel < 0 || panel > 3 {
 		t.Errorf("the results block starts at row %d, too far under a one-line answer:\n%s", panel, v)
 	}
 }
@@ -561,7 +561,7 @@ func TestToolJobKeepsTheAnswerOnTop(t *testing.T) {
 	if lineWith(lines, answerLead(summary)) != 0 {
 		t.Errorf("the job pane displaced the answer:\n%s", v)
 	}
-	if lineWith(lines, "dig printer.local") <= firstPanelLine(lines) {
+	if lineWith(lines, "dig printer.local") <= firstBodyLine(lines) {
 		t.Errorf("the job pane is above the results block:\n%s", v)
 	}
 	if len(lines) > 40 {

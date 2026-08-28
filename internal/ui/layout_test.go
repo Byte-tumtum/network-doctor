@@ -63,9 +63,10 @@ func checkPersistent(t *testing.T, m model, where, v string) {
 	}
 }
 
-// unclosedPanels counts panel borders the view opened without closing. A
-// clipped border is the malformed rendering a bottom-clipped results block
-// used to produce.
+// unclosedPanels counts panel borders the view opened without closing. The
+// results block is not boxed, so what this guards is the surfaces that still
+// are: the Actions menu, the forms, the pickers and the network map, any of
+// which may be drawn over a body that is yielding rows underneath them.
 func unclosedPanels(v string) int {
 	return strings.Count(v, "╭") - strings.Count(v, "╰")
 }
@@ -126,8 +127,8 @@ func TestPersistentBlockUnchangedWhileScrolling(t *testing.T) {
 	}
 	checkPersistent(t, bottom, "after scrolling", bottomView)
 	// The conclusion is rendered above the results block, so the lines before
-	// the first panel border must be byte-identical at both scroll positions.
-	head := func(v string) string { before, _, _ := strings.Cut(v, "╭"); return before }
+	// the Checks heading must be byte-identical at both scroll positions.
+	head := func(v string) string { before, _, _ := strings.Cut(v, "Checks"); return before }
 	if head(topView) != head(bottomView) {
 		t.Errorf("the conclusion changed while scrolling:\nbefore\n%s\nafter\n%s", head(topView), head(bottomView))
 	}

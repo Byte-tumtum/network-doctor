@@ -433,7 +433,7 @@ func TestPathStripSitsUnderTheAnswer(t *testing.T) {
 	if !strings.HasPrefix(lines[0], probeGlyph(diagnostic.StatusFail)+" ") {
 		t.Errorf("the verdict must still be the first row on screen:\n%s", v)
 	}
-	if panel := firstPanelLine(lines); strip > panel {
+	if panel := firstBodyLine(lines); strip > panel {
 		t.Errorf("the strip is at row %d, below the results block at %d:\n%s", strip, panel, v)
 	}
 	for _, banner := range strings.Split(m.banner(), "\n") {
