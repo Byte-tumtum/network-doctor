@@ -510,14 +510,52 @@ func TestInternetProbeAddsBackwardCompatibleRouteCause(t *testing.T) {
 			return nil, errors.New("no route to host")
 		},
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
+		// Sticky, because a host with no default route in either family is
+		// asked about both: the contract this pins is that the first candidate
+		// is classified, not that it is the only one classified.
 		routeCause: func(destination net.IP) string {
-			called = destination.Equal(net.ParseIP("1.1.1.1"))
+			called = called || destination.Equal(net.ParseIP("1.1.1.1"))
 			return RouteCauseNoDefaultRoute
 		},
 	}
 	r := ops.internetProbe(context.Background(), nil)
 	if r.Status != StatusFail || r.Cause != RouteCauseNoDefaultRoute || !called {
 		t.Errorf("route-classified egress = %+v, called=%t", r, called)
+	}
+}
+
+// TestInternetProbeClassifiesTheFamilyThatHasRoutes covers the machine the
+// first candidate address misdescribes. Both families fail, the endpoint list
+// leads with IPv4, and IPv4 has no default route because this host does not do
+// IPv4: reading the cause off that table reports "no default route" to someone
+// whose IPv6 default is present, preferred and dead, which is a different
+// repair entirely. The family with defaults of its own is the one asked.
+func TestInternetProbeClassifiesTheFamilyThatHasRoutes(t *testing.T) {
+	asked := map[string]string{}
+	ops := &netops{routeCause: func(destination net.IP) string {
+		if destination.To4() != nil {
+			asked["ipv4"] = destination.String()
+			return RouteCauseNoDefaultRoute
+		}
+		asked["ipv6"] = destination.String()
+		return RouteCausePreferredPathFailed
+	}}
+	r, dialed := dialedNetworks(t, ops, map[string]bool{"tcp4": true, "tcp6": true})
+	if r.Status != StatusFail || r.Cause != RouteCausePreferredPathFailed {
+		t.Errorf("IPv6-only host with a dead preferred path = %+v, want %s", r, RouteCausePreferredPathFailed)
+	}
+	if dialed != "[tcp4 tcp6]" || asked["ipv4"] == "" || asked["ipv6"] == "" {
+		t.Errorf("dialed %s, classifier saw %v: both families are still tried and still asked", dialed, asked)
+	}
+	if fix := routeFix(r.Cause); !strings.Contains(fix, "preferred default route") {
+		t.Errorf("fix hint = %q, want the preferred-route repair", fix)
+	}
+
+	// The other family having nothing to say leaves the original verdict
+	// alone, which is what keeps a genuinely routeless host reported as one.
+	both := &netops{routeCause: func(net.IP) string { return RouteCauseNoDefaultRoute }}
+	if r, _ := dialedNetworks(t, both, map[string]bool{"tcp4": true, "tcp6": true}); r.Cause != RouteCauseNoDefaultRoute {
+		t.Errorf("no defaults in either family = %+v, want %s", r, RouteCauseNoDefaultRoute)
 	}
 }
 

@@ -1007,6 +1007,18 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		}
 		if o.routeCause != nil {
 			r.Cause = o.routeCause(all[0])
+			// all[0] is an IPv4 endpoint whenever this dial had one, and a
+			// host with no IPv4 default route classifies as no_default_route
+			// however healthy its IPv6 routing is. An IPv6-only machine whose
+			// preferred IPv6 path just died would be told to go and create a
+			// default route it does not need, so when the other family holds
+			// defaults of its own and still failed, its verdict is the one
+			// that explains this row.
+			if r.Cause == RouteCauseNoDefaultRoute && len(v4.ips) > 0 && len(v6.ips) > 0 {
+				if other := o.routeCause(v6.ips[0]); other != "" && other != RouteCauseNoDefaultRoute {
+					r.Cause = other
+				}
+			}
 		}
 		// The routing table decides the advice: a missing default route and a
 		// filtered upstream are different repairs. An empty or unrecognized
