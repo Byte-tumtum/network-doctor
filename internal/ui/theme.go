@@ -82,6 +82,16 @@ var themes = []Theme{
 		Skip:   lipgloss.AdaptiveColor{Light: "#5f00af", Dark: "#d7afff"},
 		Muted:  lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"},
 	},
+	{
+		Name:   "monochrome",
+		About:  "no colours, with bold and faint emphasis",
+		Accent: lipgloss.NoColor{},
+		Border: lipgloss.NoColor{},
+		Pass:   lipgloss.NoColor{},
+		Fail:   lipgloss.NoColor{},
+		Warn:   lipgloss.NoColor{},
+		Skip:   lipgloss.NoColor{},
+	},
 }
 
 var defaultTheme = themes[0]

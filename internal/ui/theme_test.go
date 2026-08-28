@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -80,7 +82,7 @@ func TestDefaultThemeIsTheHistoricalPalette(t *testing.T) {
 }
 
 func TestBuiltInThemesAreUniqueAndStable(t *testing.T) {
-	want := []string{"terminal", "harbor", "ember", "contrast"}
+	want := []string{"terminal", "harbor", "ember", "contrast", "monochrome"}
 	var got []string
 	for _, th := range themes {
 		got = append(got, th.Name)
@@ -112,6 +114,113 @@ func TestBuiltInThemesAreUniqueAndStable(t *testing.T) {
 				t.Errorf("theme %q has no %s color", th.Name, name)
 			}
 		}
+	}
+}
+
+func TestMonochromeUsesNoColorsAndKeepsEmphasis(t *testing.T) {
+	mono := resolveTheme("monochrome")
+	for name, color := range map[string]lipgloss.TerminalColor{
+		"accent": mono.Accent, "border": mono.Border, "pass": mono.Pass,
+		"fail": mono.Fail, "warn": mono.Warn, "skip": mono.Skip,
+	} {
+		if color != (lipgloss.NoColor{}) {
+			t.Errorf("monochrome %s = %#v, want no color", name, color)
+		}
+	}
+	if mono.Muted != nil {
+		t.Errorf("monochrome muted = %#v, want terminal faint", mono.Muted)
+	}
+
+	s := newStyles(mono)
+	for name, style := range map[string]lipgloss.Style{
+		"pass": s.pass, "fail": s.fail, "skip": s.skip, "warn": s.warn,
+		"selection": s.sel, "key": s.key, "panel title": s.panelTitle, "spinner": s.spinner,
+	} {
+		if color := style.GetForeground(); color != (lipgloss.NoColor{}) {
+			t.Errorf("monochrome %s foreground = %#v, want no color", name, color)
+		}
+	}
+	for name, style := range map[string]lipgloss.Style{"panel": s.panel, "focus panel": s.focusPanel} {
+		if color := style.GetBorderTopForeground(); color != (lipgloss.NoColor{}) {
+			t.Errorf("monochrome %s border = %#v, want no color", name, color)
+		}
+	}
+	if !s.title.GetBold() || !s.sel.GetBold() || !s.panelTitle.GetBold() || !s.warn.GetBold() || !s.faint.GetFaint() {
+		t.Error("monochrome lost bold or faint emphasis")
+	}
+}
+
+func TestContrastThemeRemainsHighContrast(t *testing.T) {
+	want := Theme{
+		Name:   "contrast",
+		About:  "high contrast, with dim text at full strength",
+		Accent: lipgloss.AdaptiveColor{Light: "#00308f", Dark: "#00ffff"},
+		Border: lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"},
+		Pass:   lipgloss.AdaptiveColor{Light: "#005f00", Dark: "#00ff5f"},
+		Fail:   lipgloss.AdaptiveColor{Light: "#870000", Dark: "#ff5f5f"},
+		Warn:   lipgloss.AdaptiveColor{Light: "#5f3f00", Dark: "#ffd700"},
+		Skip:   lipgloss.AdaptiveColor{Light: "#5f00af", Dark: "#d7afff"},
+		Muted:  lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"},
+	}
+	if got := resolveTheme("contrast"); !reflect.DeepEqual(got, want) {
+		t.Errorf("contrast theme changed:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestMonochromeKeepsStatusAndJobMeaning(t *testing.T) {
+	m := newModel(mustTarget(t, "example.com:443"), false)
+	m.setTheme(resolveTheme("monochrome"))
+	for status := diagnostic.StatusPass; status <= diagnostic.StatusNA; status++ {
+		want := probeGlyph(status) + " " + status.String()
+		if got := ansi.Strip(m.st.status[status].Render(want)); got != want {
+			t.Errorf("status %s rendered as %q, want %q", status, got, want)
+		}
+	}
+
+	seen := map[string]JobStatus{}
+	for status := JobQueued; status <= JobTimedOut; status++ {
+		run := jobState{name: "job", status: status}
+		if status == JobRunning {
+			run.active = &job{}
+		}
+		glyph := ansi.Strip(m.jobGlyph(&run))
+		if glyph == "" {
+			t.Errorf("job status %s has no glyph", status)
+		} else if other, duplicate := seen[glyph]; duplicate {
+			t.Errorf("job statuses %s and %s share glyph %q", status, other, glyph)
+		}
+		seen[glyph] = status
+		m.cur = run
+		if got := ansi.Strip(m.jobStatusLine()); !strings.Contains(got, status.String()) {
+			t.Errorf("job status line %q does not name %s", got, status)
+		}
+	}
+}
+
+// Lip Gloss is the rendering layer that turns the model's styles into ANSI.
+// Its pinned termenv output reads NO_COLOR when the renderer is created, before
+// Bubble Tea writes that rendered view to the terminal.
+func TestLipGlossRendererHonorsNOColor(t *testing.T) {
+	for _, tt := range []struct {
+		name, value string
+		wantANSI    bool
+	}{
+		{"non-empty suppresses color", "1", false},
+		{"empty keeps color", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("NO_COLOR", tt.value)
+			t.Setenv("CLICOLOR", "")
+			t.Setenv("CLICOLOR_FORCE", "1")
+			renderer := lipgloss.NewRenderer(io.Discard)
+			got := lipgloss.NewStyle().Renderer(renderer).Foreground(lipgloss.Color("1")).Render("status")
+			if hasANSI := strings.Contains(got, "\x1b["); hasANSI != tt.wantANSI {
+				t.Errorf("rendered %q, ANSI present = %v, want %v", got, hasANSI, tt.wantANSI)
+			}
+			if plain := ansi.Strip(got); plain != "status" {
+				t.Errorf("visible text = %q, want status", plain)
+			}
+		})
 	}
 }
 
@@ -205,7 +314,7 @@ func TestThemePickerPreviewAcceptAndCancel(t *testing.T) {
 	if !m.theming || m.themeSel != 0 || m.themeWas.Name != before.Name {
 		t.Fatalf("T left theming=%v sel=%d was=%q", m.theming, m.themeSel, m.themeWas.Name)
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "Theme") {
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "Theme") || !strings.Contains(view, "monochrome") {
 		t.Error("the picker is not on screen")
 	}
 
@@ -253,22 +362,24 @@ func TestThemePickerPreviewAcceptAndCancel(t *testing.T) {
 
 	// enter keeps the previewed theme and persists it.
 	m = pressed(t, m, keyPress("T"))
-	press("down")
+	for range len(themes) {
+		press("down")
+	}
 	press("enter")
-	if m.theming || m.theme.Name != themes[1].Name {
-		t.Fatalf("enter left theming=%v theme=%q, want %q", m.theming, m.theme.Name, themes[1].Name)
+	if m.theming || m.theme.Name != themes[len(themes)-1].Name {
+		t.Fatalf("enter left theming=%v theme=%q, want %q", m.theming, m.theme.Name, themes[len(themes)-1].Name)
 	}
 	saved, err := os.ReadFile(path) // #nosec G304 -- path is this test's own temp dir
-	if err != nil || strings.TrimSpace(string(saved)) != themes[1].Name {
-		t.Fatalf("saved preference = %q (%v), want %q", saved, err, themes[1].Name)
+	if err != nil || strings.TrimSpace(string(saved)) != themes[len(themes)-1].Name {
+		t.Fatalf("saved preference = %q (%v), want %q", saved, err, themes[len(themes)-1].Name)
 	}
-	if !strings.Contains(m.notice, themes[1].Name) {
+	if !strings.Contains(m.notice, themes[len(themes)-1].Name) {
 		t.Errorf("notice = %q, want it to name the theme", m.notice)
 	}
 	// A picker opened again starts on the theme now in force.
 	m = pressed(t, m, keyPress("T"))
-	if m.themeSel != 1 {
-		t.Errorf("reopened picker = sel %d, want 1", m.themeSel)
+	if m.themeSel != len(themes)-1 {
+		t.Errorf("reopened picker = sel %d, want %d", m.themeSel, len(themes)-1)
 	}
 }
 
@@ -344,6 +455,32 @@ func TestThemesRenderIdenticalVisibleContent(t *testing.T) {
 			return strings.Join(m.detailRows(false), "\n")
 		},
 		"theme picker": func(m model) string { m.themeSel = 3; return m.themeView() },
+		"actions menu": func(m model) string { m.actionsOpen = true; return m.View() },
+		"watch change": func(m model) string {
+			m.watch = true
+			doneResults(&m, diagnostic.ProbeDNS)
+			for _, probe := range m.probes {
+				m.runHistory[probe.ID] = []diagnostic.Status{diagnostic.StatusPass, m.results[probe.ID].Status}
+			}
+			return m.View()
+		},
+		"confirmation": func(m model) string {
+			u, _ := m.Update(keyMsg("n"))
+			return asModel(t, u).View()
+		},
+		"restart input": func(m model) string {
+			u, _ := m.runAction(actRestart)
+			return asModel(t, u).View()
+		},
+		"incident": func(m model) string {
+			start := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+			m.watch = true
+			recordWatchPass(&m, start, false, "wlan0")
+			recordWatchPass(&m, start.Add(5*time.Second), true, "wg0")
+			recordWatchPass(&m, start.Add(10*time.Second), false, "wlan0")
+			m.openIncidentViewer()
+			return m.View()
+		},
 	}
 	// The comparison is only worth making because the themes really do paint
 	// differently; a test binary whose stdout is not a terminal renders without

@@ -324,7 +324,7 @@ netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 
 `T` opens the theme picker. The highlighted theme is applied as you move, so the run behind the picker is the preview; `enter` keeps it and `esc` puts back the one you started on. The choice persists between sessions.
 
-`terminal` is the default and uses your terminal's own 16 colours, so netdoc follows whatever palette you already have. `harbor` and `ember` are cool and warm alternatives that adapt to a light or dark background, and `contrast` raises everything and draws dim text at full strength. No theme changes what netdoc says: every status keeps its glyph and its word, so `NO_COLOR` and monochrome terminals stay readable. The preference file is in **[docs/reference.md](docs/reference.md#usage-details)**.
+`terminal` is the default and uses your terminal's own 16 colours, so netdoc follows whatever palette you already have. `harbor` and `ember` are cool and warm alternatives, `contrast` is the high-contrast option, and `monochrome` is the explicit colour-free option with bold and faint emphasis. No theme changes what netdoc says: every status keeps its glyph and its word. `NO_COLOR=1 netdoc ...` disables colour for a run; an empty `NO_COLOR` value does not. The preference file is in **[docs/reference.md](docs/reference.md#usage-details)**.
 
 ### Vim keybindings
 
