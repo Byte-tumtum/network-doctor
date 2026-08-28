@@ -441,10 +441,8 @@ func TestSSHHostValueRoundTrip(t *testing.T) {
 	}
 }
 
-// sshHelpText returns the S binding's help bar label and cheatsheet line from
-// the keymap table itself. The tests below assert that those lines appear or
-// stay hidden, which is the behavior; taking the wording from the table rather
-// than repeating it here keeps a reworded help string from failing them.
+// sshHelpText returns the S binding's compact label and cheatsheet line from
+// the keymap table itself.
 func sshHelpText(t *testing.T) (bar, details string) {
 	t.Helper()
 	for _, def := range actionDefs {
@@ -461,8 +459,8 @@ func sshHelpText(t *testing.T) (bar, details string) {
 	return "", ""
 }
 
-// S is hinted in the help bar and the cheatsheet only once the banner probe
-// has found an SSH server, but the binding itself stays live either way.
+// S remains off the compact footer. The Actions menu and cheatsheet expose it
+// once the banner probe has found an SSH server, while the binding stays live.
 func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 	oldLookPath := toolLookPath
 	toolLookPath = func(string) (string, error) { return "ssh", nil }
@@ -474,7 +472,7 @@ func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 	bar, details := sshHelpText(t)
 
 	if strings.Contains(m.View(), bar) {
-		t.Error("the help bar hints S with no SSH server on the target")
+		t.Error("the footer hints S with no SSH server on the target")
 	}
 	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), details) {
 		t.Error("the cheatsheet lists S with no SSH server on the target")
@@ -485,8 +483,11 @@ func TestSSHHintFollowsTheBannerProbe(t *testing.T) {
 	}
 
 	doneResults(&m, "")
-	if !strings.Contains(m.View(), bar) {
-		t.Error("the help bar drops S even though the banner probe passed")
+	if strings.Contains(m.View(), bar) {
+		t.Error("the footer hints S even though secondary actions stay compact")
+	}
+	if !slices.Contains(menuNames(m), "SSH login") {
+		t.Error("the Actions menu drops S even though the banner probe passed")
 	}
 	if !strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), details) {
 		t.Error("the cheatsheet drops S even though the banner probe passed")
@@ -511,7 +512,7 @@ func TestSSHHintStaysHiddenWithoutAnSSHRung(t *testing.T) {
 		t.Fatal("an https target grew an SSH rung: pick another target for this test")
 	}
 	if strings.Contains(m.View(), bar) {
-		t.Error("the help bar hints S on a target with no SSH rung")
+		t.Error("the footer hints S on a target with no SSH rung")
 	}
 	if strings.Contains(asModel(t, must(m.Update(keyMsg("?")))).View(), details) {
 		t.Error("the cheatsheet lists S on a target with no SSH rung")

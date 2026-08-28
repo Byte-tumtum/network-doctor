@@ -40,8 +40,8 @@ func TestWatchCapturesAndDisplaysOneContinuingIncident(t *testing.T) {
 	if len(items) != 1 || items[0].Passes != 2 || items[0].Active() || items[0].Duration(start.Add(time.Minute)) != 10*time.Second {
 		t.Fatalf("incidents = %+v, want one recovered incident with two failing passes", items)
 	}
-	if help := m.helpView(false); !strings.Contains(help, "incidents") {
-		t.Fatalf("watch help does not expose incident inspection: %s", help)
+	if help := m.helpView(false); strings.Contains(help, "incidents") {
+		t.Fatalf("watch footer advertises incident inspection: %s", help)
 	}
 	if header := m.headerView(); !strings.Contains(header, "last incident recovered after 10s") {
 		t.Fatalf("watch header does not summarize the latest incident: %s", header)

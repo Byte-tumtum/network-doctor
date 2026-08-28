@@ -1368,6 +1368,12 @@ func (m model) helpView(deferred bool) string {
 			add(m.keys.pairLabel(ctxList, a, b), help.bar)
 		}
 	}
+	withNotice := func(help string) string {
+		if notice := m.noticeView(); notice != "" {
+			return notice + "\n" + help
+		}
+		return help
+	}
 	switch {
 	case m.networkMap && m.svc.host != "":
 		if len(m.svc.scan.Open) > 0 {
@@ -1391,18 +1397,11 @@ func (m model) helpView(deferred bool) string {
 			kv = append(kv, "letter", "runs that tool")
 		}
 	default:
-		add(m.keys.pairLabel(ctxList, actUp, actDown), "scroll")
-		addPair(actTop, actBottom)
-		addAction(actNetworkMap)
-		// The way back is only on the help bar: expanding removes the summary
-		// line that advertised the key.
-		if m.actionAvailable(actExpand) {
-			if m.expanded {
-				add(m.keys.label(ctxList, actExpand), "collapse")
-			} else {
-				addAction(actExpand)
-			}
-		}
+		addPair(actUp, actDown)
+		addAction(actActions)
+		addAction(actHelp)
+		addAction(actQuit)
+		return withNotice(m.chordHint(helpKeys(m.st, m.width, kv...)))
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
 	// hint tracks exactly when the key does something. On the map it opens a
@@ -1416,14 +1415,6 @@ func (m model) helpView(deferred bool) string {
 	}
 	if m.actionAvailable(actSwitchJob) {
 		addAction(actSwitchJob)
-	}
-	// Applied to every exit, including the deferred one: a notice raised before
-	// the chain has run has nothing else on screen to explain it.
-	withNotice := func(help string) string {
-		if notice := m.noticeView(); notice != "" {
-			return notice + "\n" + help
-		}
-		return help
 	}
 	if deferred {
 		if m.networkMap {

@@ -41,8 +41,8 @@ func TestWhyActionUsesTheExistingDetailsPanel(t *testing.T) {
 	if strings.Contains(ansi.Strip(strings.Join(m.detailRows(false), "\n")), "Ruled out") {
 		t.Fatal("details panel showed the causal explanation before e was pressed")
 	}
-	if bar := ansi.Strip(m.helpView(false)); !strings.Contains(bar, "e why") {
-		t.Fatalf("help bar = %q, want the explanation action", bar)
+	if bar := ansi.Strip(m.helpView(false)); strings.Contains(bar, "e why") {
+		t.Fatalf("footer advertises the explanation action: %q", bar)
 	}
 
 	m = pressed(t, m, keyPress("e"))
@@ -67,8 +67,8 @@ func TestWhyActionUsesTheExistingDetailsPanel(t *testing.T) {
 			t.Errorf("Why view is missing %q:\n%s", want, view)
 		}
 	}
-	if bar := ansi.Strip(m.helpView(false)); !strings.Contains(bar, "e details") {
-		t.Errorf("open Why help bar = %q, want the toggle back", bar)
+	if bar := ansi.Strip(m.helpView(false)); strings.Contains(bar, "e details") {
+		t.Errorf("open Why footer advertises the toggle: %q", bar)
 	}
 
 	m = pressed(t, m, keyPress("e"))

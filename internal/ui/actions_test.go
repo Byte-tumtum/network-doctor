@@ -159,18 +159,8 @@ func TestActionsMenuCursorSurvivesAShrinkingList(t *testing.T) {
 	}
 }
 
-// Availability is the whole point of the menu, and it is the same answer the
-// help bar gives, so the two are checked together.
+// Availability is the whole point of the menu.
 func TestActionsMenuOffersOnlyWhatTheStateCanDo(t *testing.T) {
-	// Both surfaces name the same action, one as a chip and one as a row.
-	surfaces := map[string]string{
-		"retest":      "Retest",
-		"save report": "Save report",
-		"switch job":  "Switch job",
-		"why":         "Explain why",
-		"ssh login":   "SSH login",
-		"incidents":   "Incidents",
-	}
 	running := newModel(mustTarget(t, "example.com:443"), false)
 	running.width, running.height = 100, 40
 	for _, name := range []string{"Retest", "Save report", "Switch job", "Explain why", "Full output", "Cancel job", "Incidents", "SSH login"} {
@@ -207,16 +197,50 @@ func TestActionsMenuOffersOnlyWhatTheStateCanDo(t *testing.T) {
 			t.Errorf("a run with two jobs hides %q: %v", name, menuNames(jobs))
 		}
 	}
+}
 
-	for state, m := range map[string]model{"running": running, "finished": done, "jobs": jobs} {
-		bar := ansi.Strip(m.helpView(false))
-		for chip, row := range surfaces {
-			onBar := strings.Contains(bar, chip)
-			inMenu := slices.Contains(menuNames(m), row)
-			if onBar != inMenu {
-				t.Errorf("%s: the help bar says %q=%v but the menu says %q=%v\n%s", state, chip, onBar, row, inMenu, bar)
+func TestChecksFooterIsCompactAndUsesTheActiveKeymap(t *testing.T) {
+	secondary := []string{
+		"network map", "expand", "collapse", "copy", "save", "restart",
+		"retest", "theme", "ssh", "incidents", "why", "full output",
+	}
+	for _, preset := range presets {
+		t.Run(preset.name, func(t *testing.T) {
+			km, err := PresetKeymap(preset.name)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+			m := menuModel(t)
+			m.keys, m.width = km, 200
+			bar := ansi.Strip(m.helpView(false))
+			var kv []string
+			for _, act := range []keyAction{actActions, actHelp, actQuit} {
+				help, _ := actionHelpFor(ctxList, act)
+				kv = append(kv, km.label(ctxList, act), help.bar)
+			}
+			movement, _ := actionHelpFor(ctxList, actUp)
+			kv = append([]string{km.pairLabel(ctxList, actUp, actDown), movement.bar}, kv...)
+			if want := ansi.Strip(helpKeys(m.st, m.width, kv...)); bar != want {
+				t.Errorf("footer = %q, want %q", bar, want)
+			}
+			for _, hidden := range secondary {
+				if strings.Contains(bar, hidden) {
+					t.Errorf("footer contains secondary action %q: %q", hidden, bar)
+				}
+			}
+			for _, width := range []int{120, 80, 30} {
+				m.width = width
+				footer := m.helpView(false)
+				for _, line := range strings.Split(footer, "\n") {
+					if got := lipgloss.Width(line); got > width {
+						t.Errorf("%d-column footer has a %d-column line: %q", width, got, line)
+					}
+				}
+				if rows := lipgloss.Height(footer); width >= 80 && rows != 1 || width == 30 && rows > 2 {
+					t.Errorf("%d-column footer uses %d rows: %q", width, rows, ansi.Strip(footer))
+				}
+			}
+		})
 	}
 }
 

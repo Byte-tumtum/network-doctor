@@ -92,8 +92,8 @@ func TestPortalURLDisplayed(t *testing.T) {
 			t.Errorf("%s missing portal URL:\n%s", name, got)
 		}
 	}
-	if help := m.helpView(false); !strings.Contains(help, "copy portal URL") {
-		t.Errorf("help missing portal copy action:\n%s", help)
+	if help := m.helpView(false); strings.Contains(help, "copy portal URL") {
+		t.Errorf("footer advertises portal copy action:\n%s", help)
 	}
 
 	t.Setenv("TMUX", "")
@@ -632,8 +632,11 @@ func TestConcurrentToolsCanSwitch(t *testing.T) {
 	if canceled || nm.pending != nil || len(nm.otherJobs) != 1 || nm.otherJobs[0].active.id != "first" {
 		t.Fatalf("first tool was not preserved (canceled=%v pending=%v other=%+v)", canceled, nm.pending, nm.otherJobs)
 	}
-	if !strings.Contains(nm.View(), "tab") {
-		t.Fatal("multiple jobs must show the switch key")
+	if strings.Contains(nm.helpView(false), "switch job") {
+		t.Fatal("multiple jobs advertise switching in the compact footer")
+	}
+	if !slices.Contains(menuNames(nm), "Switch job") {
+		t.Fatal("multiple jobs must expose switching in the Actions menu")
 	}
 
 	u, cmd = nm.Update(ToolOutputMsg{JobID: "first", Generation: 1, Line: "still running"})

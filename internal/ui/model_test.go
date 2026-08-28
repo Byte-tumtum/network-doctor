@@ -73,8 +73,8 @@ func TestNetworkMapToggle(t *testing.T) {
 	}
 	r.Source = net.ParseIP("192.168.12.34")
 	m.results[diagnostic.ProbeInternet] = r
-	if help := m.helpView(false); !strings.Contains(help, "network map") {
-		t.Fatalf("v hint must say network map: %s", help)
+	if help := m.helpView(false); strings.Contains(help, "network map") {
+		t.Fatalf("normal footer still advertises network map: %s", help)
 	}
 
 	u, cmd := m.Update(keyMsg("v"))

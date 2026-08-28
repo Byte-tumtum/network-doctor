@@ -569,18 +569,16 @@ func TestToolboxModeKeepsItsChips(t *testing.T) {
 	}
 }
 
-// TestExpandKeyIsOfferedOnTheHelpBar: expanding removes the summary row that
-// advertised the key, so the way back has to live on the bar.
-func TestExpandKeyIsOfferedOnTheHelpBar(t *testing.T) {
+func TestExpandKeyStaysOutOfThePersistentFooter(t *testing.T) {
 	m := healthyModel(t)
 	m.width = 100
-	if bar := m.helpView(false); !strings.Contains(bar, "a expand") {
-		t.Errorf("compact help bar = %q, want the expand key", bar)
+	if bar := m.helpView(false); strings.Contains(bar, "expand") {
+		t.Errorf("compact footer advertises expand: %q", bar)
 	}
 	expanded := press(t, m, "a")
 	bar := expanded.helpView(false)
-	if !strings.Contains(bar, "a collapse") {
-		t.Errorf("expanded help bar = %q, want the way back", bar)
+	if strings.Contains(bar, "collapse") {
+		t.Errorf("expanded footer advertises collapse: %q", bar)
 	}
 }
 

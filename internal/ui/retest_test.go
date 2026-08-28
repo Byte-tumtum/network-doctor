@@ -188,14 +188,14 @@ func TestRetestDefersUntilRunningWorkStops(t *testing.T) {
 	}
 }
 
-// TestRetestIsAdvertisedOnceThereIsARunToRepeat keeps the help bar honest: the
-// key is offered when it means something, and the cheatsheet lists it from the
-// same table dispatch uses.
-func TestRetestIsAdvertisedOnceThereIsARunToRepeat(t *testing.T) {
+func TestRetestRemainsDiscoverableWithoutClutteringTheFooter(t *testing.T) {
 	m := pinnedRun(t, nil)
 	m.started[diagnostic.ProbeIface] = true
-	if bar := ansi.Strip(m.helpView(false)); !strings.Contains(bar, "retest") {
-		t.Errorf("a finished run must advertise retest: %q", bar)
+	if bar := ansi.Strip(m.helpView(false)); strings.Contains(bar, "retest") {
+		t.Errorf("a finished run advertises retest in the footer: %q", bar)
+	}
+	if !slices.Contains(menuNames(m), "Retest") {
+		t.Errorf("the Actions menu is missing Retest: %v", menuNames(m))
 	}
 	if sheet := ansi.Strip(m.helpOverlay()); !strings.Contains(sheet, "rerun the same checks on the same target") {
 		t.Errorf("the cheatsheet is missing retest: %q", sheet)

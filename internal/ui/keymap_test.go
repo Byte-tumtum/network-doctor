@@ -258,13 +258,6 @@ func TestActionMetadataMatchesDispatchAndHelp(t *testing.T) {
 			t.Errorf("action %d has no metadata", act)
 		}
 	}
-	bar := m.helpView(false)
-	if !strings.Contains(bar, "gg/G") {
-		t.Errorf("vim help bar = %q, want gg/G", bar)
-	}
-	if bar := newModel(nil, false).helpView(false); strings.Contains(bar, "gg/G") {
-		t.Errorf("default help bar advertises Vim keys: %q", bar)
-	}
 }
 
 func TestPresetKeymapRejectsUnknownName(t *testing.T) {
