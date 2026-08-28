@@ -269,7 +269,7 @@ func TestUnbindableToolsAreUnchanged(t *testing.T) {
 		for _, target := range targets {
 			tgt := mustTarget(t, target)
 			plain, bound := toolsFor(tgt, goos, toolBind{}), toolsFor(tgt, goos, dual)
-			keys := []string{"i", "s", "d", "n"}
+			keys := []string{"I", "s", "d", "n"}
 			if tgt.Proto == diagnostic.ProtoSSH || tgt.Proto == diagnostic.ProtoSMTP {
 				keys = append(keys, "c") // the ssh / openssl handshake checks
 			}

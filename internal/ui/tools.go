@@ -145,17 +145,17 @@ func toolsFor(t *diagnostic.Target, goos string, b toolBind) []Tool {
 	switch goos {
 	case "darwin":
 		tools = []Tool{
-			staticTool(quote, "i", "route table", "netstat", "-rn"),
+			staticTool(quote, "I", "route table", "netstat", "-rn"),
 			staticTool(quote, "s", "open sockets", "netstat", "-an", "-p", "tcp"),
 		}
 	case "windows":
 		tools = []Tool{
-			staticTool(quote, "i", "route table", "route", "print", "-4"),
+			staticTool(quote, "I", "route table", "route", "print", "-4"),
 			staticTool(quote, "s", "open sockets", "netstat", "-ano"),
 		}
 	default: // linux (and any other unix)
 		tools = []Tool{
-			staticTool(quote, "i", "route table", "ip", "route"),
+			staticTool(quote, "I", "route table", "ip", "route"),
 			staticTool(quote, "s", "open sockets", "ss", "-tunp"),
 		}
 	}

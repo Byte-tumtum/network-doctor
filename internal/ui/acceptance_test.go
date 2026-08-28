@@ -14,7 +14,7 @@ import (
 func TestNativeDrillDownToolsExecute(t *testing.T) {
 	target := mustTarget(t, "127.0.0.1")
 	tools := toolsFor(target, runtime.GOOS, toolBind{})
-	for _, key := range []string{"i", "s", "p"} {
+	for _, key := range []string{"I", "s", "p"} {
 		tool := toolByKey(t, tools, key)
 		t.Run(tool.Name, func(t *testing.T) {
 			if !tool.Available {

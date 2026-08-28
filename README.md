@@ -333,7 +333,7 @@ Each diagnosis row is *evidence*; when you want proof, run the real tools as can
 
 | Key | Linux | macOS | Windows |
 |-----|-------|-------|---------|
-| `i` | `ip route` | `netstat -rn` | `route print -4` |
+| `I` | `ip route` | `netstat -rn` | `route print -4` |
 | `s` | `ss -tunp` | `netstat -an -p tcp` | `netstat -ano` |
 | `p` | `ping -c 4 -W 2` | `ping -c 4` | `ping -n 4 -w 2000` |
 | `d` | `dig +time=2 +tries=1` | `dig +time=2 +tries=1` | `nslookup` |

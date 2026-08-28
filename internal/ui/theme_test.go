@@ -368,24 +368,43 @@ func TestThemesRenderIdenticalVisibleContent(t *testing.T) {
 	}
 }
 
-// The picker's key must not take a key something else already owns: the built-in
+// A tool hotkey must not take a key something else already owns: the built-in
 // actions and the drill-down tool hotkeys share one keyboard, and the actions
-// are dispatched first, so a collision would silently swallow a tool.
+// are dispatched first, so a collision would silently swallow a tool. A key
+// that only begins a chord swallows it just as completely, because handleKey
+// holds the keyboard for the rest of the chord instead of reaching the tools.
 func TestListBindingsDoNotCollideWithToolHotkeys(t *testing.T) {
-	// "i" is a collision that predates the theme picker: it is both the
-	// incidents action and the route-table tool, and the action wins. Whether
-	// to rebind one of them is a separate behavior question, so it is recorded
-	// here rather than fixed, and the guard still catches any new collision.
-	known := map[string]bool{"i": true}
 	tgt := mustTarget(t, "example.com:443")
 	for _, preset := range presets {
 		km := newKeymap(preset.preset)
 		for _, goos := range []string{"linux", "darwin", "windows"} {
 			for _, tool := range toolsFor(tgt, goos, toolBind{}) {
-				act, ok := km.lookup(ctxList, []string{tool.Key})
-				if ok && !known[tool.Key] {
+				if act, ok := km.lookup(ctxList, []string{tool.Key}); ok {
 					t.Errorf("%s/%s: tool %q is shadowed by action %d", preset.name, goos, tool.Key, act)
 				}
+				if km.isPrefix(ctxList, []string{tool.Key}) {
+					t.Errorf("%s/%s: tool %q is swallowed by a chord that starts with it", preset.name, goos, tool.Key)
+				}
+			}
+		}
+	}
+	// Every tool hotkey has to survive the real dispatch, not just the tables.
+	// An unavailable binary spawns nothing, so the pane naming the tool is the
+	// proof the key reached it.
+	for _, preset := range presets {
+		km := newKeymap(preset.preset)
+		for _, tool := range newModel(tgt, false).tools {
+			m := newModel(tgt, false)
+			m.keys = km
+			for i := range m.tools {
+				m.tools[i].Available = false
+			}
+			m = pressed(t, m, keyPress(tool.Key))
+			if m.confirmTool != nil {
+				continue // gated tools stop at the confirmation, which is reaching them
+			}
+			if m.cur.name != tool.Name {
+				t.Errorf("%s: %q opened %q, want %q", preset.name, tool.Key, m.cur.name, tool.Name)
 			}
 		}
 	}

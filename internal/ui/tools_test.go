@@ -72,7 +72,7 @@ func TestToolsForDefinitions(t *testing.T) {
 	}
 	nmapArgs := []string{"-sT", "-Pn", "--host-timeout", "110s", "github.com"}
 	wantHost := []want{
-		{"i", "route table", "ip", []string{"route"}, "ip route", false},
+		{"I", "route table", "ip", []string{"route"}, "ip route", false},
 		{"s", "open sockets", "ss", []string{"-tunp"}, "ss -tunp", false},
 		{"p", "ping the host", "ping", []string{"-c", "4", "-W", "2", "github.com"}, "ping -c 4 -W 2 github.com", false},
 		{"d", "DNS lookup", "dig", []string{"+time=2", "+tries=1", "github.com"}, "dig +time=2 +tries=1 github.com", false},
@@ -109,7 +109,7 @@ func TestToolsForDefinitions(t *testing.T) {
 
 	// No-target set: only the target-independent tools, same order.
 	generic := toolsFor(nil, "linux", toolBind{})
-	wantGeneric := []string{"i", "s"}
+	wantGeneric := []string{"I", "s"}
 	if len(generic) != len(wantGeneric) {
 		t.Fatalf("toolsFor(nil) returned %d tools, want %d", len(generic), len(wantGeneric))
 	}
@@ -347,7 +347,7 @@ func TestToolsForWindows(t *testing.T) {
 	tools := toolsFor(tgt, "windows", toolBind{})
 
 	wantBins := map[string]string{
-		"i": "route", "s": "netstat", "p": "ping", "d": "nslookup",
+		"I": "route", "s": "netstat", "p": "ping", "d": "nslookup",
 		"c": "curl.exe", "t": "tracert", "m": "pathping", "n": "nmap",
 	}
 	if len(tools) != len(wantBins) {
@@ -389,7 +389,7 @@ func TestToolsForWindows(t *testing.T) {
 	if args, _, _ := toolByKey(t, tools, "t").Build(tgt, nil); !slices.Equal(args, []string{"-w", "2000", "-h", "20", "github.com"}) {
 		t.Errorf("tracert argv = %q", args)
 	}
-	if args, _, _ := toolByKey(t, tools, "i").Build(tgt, nil); !slices.Equal(args, []string{"print", "-4"}) {
+	if args, _, _ := toolByKey(t, tools, "I").Build(tgt, nil); !slices.Equal(args, []string{"print", "-4"}) {
 		t.Errorf("route print argv = %q", args)
 	}
 	if args, _, _ := toolByKey(t, tools, "s").Build(tgt, nil); !slices.Equal(args, []string{"-ano"}) {
@@ -403,7 +403,7 @@ func TestToolsForDarwin(t *testing.T) {
 	tgt := mustTarget(t, "github.com")
 	tools := toolsFor(tgt, "darwin", toolBind{})
 
-	if args, _, _ := toolByKey(t, tools, "i").Build(tgt, nil); !slices.Equal(args, []string{"-rn"}) {
+	if args, _, _ := toolByKey(t, tools, "I").Build(tgt, nil); !slices.Equal(args, []string{"-rn"}) {
 		t.Errorf("darwin routes argv = %q", args)
 	}
 	if args, _, _ := toolByKey(t, tools, "s").Build(tgt, nil); !slices.Equal(args, []string{"-an", "-p", "tcp"}) {
@@ -431,7 +431,7 @@ func TestToolsForDarwin(t *testing.T) {
 // Every table keeps the same hotkey set so muscle memory transfers across OSes.
 func TestToolTablesSameHotkeys(t *testing.T) {
 	tgt := mustTarget(t, "github.com")
-	want := []string{"i", "s", "p", "d", "c", "t", "m", "n"}
+	want := []string{"I", "s", "p", "d", "c", "t", "m", "n"}
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		var keys []string
 		for _, tl := range toolsFor(tgt, goos, toolBind{}) {
