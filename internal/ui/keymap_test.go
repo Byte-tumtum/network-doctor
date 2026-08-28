@@ -242,7 +242,7 @@ func TestActionMetadataMatchesDispatchAndHelp(t *testing.T) {
 		seen[def.act] = true
 		for ctx, metadata := range def.help {
 			for _, seq := range km.keysFor(ctx, def.act) {
-				parts := strings.Fields(seq)
+				parts := splitSeq(seq)
 				if act, ok := km.lookup(ctx, parts); !ok || act != def.act {
 					t.Errorf("%s %q dispatches to %d, ok=%v", def.name, seq, act, ok)
 				}

@@ -1,0 +1,420 @@
+// The Actions menu: its binding, what it offers in a given state, and the
+// promise that every row is the action the keyboard already runs rather than a
+// second copy of it.
+
+package ui
+
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
+)
+
+// sendKey drives one key through Update, which is where the open menu takes
+// ownership of the keyboard, so these tests exercise the real routing.
+func sendKey(t *testing.T, m model, key string) model {
+	t.Helper()
+	u, _ := m.Update(keyPress(key))
+	return asModel(t, u)
+}
+
+// menuModel is a finished run with a full toolbox, the state with the most to
+// offer. The tool table is pinned to one GOOS so the rows are the same
+// wherever the suite runs.
+func menuModel(t *testing.T) model {
+	t.Helper()
+	m := blackHoleModel(t)
+	m.tools = toolsFor(m.target, "linux", toolBind{})
+	// The fixture writes results straight into the map; retest is offered for
+	// a chain that ran, so say that it did.
+	for _, p := range m.probes {
+		m.started[p.ID] = true
+	}
+	m.width, m.height = 100, 40
+	return m
+}
+
+func menuNames(m model) []string {
+	items := m.actionItems()
+	names := make([]string, len(items))
+	for i, item := range items {
+		names[i] = item.name
+	}
+	return names
+}
+
+func menuKey(m model, name string) (string, bool) {
+	for _, item := range m.actionItems() {
+		if item.name == name {
+			return item.key, true
+		}
+	}
+	return "", false
+}
+
+// selectMenu puts the cursor on the named row, failing when the menu is not
+// offering it at all.
+func selectMenu(t *testing.T, m model, name string) model {
+	t.Helper()
+	i := slices.Index(menuNames(m), name)
+	if i < 0 {
+		t.Fatalf("the Actions menu has no %q row: %v", name, menuNames(m))
+	}
+	m.actionsOpen, m.actionsSel = true, i
+	return m
+}
+
+// The menu is reached through the ordinary keymap, so space has to resolve to
+// it in every preset and stay out of the viewer, which never opens it.
+func TestActionsMenuIsBoundToSpaceInEveryPreset(t *testing.T) {
+	for _, preset := range presets {
+		km, err := PresetKeymap(preset.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if act, pending := resolvedAction(km, ctxList, " "); act != actActions || pending != nil {
+			t.Errorf("%s: space = (%d, %v), want the Actions menu", preset.name, act, pending)
+		}
+		if act, ok := km.lookup(ctxViewer, []string{" "}); ok {
+			t.Errorf("%s: space in the output viewer took action %d", preset.name, act)
+		}
+		if label := km.label(ctxList, actActions); label != "space" {
+			t.Errorf("%s: the menu's key reads %q", preset.name, label)
+		}
+	}
+}
+
+func TestActionsMenuOpensAndCloses(t *testing.T) {
+	m := menuModel(t)
+	m = sendKey(t, m, " ")
+	if !m.actionsOpen || m.actionsSel != 0 {
+		t.Fatalf("space left open=%v sel=%d", m.actionsOpen, m.actionsSel)
+	}
+	if closed := sendKey(t, m, "esc"); closed.actionsOpen {
+		t.Error("esc must close the menu")
+	}
+	if toggled := sendKey(t, m, " "); toggled.actionsOpen {
+		t.Error("space must close the menu it opened")
+	}
+	// Closing acts on nothing: esc is the job cancel key outside the menu.
+	canceled := false
+	m.cur.active = &job{cancel: func() { canceled = true }}
+	if sendKey(t, m, "esc"); canceled {
+		t.Error("esc closed the menu and cancelled the job underneath it")
+	}
+}
+
+func TestActionsMenuNavigatesAndRunsTheSelectedRow(t *testing.T) {
+	m := menuModel(t)
+	names := menuNames(m)
+	m = sendKey(t, m, " ")
+	for _, key := range []string{"down", "j", "up"} {
+		m = sendKey(t, m, key)
+	}
+	if m.actionsSel != 1 {
+		t.Fatalf("down, j, up left the cursor on row %d, want 1", m.actionsSel)
+	}
+	if m = sendKey(t, m, "up"); m.actionsSel != 0 {
+		t.Fatalf("the cursor walked off the top to row %d", m.actionsSel)
+	}
+	for range len(names) + 3 {
+		m = sendKey(t, m, "down")
+	}
+	if m.actionsSel != len(names)-1 {
+		t.Fatalf("the cursor walked off the bottom to row %d of %d", m.actionsSel, len(names))
+	}
+
+	// Enter runs the selected row, and the row is what its name says.
+	run := sendKey(t, selectMenu(t, m, "Theme"), "enter")
+	if run.actionsOpen || !run.theming {
+		t.Errorf("enter on Theme left open=%v theming=%v", run.actionsOpen, run.theming)
+	}
+	run = sendKey(t, selectMenu(t, m, "Restart"), "enter")
+	if run.actionsOpen || !run.entering {
+		t.Errorf("enter on Restart left open=%v entering=%v", run.actionsOpen, run.entering)
+	}
+	run = sendKey(t, selectMenu(t, m, "Ping the host"), "enter")
+	if run.actionsOpen || run.cur.name != "ping the host" {
+		t.Errorf("enter on Ping the host left open=%v job=%q", run.actionsOpen, run.cur.name)
+	}
+}
+
+// A row that stopped applying under an open menu must not leave the cursor
+// pointing past the end of the list.
+func TestActionsMenuCursorSurvivesAShrinkingList(t *testing.T) {
+	m := menuModel(t)
+	m.actionsOpen, m.actionsSel = true, len(menuNames(m))-1
+	m.tools = nil
+	m.width, m.height = 100, 40
+	if v := m.View(); !strings.Contains(v, "Actions") {
+		t.Fatalf("the menu stopped rendering:\n%s", v)
+	}
+	m = sendKey(t, m, "enter")
+	if m.actionsOpen {
+		t.Error("enter must close the menu even after the list shrank")
+	}
+}
+
+// Availability is the whole point of the menu, and it is the same answer the
+// help bar gives, so the two are checked together.
+func TestActionsMenuOffersOnlyWhatTheStateCanDo(t *testing.T) {
+	// Both surfaces name the same action, one as a chip and one as a row.
+	surfaces := map[string]string{
+		"retest":      "Retest",
+		"save report": "Save report",
+		"switch job":  "Switch job",
+		"why":         "Explain why",
+		"ssh login":   "SSH login",
+		"incidents":   "Incidents",
+	}
+	running := newModel(mustTarget(t, "example.com:443"), false)
+	running.width, running.height = 100, 40
+	for _, name := range []string{"Retest", "Save report", "Switch job", "Explain why", "Full output", "Cancel job", "Incidents", "SSH login"} {
+		if slices.Contains(menuNames(running), name) {
+			t.Errorf("an unfinished run offers %q: %v", name, menuNames(running))
+		}
+	}
+	// Restart and quit are always there, or the menu could open on nothing.
+	for _, name := range []string{"Restart", "Theme", "Help", "Quit", "Network map"} {
+		if !slices.Contains(menuNames(running), name) {
+			t.Errorf("an unfinished run hides %q: %v", name, menuNames(running))
+		}
+	}
+
+	done := menuModel(t)
+	for _, name := range []string{"Retest", "Save report", "Copy report", "Explain why"} {
+		if !slices.Contains(menuNames(done), name) {
+			t.Errorf("a finished run hides %q: %v", name, menuNames(done))
+		}
+	}
+	// A finished run has no job pane and no second job yet.
+	for _, name := range []string{"Full output", "Switch job", "Cancel job"} {
+		if slices.Contains(menuNames(done), name) {
+			t.Errorf("a finished run with no job offers %q", name)
+		}
+	}
+
+	jobs := menuModel(t)
+	jobs.cur.name, jobs.cur.status = "ping the host", JobDone
+	jobs.cur.active = &job{cancel: func() {}}
+	jobs.otherJobs = []jobState{{name: "trace the path", status: JobDone}}
+	for _, name := range []string{"Full output", "Switch job", "Cancel job"} {
+		if !slices.Contains(menuNames(jobs), name) {
+			t.Errorf("a run with two jobs hides %q: %v", name, menuNames(jobs))
+		}
+	}
+
+	for state, m := range map[string]model{"running": running, "finished": done, "jobs": jobs} {
+		bar := ansi.Strip(m.helpView(false))
+		for chip, row := range surfaces {
+			onBar := strings.Contains(bar, chip)
+			inMenu := slices.Contains(menuNames(m), row)
+			if onBar != inMenu {
+				t.Errorf("%s: the help bar says %q=%v but the menu says %q=%v\n%s", state, chip, onBar, row, inMenu, bar)
+			}
+		}
+	}
+}
+
+// Wording follows the state where the action itself does, which is the reason
+// the menu names rows rather than repeating the cheatsheet.
+func TestActionsMenuNamesFollowTheState(t *testing.T) {
+	m := menuModel(t)
+	m.results[m.probes[m.selected].ID] = diagnostic.ProbeResult{
+		ID:     m.probes[m.selected].ID,
+		Status: diagnostic.StatusWarn,
+		Portal: &diagnostic.Portal{RedirectURL: "http://portal.example/login"},
+	}
+	if !slices.Contains(menuNames(m), "Copy portal URL") || slices.Contains(menuNames(m), "Copy report") {
+		t.Errorf("a selected portal row must offer its URL: %v", menuNames(m))
+	}
+
+	collapsed := menuModel(t)
+	if !slices.Contains(menuNames(collapsed), "Expand checks") {
+		t.Errorf("a collapsed run must offer the expansion: %v", menuNames(collapsed))
+	}
+	collapsed.expanded = true
+	if !slices.Contains(menuNames(collapsed), "Collapse checks") {
+		t.Errorf("an expanded run must offer the way back: %v", menuNames(collapsed))
+	}
+}
+
+// Every key in the menu is read from the active preset, never spelled out in
+// the menu itself.
+func TestActionsMenuKeysComeFromTheActivePreset(t *testing.T) {
+	m := menuModel(t)
+	if key, _ := menuKey(m, "Retest"); key != "R" {
+		t.Errorf("Retest shows key %q, want R", key)
+	}
+	rebound := clonePreset(defaultPreset)
+	rebound[ctxList][actRetest] = []string{"X"}
+	rebound[ctxList][actExplain] = nil
+	m.keys = newKeymap(rebound)
+	if key, _ := menuKey(m, "Retest"); key != "X" {
+		t.Errorf("the rebound Retest shows key %q, want X", key)
+	}
+	// An action the preset does not bind cannot be run from the menu either.
+	if slices.Contains(menuNames(m), "Explain why") {
+		t.Errorf("an unbound action is still on the menu: %v", menuNames(m))
+	}
+	if v := m.actionsView(30); !strings.Contains(ansi.Strip(v), "X  Retest") {
+		t.Errorf("the rendered menu ignores the preset:\n%s", v)
+	}
+}
+
+// Tool rows are the toolbox, not a copy of it.
+func TestActionsMenuToolsComeFromToolMetadata(t *testing.T) {
+	m := menuModel(t)
+	var want []string
+	for _, tool := range m.tools {
+		want = append(want, strings.ToUpper(tool.Name[:1])+tool.Name[1:])
+	}
+	names := menuNames(m)
+	if got := names[len(names)-len(want):]; !slices.Equal(got, want) {
+		t.Errorf("tool rows = %v, want %v", got, want)
+	}
+	for _, tool := range m.tools {
+		key, ok := menuKey(m, strings.ToUpper(tool.Name[:1])+tool.Name[1:])
+		if !ok || key != tool.Key {
+			t.Errorf("tool %q shows key %q (found=%v), want %q", tool.Name, key, ok, tool.Key)
+		}
+	}
+	// A tool whose binary is missing has a chip that says so; it is not
+	// something the menu can run.
+	m.tools[0].Available = false
+	if slices.Contains(menuNames(m), strings.ToUpper(m.tools[0].Name[:1])+m.tools[0].Name[1:]) {
+		t.Errorf("a missing binary is still offered: %v", menuNames(m))
+	}
+}
+
+// The confirm gate belongs to the tool, not to the key that reached it.
+func TestActionsMenuKeepsTheConfirmationGate(t *testing.T) {
+	m := selectMenu(t, menuModel(t), "Port scan")
+	m = sendKey(t, m, "enter")
+	if m.actionsOpen || m.confirmTool == nil || m.confirmTool.Name != "port scan" {
+		t.Fatalf("the port scan skipped its gate: open=%v confirm=%v", m.actionsOpen, m.confirmTool)
+	}
+	if m.cur.status == JobRunning {
+		t.Error("the scan started before it was confirmed")
+	}
+	if run := sendKey(t, m, "y"); run.confirmTool != nil {
+		t.Error("the gate did not hand the tool on to y")
+	}
+}
+
+// An open menu is still the ordinary keyboard: a reader who knows a shortcut
+// presses it and gets what it always does.
+func TestActionsMenuPassesShortcutsThrough(t *testing.T) {
+	m := menuModel(t)
+	m.actionsOpen = true
+	if themed := sendKey(t, m, "T"); themed.actionsOpen || !themed.theming {
+		t.Errorf("T left open=%v theming=%v", themed.actionsOpen, themed.theming)
+	}
+	if scan := sendKey(t, m, "n"); scan.actionsOpen || scan.confirmTool == nil {
+		t.Errorf("the tool hotkey left open=%v confirm=%v", scan.actionsOpen, scan.confirmTool)
+	}
+	if tool := sendKey(t, m, "p"); tool.actionsOpen || tool.cur.name != "ping the host" {
+		t.Errorf("the tool hotkey left open=%v job=%q", tool.actionsOpen, tool.cur.name)
+	}
+	// A chord still owns the keyboard until it completes, and it moves the
+	// menu's own cursor rather than the checks underneath it.
+	km, _ := PresetKeymap("vim")
+	vim := menuModel(t)
+	vim.keys, vim.actionsOpen, vim.actionsSel = km, true, 4
+	vim = sendKey(t, vim, "g")
+	if !slices.Equal(vim.pendingKeys, []string{"g"}) || vim.actionsSel != 4 {
+		t.Fatalf("the first g moved the cursor to %d (pending %v)", vim.actionsSel, vim.pendingKeys)
+	}
+	vim = sendKey(t, vim, "g")
+	if vim.actionsSel != 0 || !vim.actionsOpen {
+		t.Errorf("gg left the cursor on row %d, open=%v", vim.actionsSel, vim.actionsOpen)
+	}
+	vim = sendKey(t, vim, "G")
+	if vim.actionsSel != len(menuNames(vim))-1 {
+		t.Errorf("G left the cursor on row %d", vim.actionsSel)
+	}
+}
+
+// The menu is drawn where the help bar goes, so the run behind it has to stay
+// on screen and the view has to stay inside the terminal. The theme picker is
+// the yardstick: it is the same kind of panel in the same place, so a size it
+// survives is a size the menu has to survive, however many rows the menu would
+// rather have had.
+func TestActionsMenuFitsTheTerminal(t *testing.T) {
+	for _, width := range []int{30, 46, 80, 120} {
+		for _, height := range []int{6, 8, 10, 12, 16, 24, 40} {
+			m := menuModel(t)
+			m.width, m.height = width, height
+			acts, picker := m, m
+			acts.actionsOpen, acts.actionsSel = true, 12
+			picker.theming, picker.themeSel = true, 1
+			av, pv := acts.View(), picker.View()
+
+			if rows := lipgloss.Height(av); rows > height {
+				t.Errorf("%dx%d: the menu made the view %d rows tall", width, height, rows)
+			}
+			// The top of the screen carries the verdict, and nothing the menu
+			// does may push it off.
+			// Trailing blanks only: the view pads its rows out to the width.
+			want := strings.Split(m.wrap(m.banner()), "\n")[0]
+			if got := strings.TrimRight(strings.Split(av, "\n")[0], " "); got != want {
+				t.Errorf("%dx%d: the view now opens on %q, want the verdict %q", width, height, got, want)
+			}
+			if n, limit := unclosedPanels(av), unclosedPanels(pv); n > limit {
+				t.Errorf("%dx%d: %d panel border(s) left unclosed, the theme picker leaves %d:\n%s", width, height, n, limit, av)
+			}
+			if strings.Contains(ansi.Strip(pv), "esc cancel") && !strings.Contains(ansi.Strip(av), "esc close") {
+				t.Errorf("%dx%d: the menu lost the footer the theme picker keeps:\n%s", width, height, av)
+			}
+		}
+	}
+}
+
+// The way in has to be visible on the surfaces a lost reader looks at, and
+// both of those are generated from the same metadata dispatch uses.
+func TestHelpAdvertisesTheActionsMenu(t *testing.T) {
+	m := menuModel(t)
+	help, _ := actionHelpFor(ctxList, actActions)
+	for name, surface := range map[string]string{
+		"help bar":   ansi.Strip(m.helpView(false)),
+		"deferred":   ansi.Strip(m.helpView(true)),
+		"cheatsheet": ansi.Strip(m.helpOverlay()),
+	} {
+		if !strings.Contains(surface, "space") {
+			t.Errorf("%s does not mention the menu's key:\n%s", name, surface)
+		}
+	}
+	if !strings.Contains(ansi.Strip(m.helpView(false)), "space "+help.bar) {
+		t.Errorf("the help bar chip does not come from the action metadata:\n%s", m.helpView(false))
+	}
+	if !strings.Contains(ansi.Strip(m.helpOverlay()), help.details) {
+		t.Error("the cheatsheet does not come from the action metadata")
+	}
+}
+
+// Opening the menu must not take the keyboard away from the modals that own
+// it, and it must not follow the reader into the output viewer.
+func TestActionsMenuYieldsToTheOtherModals(t *testing.T) {
+	m := menuModel(t)
+	m.cur.name, m.cur.status = "ping the host", JobDone
+	m.appendJobLine("64 bytes from 192.0.2.1")
+	viewing := sendKey(t, m, "enter")
+	if !viewing.viewing {
+		t.Fatal("enter did not open the output viewer")
+	}
+	if opened := sendKey(t, viewing, " "); opened.actionsOpen {
+		t.Error("space opened the menu inside the output viewer")
+	}
+	entering := sendKey(t, m, "r")
+	if space := sendKey(t, entering, " "); space.actionsOpen || space.input.Value() == entering.input.Value() {
+		t.Error("space in the restart prompt opened the menu instead of typing")
+	}
+	theming := sendKey(t, m, "T")
+	if space := sendKey(t, theming, " "); space.actionsOpen {
+		t.Error("space opened the menu behind the theme picker")
+	}
+}

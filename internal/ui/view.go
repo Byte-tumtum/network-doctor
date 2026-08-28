@@ -90,6 +90,11 @@ func (m model) View() string {
 		}
 	}
 	body := shrink(0)
+	banner := m.wrap(m.banner()) + "\n"
+	header := ""
+	if h := m.wrap(m.headerView()); h != "" {
+		header = h + "\n"
+	}
 	help := m.helpView(deferred)
 	if m.entering {
 		help = m.promptView(true)
@@ -103,12 +108,12 @@ func (m model) View() string {
 	if m.theming {
 		help = m.themeView()
 	}
-	toolbox := m.toolboxView(false)
-	banner := m.wrap(m.banner()) + "\n"
-	header := ""
-	if h := m.wrap(m.headerView()); h != "" {
-		header = h + "\n"
+	if m.actionsOpen {
+		// The banner and the header outrank the menu, so it is given the rows
+		// they leave rather than pushing them off the top of the screen.
+		help = m.actionsView(m.height - strings.Count(banner+header, "\n"))
 	}
+	toolbox := m.toolboxView(false)
 	tail := help + "\n"
 	// Adaptive tail: the job pane gets whatever rows the rest doesn't use.
 	// avail is a budget in newlines: jobView's output must add at most avail
@@ -1199,6 +1204,53 @@ func (m model) themeView() string {
 		helpKeys(m.st, m.width, "\u2191/\u2193", "preview", "enter", "keep", "esc", "cancel")
 }
 
+// actionsView is the Actions menu (space): what the run can do right now, each
+// row carrying the key that does it. Like the theme picker and the confirm
+// gate it is drawn where the help bar goes rather than as an overlay, so the
+// checks, banner and panels stay on screen behind it. The list is windowed to
+// the terminal rather than allowed to push the verdict off the top of it, and
+// the cursor row is marked as well as coloured, since colour alone is not a
+// distinction every terminal or every reader has.
+func (m model) actionsView(avail int) string {
+	items := m.actionItems()
+	sel := min(m.actionsSel, max(len(items)-1, 0))
+	keyWidth := 0
+	for _, item := range items {
+		keyWidth = max(keyWidth, lipgloss.Width(item.key))
+	}
+	footer := helpKeys(m.st, m.width, m.keys.pairLabel(ctxList, actUp, actDown), "select", "enter", "run", "esc", "close")
+	// What is left for the list once the panel's own two borders, its title
+	// and the footer under it are paid for.
+	rows := len(items)
+	if m.height > 0 {
+		rows = min(rows, max(avail-3-lipgloss.Height(footer), 1))
+	}
+	first := 0
+	if sel >= rows {
+		first = sel - rows + 1
+	}
+	var b strings.Builder
+	b.WriteString(m.st.panelTitle.Render("Actions"))
+	if rows < len(items) {
+		b.WriteString(m.st.faint.Render(fmt.Sprintf("  %d of %d", sel+1, len(items))))
+	}
+	b.WriteString("\n")
+	for i := first; i < min(first+rows, len(items)); i++ {
+		item := items[i]
+		marker, key, name := "  ", m.st.key.Render(item.key), item.name
+		if i == sel {
+			marker, key, name = m.st.sel.Render("\u203a "), m.st.sel.Render(item.key), m.st.sel.Render(item.name)
+		}
+		pad := strings.Repeat(" ", max(keyWidth-lipgloss.Width(item.key), 0)+2)
+		b.WriteString(marker + key + pad + name + "\n")
+	}
+	if len(items) == 0 {
+		b.WriteString(m.st.faint.Render("nothing to do yet: the checks are still running") + "\n")
+	}
+	w := max(min(m.width-2, 56), 24)
+	return m.st.focusPanel.Width(w).Render(strings.TrimRight(b.String(), "\n")) + "\n" + footer
+}
+
 func (m model) helpView(deferred bool) string {
 	// Only the device-list branch cares how many devices there are, and
 	// networkHosts walks the whole job line buffer, so don't pay for it on
@@ -1254,23 +1306,25 @@ func (m model) helpView(deferred bool) string {
 		addAction(actNetworkMap)
 		// The way back is only on the help bar: expanding removes the summary
 		// line that advertised the key.
-		if _, hiddenPass, hiddenNA := m.compactRows(); m.expanded && m.allDone() {
-			add(m.keys.label(ctxList, actExpand), "collapse")
-		} else if hiddenPass+hiddenNA > 0 || m.toolsCollapsed() {
-			addAction(actExpand)
+		if m.actionAvailable(actExpand) {
+			if m.expanded {
+				add(m.keys.label(ctxList, actExpand), "collapse")
+			} else {
+				addAction(actExpand)
+			}
 		}
 	}
 	// Open works whenever a job pane exists (same condition as jobView), so the
 	// hint tracks exactly when the key does something. On the map it opens a
 	// device or diagnoses a service instead, so it is only the empty device
 	// list that leaves the key free.
-	if m.hasJob() && (!m.networkMap || m.svc.host == "" && hosts == 0) {
+	if m.actionAvailable(actOpen) && (!m.networkMap || m.svc.host == "" && hosts == 0) {
 		add(m.keys.label(ctxList, actOpen), "full output")
 	}
 	if !deferred && m.cur.active != nil {
 		addAction(actCancelJob)
 	}
-	if len(m.otherJobs) > 0 {
+	if m.actionAvailable(actSwitchJob) {
 		addAction(actSwitchJob)
 	}
 	// Applied to every exit, including the deferred one: a notice raised before
@@ -1285,39 +1339,38 @@ func (m model) helpView(deferred bool) string {
 		if m.networkMap {
 			add(m.keys.label(ctxList, actRestart), "run the checks")
 		}
+		addAction(actActions)
 		addAction(actHelp)
 		addAction(actQuit)
 		return withNotice(m.chordHint(helpKeys(m.st, m.width, kv...)))
 	}
-	if d := m.diagnosis(); m.allDone() && len(d.Findings) > 0 && len(d.Findings[0].Evidence) > 0 {
+	if m.actionAvailable(actExplain) {
 		if m.explaining {
 			add(m.keys.label(ctxList, actExplain), "details")
 		} else {
 			addAction(actExplain)
 		}
 	}
-	if m.watch && len(m.incidents.Incidents()) > 0 {
+	if m.actionAvailable(actIncidents) {
 		addAction(actIncidents)
 	}
 	if m.selectedPortalURL() != "" {
 		add(m.keys.label(ctxList, actCopy), "copy portal URL")
-	} else if m.reportReady() {
+	} else if m.actionAvailable(actCopy) {
 		add(m.keys.label(ctxList, actCopy), "copy report")
 	}
-	if m.reportReady() {
+	if m.actionAvailable(actSave) {
 		addAction(actSave)
 	}
-	// Retest is offered once there is a finished run to rerun. Before that the
-	// chain is either already running or waiting on the restart key, and a
-	// second way to start it would only be a second name for r.
-	if m.allDone() && m.chainRan() {
+	if m.actionAvailable(actRetest) {
 		addAction(actRetest)
 	}
-	if m.sshDetected() {
+	if m.actionAvailable(actSSH) {
 		addAction(actSSH)
 	}
 	addAction(actRestart)
 	addAction(actTheme)
+	addAction(actActions)
 	addAction(actHelp)
 	addAction(actQuit)
 	return withNotice(m.chordHint(helpKeys(m.st, m.width, kv...)))

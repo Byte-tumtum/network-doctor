@@ -68,18 +68,41 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Tool hotkeys are checked after built-in actions.
-		for _, tool := range m.tools {
-			if msg.String() == tool.Key {
-				if tool.Confirm {
-					t := tool // hold for the confirm gate; run happens on 'y'
-					m.confirmTool = &t
-					return m, nil
-				}
-				return m, m.launchTool(tool)
-			}
+		if tool, ok := m.toolForKey(msg.String()); ok {
+			return m.runTool(tool)
 		}
 		return m, nil
 	}
+	return m.runAction(act)
+}
+
+// toolForKey is the toolbox half of dispatch: the tool a key runs, if any. Every
+// caller resolves the built-in actions first, so a tool hotkey can never shadow one.
+func (m model) toolForKey(key string) (Tool, bool) {
+	for _, tool := range m.tools {
+		if tool.Key == key {
+			return tool, true
+		}
+	}
+	return Tool{}, false
+}
+
+// runTool starts a tool, or holds it at the confirm gate when it is one of the
+// active scans that has to show its command first. Both the hotkey and the
+// Actions menu come through here, so neither can skip the gate.
+func (m model) runTool(tool Tool) (tea.Model, tea.Cmd) {
+	if tool.Confirm {
+		t := tool // hold for the confirm gate; run happens on 'y'
+		m.confirmTool = &t
+		return m, nil
+	}
+	return m, m.launchTool(tool)
+}
+
+// runAction performs one resolved action. It is split from handleKey because a
+// key is not the only way to ask for one: the Actions menu runs its selected
+// row through this same switch rather than owning a dispatch of its own.
+func (m model) runAction(act keyAction) (tea.Model, tea.Cmd) {
 	switch act {
 	case actQuit:
 		return m.quit()
@@ -262,6 +285,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// stays on screen: that screen is the preview.
 		m.theming, m.themeWas = true, m.theme
 		m.themeSel = themeIndex(m.theme.Name)
+		return m, nil
+	case actActions:
+		m.actionsOpen, m.actionsSel = true, 0
 		return m, nil
 	case actHelp:
 		m.helping = true

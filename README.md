@@ -294,6 +294,7 @@ netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 
 | Key | Action |
 |-----|--------|
+| `space` | the Actions menu: everything the run can do right now, each with its own key; `↑`/`↓` select, `enter` runs, `esc` closes |
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device or service in the network map |
 | `a` | expand the checks a finished run collapsed (the passing rows, and the toolbox on a clean run), and collapse them again |
 | `e` | show why the selected diagnosis follows from the observed checks, and return to normal details |
@@ -312,6 +313,10 @@ netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 | `T` | pick a colour theme, previewed as you move; `enter` keeps it, `esc` restores the one you had |
 | `?` | full-screen key cheatsheet; any key closes it |
 | `q` | quit (cancels running jobs first, then exits) |
+
+### Actions menu
+
+`space` opens the Actions menu, in the help bar's place so the run stays on screen behind it. It lists what this state can actually do, and nothing else: the report rows appear once the checks finish, the job rows once a tool has output, incidents in Watch Mode, and the toolbox tools whose binary is installed. Every row carries the key that runs it under your preset, so the menu teaches the shortcuts you would otherwise have to look up, and pressing one of those keys with the menu open runs it just as it would with the menu closed.
 
 ### Themes
 
