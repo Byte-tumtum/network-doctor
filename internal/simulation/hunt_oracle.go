@@ -234,20 +234,35 @@ func recognizedConditions(d *Diagnosis) []NetworkCondition {
 	return out
 }
 
+// caseConditions is the whole of what the oracle can say about one case: the
+// conditions the simulator's own evidence established, the ones the final
+// diagnosis named, and whether the case was a final-state comparison at all.
+//
+// The third return is load-bearing and is not the same as "established
+// nothing". A case under persistent shaping or a timed path transition is one
+// the oracle never got to ask about, which is a fact about coverage; a
+// comparable case that established nothing is a fact about the network.
+func caseConditions(report *Report, truth ObservedTruth) (established, recognized []NetworkCondition, comparable bool) {
+	if report == nil || !finalStateComparable(report) {
+		return nil, nil, false
+	}
+	diagnosis := finalClientDiagnosis(report)
+	if diagnosis == nil {
+		return nil, nil, false
+	}
+	return observedConditions(observation{Evidence: report.Evidence, Truth: truth, Client: observedClient(report)}),
+		recognizedConditions(diagnosis), true
+}
+
 // unrecognizedConditionFindings reconciles the two halves. A condition the
 // simulator never established produces nothing, however loudly the manifest
 // says a mutation was scheduled or applied: an unobserved effect is a coverage
 // question, not an accusation about the diagnosis.
 func unrecognizedConditionFindings(report *Report, truth ObservedTruth) []HuntCaseFinding {
-	if !finalStateComparable(report) {
+	observed, recognized, comparable := caseConditions(report, truth)
+	if !comparable {
 		return nil
 	}
-	diagnosis := finalClientDiagnosis(report)
-	if diagnosis == nil {
-		return nil
-	}
-	observed := observedConditions(observation{Evidence: report.Evidence, Truth: truth, Client: observedClient(report)})
-	recognized := recognizedConditions(diagnosis)
 	var findings []HuntCaseFinding
 	for _, rule := range conditionOracle {
 		if !slices.Contains(observed, rule.condition) || slices.Contains(recognized, rule.condition) {

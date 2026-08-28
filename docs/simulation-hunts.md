@@ -270,6 +270,85 @@ selected preferred family path to be unreachable and the controlled target on
 the distinct higher-metric alternate path to remain reachable; successful
 link-down application alone is insufficient.
 
+### How much ground a hunt covered
+
+A clean hunt result answers one question, whether any case disagreed with
+Network Doctor. It does not answer the other one: how much of its own universe
+the run actually stood on. Five hundred cases against `healthy` in the
+bug-oracle lane build six distinct networks and then rebuild those six another
+four hundred and ninety-four times, because the three operators that base can
+host take no parameters. Case counts measure execution. Coverage measures
+ground.
+
+Every hunt result carries a `coverage` block, and every triage baseline carries
+the same block for its hunt. It is derived from the case results and from the
+base scenario's own library definition, so it changes nothing about findings,
+leaves `result: clean` alone, and a merged hunt recomputes exactly what the
+unsharded hunt would have reported rather than summing partial views.
+
+Per operator, in registry order, three claims in descending strength:
+
+- **applicable**: the base scenario can host it. A fact about the scenario, and
+  reported for operators the run never drew, since that absence is the point.
+- **generated**: the generator drew it into at least one case.
+- **observed**: independent simulator evidence confirmed its effect in at least
+  one executed case, which is `ObservedFaults` and never mutation intent.
+
+Per oracle condition, in oracle order:
+
+- **reachable**: an applicable operator declares it as its finding contract, or
+  a case established it. Faults reach conditions they never declared, so this
+  is a floor: deleting a default route also takes IPv4 off the internet, and
+  only the second half of the test sees that.
+- **established**: the simulator's own evidence put the condition on the
+  network with the oracle in a position to compare.
+- **recognized**: the diagnosis then named it. The difference between the two
+  is exactly the false negatives the run reported for that condition.
+
+And a handful of aggregate numbers: how many distinct combinations of operators
+the run built, how many distinct fully parameterized experiments those became,
+the case number of the last one that introduced a combination no earlier case
+had, and how many executed cases the condition oracle could compare at all.
+That last one matters most in the stress lane, where persistent shaping and
+timed path transitions are deliberately not final-state comparisons: a
+twenty-case stress hunt whose oracle could compare four of them proves less than
+its case count suggests.
+
+Two more describe the shape of the faults themselves:
+
+- **mutation cardinality** counts the cases carrying one fault, two, and so on.
+  `--max-faults` says what the run asked for; this says what the base could
+  deliver, and they come apart wherever the applicable operators share conflict
+  tags. `two-path-ipv6-healthy` in the bug-oracle lane hosts four operators of
+  which three are resolver faults, so a ceiling of three still builds nothing
+  larger than a two-fault network. Reading it against the sum of the observed
+  operator counts also gives the masking: faults written into the scenario that
+  no independent evidence caught happening, because an earlier fault took the
+  path the later one needed.
+- **multi-fault cases** counts the cases whose evidence independently confirmed
+  two or more faults on the same network. It is what `--max-faults` actually
+  buys, and the only number that says so. Counting established conditions
+  instead would not: a deleted default route establishes both the missing route
+  and an unreachable IPv4 on its own, so a hunt that never once put two faults
+  together can still look like it tested precedence everywhere.
+  `healthy-routed-network` in the bug-oracle lane is exactly that hunt, and only
+  this row says so.
+
+The gaps list is the derived reading, and it is a statement about the hunt, not
+an accusation against Network Doctor. `operator_not_generated` means the base
+could host a fault the budget never drew. `operator_not_observed` means the
+generator drew one and nothing independently confirmed it reached the wire.
+`condition_not_established` means an operator promised a condition and no case
+put it on the network. A dry run files none of the last two, because a run that
+executed nothing observed nothing.
+
+What coverage deliberately does not claim: that the reachable-condition set is
+complete, since side-effect reachability is only visible once something
+establishes it; that a distinct experiment is a distinct outcome, since two
+parameterizations of the same operator can produce the same network behaviour;
+and that full coverage means correctness, since the oracle can only compare the
+conditions it has rules for.
+
 ### Generator versions
 
 The mutation registry is versioned because changing an operator universe, lane

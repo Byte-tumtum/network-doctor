@@ -212,7 +212,7 @@ func triage(ctx context.Context, opts triageOptions, hunt huntFunc, gh ghFunc) *
 		}
 		report.Baselines = append(report.Baselines, simulation.TriageScenarioResult{Scenario: baseline.Scenario,
 			Seed: baseline.Seed, Cases: result.ExecutedCases, Candidates: len(result.Findings),
-			HuntResult: result.Result})
+			HuntResult: result.Result, Coverage: result.Coverage})
 		summary := &report.Baselines[len(report.Baselines)-1]
 		if result.Result == simulation.HuntResultError || result.Result == simulation.HuntResultCancelled {
 			return fail("hunt %s seed %d: %s: %s", baseline.Scenario, baseline.Seed, result.ErrorKind, result.Error)

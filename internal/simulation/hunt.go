@@ -85,12 +85,17 @@ type HuntResult struct {
 	Findings            []HuntFinding    `json:"findings"`
 	Suggestions         []HuntSuggestion `json:"suggestions"`
 	Cases               []HuntCaseResult `json:"case_results"`
-	FailFastStopped     bool             `json:"fail_fast_stopped"`
-	Cancelled           bool             `json:"cancelled"`
-	RuntimeFailure      bool             `json:"runtime_failure"`
-	Result              string           `json:"result"`
-	ErrorKind           string           `json:"error_kind,omitempty"`
-	Error               string           `json:"error,omitempty"`
+	// Coverage is how much ground this hunt stood on, which is a separate
+	// question from what it found. It is derived from the case results and
+	// never changes them, so a clean result stays clean and gains a way to say
+	// how much confidence it deserves.
+	Coverage        HuntCoverage `json:"coverage"`
+	FailFastStopped bool         `json:"fail_fast_stopped"`
+	Cancelled       bool         `json:"cancelled"`
+	RuntimeFailure  bool         `json:"runtime_failure"`
+	Result          string       `json:"result"`
+	ErrorKind       string       `json:"error_kind,omitempty"`
+	Error           string       `json:"error,omitempty"`
 }
 
 func (o *HuntOptions) withDefaults() error {
@@ -302,6 +307,7 @@ func (r *HuntResult) finish() {
 			r.CleanCases++
 		}
 	}
+	r.Coverage = huntCoverageFor(r.GeneratorVersion, r.Lane, r.BaseScenario, r.Cases)
 	r.Findings = aggregateHuntFindings(r.Cases)
 	r.Suggestions = aggregateHuntSuggestions(r.Findings)
 	if r.Findings == nil {

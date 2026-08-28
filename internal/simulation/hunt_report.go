@@ -29,6 +29,7 @@ func (r *HuntResult) WriteText(w io.Writer) {
 		fmt.Fprintf(w, "\nCases executed: %d\nClean:          %d\nFindings:       %d\nDuplicates:     %d\n",
 			r.ExecutedCases, r.CleanCases, len(r.Findings), r.DuplicateCandidates)
 	}
+	r.writeCoverage(w)
 	if len(r.Findings) > 0 {
 		fmt.Fprintln(w, "\nFindings")
 		for _, finding := range r.Findings {
@@ -58,10 +59,82 @@ func (r *HuntResult) WriteText(w io.Writer) {
 	}
 }
 
+// writeCoverage prints what a clean result cannot say for itself: how much of
+// the reachable mutation universe this hunt actually stood on. Counts first,
+// because they are the summary; then the gaps, because those are the reasons a
+// clean result deserves less confidence than its case count suggests.
+func (r *HuntResult) writeCoverage(w io.Writer) {
+	coverage := r.Coverage
+	applicable, generated, observed, conditions, established := coverage.Counts()
+	fmt.Fprintln(w, "\nCoverage")
+	fmt.Fprintf(w, "  operators:   %d of %d applicable generated", generated, applicable)
+	if r.ExecutedCases > 0 {
+		fmt.Fprintf(w, ", %d independently observed", observed)
+	}
+	fmt.Fprintf(w, "\n  mutations:   %d distinct operator set(s), %d distinct experiment(s) in %d case(s)\n",
+		coverage.MutationSets, coverage.DistinctExperiments, len(r.Cases))
+	fmt.Fprintf(w, "  faults:      %d generated under a ceiling of %d (%s)", huntFaultsGenerated(coverage), r.MaxFaults,
+		huntCardinality(coverage))
+	if r.ExecutedCases > 0 {
+		fmt.Fprintf(w, ", %d independently observed", huntFaultsObserved(coverage))
+	}
+	fmt.Fprintln(w)
+	if coverage.LastNewSetCase >= 0 {
+		fmt.Fprintf(w, "  saturation:  last new operator set at case %d\n", coverage.LastNewSetCase)
+	}
+	if r.ExecutedCases > 0 {
+		fmt.Fprintf(w, "  conditions:  %d of %d reachable oracle condition(s) established", established, conditions)
+		fmt.Fprintf(w, "; %d of %d executed case(s) were oracle-comparable\n", coverage.OracleCases, r.ExecutedCases)
+		fmt.Fprintf(w, "  interaction: %d executed case(s) carried two or more independently observed faults at once\n",
+			coverage.MultiFaultCases)
+	}
+	gaps := coverage.Gaps()
+	if len(gaps) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\n  Coverage gaps (limits on what this result means, not netdoc defects)")
+	for _, gap := range gaps {
+		fmt.Fprintf(w, "    %-30s %s\n", gap.Kind, textsafe.Clean(gap.ID))
+	}
+}
+
 func intList(values []int) string {
 	parts := make([]string, len(values))
 	for i, value := range values {
 		parts[i] = fmt.Sprint(value)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// The three readings below are sums over rows the coverage model already
+// carries, kept here rather than in the model because only the report needs
+// them. Generated against observed is the masking: faults the generator wrote
+// into the scenario that no independent evidence caught happening, which is
+// what says whether a taller fault ceiling bought anything or just built
+// networks whose extra faults nobody could reach.
+func huntFaultsGenerated(c HuntCoverage) int {
+	total := 0
+	for i, cases := range c.Cardinality {
+		total += (i + 1) * cases
+	}
+	return total
+}
+
+func huntFaultsObserved(c HuntCoverage) int {
+	total := 0
+	for _, op := range c.Operators {
+		total += op.Observed
+	}
+	return total
+}
+
+func huntCardinality(c HuntCoverage) string {
+	if len(c.Cardinality) == 0 {
+		return "no case carried a fault"
+	}
+	parts := make([]string, 0, len(c.Cardinality))
+	for i, cases := range c.Cardinality {
+		parts = append(parts, fmt.Sprintf("%d-fault: %d", i+1, cases))
 	}
 	return strings.Join(parts, ", ")
 }

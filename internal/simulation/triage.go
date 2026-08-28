@@ -75,6 +75,11 @@ type TriageScenarioResult struct {
 	Candidates int    `json:"candidate_findings"`
 	Filtered   int    `json:"below_severity_floor"`
 	HuntResult string `json:"hunt_result"`
+	// Coverage is this baseline's hunt coverage, carried through unchanged. A
+	// nightly report that files nothing is the report that most needs it: it
+	// is the difference between netdoc surviving everything this baseline can
+	// throw and netdoc surviving the three faults it happened to throw.
+	Coverage HuntCoverage `json:"coverage"`
 }
 
 // ParseSeverity maps a flag value onto the hunt severity vocabulary.
@@ -317,6 +322,16 @@ func (r *TriageReport) WriteText(w io.Writer) {
 		fmt.Fprintf(w, "  %-24s seed %-12d cases %-4d candidates %-3d below floor %-3d %s\n",
 			textsafe.Clean(baseline.Scenario), baseline.Seed, baseline.Cases, baseline.Candidates,
 			baseline.Filtered, baseline.HuntResult)
+		applicable, generated, observed, conditions, established := baseline.Coverage.Counts()
+		fmt.Fprintf(w, "    coverage: operators %d/%d generated, %d observed; conditions %d/%d established; %d set(s), %d experiment(s)\n",
+			generated, applicable, observed, established, conditions,
+			baseline.Coverage.MutationSets, baseline.Coverage.DistinctExperiments)
+		fmt.Fprintf(w, "    faults:   %d generated (%s), %d observed; %d case(s) observed two or more at once\n",
+			huntFaultsGenerated(baseline.Coverage), huntCardinality(baseline.Coverage),
+			huntFaultsObserved(baseline.Coverage), baseline.Coverage.MultiFaultCases)
+		for _, gap := range baseline.Coverage.Gaps() {
+			fmt.Fprintf(w, "      gap: %-30s %s\n", gap.Kind, textsafe.Clean(gap.ID))
+		}
 	}
 	reproducible, existing, created := 0, 0, 0
 	for _, finding := range r.Findings {

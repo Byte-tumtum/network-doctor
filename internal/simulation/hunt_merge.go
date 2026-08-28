@@ -299,6 +299,14 @@ func validateHuntCases(result *HuntResult, expected []GeneratedCaseManifest, dup
 	if result.CleanCases != clean {
 		return fmt.Errorf("clean case count %d does not match %d", result.CleanCases, clean)
 	}
+	// Coverage is derived from the case results and nothing else, so a merged
+	// hunt's coverage has to equal what the same cases would produce unsharded.
+	// Recomputing it here is what holds that, and what stops a hand-edited
+	// artifact from claiming ground it never stood on.
+	wantCoverage := huntCoverageFor(result.GeneratorVersion, result.Lane, result.BaseScenario, result.Cases)
+	if !reflect.DeepEqual(result.Coverage, wantCoverage) {
+		return fmt.Errorf("coverage does not match case results")
+	}
 	wantFindings := aggregateHuntFindings(result.Cases)
 	wantSuggestions := aggregateHuntSuggestions(wantFindings)
 	if !reflect.DeepEqual(result.Findings, wantFindings) {
