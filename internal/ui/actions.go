@@ -13,13 +13,12 @@ import (
 )
 
 // actionItem is one row of the Actions menu: what to call it, the key that
-// runs it under the active preset, and which action or tool it is. Exactly one
-// of act and tool is set.
+// runs it under the active preset, and which action or tool it is. A tool row
+// leaves act zero; enter finds the tool by that key, the way the keyboard does.
 type actionItem struct {
 	name string
 	key  string
 	act  keyAction
-	tool *Tool
 }
 
 // actionAvailable reports whether act would do something in the current state.
@@ -121,7 +120,7 @@ func (m model) actionItems() []actionItem {
 			act:  def.act,
 		})
 	}
-	for i, tool := range m.tools {
+	for _, tool := range m.tools {
 		// A missing binary has a chip that says so; the menu is what can run now.
 		if !tool.Available {
 			continue
@@ -129,7 +128,6 @@ func (m model) actionItems() []actionItem {
 		items = append(items, actionItem{
 			name: strings.ToUpper(tool.Name[:1]) + tool.Name[1:],
 			key:  tool.Key,
-			tool: &m.tools[i],
 		})
 	}
 	return items
@@ -152,8 +150,11 @@ func (m model) handleActionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		item := items[m.actionsSel]
-		if item.tool != nil {
-			return m.runTool(*item.tool)
+		if item.act == actNone {
+			if tool, ok := m.toolForKey(item.key); ok {
+				return m.runTool(tool)
+			}
+			return m, nil
 		}
 		return m.runAction(item.act)
 	case "esc":
