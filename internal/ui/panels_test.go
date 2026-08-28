@@ -343,7 +343,7 @@ func TestDetailsPanelComesBackWithContent(t *testing.T) {
 // with its styling stripped, so a body that is only spaces, or only escape
 // sequences, still counts as nothing to draw.
 func TestPanelBodyDropsAWhitespaceOnlyPanel(t *testing.T) {
-	title := panelTitleStyle.Render("Details: DNS")
+	title := defaultStyles.panelTitle.Render("Details: DNS")
 	for _, tc := range []struct {
 		name string
 		rows []string
@@ -352,9 +352,9 @@ func TestPanelBodyDropsAWhitespaceOnlyPanel(t *testing.T) {
 		{"title alone", []string{title}, false},
 		{"blank body", []string{title, ""}, false},
 		{"spaces", []string{title, "   ", "\t"}, false},
-		{"styling only", []string{title, faintStyle.Render("")}, false},
+		{"styling only", []string{title, defaultStyles.faint.Render("")}, false},
 		{"nothing at all", nil, false},
-		{"real content", []string{title, faintStyle.Render("src 192.0.2.7 eth0")}, true},
+		{"real content", []string{title, defaultStyles.faint.Render("src 192.0.2.7 eth0")}, true},
 		{"blank row above content", []string{title, "  ", "PASS: up"}, true},
 	} {
 		if got := panelBody(tc.rows) != nil; got != tc.want {

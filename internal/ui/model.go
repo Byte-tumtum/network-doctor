@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 	"github.com/heymaikol/network-doctor/internal/incident"
 	"github.com/heymaikol/network-doctor/internal/textsafe"
@@ -230,6 +228,19 @@ type model struct {
 
 	helping bool // ?: full-screen key cheatsheet; any key closes it
 
+	// theme is this model's own palette and the styles every view draws
+	// with. Both are values rather than package state, so a second model or a
+	// parallel test cannot repaint this one. It is presentation and nothing
+	// else: no probe, diagnosis, report, or snapshot path reads either.
+	theme     Theme
+	st        styles
+	themePath string // ""; disables persistence (tests, or no config dir)
+	// Theme picker (T): themeSel is the previewed row, applied as the cursor
+	// moves, and themeWas is the theme esc puts back.
+	theming  bool
+	themeSel int
+	themeWas Theme
+
 	// keys resolves keypresses to actions. The zero value is the default
 	// keymap, so a model built without one behaves as netdoc always has.
 	// pendingKeys is the unfinished start of a chord ("g" of "gg") waiting
@@ -265,37 +276,19 @@ type model struct {
 	width, height int
 }
 
-// The palette sticks to the 16 ANSI colors so it follows the user's terminal
-// theme, and every status is also carried by a glyph or word, so color is never
-// the only signal (NO_COLOR and monochrome terminals stay usable).
-var (
-	accentColor = lipgloss.Color("6")
-	borderColor = lipgloss.Color("8")
-
-	passStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	failStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	skipStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	warnStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
-	faintStyle      = lipgloss.NewStyle().Faint(true)
-	titleStyle      = lipgloss.NewStyle().Bold(true)
-	selStyle        = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
-	keyStyle        = lipgloss.NewStyle().Foreground(accentColor)
-	panelStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(borderColor).Padding(0, 1)
-	focusPanelStyle = panelStyle.BorderForeground(accentColor) // input focus lives here
-	panelTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
-	statusStyles    = map[fmt.Stringer]lipgloss.Style{
-		diagnostic.StatusPass: passStyle, diagnostic.StatusWarn: warnStyle,
-		diagnostic.StatusFail: failStyle, diagnostic.StatusSkip: skipStyle, diagnostic.StatusNA: faintStyle,
-		JobDone: passStyle, JobFailed: failStyle, JobTimedOut: failStyle, JobCanceled: skipStyle,
-	}
-)
-
 // Option adjusts a new model without growing its positional constructor.
 type Option func(*model)
 
 // WithKeymap runs the TUI on a resolved keymap instead of the default one.
 func WithKeymap(km Keymap) Option {
 	return func(m *model) { m.keys = km }
+}
+
+// WithThemeFile persists the selected theme to path and reads the startup
+// preference from it. "" keeps the choice to this session, which is what
+// tests and a machine with no config directory get.
+func WithThemeFile(path string) Option {
+	return func(m *model) { m.themePath = path }
 }
 
 // WithProbeTimeout overrides the per-probe budget for this model only.
@@ -322,7 +315,6 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 	probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS))
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	m := model{
 		target:       t,
 		probes:       probes,
@@ -345,6 +337,8 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 	for _, opt := range opts {
 		opt(&m)
 	}
+	// After the options, since one of them names the preference file.
+	m.setTheme(loadTheme(m.themePath))
 	m.history = loadHistory(histFile)
 	if t != nil {
 		if n := len(m.history); n == 0 || m.history[n-1] != t.Raw {
@@ -353,6 +347,13 @@ func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses,
 		saveHistory(histFile, m.history) // launch targets count as history too
 	}
 	return m
+}
+
+// setTheme swaps this model's palette and everything derived from it, the
+// spinner included. It touches nothing but presentation.
+func (m *model) setTheme(t Theme) {
+	m.theme, m.st = t, newStyles(t)
+	m.spinner.Style = m.st.spinner
 }
 
 // diagnosis is this model's one reading of the current results. Everything the
@@ -403,6 +404,14 @@ func saveHistory(path string, hist []string) {
 	if len(hist) > histMax {
 		hist = hist[len(hist)-histMax:]
 	}
+	writeConfigFile(path, strings.Join(hist, "\n")+"\n")
+}
+
+// writeConfigFile replaces one small convenience file in the config directory.
+// Shared by the target history and the theme preference, both of which are
+// nice to have and neither of which is worth failing a run over, so every
+// error path here simply leaves the file as it was.
+func writeConfigFile(path, content string) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
@@ -410,12 +419,12 @@ func saveHistory(path string, hist []string) {
 	// os.WriteFile would follow a symlink planted at path and truncate whatever
 	// it points at. Renaming a sibling temp file over the name replaces the link
 	// itself, and costs nothing beyond the write we were doing anyway.
-	f, err := os.CreateTemp(dir, "history-*") // 0600 by definition
+	f, err := os.CreateTemp(dir, filepath.Base(path)+"-*") // 0600 by definition
 	if err != nil {
 		return
 	}
 	defer func() { _ = os.Remove(f.Name()) }() // no-op once the rename lands
-	if _, err := f.WriteString(strings.Join(hist, "\n") + "\n"); err != nil {
+	if _, err := f.WriteString(content); err != nil {
 		_ = f.Close()
 		return
 	}
@@ -537,6 +546,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.confirmTool != nil {
 			return m.handleConfirmKey(msg)
+		}
+		if m.theming {
+			return m.handleThemeKey(msg)
 		}
 		if m.sshPrompt {
 			return m.handleSSHKey(msg)

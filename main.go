@@ -529,7 +529,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
 	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection,
-		ui.WithKeymap(keymap), ui.WithProbeTimeout(*timeout), ui.WithSnapshotSelection(checks.strings(), skips.strings())), tea.WithAltScreen())
+		ui.WithKeymap(keymap), ui.WithProbeTimeout(*timeout), ui.WithThemeFile(themeFile()),
+		ui.WithSnapshotSelection(checks.strings(), skips.strings())), tea.WithAltScreen())
 	final, err := p.Run()
 	// Every way out of Run lands here, including the ones that never reached
 	// the model's own quit path.
@@ -564,6 +565,18 @@ func historyFile(disabled bool) string {
 		return ""
 	}
 	return filepath.Join(dir, "netdoc", "history")
+}
+
+// themeFile is where the TUI's theme choice persists between sessions, under
+// the same config-directory policy as the target history. "" is the UI's
+// in-memory path: the default theme, and nothing written. It is deliberately
+// not tied to -no-history, which is about the targets you type.
+func themeFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "netdoc", "theme")
 }
 
 // printUsage writes the full help text: usage line, the target grammar

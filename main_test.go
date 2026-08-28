@@ -313,10 +313,11 @@ func TestPrintUsageTargetForms(t *testing.T) {
 	}
 }
 
-// -no-history is only a choice of the path handed to the UI, which already
-// treats "" as in-memory only, so the seam worth pinning is that path: the
-// default still points at the config file, the flag still resolves to "".
-func TestHistoryFile(t *testing.T) {
+// Both convenience files are only a choice of path handed to the UI, which
+// already treats "" as in-memory only, so the seam worth pinning is that path.
+// -no-history still resolves to "", and both defaults still point at the
+// directory the reference documentation promises.
+func TestConfigFilePaths(t *testing.T) {
 	if got := historyFile(true); got != "" {
 		t.Errorf("historyFile(true) = %q, want the empty path", got)
 	}
@@ -327,6 +328,11 @@ func TestHistoryFile(t *testing.T) {
 	want := filepath.Join(dir, "netdoc", "history")
 	if got := historyFile(false); got != want {
 		t.Errorf("historyFile(false) = %q, want %q", got, want)
+	}
+	// The theme preference sits beside it, and is deliberately not tied to
+	// -no-history, which is about the targets you type.
+	if got, want := themeFile(), filepath.Join(dir, "netdoc", "theme"); got != want {
+		t.Errorf("themeFile() = %q, want %q", got, want)
 	}
 }
 

@@ -494,7 +494,7 @@ func TestViewerEscAndQGoBack(t *testing.T) {
 	m.cur.status = JobDone
 	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	nm := asModel(t, u)
-	if got := nm.View(); !strings.Contains(got, keyStyle.Render("esc/q")) {
+	if got := nm.View(); !strings.Contains(got, defaultStyles.key.Render("esc/q")) {
 		t.Errorf("viewer footer must offer esc/q back, got %q", got)
 	}
 
@@ -521,7 +521,7 @@ func TestViewerCopiesFullOutput(t *testing.T) {
 	m.cur.lines = []string{"first", "second"}
 	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	nm := asModel(t, u)
-	if !strings.Contains(nm.View(), keyStyle.Render("y")) {
+	if !strings.Contains(nm.View(), defaultStyles.key.Render("y")) {
 		t.Fatal("viewer footer must offer y to copy output")
 	}
 
@@ -554,7 +554,7 @@ func TestViewerSavesFilteredOutput(t *testing.T) {
 	m.viewing = true
 	m.filter = "keep"
 	m.refreshViewport()
-	if !strings.Contains(m.View(), keyStyle.Render("w")) {
+	if !strings.Contains(m.View(), defaultStyles.key.Render("w")) {
 		t.Fatal("viewer footer must offer w to save output")
 	}
 

@@ -72,7 +72,7 @@ func (m model) jobContent() string {
 		if m.filter != "" {
 			empty = "(no lines match)"
 		}
-		return lipgloss.NewStyle().Width(w).Render(faintStyle.Render(empty))
+		return lipgloss.NewStyle().Width(w).Render(m.st.faint.Render(empty))
 	}
 	return lipgloss.NewStyle().Width(w).Render(strings.Join(lines, "\n"))
 }

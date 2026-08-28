@@ -309,8 +309,15 @@ netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 | `tab` | switch between running tool jobs |
 | `esc` | cancel the focused job only (`tab` picks which), or leave an opened device on the map; `q` is the stop-everything path |
 | `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
+| `T` | pick a colour theme, previewed as you move; `enter` keeps it, `esc` restores the one you had |
 | `?` | full-screen key cheatsheet; any key closes it |
 | `q` | quit (cancels running jobs first, then exits) |
+
+### Themes
+
+`T` opens the theme picker. The highlighted theme is applied as you move, so the run behind the picker is the preview; `enter` keeps it and `esc` puts back the one you started on. The choice persists between sessions.
+
+`terminal` is the default and uses your terminal's own 16 colours, so netdoc follows whatever palette you already have. `harbor` and `ember` are cool and warm alternatives that adapt to a light or dark background, and `contrast` raises everything and draws dim text at full strength. No theme changes what netdoc says: every status keeps its glyph and its word, so `NO_COLOR` and monochrome terminals stay readable. The preference file is in **[docs/reference.md](docs/reference.md#usage-details)**.
 
 ### Vim keybindings
 

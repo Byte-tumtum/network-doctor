@@ -98,13 +98,13 @@ type sshForm struct {
 // newSSHForm seeds the form from the run target, the local login name, and the
 // keys sitting in ~/.ssh: the three answers netdoc can give on the user's
 // behalf.
-func newSSHForm(t *diagnostic.Target) sshForm {
+func newSSHForm(st styles, t *diagnostic.Target) sshForm {
 	f := sshForm{host: sshHostValue(t), keys: append([]string{""}, listSSHKeys()...)}
 
 	f.user = textinput.New()
 	f.user.Prompt = "Username  "
 	f.user.Placeholder = "your login name on that host"
-	f.user.PromptStyle = keyStyle
+	f.user.PromptStyle = st.key
 	if u, err := user.Current(); err == nil {
 		f.user.SetValue(u.Username)
 	}
@@ -112,7 +112,7 @@ func newSSHForm(t *diagnostic.Target) sshForm {
 	f.pass = textinput.New()
 	f.pass.Prompt = "Password  "
 	f.pass.Placeholder = "optional"
-	f.pass.PromptStyle = keyStyle
+	f.pass.PromptStyle = st.key
 	// A typed password is echoed as dots; it is still held in memory, so it
 	// never reaches a notice, the report, or an argv.
 	f.pass.EchoMode = textinput.EchoPassword

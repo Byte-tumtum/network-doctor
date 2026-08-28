@@ -825,7 +825,7 @@ func TestSSHFormNeedsTarget(t *testing.T) {
 
 // ←/→ walks the discovered keys and wraps, and "none" stays reachable.
 func TestSSHKeyChooser(t *testing.T) {
-	f := newSSHForm(mustTarget(t, "example.com"))
+	f := newSSHForm(defaultStyles, mustTarget(t, "example.com"))
 	f.keys = []string{"", "/home/a/.ssh/id_ed25519", "/home/a/.ssh/id_rsa"}
 	f.setFocus(sshKey)
 	if f.keyPath() != "" {
@@ -844,7 +844,7 @@ func TestSSHKeyChooser(t *testing.T) {
 
 // A password is echoed as dots, never as itself.
 func TestSSHPasswordMasked(t *testing.T) {
-	f := newSSHForm(mustTarget(t, "example.com"))
+	f := newSSHForm(defaultStyles, mustTarget(t, "example.com"))
 	f.setFocus(sshPass)
 	f.pass.SetValue("hunter2")
 	if got := f.pass.View(); strings.Contains(got, "hunter2") {

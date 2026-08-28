@@ -89,7 +89,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ti := textinput.New()
 		ti.Prompt = "netdoc "
 		ti.Placeholder = "example.com:443, or empty for a general check"
-		ti.PromptStyle = keyStyle
+		ti.PromptStyle = m.st.key
 		if m.target != nil {
 			ti.SetValue(m.target.Raw)
 		}
@@ -110,7 +110,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if _, err := toolLookPath("ssh"); err != nil {
 			return m, m.setNotice("ssh not found: install an OpenSSH client", false)
 		}
-		m.sshPrompt, m.ssh = true, newSSHForm(m.target)
+		m.sshPrompt, m.ssh = true, newSSHForm(m.st, m.target)
 		return m, textinput.Blink
 	case actNetworkMap:
 		if m.networkMap {
@@ -257,6 +257,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		notice, ok := exportReport(m.report(), act == actSave)
 		return m, m.setNotice(notice, ok)
+	case actTheme:
+		// The picker is drawn where the help bar goes, so the run behind it
+		// stays on screen: that screen is the preview.
+		m.theming, m.themeWas = true, m.theme
+		m.themeSel = themeIndex(m.theme.Name)
+		return m, nil
 	case actHelp:
 		m.helping = true
 		return m, nil
@@ -368,6 +374,30 @@ func (m model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleThemeKey drives the theme picker. Moving the cursor applies the
+// highlighted theme at once, so the screen behind the picker is the preview;
+// enter keeps it and writes the preference; esc puts back the theme that was
+// active when the picker opened. Nothing here touches probes, results, or the
+// diagnosis: the picker only repaints what is already on screen.
+func (m model) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.themeSel = max(m.themeSel-1, 0)
+		m.setTheme(themes[m.themeSel])
+	case "down", "j":
+		m.themeSel = min(m.themeSel+1, len(themes)-1)
+		m.setTheme(themes[m.themeSel])
+	case "enter":
+		m.theming = false
+		saveTheme(m.themePath, m.theme.Name)
+		return m, m.setNotice("theme: "+m.theme.Name, true)
+	case "esc":
+		m.theming = false
+		m.setTheme(m.themeWas)
+	}
+	return m, nil
+}
+
 // handleViewKey handles keys while the output viewport is open. Everything not
 // handled here scrolls the viewport; leaving the bottom disables follow mode.
 func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -408,7 +438,7 @@ func (m model) handleViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		ti := textinput.New()
 		ti.Prompt = "/"
-		ti.PromptStyle = keyStyle
+		ti.PromptStyle = m.st.key
 		ti.SetValue(m.filter)
 		ti.Focus()
 		ti.CursorEnd()

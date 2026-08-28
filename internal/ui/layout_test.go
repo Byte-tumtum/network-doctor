@@ -232,7 +232,7 @@ func TestWindowRowsKeepsTheCursor(t *testing.T) {
 			}
 			for sel := -2; sel <= n+2; sel++ {
 				for budget := -3; budget <= 12; budget++ {
-					got := windowRows(rows, sel, budget, width)
+					got := windowRows(defaultStyles, rows, sel, budget, width)
 					if got[0] != rows[0] {
 						t.Fatalf("width=%d n=%d sel=%d budget=%d: the title moved", width, n, sel, budget)
 					}

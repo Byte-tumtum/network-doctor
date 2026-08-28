@@ -31,11 +31,11 @@ func (m model) glyph(id diagnostic.ProbeID) string {
 	r, ok := m.results[id]
 	if !ok {
 		if !m.started[id] {
-			return faintStyle.Render("·")
+			return m.st.faint.Render("·")
 		}
 		return m.spinner.View()
 	}
-	return statusStyles[r.Status].Render(probeGlyph(r.Status))
+	return m.st.status[r.Status].Render(probeGlyph(r.Status))
 }
 
 func probeGlyph(s diagnostic.Status) string {
@@ -99,6 +99,9 @@ func (m model) View() string {
 	}
 	if m.confirmTool != nil {
 		help = m.confirmView()
+	}
+	if m.theming {
+		help = m.themeView()
 	}
 	toolbox := m.toolboxView(false)
 	banner := m.wrap(m.banner()) + "\n"
@@ -235,7 +238,7 @@ func (m model) headerView() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return faintStyle.Render(strings.Join(parts, "  ·  "))
+	return m.st.faint.Render(strings.Join(parts, "  ·  "))
 }
 
 // bodyView renders the Checks panel and, beside it, the Details panel when
@@ -251,7 +254,7 @@ func (m model) bodyView(deferred bool, rows int) string {
 	// The cursor row is always in shown, so the windowed panel still scrolls to
 	// the row the Details panel is describing.
 	sel := max(slices.Index(shown, m.selected), 0)
-	pad := panelStyle.GetHorizontalPadding()
+	pad := m.st.panel.GetHorizontalPadding()
 	// Which of the failed rows the diagnosis has already explained as
 	// downstream of another one. It is read from the current results on every
 	// render, so a watch pass that repairs the path takes the labels with it.
@@ -259,27 +262,27 @@ func (m model) bodyView(deferred bool, rows int) string {
 
 	// The rows are built before the panel has a width, because a labelled row
 	// is what decides that width, so the label is placed in a second pass.
-	label := faintStyle.Render(consequenceLabel)
+	label := m.st.faint.Render(consequenceLabel)
 	checks := make([]string, 0, len(shown))
 	labelled := make([]bool, 0, len(shown))
 	want := 0
 	for _, i := range shown {
 		probe := m.probes[i]
 		if deferred {
-			checks = append(checks, faintStyle.Render("  · "+probe.Name))
+			checks = append(checks, m.st.faint.Render("  · "+probe.Name))
 			labelled = append(labelled, false)
 			continue
 		}
 		marker, name := "  ", probe.Name
 		if i == m.selected {
-			marker, name = selStyle.Render("› "), selStyle.Render(name)
+			marker, name = m.st.sel.Render("› "), m.st.sel.Render(name)
 		}
 		// A collateral failure keeps its glyph and its Fail status; only the
 		// red comes off it, so the row still carrying red is the one the
 		// reader has something to do about.
 		glyph := m.glyph(probe.ID)
 		if collateral[probe.ID] {
-			glyph = faintStyle.Render(probeGlyph(diagnostic.StatusFail))
+			glyph = m.st.faint.Render(probeGlyph(diagnostic.StatusFail))
 		}
 		row := marker + glyph + " " + name
 		if m.watch && len(m.runHistory[probe.ID]) > 0 {
@@ -295,7 +298,7 @@ func (m model) bodyView(deferred bool, rows int) string {
 	// the labels are placed against that width, so they land at its right edge.
 	checkPanel := func(width int) []string {
 		out := make([]string, 0, len(checks)+2)
-		out = append(out, panelTitleStyle.Render("Checks"))
+		out = append(out, m.st.panelTitle.Render("Checks"))
 		for j, row := range checks {
 			if labelled[j] {
 				row = labelRight(row, label, width-pad)
@@ -309,18 +312,18 @@ func (m model) bodyView(deferred bool, rows int) string {
 	}
 
 	rightRows := m.detailRows(deferred)
-	frame := panelStyle.GetVerticalFrameSize()
+	frame := m.st.panel.GetVerticalFrameSize()
 
 	if m.width < 80 { // too narrow for two columns, so stack
 		w := max(m.width-2, 24)
 		leftRows := checkPanel(w)
 		stack := func(left, right []string) string {
-			panel := panelStyle.Width(w).Render(strings.Join(left, "\n"))
+			panel := m.st.panel.Width(w).Render(strings.Join(left, "\n"))
 			if len(right) == 0 {
 				return panel
 			}
 			return lipgloss.JoinVertical(lipgloss.Left,
-				panel, panelStyle.Width(w).Render(strings.Join(right, "\n")))
+				panel, m.st.panel.Width(w).Render(strings.Join(right, "\n")))
 		}
 		if rows <= 0 {
 			return stack(leftRows, rightRows)
@@ -332,13 +335,13 @@ func (m model) bodyView(deferred bool, rows int) string {
 		// row that wraps costs a display row no row count can see coming.
 		inner := rows - 2*frame
 		if right := panelBody(fitRows(rightRows, max(inner/2, 1), w-pad)); len(right) > 0 {
-			both := stack(windowRows(leftRows, sel, inner-displayRows(right, w-pad), w-pad), right)
+			both := stack(windowRows(m.st, leftRows, sel, inner-displayRows(right, w-pad), w-pad), right)
 			if lipgloss.Height(both) <= rows {
 				return both
 			}
 		}
 		// Checks on its own, so there is only one border to pay for.
-		return fitBlock(stack(windowRows(leftRows, sel, rows-frame, w-pad), nil), rows)
+		return fitBlock(stack(windowRows(m.st, leftRows, sel, rows-frame, w-pad), nil), rows)
 	}
 	leftW := 38
 	if want > leftW {
@@ -352,15 +355,15 @@ func (m model) bodyView(deferred bool, rows int) string {
 	leftRows := checkPanel(leftW)
 	rightW := max(m.width-leftW-5, detailsMinWidth)
 	if rows > 0 {
-		leftRows = windowRows(leftRows, sel, rows-frame, leftW-pad)
+		leftRows = windowRows(m.st, leftRows, sel, rows-frame, leftW-pad)
 		rightRows = panelBody(fitRows(rightRows, rows-frame, rightW-pad))
 	}
-	left := panelStyle.Width(leftW).Render(strings.Join(leftRows, "\n"))
+	left := m.st.panel.Width(leftW).Render(strings.Join(leftRows, "\n"))
 	if len(rightRows) == 0 {
 		return fitBlock(left, rows)
 	}
 	return fitBlock(lipgloss.JoinHorizontal(lipgloss.Top, left, " ",
-		panelStyle.Width(rightW).Render(strings.Join(rightRows, "\n"))), rows)
+		m.st.panel.Width(rightW).Render(strings.Join(rightRows, "\n"))), rows)
 }
 
 // detailRows is the Details panel: its title row followed by the evidence for
@@ -371,8 +374,8 @@ func (m model) bodyView(deferred bool, rows int) string {
 func (m model) detailRows(deferred bool) []string {
 	if deferred {
 		return []string{
-			panelTitleStyle.Render("Details"),
-			faintStyle.Render("Nothing to show yet: the checks haven't run."),
+			m.st.panelTitle.Render("Details"),
+			m.st.faint.Render("Nothing to show yet: the checks haven't run."),
 		}
 	}
 	// No row to describe: --check and --skip can between them select nothing
@@ -384,7 +387,7 @@ func (m model) detailRows(deferred bool) []string {
 	if m.explaining && m.selected == m.answerRow() {
 		why := m.whyLines()
 		if len(why) > 1 {
-			rows := append([]string{panelTitleStyle.Render("Why: " + probe.Name)}, why[1:]...)
+			rows := append([]string{m.st.panelTitle.Render("Why: " + probe.Name)}, why[1:]...)
 			return panelBody(rows)
 		}
 	}
@@ -400,10 +403,10 @@ func (m model) detailRows(deferred bool) []string {
 		_, quoted := m.evidenceLine(r.Detail)
 		answered := m.selected == m.answerRow()
 		if !answered || !quoted {
-			body.WriteString(statusStyles[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
+			body.WriteString(m.st.status[r.Status].Render(r.Status.String()) + ": " + r.Detail + "\n")
 		}
 		if !answered && (r.Status == diagnostic.StatusFail || r.Status == diagnostic.StatusWarn) && r.Fix != "" {
-			body.WriteString(skipStyle.Render("Fix: ") + r.Fix + "\n")
+			body.WriteString(m.st.skip.Render("Fix: ") + r.Fix + "\n")
 		}
 		// The remediation belongs to the diagnosis rather than to any one row,
 		// so it is shown on the row the diagnosis focuses and nowhere else:
@@ -415,17 +418,17 @@ func (m model) detailRows(deferred bool) []string {
 			body.WriteString(m.remediationBlock())
 		}
 		if r.Portal != nil && r.Portal.RedirectURL != "" {
-			body.WriteString(faintStyle.Render("portal "+r.Portal.RedirectURL) + "\n")
+			body.WriteString(m.st.faint.Render("portal "+r.Portal.RedirectURL) + "\n")
 		}
 		if r.Source != nil {
-			body.WriteString(faintStyle.Render("src "+r.Source.String()+" "+r.Iface) + "\n")
+			body.WriteString(m.st.faint.Render("src "+r.Source.String()+" "+r.Iface) + "\n")
 		}
 		// One line per destination the operating system was asked about, and
 		// only where it answered. A platform that cannot answer shows nothing
 		// here rather than a row of empty fields.
 		for _, route := range r.Routes {
 			if summary := route.Summary(); summary != "" {
-				body.WriteString(faintStyle.Render("  route "+route.Destination.String()+": "+summary) + "\n")
+				body.WriteString(m.st.faint.Render("  route "+route.Destination.String()+": "+summary) + "\n")
 			}
 		}
 		for _, a := range r.Attempts {
@@ -433,15 +436,15 @@ func (m model) detailRows(deferred bool) []string {
 			if a.Err != nil {
 				st = a.Err.Error()
 			}
-			body.WriteString(faintStyle.Render(fmt.Sprintf("  %s %dms %s", a.IP, diagnostic.Ms(a.Dur), st)) + "\n")
+			body.WriteString(m.st.faint.Render(fmt.Sprintf("  %s %dms %s", a.IP, diagnostic.Ms(a.Dur), st)) + "\n")
 		}
 	} else {
-		body.WriteString(m.spinner.View() + faintStyle.Render(" checking…") + "\n")
+		body.WriteString(m.spinner.View() + m.st.faint.Render(" checking…") + "\n")
 	}
 	if history := m.historyLine(probe.ID); history != "" {
 		body.WriteString(history + "\n")
 	}
-	rows := append([]string{panelTitleStyle.Render("Details: " + probe.Name)},
+	rows := append([]string{m.st.panelTitle.Render("Details: " + probe.Name)},
 		strings.Split(strings.TrimRight(body.String(), "\n"), "\n")...)
 	return panelBody(rows)
 }
@@ -707,25 +710,25 @@ func (m model) remediationBlock() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(skipStyle.Render("Do: ") + rem.Action + "\n")
+	b.WriteString(m.st.skip.Render("Do: ") + rem.Action + "\n")
 	if rem.Why != "" {
-		b.WriteString(faintStyle.Render(rem.Why) + "\n")
+		b.WriteString(m.st.faint.Render(rem.Why) + "\n")
 	}
 	for _, step := range rem.Steps {
 		b.WriteString("· " + step + "\n")
 	}
 	if line := rem.CommandLine(); line != "" {
-		b.WriteString(faintStyle.Render("Run: ") + line + "\n")
+		b.WriteString(m.st.faint.Render("Run: ") + line + "\n")
 	}
 	if rem.Expect != "" {
-		b.WriteString(faintStyle.Render("Expect: "+rem.Expect) + "\n")
+		b.WriteString(m.st.faint.Render("Expect: "+rem.Expect) + "\n")
 	}
 	// The payoff line: the advice is only half a workflow without the way to
 	// ask the same question again. Dropped when the action has no key, since a
 	// custom keymap is free to leave it unbound.
 	if m.keys.bound(ctxList, actRetest) {
-		b.WriteString(faintStyle.Render("Then press ") + selStyle.Render(m.keys.label(ctxList, actRetest)) +
-			faintStyle.Render(" to retest") + "\n")
+		b.WriteString(m.st.faint.Render("Then press ") + m.st.sel.Render(m.keys.label(ctxList, actRetest)) +
+			m.st.faint.Render(" to retest") + "\n")
 	}
 	return b.String()
 }
@@ -795,7 +798,7 @@ func fitRows(rows []string, n, width int) []string {
 // so that sel, an index into that list, is always on screen. A truncated list
 // spends its last row saying how many it hid, since nothing else on the panel
 // admits that it goes on.
-func windowRows(rows []string, sel, n, width int) []string {
+func windowRows(st styles, rows []string, sel, n, width int) []string {
 	if len(rows) < 2 || displayRows(rows, width) <= n {
 		return rows // a bare title has nothing to scroll
 	}
@@ -812,7 +815,7 @@ func windowRows(rows []string, sel, n, width int) []string {
 	// could carry, and it yields to the last row the list can still show: a
 	// panel with the cursor in it beats a panel that only says how much it is
 	// hiding.
-	cost := rowCost(faintStyle.Render(fmt.Sprintf("… %d more", len(list))), width)
+	cost := rowCost(st.faint.Render(fmt.Sprintf("… %d more", len(list))), width)
 	marker := budget >= cost
 	if marker {
 		budget -= cost
@@ -837,7 +840,7 @@ func windowRows(rows []string, sel, n, width int) []string {
 	}
 	shown := append([]string{rows[0]}, list[lo:hi]...)
 	if hidden := len(list) - (hi - lo); marker && hidden > 0 {
-		shown = append(shown, faintStyle.Render(fmt.Sprintf("… %d more", hidden)))
+		shown = append(shown, st.faint.Render(fmt.Sprintf("… %d more", hidden)))
 	}
 	return shown
 }
@@ -853,8 +856,8 @@ func (m model) historyLine(id diagnostic.ProbeID) string {
 			failed++
 		}
 	}
-	return faintStyle.Render("History: ") + m.statusSparkline(id, 0) +
-		faintStyle.Render(fmt.Sprintf("  ·  failed %d of %d runs", failed, len(history)))
+	return m.st.faint.Render("History: ") + m.statusSparkline(id, 0) +
+		m.st.faint.Render(fmt.Sprintf("  ·  failed %d of %d runs", failed, len(history)))
 }
 
 func (m model) statusSparkline(id diagnostic.ProbeID, limit int) string {
@@ -864,7 +867,7 @@ func (m model) statusSparkline(id diagnostic.ProbeID, limit int) string {
 	}
 	var spark strings.Builder
 	for _, status := range history {
-		spark.WriteString(statusStyles[status].Render(probeGlyph(status)))
+		spark.WriteString(m.st.status[status].Render(probeGlyph(status)))
 	}
 	return spark.String()
 }
@@ -939,11 +942,11 @@ func (m model) namePending(address string) bool {
 // are none, exactly what was learned instead of guessing at one.
 func (m model) serviceChooserView() string {
 	var b strings.Builder
-	b.WriteString(panelTitleStyle.Render("Services on "+m.svc.name) + "\n")
+	b.WriteString(m.st.panelTitle.Render("Services on "+m.svc.name) + "\n")
 	scan := m.svc.scan
 	switch {
 	case !m.svc.done:
-		b.WriteString(m.spinner.View() + faintStyle.Render(" checking common service ports…") + "\n")
+		b.WriteString(m.spinner.View() + m.st.faint.Render(" checking common service ports…") + "\n")
 	case len(scan.Open) > 0:
 		for i, svc := range scan.Open {
 			branch := "├─ "
@@ -953,20 +956,20 @@ func (m model) serviceChooserView() string {
 			row := fmt.Sprintf("%-5d %s", svc.Port, svc.Name)
 			marker := "  "
 			if i == m.svc.sel {
-				marker, row = selStyle.Render("› "), selStyle.Render(row)
+				marker, row = m.st.sel.Render("› "), m.st.sel.Render(row)
 			}
-			b.WriteString(marker + faintStyle.Render(branch) + passStyle.Render("●") + " " + row + "\n")
+			b.WriteString(marker + m.st.faint.Render(branch) + m.st.pass.Render("●") + " " + row + "\n")
 		}
 	case scan.Refused > 0:
 		// A refusal is an answer: the device is there and reachable, and the
 		// only thing missing is something listening.
-		b.WriteString(faintStyle.Render(fmt.Sprintf("└─ No common service answered, but %d of %d ports refused the connection, so the device is on the network.", scan.Refused, scan.Checked())) + "\n")
-		b.WriteString(faintStyle.Render("Press "+m.keys.label(ctxList, actRestart)+" to name a port yourself.") + "\n")
+		b.WriteString(m.st.faint.Render(fmt.Sprintf("└─ No common service answered, but %d of %d ports refused the connection, so the device is on the network.", scan.Refused, scan.Checked())) + "\n")
+		b.WriteString(m.st.faint.Render("Press "+m.keys.label(ctxList, actRestart)+" to name a port yourself.") + "\n")
 	default:
-		b.WriteString(faintStyle.Render(fmt.Sprintf("└─ Nothing answered on any of the %d ports checked: the device may be powered off, may have left the network, or may be dropping connections.", scan.Checked())) + "\n")
-		b.WriteString(faintStyle.Render("Press "+m.keys.label(ctxList, actRestart)+" to name a port yourself.") + "\n")
+		b.WriteString(m.st.faint.Render(fmt.Sprintf("└─ Nothing answered on any of the %d ports checked: the device may be powered off, may have left the network, or may be dropping connections.", scan.Checked())) + "\n")
+		b.WriteString(m.st.faint.Render("Press "+m.keys.label(ctxList, actRestart)+" to name a port yourself.") + "\n")
 	}
-	return panelStyle.Width(max(m.width-2, 24)).Render(strings.TrimRight(b.String(), "\n"))
+	return m.st.panel.Width(max(m.width-2, 24)).Render(strings.TrimRight(b.String(), "\n"))
 }
 
 // networkMapView renders hosts found by the LAN scan, or the services of the
@@ -997,10 +1000,10 @@ func (m model) networkMapView() string {
 	}
 
 	panelWidth := max(m.width-2, 24)
-	title := panelTitleStyle.Render("Network map: " + lanDiscoveryName + " · " + m.networkCIDR)
+	title := m.st.panelTitle.Render("Network map: " + lanDiscoveryName + " · " + m.networkCIDR)
 	if commonDomain != "" {
-		domain := faintStyle.Render("Domain: " + commonDomain)
-		contentWidth := panelWidth - panelStyle.GetHorizontalPadding()
+		domain := m.st.faint.Render("Domain: " + commonDomain)
+		contentWidth := panelWidth - m.st.panel.GetHorizontalPadding()
 		if gap := contentWidth - lipgloss.Width(title) - lipgloss.Width(domain); gap > 0 {
 			title += strings.Repeat(" ", gap) + domain
 		} else {
@@ -1009,7 +1012,7 @@ func (m model) networkMapView() string {
 	}
 	var b strings.Builder
 	b.WriteString(title + "\n")
-	b.WriteString(selStyle.Render("◆") + " This device")
+	b.WriteString(m.st.sel.Render("◆") + " This device")
 	if source != nil {
 		b.WriteString(" " + source.String())
 	}
@@ -1033,23 +1036,23 @@ func (m model) networkMapView() string {
 		}
 		marker := "  "
 		if i == m.mapSelected {
-			marker = selStyle.Render("› ")
-			host = selStyle.Render(host)
+			marker = m.st.sel.Render("› ")
+			host = m.st.sel.Render(host)
 		}
-		b.WriteString(marker + faintStyle.Render(branch) + passStyle.Render("●") + " " + host + "\n")
+		b.WriteString(marker + m.st.faint.Render(branch) + m.st.pass.Render("●") + " " + host + "\n")
 	}
 	if len(hosts) == 0 {
 		switch {
 		case m.cur.active != nil:
-			b.WriteString(m.spinner.View() + faintStyle.Render(" discovering devices…") + "\n")
+			b.WriteString(m.spinner.View() + m.st.faint.Render(" discovering devices…") + "\n")
 		case m.cur.status != JobDone:
-			b.WriteString(failStyle.Render("└─ Discovery "+m.cur.status.String()) + "\n")
+			b.WriteString(m.st.fail.Render("└─ Discovery "+m.cur.status.String()) + "\n")
 		default:
-			b.WriteString(faintStyle.Render("└─ No other devices replied") + "\n")
+			b.WriteString(m.st.faint.Render("└─ No other devices replied") + "\n")
 		}
 	}
 
-	return panelStyle.Width(panelWidth).Render(strings.TrimRight(b.String(), "\n"))
+	return m.st.panel.Width(panelWidth).Render(strings.TrimRight(b.String(), "\n"))
 }
 
 func (m model) discoveryNetwork() (net.IP, string) {
@@ -1088,47 +1091,47 @@ func joinChips(width int, sep string, chips []string) string {
 
 // helpKeys renders key/description pairs as a dim help bar with the keys
 // highlighted, e.g. "r restart  ·  q quit", wrapped at pair boundaries.
-func helpKeys(width int, kv ...string) string {
+func helpKeys(st styles, width int, kv ...string) string {
 	parts := make([]string, 0, len(kv)/2)
 	for i := 0; i+1 < len(kv); i += 2 {
-		parts = append(parts, keyStyle.Render(kv[i])+" "+faintStyle.Render(kv[i+1]))
+		parts = append(parts, st.key.Render(kv[i])+" "+st.faint.Render(kv[i+1]))
 	}
-	return joinChips(width, faintStyle.Render("  ·  "), parts)
+	return joinChips(width, st.faint.Render("  ·  "), parts)
 }
 
 // confirmView replaces the help bar with the pending advanced tool's exact
 // command and a run/cancel gate, so the scan is always shown before it runs.
 func (m model) confirmView() string {
 	_, _, display := m.confirmTool.Build(m.target, m.selectedIP())
-	body := panelTitleStyle.Render("Run "+m.confirmTool.Name+"?") + "\n" +
-		faintStyle.Render("Actively probes the shown scope, and may trip intrusion detection.") + "\n" +
+	body := m.st.panelTitle.Render("Run "+m.confirmTool.Name+"?") + "\n" +
+		m.st.faint.Render("Actively probes the shown scope, and may trip intrusion detection.") + "\n" +
 		"$ " + display
 	w := max(min(m.width-2, 76), 24)
-	return focusPanelStyle.Width(w).Render(body) + "\n" + helpKeys(m.width, "y", "run", "esc", "cancel")
+	return m.st.focusPanel.Width(w).Render(body) + "\n" + helpKeys(m.st, m.width, "y", "run", "esc", "cancel")
 }
 
 // promptView is the restart prompt panel, shown in place of the help bar.
 // withForms includes the target-grammar cheatsheet; View drops it when the
 // terminal is too short (the input and any job pane always outrank it).
 func (m model) promptView(withForms bool) string {
-	body := panelTitleStyle.Render("Restart") + "\n" + m.input.View()
+	body := m.st.panelTitle.Render("Restart") + "\n" + m.input.View()
 	if withForms {
 		// Dedent the shared const: the two-space indent reads right under
 		// "Target forms:" in --help but floats oddly inside the panel.
 		forms := strings.TrimPrefix(strings.ReplaceAll(diagnostic.TargetForms, "\n  ", "\n"), "  ")
-		body += "\n\n" + faintStyle.Render(forms)
+		body += "\n\n" + m.st.faint.Render(forms)
 	}
 	if m.inputErr != "" {
-		body += "\n" + failStyle.Render("✗ "+m.inputErr)
+		body += "\n" + m.st.fail.Render("✗ "+m.inputErr)
 	}
 	// 88, not 76: the longest target-form line needs ~86 content cols to
 	// render unwrapped on wide terminals.
 	w := max(min(m.width-2, 88), 24)
-	footer := helpKeys(m.width, "↑/↓", "history", "enter", "run", "esc", "back")
+	footer := helpKeys(m.st, m.width, "↑/↓", "history", "enter", "run", "esc", "back")
 	if m.notice == ctrlCNotice {
 		footer = m.noticeView()
 	}
-	return focusPanelStyle.Width(w).Render(body) + "\n" + footer
+	return m.st.focusPanel.Width(w).Render(body) + "\n" + footer
 }
 
 // sshFormView is the SSH login panel (S), shown in place of the help bar. The
@@ -1143,33 +1146,57 @@ func (m model) sshFormView() string {
 
 	// The key row is a chooser, so it renders itself: the selected key, and
 	// the ←/→ hint only while the row has the focus.
-	key := keyStyle.Render("Key       ") + m.ssh.keyLabel()
+	key := m.st.key.Render("Key       ") + m.ssh.keyLabel()
 	if len(m.ssh.keys) > 1 {
-		key += faintStyle.Render(fmt.Sprintf("  (%d of %d)", m.ssh.keyIdx+1, len(m.ssh.keys)))
+		key += m.st.faint.Render(fmt.Sprintf("  (%d of %d)", m.ssh.keyIdx+1, len(m.ssh.keys)))
 		if m.ssh.focus == sshKey {
-			key += faintStyle.Render("  ←/→")
+			key += m.st.faint.Render("  ←/→")
 		}
 	}
 	if m.ssh.focus == sshKey {
-		key = selStyle.Render("▸ ") + key
+		key = m.st.sel.Render("▸ ") + key
 	} else {
 		key = "  " + key
 	}
 
-	body := panelTitleStyle.Render("SSH login to "+m.ssh.host) + "\n" +
+	body := m.st.panelTitle.Render("SSH login to "+m.ssh.host) + "\n" +
 		"  " + m.ssh.user.View() + "\n" +
 		key + "\n" +
 		"  " + m.ssh.pass.View() +
-		"\n\n" + faintStyle.Render("Leave a field blank and ssh asks you itself, as it does for a\nkey passphrase, a host-key check, or a 2FA code.")
+		"\n\n" + m.st.faint.Render("Leave a field blank and ssh asks you itself, as it does for a\nkey passphrase, a host-key check, or a 2FA code.")
 	if m.ssh.err != "" {
-		body += "\n" + failStyle.Render("✗ "+m.ssh.err)
+		body += "\n" + m.st.fail.Render("✗ "+m.ssh.err)
 	}
 	if m.ssh.pending != nil {
 		body += "\n" + m.spinner.View() + " checking ssh config…"
-		return focusPanelStyle.Width(w).Render(body) + "\n" + helpKeys(m.width, "esc", "back")
+		return m.st.focusPanel.Width(w).Render(body) + "\n" + helpKeys(m.st, m.width, "esc", "back")
 	}
-	return focusPanelStyle.Width(w).Render(body) + "\n" +
-		helpKeys(m.width, "tab", "next field", "enter", "connect", "esc", "back")
+	return m.st.focusPanel.Width(w).Render(body) + "\n" +
+		helpKeys(m.st, m.width, "tab", "next field", "enter", "connect", "esc", "back")
+}
+
+// themeView is the theme picker. It is drawn where the help bar goes, like the
+// confirm gate and the SSH form, rather than as a full-screen overlay: the
+// checks, banner and panels stay visible, and moving the cursor repaints them
+// in the highlighted theme, which is the whole point of previewing one.
+func (m model) themeView() string {
+	names := 0
+	for _, t := range themes {
+		names = max(names, lipgloss.Width(t.Name))
+	}
+	var b strings.Builder
+	b.WriteString(m.st.panelTitle.Render("Theme") + "\n")
+	for i, t := range themes {
+		marker, name := "  ", t.Name
+		if i == m.themeSel {
+			marker, name = m.st.sel.Render("\u203a "), m.st.sel.Render(t.Name)
+		}
+		pad := strings.Repeat(" ", names-lipgloss.Width(t.Name)+2)
+		b.WriteString(marker + name + pad + m.st.faint.Render(t.About) + "\n")
+	}
+	w := max(m.width-2, 24)
+	return m.st.focusPanel.Width(w).Render(strings.TrimRight(b.String(), "\n")) + "\n" +
+		helpKeys(m.st, m.width, "\u2191/\u2193", "preview", "enter", "keep", "esc", "cancel")
 }
 
 func (m model) helpView(deferred bool) string {
@@ -1260,7 +1287,7 @@ func (m model) helpView(deferred bool) string {
 		}
 		addAction(actHelp)
 		addAction(actQuit)
-		return withNotice(m.chordHint(helpKeys(m.width, kv...)))
+		return withNotice(m.chordHint(helpKeys(m.st, m.width, kv...)))
 	}
 	if d := m.diagnosis(); m.allDone() && len(d.Findings) > 0 && len(d.Findings[0].Evidence) > 0 {
 		if m.explaining {
@@ -1290,9 +1317,10 @@ func (m model) helpView(deferred bool) string {
 		addAction(actSSH)
 	}
 	addAction(actRestart)
+	addAction(actTheme)
 	addAction(actHelp)
 	addAction(actQuit)
-	return withNotice(m.chordHint(helpKeys(m.width, kv...)))
+	return withNotice(m.chordHint(helpKeys(m.st, m.width, kv...)))
 }
 
 // chordHint prefixes the help bar with a half-typed chord, as vim's showcmd
@@ -1301,7 +1329,7 @@ func (m model) chordHint(help string) string {
 	if len(m.pendingKeys) == 0 {
 		return help
 	}
-	return keyStyle.Render(displaySeq(strings.Join(m.pendingKeys, " "))+"…") + faintStyle.Render("  ·  ") + help
+	return m.st.key.Render(displaySeq(strings.Join(m.pendingKeys, " "))+"…") + m.st.faint.Render("  ·  ") + help
 }
 
 // helpOverlay is generated from the same actions and bindings used by dispatch.
@@ -1313,9 +1341,9 @@ func (m model) helpOverlay() string {
 		}
 	}
 	row := func(k, desc string) string {
-		return "  " + keyStyle.Render(k) +
+		return "  " + m.st.key.Render(k) +
 			strings.Repeat(" ", max(keyWidth-lipgloss.Width(k), 0)+2) +
-			faintStyle.Render(desc) + "\n"
+			m.st.faint.Render(desc) + "\n"
 	}
 	// Both sections are generated from the same table dispatch indexes.
 	section := func(b *strings.Builder, ctx keyContext) {
@@ -1331,14 +1359,14 @@ func (m model) helpOverlay() string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString(panelTitleStyle.Render("Keys") + "\n")
+	b.WriteString(m.st.panelTitle.Render("Keys") + "\n")
 	section(&b, ctxList)
 	for _, tool := range m.tools {
 		b.WriteString(row(tool.Key, "run "+tool.Name))
 	}
-	b.WriteString("\n" + panelTitleStyle.Render("Output viewer") + "\n")
+	b.WriteString("\n" + m.st.panelTitle.Render("Output viewer") + "\n")
 	section(&b, ctxViewer)
-	out := b.String() + "\n" + helpKeys(m.width, "any key", "close")
+	out := b.String() + "\n" + helpKeys(m.st, m.width, "any key", "close")
 	if m.height > 0 {
 		out = lipgloss.NewStyle().MaxHeight(m.height).Render(out)
 	}
@@ -1350,12 +1378,12 @@ func (m model) noticeView() string {
 		return ""
 	}
 	if m.notice == ctrlCNotice {
-		return warnStyle.Render("! " + m.notice)
+		return m.st.warn.Render("! " + m.notice)
 	}
 	if m.noticeOK {
-		return passStyle.Render("✓ " + m.notice)
+		return m.st.pass.Render("✓ " + m.notice)
 	}
-	return failStyle.Render("✗ " + m.notice)
+	return m.st.fail.Render("✗ " + m.notice)
 }
 
 // banner is the full-width guidance block under the header: what is happening,
@@ -1363,12 +1391,12 @@ func (m model) noticeView() string {
 // which tool to reach for next.
 func (m model) banner() string {
 	if m.toolbox && !m.chainRan() {
-		return "Welcome! Press " + selStyle.Render("r") + " to check your connection, or run a tool below."
+		return "Welcome! Press " + m.st.sel.Render("r") + " to check your connection, or run a tool below."
 	}
 	if !m.allDone() {
 		done, total := len(m.results), len(m.probes)
 		return m.spinner.View() + " Checking your connection… " +
-			progressBar(done, total, 20) + faintStyle.Render(fmt.Sprintf(" %d of %d done", done, total))
+			progressBar(m.st, done, total, 20) + m.st.faint.Render(fmt.Sprintf(" %d of %d done", done, total))
 	}
 	summary, verdict := m.diagnose(m.probeOrder())
 	st := verdictStatus(verdict)
@@ -1377,7 +1405,7 @@ func (m model) banner() string {
 	// renders no attributes at all drops both together, which is why the
 	// hierarchy is carried by position, by the glyph and by the labels below,
 	// and never by weight alone.
-	lines := []string{statusStyles[st].Bold(true).Render(probeGlyph(st) + " " + summary)}
+	lines := []string{m.st.status[st].Bold(true).Render(probeGlyph(st) + " " + summary)}
 	// All three lines under the verdict follow the row the diagnosis blames
 	// rather than the first failing row: a path MTU black hole fails TLS but
 	// the evidence and the remedy are both on the Path MTU row, and a "Fix:"
@@ -1394,7 +1422,7 @@ func (m model) banner() string {
 	}
 	blamed := m.probes[i].ID
 	if fix := m.results[blamed].Fix; fix != "" {
-		lines = append(lines, faintStyle.Render("  Fix: "+fix))
+		lines = append(lines, m.st.faint.Render("  Fix: "+fix))
 	}
 	if next := m.nextStep(blamed); next != "" {
 		lines = append(lines, "  "+next)
@@ -1405,7 +1433,7 @@ func (m model) banner() string {
 	// the panel, and the cursor is already parked on the row that holds the
 	// whole of it.
 	if line, _ := m.evidenceLine(m.results[blamed].Detail); line != "" {
-		lines = append(lines, faintStyle.Render(line))
+		lines = append(lines, m.st.faint.Render(line))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1423,7 +1451,7 @@ func (m model) localDeviceHint() string {
 	if _, cidr := m.discoveryNetwork(); cidr == "" {
 		return ""
 	}
-	return "Next: press " + selStyle.Render(m.keys.label(ctxList, actNetworkMap)) + " to find a device on your network and diagnose it"
+	return "Next: press " + m.st.sel.Render(m.keys.label(ctxList, actNetworkMap)) + " to find a device on your network and diagnose it"
 }
 
 // evidenceLine is the answer block's quote of a probe's finding, clipped to one
@@ -1611,7 +1639,7 @@ func (m model) collapsedChecksRow(hiddenPass, hiddenNA int) string {
 	default:
 		summary = fmt.Sprintf("%d passed, %d N/A", hiddenPass, hiddenNA)
 	}
-	return faintStyle.Render(fmt.Sprintf("· %s (%s expand)", summary, m.keys.label(ctxList, actExpand)))
+	return m.st.faint.Render(fmt.Sprintf("· %s (%s expand)", summary, m.keys.label(ctxList, actExpand)))
 }
 
 // toolsCollapsed reports whether the "Dig deeper" chips have to justify their
@@ -1657,7 +1685,7 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 	}
 	for _, t := range m.tools {
 		if t.Key == key && t.Available {
-			return "Next: press " + selStyle.Render(key) + " for " + t.Name + " (" + t.Bin + ")"
+			return "Next: press " + m.st.sel.Render(key) + " for " + t.Name + " (" + t.Bin + ")"
 		}
 	}
 	return ""
@@ -1667,17 +1695,17 @@ func (m model) nextStep(id diagnostic.ProbeID) string {
 // output viewer: a live spinner + timer while running, the total duration
 // once the job has finished.
 func (m model) jobStatusLine() string {
-	s := faintStyle.Render(m.cur.name+": ") + statusStyles[m.cur.status].Render(m.cur.status.String())
+	s := m.st.faint.Render(m.cur.name+": ") + m.st.status[m.cur.status].Render(m.cur.status.String())
 	if len(m.otherJobs) > 0 {
-		s += faintStyle.Render(fmt.Sprintf(" · %d jobs · tab to switch", len(m.otherJobs)+1))
+		s += m.st.faint.Render(fmt.Sprintf(" · %d jobs · tab to switch", len(m.otherJobs)+1))
 	}
 	if m.cur.active != nil {
-		return s + " " + m.spinner.View() + faintStyle.Render(fmt.Sprintf(" %.0fs", time.Since(m.cur.start).Seconds()))
+		return s + " " + m.spinner.View() + m.st.faint.Render(fmt.Sprintf(" %.0fs", time.Since(m.cur.start).Seconds()))
 	}
 	if m.cur.dur > 0 && m.cur.dur < time.Second {
-		s += faintStyle.Render(fmt.Sprintf(" · %dms", m.cur.dur.Milliseconds()))
+		s += m.st.faint.Render(fmt.Sprintf(" · %dms", m.cur.dur.Milliseconds()))
 	} else if m.cur.dur >= time.Second {
-		s += faintStyle.Render(fmt.Sprintf(" · %.0fs", m.cur.dur.Seconds()))
+		s += m.st.faint.Render(fmt.Sprintf(" · %.0fs", m.cur.dur.Seconds()))
 	}
 	return s
 }
@@ -1685,7 +1713,7 @@ func (m model) jobStatusLine() string {
 // viewerHeader is the command line and status above the viewport, wrapped:
 // nothing else reflows them, and vpHeight has to know how many rows they cost.
 func (m model) viewerHeader() string {
-	return m.wrap(titleStyle.Render("$ "+m.cur.display)) + "\n" + m.wrap(m.jobStatusLine())
+	return m.wrap(m.st.title.Render("$ "+m.cur.display)) + "\n" + m.wrap(m.jobStatusLine())
 }
 
 // outputView is the full-screen scrollable output viewer (Enter).
@@ -1699,14 +1727,14 @@ func (m model) outputView() string {
 	if m.width > 0 {
 		ctx = ansi.Truncate(ctx, m.width, "")
 	}
-	b.WriteString(faintStyle.Render(ctx) + "\n")
+	b.WriteString(m.st.faint.Render(ctx) + "\n")
 	b.WriteString(m.viewerFooter())
 	return b.String()
 }
 
 func (m model) viewerFooter() string {
 	if m.filtering {
-		return m.filterInput.View() + "\n" + helpKeys(m.width, "enter", "apply", "esc", "clear")
+		return m.filterInput.View() + "\n" + helpKeys(m.st, m.width, "enter", "apply", "esc", "clear")
 	}
 	if notice := m.noticeView(); notice != "" {
 		return notice
@@ -1742,10 +1770,10 @@ func (m model) viewerFooter() string {
 	if m.filter != "" {
 		addAction(actClearFilter)
 		addAction(actBack)
-		return m.chordHint(helpKeys(m.width, kv...))
+		return m.chordHint(helpKeys(m.st, m.width, kv...))
 	}
 	addPair(actClearFilter, actBack)
-	return m.chordHint(helpKeys(m.width, kv...))
+	return m.chordHint(helpKeys(m.st, m.width, kv...))
 }
 
 // vpContext is the viewport position line, in wrapped display-line numbers:
@@ -1781,12 +1809,12 @@ func (m model) vpContext() string {
 }
 
 // progressBar is a w-cell block bar, filled proportionally to done/total.
-func progressBar(done, total, w int) string {
+func progressBar(st styles, done, total, w int) string {
 	if total <= 0 || w <= 0 {
 		return ""
 	}
 	filled := min(done*w/total, w)
-	return selStyle.Render(strings.Repeat("█", filled)) + faintStyle.Render(strings.Repeat("░", w-filled))
+	return st.sel.Render(strings.Repeat("█", filled)) + st.faint.Render(strings.Repeat("░", w-filled))
 }
 
 // toolboxView renders the "Dig deeper" chip row. compact keeps only the keys:
@@ -1794,11 +1822,11 @@ func progressBar(done, total, w int) string {
 // alone still say which keys are bound, and ? lists what they do.
 func (m model) toolboxView(compact bool) string {
 	if len(m.tools) == 0 {
-		return faintStyle.Render("Tools need a host, press ") + keyStyle.Render("r") + faintStyle.Render(" to set one") + "\n"
+		return m.st.faint.Render("Tools need a host, press ") + m.st.key.Render("r") + m.st.faint.Render(" to set one") + "\n"
 	}
 	// The SSH chip below is not in m.tools, so the count has to include it.
 	if m.toolsCollapsed() {
-		return titleStyle.Render("Dig deeper") + faintStyle.Render(fmt.Sprintf("  %d tools (%s expand)",
+		return m.st.title.Render("Dig deeper") + m.st.faint.Render(fmt.Sprintf("  %d tools (%s expand)",
 			len(m.tools)+1, m.keys.label(ctxList, actExpand))) + "\n"
 	}
 	chip := func(available bool, key, rest string) string {
@@ -1806,9 +1834,9 @@ func (m model) toolboxView(compact bool) string {
 			rest = ""
 		}
 		if !available {
-			return faintStyle.Render("[" + key + "]" + rest)
+			return m.st.faint.Render("[" + key + "]" + rest)
 		}
-		return keyStyle.Render("["+key+"]") + rest
+		return m.st.key.Render("["+key+"]") + rest
 	}
 	parts := make([]string, len(m.tools))
 	for i, t := range m.tools {
@@ -1826,13 +1854,13 @@ func (m model) toolboxView(compact bool) string {
 	} else {
 		parts = append(parts, chip(true, "S", " SSH login"))
 	}
-	sep := faintStyle.Render("  ·  ")
+	sep := m.st.faint.Render("  ·  ")
 	if compact {
 		sep = " "
 	}
 	// The title rides on the first chip so line 1's width math includes it;
 	// wrapping happens only between chips, never inside one.
-	parts[0] = titleStyle.Render("Dig deeper") + "  " + parts[0]
+	parts[0] = m.st.title.Render("Dig deeper") + "  " + parts[0]
 	return joinChips(m.width, sep, parts) + "\n"
 }
 
@@ -1845,7 +1873,7 @@ func (m model) jobView(avail int) string {
 	if m.height > 0 && avail < 5 {
 		return "" // not even rule+title+status+note fit, so drop the pane
 	}
-	title := m.wrap(titleStyle.Render("$ " + m.cur.display))
+	title := m.wrap(m.st.title.Render("$ " + m.cur.display))
 	status := m.wrap(m.jobStatusLine())
 	tailN := jobTailLines
 	if m.height > 0 {
@@ -1857,7 +1885,7 @@ func (m model) jobView(avail int) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString(faintStyle.Render(strings.Repeat("─", m.width)) + "\n")
+	b.WriteString(m.st.faint.Render(strings.Repeat("─", m.width)) + "\n")
 	b.WriteString(title + "\n")
 	b.WriteString(status + "\n")
 
@@ -1883,7 +1911,7 @@ func (m model) jobView(avail int) string {
 		if m.cur.dropped > 0 {
 			notes = append(notes, fmt.Sprintf("%d dropped (channel overflow)", m.cur.dropped))
 		}
-		b.WriteString(faintStyle.Render("("+strings.Join(notes, " · ")+")") + "\n")
+		b.WriteString(m.st.faint.Render("("+strings.Join(notes, " · ")+")") + "\n")
 	}
 	return b.String() + "\n"
 }

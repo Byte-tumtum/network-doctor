@@ -214,7 +214,7 @@ func TestWatchPreservesOpenUIState(t *testing.T) {
 		check func(t *testing.T, m model)
 	}{
 		{"ssh form", func(m *model) {
-			m.sshPrompt, m.ssh = true, newSSHForm(m.target)
+			m.sshPrompt, m.ssh = true, newSSHForm(m.st, m.target)
 			m.ssh.user.SetValue("operator")
 		}, func(t *testing.T, m model) {
 			if !m.sshPrompt {

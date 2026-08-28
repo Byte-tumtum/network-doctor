@@ -93,9 +93,9 @@ func (m *model) refreshIncidentViewport(reset bool) {
 
 func (m model) incidentView() string {
 	total := len(m.incidents.Incidents())
-	header := titleStyle.Render(fmt.Sprintf("Watch incidents  %d of %d", m.incidentSelected+1, total))
+	header := m.st.title.Render(fmt.Sprintf("Watch incidents  %d of %d", m.incidentSelected+1, total))
 	if dropped := m.incidents.Dropped(); dropped > 0 {
-		header += faintStyle.Render(fmt.Sprintf("  ·  %d older discarded", dropped))
+		header += m.st.faint.Render(fmt.Sprintf("  ·  %d older discarded", dropped))
 	}
 	top, bottom, lines := m.incidentVP.YOffset+1, m.incidentVP.YOffset+m.incidentVP.Height, m.incidentVP.TotalLineCount()
 	if bottom > lines {
@@ -104,8 +104,8 @@ func (m model) incidentView() string {
 	if top > bottom {
 		top = bottom
 	}
-	context := faintStyle.Render(fmt.Sprintf("lines %d-%d of %d", top, bottom, lines))
-	footer := helpKeys(m.width, "←/→", "incident", "↑/↓", "scroll", "pgup/pgdn", "page", "y", "copy", "w", "save .ndoc", "esc/q", "back")
+	context := m.st.faint.Render(fmt.Sprintf("lines %d-%d of %d", top, bottom, lines))
+	footer := helpKeys(m.st, m.width, "←/→", "incident", "↑/↓", "scroll", "pgup/pgdn", "page", "y", "copy", "w", "save .ndoc", "esc/q", "back")
 	if notice := m.noticeView(); notice != "" {
 		footer = notice
 	}

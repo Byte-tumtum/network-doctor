@@ -36,6 +36,7 @@ const (
 	actExpand
 	actExplain
 	actIncidents
+	actTheme
 	actHelp
 	actQuit
 )
@@ -105,6 +106,7 @@ var actionDefs = []actionDef{
 	{actSSH, "ssh", map[keyContext]actionHelp{ctxList: {"ssh login", "log in to a host, handing the terminal to ssh"}}},
 	{actClearFilter, "clear-filter", map[keyContext]actionHelp{ctxViewer: {"clear filter", "clear the filter, or back when none is set"}}},
 	{actBack, "back", map[keyContext]actionHelp{ctxViewer: {"back", "back"}}},
+	{actTheme, "theme", map[keyContext]actionHelp{ctxList: {"theme", "pick a colour theme, previewed as you move and remembered between sessions"}}},
 	{actHelp, "help", map[keyContext]actionHelp{ctxList: {"help", "full-screen key cheatsheet"}}},
 	{actQuit, "quit", map[keyContext]actionHelp{ctxList: {"quit", "quit"}}},
 }
@@ -139,6 +141,7 @@ var defaultPreset = keyPreset{
 		actExpand:     {"a"},
 		actExplain:    {"e"},
 		actIncidents:  {"i"},
+		actTheme:      {"T"},
 		actHelp:       {"?"},
 		actQuit:       {"q"},
 	},
