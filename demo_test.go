@@ -13,8 +13,7 @@ import (
 // The README's hero GIF is recorded by .github/workflows/demo.yml from
 // hero.tape. These tests hold the parts of that arrangement that break
 // silently: a recording is still produced when the tape has drifted off the
-// program, and a workflow that quietly went back to installing VHS by hand, or
-// grew a write permission, looks exactly like one that did not.
+// program, and each successful main recording can refresh the tracked GIF.
 
 func demoWorkflow(t *testing.T) string {
 	t.Helper()
@@ -26,10 +25,7 @@ func demoWorkflow(t *testing.T) string {
 }
 
 // demoSteps is the workflow with its commentary removed, for the checks that
-// ask what the workflow does rather than what it says. The comments here
-// explain why VHS is not installed by hand and why nothing is committed, so
-// scanning the raw file for "ttyd" or "write" finds the explanation and calls
-// it the offence.
+// ask what the workflow does rather than what it says.
 func demoSteps(t *testing.T) string {
 	t.Helper()
 	var kept []string
@@ -68,6 +64,9 @@ func TestDemoWorkflowRecordsThroughTheOfficialVHSAction(t *testing.T) {
 	}
 	if !strings.Contains(workflow, "path: hero.tape") {
 		t.Error("demo.yml does not hand hero.tape to the action")
+	}
+	if !strings.Contains(workflow, "uses: actions/upload-artifact@") {
+		t.Error("demo.yml does not upload the generated hero GIF")
 	}
 	// The tape names its own output, and the workflow checks that file. If
 	// the tape's Output line moves, the check is watching a stale path.
@@ -213,42 +212,121 @@ func TestDemoWorkflowPinsItsActionsAndItsVHS(t *testing.T) {
 	}
 }
 
-// Nothing here writes: the manually requested recording is uploaded as an
-// artifact for review rather than committed. This also prevents a recording
-// run from triggering itself.
-func TestDemoWorkflowIsReadOnlyAndManual(t *testing.T) {
+func TestDemoWorkflowRefreshesTheTrackedGIFOnMain(t *testing.T) {
 	data, err := os.ReadFile(".github/workflows/demo.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// yaml.Node, because `workflow_dispatch:` with no inputs decodes to a
-	// null scalar, which is indistinguishable from absent in any other type.
+	type step struct {
+		Name string            `yaml:"name"`
+		Uses string            `yaml:"uses"`
+		If   string            `yaml:"if"`
+		Run  string            `yaml:"run"`
+		With map[string]string `yaml:"with"`
+		Env  map[string]string `yaml:"env"`
+	}
 	var workflow struct {
 		On          map[string]yaml.Node `yaml:"on"`
 		Permissions map[string]string    `yaml:"permissions"`
+		Concurrency struct {
+			Group            string `yaml:"group"`
+			CancelInProgress *bool  `yaml:"cancel-in-progress"`
+		} `yaml:"concurrency"`
+		Jobs map[string]struct {
+			Permissions map[string]string `yaml:"permissions"`
+			Steps       []step            `yaml:"steps"`
+		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatalf("demo.yml is not valid YAML: %v", err)
 	}
 
-	if len(workflow.On) != 1 {
-		t.Errorf("demo.yml triggers on %v; live network recording must be manual only", workflow.On)
+	if len(workflow.On) != 2 {
+		t.Errorf("demo.yml triggers on %v, want only push and workflow_dispatch", workflow.On)
 	}
 	if _, ok := workflow.On["workflow_dispatch"]; !ok {
 		t.Error("demo.yml cannot be triggered by hand")
 	}
-	if got := workflow.Permissions["contents"]; got != "read" {
-		t.Errorf("demo.yml grants contents: %q, want read", got)
+	push, ok := workflow.On["push"]
+	if !ok {
+		t.Fatal("demo.yml does not run on pushes")
 	}
-	steps := demoSteps(t)
-	if strings.Contains(steps, "write") {
-		t.Error("demo.yml grants a write permission somewhere; recording a GIF needs none, and a fork's pull request never gets one")
+	var pushFilter struct {
+		Branches    []string `yaml:"branches"`
+		Paths       []string `yaml:"paths"`
+		PathsIgnore []string `yaml:"paths-ignore"`
 	}
-	// An auto-commit would push to main, which pushes to main are a trigger
-	// for, which is a loop that runs until someone notices the bill.
-	for _, needle := range []string{"git-auto-commit", "git push", "git commit"} {
-		if strings.Contains(steps, needle) {
-			t.Errorf("demo.yml contains %q; committing the recording from a workflow that runs on push to main triggers itself", needle)
+	if err := push.Decode(&pushFilter); err != nil {
+		t.Fatalf("decode push trigger: %v", err)
+	}
+	if !slices.Equal(pushFilter.Branches, []string{"main"}) || len(pushFilter.Paths) != 0 || len(pushFilter.PathsIgnore) != 0 {
+		t.Errorf("demo.yml push filter = branches %q, paths %q, paths-ignore %q; want every push to main", pushFilter.Branches, pushFilter.Paths, pushFilter.PathsIgnore)
+	}
+	if len(workflow.Permissions) != 1 || workflow.Permissions["contents"] != "write" {
+		t.Errorf("demo.yml permissions = %v, want only contents: write", workflow.Permissions)
+	}
+	if permissions := workflow.Jobs["hero"].Permissions; len(permissions) != 0 {
+		t.Errorf("demo.yml hero job broadens permissions with %v", permissions)
+	}
+	if !strings.Contains(workflow.Concurrency.Group, "${{ github.ref }}") || workflow.Concurrency.CancelInProgress == nil || !*workflow.Concurrency.CancelInProgress {
+		t.Errorf("demo.yml concurrency = group %q, cancel-in-progress %v; newer main runs must cancel obsolete ones", workflow.Concurrency.Group, workflow.Concurrency.CancelInProgress)
+	}
+
+	var checkout, commit *step
+	for i := range workflow.Jobs["hero"].Steps {
+		s := &workflow.Jobs["hero"].Steps[i]
+		if strings.HasPrefix(s.Uses, "actions/checkout@") {
+			checkout = s
 		}
+		if s.Name == "Commit the changed recording" {
+			commit = s
+		}
+	}
+	if checkout == nil || checkout.With["persist-credentials"] != "true" {
+		t.Fatal("demo.yml checkout does not persist GITHUB_TOKEN credentials for the push")
+	}
+	if token := checkout.With["token"]; token != "" && token != "${{ github.token }}" {
+		t.Errorf("demo.yml checkout uses custom token %q; the GITHUB_TOKEN recursion protection is required", token)
+	}
+	if commit == nil {
+		t.Fatal("demo.yml does not commit the changed recording")
+	}
+	if commit.If != "github.ref == 'refs/heads/main'" {
+		t.Errorf("demo.yml commit condition = %q, want only refs/heads/main", commit.If)
+	}
+	if commit.Env["EXPECTED_HEAD"] != "${{ github.sha }}" {
+		t.Errorf("demo.yml expected head = %q, want the revision that was recorded", commit.Env["EXPECTED_HEAD"])
+	}
+
+	noChange := strings.Index(commit.Run, "git diff --quiet -- assets/hero.gif")
+	remoteHead := strings.Index(commit.Run, "git ls-remote origin refs/heads/main")
+	compareHead := strings.Index(commit.Run, `if test "$remote_head" != "$EXPECTED_HEAD"; then`)
+	rejectStale := strings.Index(commit.Run, "exit 1")
+	addGIF := strings.Index(commit.Run, "git add assets/hero.gif")
+	commitGIF := strings.Index(commit.Run, `git commit -m "Refresh README hero GIF"`)
+	pushGIF := strings.Index(commit.Run, "git push origin HEAD:main")
+	if noChange < 0 || remoteHead < 0 || noChange > remoteHead || !strings.Contains(commit.Run[noChange:remoteHead], "exit 0") {
+		t.Error("demo.yml does not exit without a commit when assets/hero.gif is unchanged")
+	}
+	ordered := []int{noChange, remoteHead, compareHead, rejectStale, addGIF, commitGIF, pushGIF}
+	for i, position := range ordered {
+		if position < 0 || i > 0 && position <= ordered[i-1] {
+			t.Fatal("demo.yml must check for a changed GIF, reject an advanced main, then add, commit, and push the recording")
+		}
+	}
+	for _, want := range []string{
+		`git config user.name "github-actions[bot]"`,
+		`git config user.email "41898282+github-actions[bot]@users.noreply.github.com"`,
+		"git add assets/hero.gif",
+		`git commit -m "Refresh README hero GIF"`,
+	} {
+		if !strings.Contains(commit.Run, want) {
+			t.Errorf("demo.yml commit step lacks %q", want)
+		}
+	}
+	indiscriminateAdd := regexp.MustCompile(`(?m)^\s*git add\s+(?:-A|--all|\.(?:\s|$))`)
+	indiscriminateCommit := regexp.MustCompile(`(?m)^\s*git commit\s+(?:-a|--all)(?:\s|$)`)
+	if indiscriminateAdd.MatchString(commit.Run) || indiscriminateCommit.MatchString(commit.Run) {
+		t.Error("demo.yml indiscriminately stages files instead of adding only assets/hero.gif")
 	}
 }
