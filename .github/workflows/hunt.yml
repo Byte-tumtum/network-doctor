@@ -18,8 +18,12 @@ on:
         description: bug-oracle cases per baseline before sharding
         default: "60"
       stress_cases:
+        # Thirty is where the stress lane stops starving operators. At twenty,
+        # five baseline-operator slots go undrawn across the eight baselines;
+        # at thirty, none do. It keeps discovering new operator combinations
+        # well past that, so this is a floor and not a saturation point.
         description: stress cases per baseline before sharding
-        default: "20"
+        default: "30"
       create:
         description: file reproducible findings as GitHub issues
         type: boolean
@@ -114,7 +118,20 @@ jobs:
       - run: tc -V
       - name: Run ${{ matrix.lane }} shard
         env:
-          CASES: ${{ matrix.lane == 'bug-oracle' && (inputs.cases || '60') || (inputs.stress_cases || '20') }}
+          CASES: ${{ matrix.lane == 'bug-oracle' && (inputs.cases || '60') || (inputs.stress_cases || '30') }}
+          # The fault ceiling is per lane because its value is. A third fault
+          # buys the bug-oracle lane multi-condition networks that two faults
+          # cannot build at any case count: 61 of its 182 reachable operator
+          # combinations need three, and where two faults can ever put two
+          # oracle conditions on one network 11 ways, three can do it 48. A
+          # measured 60-case run on tls-valid establishes 73 oracle conditions
+          # against 51, and puts two independently observed faults on one
+          # network in 28 cases against 16. The stress lane has no oracle
+          # conditions to interact and a universe already too large for its
+          # budget: measured at 30 cases, a third fault there drops the
+          # oracle-comparable cases from 14 to 9 and establishes nothing
+          # either way, so it stays at two.
+          MAX_FAULTS: ${{ matrix.lane == 'bug-oracle' && '3' || '2' }}
           HUNT_SEED: ${{ needs.seed.outputs.value }}
           LANE: ${{ matrix.lane }}
           SHARD: ${{ matrix.shard }}
@@ -129,7 +146,7 @@ jobs:
               --seed "$HUNT_SEED" \
               --cases "$CASES" \
               --shard "$SHARD/$SHARDS" \
-              --max-faults 2 \
+              --max-faults "$MAX_FAULTS" \
               --json > "$output"; then
               continue
             else
@@ -224,6 +241,11 @@ jobs:
         env:
           CREATE: ${{ steps.mode.outputs.create }}
           CASES: ${{ inputs.cases || '60' }}
+          # Has to be the bug-oracle branch of the matrix ceiling above. Triage
+          # rejects a merged report whose fault ceiling is not the one it was
+          # asked for, so a ceiling raised in one place and not the other fails
+          # the whole nightly rather than quietly triaging the wrong hunt.
+          MAX_FAULTS: "3"
           HUNT_SEED: ${{ needs.seed.outputs.value }}
           # gh reads the token from the environment; it is never an argument,
           # so it cannot reach a log line. An observation-only run gets no
@@ -237,6 +259,7 @@ jobs:
           ./netdoc-sim triage \
             --lane bug-oracle \
             --cases "$CASES" \
+            --max-faults "$MAX_FAULTS" \
             --hunt-results merged-hunts/bug-oracle \
             --seed "$HUNT_SEED" \
             "${args[@]}" \

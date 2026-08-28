@@ -447,13 +447,53 @@ explicit Bash/`pipefail` behavior and seeded-netem-compatible runner when
 changing it. One job resolves the exploration seed as the UTC date in
 `YYYYMMDD` form, then every baseline and every shard in both lanes receives that
 exact numeric value. The nightly bug-oracle lane runs 60 cases per baseline over
-four shards. The stress lane retains 20 cases per baseline over two shards.
+four shards at `--max-faults 3`. The stress lane runs 30 cases per baseline over
+two shards at `--max-faults 2`.
 Both lanes are merged and uploaded separately, while automated finding triage
-consumes only the bug-oracle reports. This assigns 75 percent of requested
-nightly case capacity to oracle-backed mutation selection without deleting
-stress exploration. Each report and case manifest records the lane and seed, so
-a later replay uses artifact metadata rather than current defaults or the
-replay date.
+consumes only the bug-oracle reports. This keeps the majority of requested
+nightly case capacity on oracle-backed mutation selection without deleting
+stress exploration. Triage rejects a merged report whose fault ceiling is not
+the one it was asked for, so the ceiling the bug-oracle lane hunts at and the
+ceiling triage passes are one number in two places, and a test holds them to
+each other.
+
+Both budgets are set by measured coverage rather than by preference. Across the
+eight baselines, the bug-oracle lane can build 121 distinct operator
+combinations at `--max-faults 2` and 182 at `--max-faults 3`; 60 cases per
+baseline reach 113 and 152 of them respectively, and starve no baseline-operator
+slot at either ceiling. Five hundred cases per baseline reach the whole
+universe, so the remainder costs several times the runtime. The stress lane
+starves five slots at 20 cases per baseline and none at 30, which is why 30 is
+the floor there. Raising either budget further buys distinct parameterizations
+rather than distinct kinds of network, and the `coverage` block on each report
+is what makes that visible on any given night. Each report and case manifest
+records the lane and seed, so a later replay uses artifact metadata rather than
+current defaults or the replay date.
+
+The ceilings differ because their value does. Sixty-one of the bug-oracle
+lane's 182 combinations need a third fault, and they are where two oracle
+conditions sit on one network at the same time: whether the diagnosis still
+names an expired certificate while the default route is gone, or a blocked QUIC
+path while a family is down. Two faults can put two oracle conditions on one
+network eleven ways in total; three faults can do it forty-eight.
+Measured live on `tls-valid`, sixty cases at the three-fault ceiling established
+73 oracle conditions against 51, and put two independently observed faults on
+one network in 28 cases against 16, for 18 percent more wall clock. Across five
+baselines the same comparison is 352 conditions against 235 and 132 multi-fault
+cases against 71, for 12 percent more wall clock. A third fault does get masked,
+more often than a second: a resolver fault takes the name a certificate or a
+QUIC endpoint needed, and the fault behind it never reaches the wire, which is
+why 24 percent of generated faults went unobserved against 16. That is the cost,
+and the coverage block reports it rather than hiding it.
+
+The stress lane has no oracle conditions to interact and a combination space
+more than twice as large, so a third fault there only spends the budget on
+faults nothing compares. At 30 cases it reaches 150 combinations of a 354-set
+universe against 116 of a 210-set one, misses 103 of the two-fault combinations
+it would otherwise have drawn, and starves an operator slot the 30-case budget
+was chosen to reach. Measured live over two baselines at 30 cases each, it also
+drops the oracle-comparable cases from 18 to 13, and no stress case established
+an oracle condition at either ceiling.
 
 The fixed-seed stress regression remains separate in
 `.github/workflows/ci.yml`.

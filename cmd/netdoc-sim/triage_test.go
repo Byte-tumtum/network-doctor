@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -675,10 +676,46 @@ func TestHuntWorkflowFansOutTheCompleteTriageCampaign(t *testing.T) {
 		t.Fatalf("shard artifact naming changed:\n%s\n%s", huntRuns, mergeRuns)
 	}
 	text := string(blob)
-	for _, want := range []string{`default: "60"`, `default: "20"`, "hunt-${{ matrix.lane }}-shard-${{ matrix.shard }}", "name: hunt-results",
+	// The per-lane budgets are measured, not preferred: 60 bug-oracle cases per
+	// baseline starve no operator slot, and the stress lane needs 30 to reach
+	// the same. The dispatch default and the matrix fallback have to name the
+	// same number, or a scheduled run and a manual one hunt different amounts.
+	for _, want := range []string{`default: "60"`, `default: "30"`,
+		`${{ matrix.lane == 'bug-oracle' && (inputs.cases || '60') || (inputs.stress_cases || '30') }}`,
+		"hunt-${{ matrix.lane }}-shard-${{ matrix.shard }}", "name: hunt-results",
 		"actions/upload-artifact@", "actions/download-artifact@"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("workflow is missing %q", want)
+		}
+	}
+	// Both lanes hunt under a fault ceiling the workflow chooses, and the two
+	// places that name it have to agree. Triage rejects a merged report whose
+	// ceiling is not the one it was asked for, so a bug-oracle lane raised here
+	// and left alone there fails the whole nightly on configuration rather than
+	// triaging anything. Reading the values out beats pinning the strings:
+	// either number may move again, and only their relationship must not.
+	huntCeiling := regexp.MustCompile(
+		`MAX_FAULTS: \$\{\{ matrix\.lane == 'bug-oracle' && '(\d)' \|\| '(\d)' \}\}`).FindStringSubmatch(text)
+	if huntCeiling == nil {
+		t.Fatal("the hunt matrix does not choose a fault ceiling per lane")
+	}
+	var triageCeiling string
+	for _, step := range merge.Steps {
+		if step.ID == "triage" {
+			triageCeiling = strings.Trim(step.Env["MAX_FAULTS"], `"`)
+		}
+	}
+	if triageCeiling != huntCeiling[1] {
+		t.Errorf("triage hunts at ceiling %q while the bug-oracle lane hunts at %q; triage rejects the merged reports",
+			triageCeiling, huntCeiling[1])
+	}
+	if huntCeiling[2] != "2" {
+		t.Errorf("stress lane ceiling = %q, want 2: a third fault buys that lane no oracle condition"+
+			" and starves operators the 30-case budget was measured to reach", huntCeiling[2])
+	}
+	for _, want := range []string{`--max-faults "$MAX_FAULTS"`} {
+		if strings.Count(text, want) != 2 {
+			t.Errorf("workflow should pass %q in both the hunt and the triage step", want)
 		}
 	}
 }
