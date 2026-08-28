@@ -209,6 +209,13 @@ const bodyMinRows = 4
 // every terminal can see.
 const consequenceLabel = "consequence"
 
+// changedLabel marks a row whose status is not what it was in the previous
+// completed watch pass, so a pass that differs reads as an event rather than
+// as the same table drawn again. It is a word for the same reason the
+// consequence label is: colour alone is not a distinction every reader or
+// every terminal can see. A recovery earns it exactly as a new failure does.
+const changedLabel = "changed"
+
 // detailsMinWidth is the narrowest the Details panel is allowed to be beside
 // the Checks panel. Below it the evidence lines wrap into unreadable stubs.
 const detailsMinWidth = 36
@@ -295,16 +302,18 @@ func (m model) bodyView(deferred bool, rows int) string {
 	collateral := diagnostic.Collateral(m.target, m.probeOrder(), m.results)
 
 	// The rows are built before the panel has a width, because a labelled row
-	// is what decides that width, so the label is placed in a second pass.
-	label := m.st.faint.Render(consequenceLabel)
+	// is what decides that width, so the labels are placed in a second pass.
+	// A row can carry both of them: a check that changed this pass and is also
+	// downstream of another failure is two separate things worth saying.
+	changed, consequence := m.st.faint.Render(changedLabel), m.st.faint.Render(consequenceLabel)
 	checks := make([]string, 0, len(shown))
-	labelled := make([]bool, 0, len(shown))
+	labels := make([]string, 0, len(shown))
 	want := 0
 	for _, i := range shown {
 		probe := m.probes[i]
 		if deferred {
 			checks = append(checks, m.st.faint.Render("  · "+probe.Name))
-			labelled = append(labelled, false)
+			labels = append(labels, "")
 			continue
 		}
 		marker, name := "  ", probe.Name
@@ -322,10 +331,18 @@ func (m model) bodyView(deferred bool, rows int) string {
 		if m.watch && len(m.runHistory[probe.ID]) > 0 {
 			row += "  " + m.statusSparkline(probe.ID, 8)
 		}
-		checks = append(checks, row)
-		labelled = append(labelled, collateral[probe.ID])
+		var label []string
+		if m.changedRow(probe.ID) {
+			label = append(label, changed)
+		}
 		if collateral[probe.ID] {
-			want = max(want, lipgloss.Width(row)+1+lipgloss.Width(label)+pad)
+			label = append(label, consequence)
+		}
+		text := strings.Join(label, "  ")
+		checks = append(checks, row)
+		labels = append(labels, text)
+		if text != "" {
+			want = max(want, lipgloss.Width(row)+1+lipgloss.Width(text)+pad)
 		}
 	}
 	// checkPanel is the Checks panel's rows once the panel width is settled:
@@ -334,8 +351,8 @@ func (m model) bodyView(deferred bool, rows int) string {
 		out := make([]string, 0, len(checks)+2)
 		out = append(out, m.st.panelTitle.Render("Checks"))
 		for j, row := range checks {
-			if labelled[j] {
-				row = labelRight(row, label, width-pad)
+			if labels[j] != "" {
+				row = labelRight(row, labels[j], width-pad)
 			}
 			out = append(out, row)
 		}
@@ -1622,6 +1639,73 @@ func (m model) focusRow() int {
 	return first
 }
 
+// changedRow reports whether a probe's status differs from the one it reported
+// in the previous completed watch pass.
+//
+// It answers only for a pass that has finished. While the next one runs the
+// rows on screen are that pass's partial results, and the history still
+// describes the pass before them, so a marker placed then would label a row
+// for a comparison it is not part of. Completion to the next restart is
+// exactly the window where the two are the same thing.
+//
+// The history is the single source of truth: recordRun already appends one
+// status per probe per pass, so the previous pass is the entry before the last
+// one and there is no second copy of it to keep in step.
+func (m model) changedRow(id diagnostic.ProbeID) bool {
+	if !m.watch || !m.allDone() {
+		return false
+	}
+	history := m.runHistory[id]
+	return len(history) >= 2 && history[len(history)-1] != history[len(history)-2]
+}
+
+// changedFocus is the row a completed watch pass sends the cursor to: the
+// first changed row in probe order that is not already explained as downstream
+// of another one, and otherwise the first changed row. -1 when the pass
+// changed nothing, which is what leaves an identical pass's cursor where the
+// reader last saw it instead of yanking it back to the same verdict every few
+// seconds.
+//
+// Downstream is read off what the run already decided rather than from a
+// second diagnosis: the failures Collateral has already marked as the same
+// outage seen again. The rest is probe order, which is the DAG's own order, so
+// a rung that went down is already ahead of everything that never got to run
+// behind it. That is what puts the cursor on DNS rather than on the target
+// connect DNS took down with it.
+func (m model) changedFocus() int {
+	collateral := diagnostic.Collateral(m.target, m.probeOrder(), m.results)
+	first := -1
+	for i, probe := range m.probes {
+		if !hasCheckRow(probe.ID) || !m.changedRow(probe.ID) {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		if collateral[probe.ID] {
+			continue
+		}
+		return i
+	}
+	return first
+}
+
+// focusTarget is the row a completed run puts the cursor on. Outside watch
+// mode, and on a watch pass with nothing yet to compare against, that is the
+// row the diagnosis blames, which is what a single run has always done. Once a
+// previous pass exists, a watch pass moves the cursor only for a change, so
+// the ordinary case of nothing happening is a screen that holds still.
+//
+// recordRun appends one status per probe per pass, so any row's history length
+// says whether there is a baseline at all, and a target switch clears the map
+// so the first pass after it starts over without one.
+func (m model) focusTarget() int {
+	if !m.watch || len(m.probes) == 0 || len(m.runHistory[m.probes[0].ID]) < 2 {
+		return m.focusRow()
+	}
+	return m.changedFocus()
+}
+
 // compactRows is the Checks panel's default row set: of the probes that have a
 // row at all (see checkRows), the indices worth reading, and how many passing
 // and not-applicable rows that left behind. A finished run keeps every Fail,
@@ -1652,7 +1736,12 @@ func (m model) compactRows() (shown []int, hiddenPass, hiddenNA int) {
 	blamed := m.focusRow()
 	for _, i := range all {
 		probe := m.probes[i]
-		if i == blamed || i == m.selected {
+		// A row that changed this watch pass stays on screen whatever it
+		// changed to: a check that just came back is the news of the pass, and
+		// collapsing it because passing rows collapse would hide the one line
+		// the reader was waiting for. It collapses again on the next pass that
+		// leaves it alone, and none of this touches the expand state.
+		if i == blamed || i == m.selected || m.changedRow(probe.ID) {
 			shown = append(shown, i)
 			continue
 		}

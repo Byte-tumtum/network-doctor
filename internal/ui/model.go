@@ -702,14 +702,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := m.scheduleStep()
 		if m.allDone() {
 			diagnostic.Finalize(m.results)
-			if !m.selMoved && !m.viewing {
-				if i := m.focusRow(); i >= 0 {
-					m.selected = i
-				}
-			}
+			// recordRun comes before the focus decision, not after it: a watch
+			// pass moves the cursor for what changed since the previous pass,
+			// and appending this pass's statuses is what makes the two
+			// comparable.
 			if m.watch {
 				m.recordRun()
 				cmds = append(cmds, m.watchCmd())
+			}
+			if !m.selMoved && !m.viewing {
+				if i := m.focusTarget(); i >= 0 {
+					m.selected = i
+				}
 			}
 		}
 		return m, tea.Batch(cmds...)
