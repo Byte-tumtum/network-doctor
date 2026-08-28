@@ -107,30 +107,12 @@ func demoAptPackages(t *testing.T) []string {
 			continue
 		}
 		for _, field := range strings.Fields(args) {
-			if strings.HasPrefix(field, "-") {
-				continue
+			if !strings.HasPrefix(field, "-") {
+				pkgs = append(pkgs, field)
 			}
-			pkgs = append(pkgs, field)
 		}
 	}
 	return pkgs
-}
-
-// The recorded screen greys out every Dig deeper action whose binary LookPath
-// cannot find, so these two are fixtures of the demo rather than build
-// dependencies. The first hosted recording shipped a hero GIF advertising
-// `trace the path` and `port scan` as unavailable, because the runner image
-// carries neither binary while an ordinary installation does. Pinned as an
-// exact set, so a later cleanup cannot quietly drop one and grey the actions
-// out again, and so the recorder's own dependencies cannot ride along beside
-// them.
-func TestDemoWorkflowInstallsTheToolsTheRecordedScreenOffers(t *testing.T) {
-	want := []string{"nmap", "traceroute"}
-	got := demoAptPackages(t)
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Errorf("demo.yml apt-installs %q, want exactly %q: the recorded screen offers both and greys out whichever binary is missing", got, want)
-	}
 }
 
 func TestHeroRecordingRunsNetworkDoctorDirectly(t *testing.T) {

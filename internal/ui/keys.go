@@ -76,7 +76,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.runAction(act)
 }
 
-// toolForKey is the toolbox half of dispatch: the tool a key runs, if any. Every
+// toolForKey is the tool half of dispatch: the tool a key runs, if any. Every
 // caller resolves the built-in actions first, so a tool hotkey can never shadow one.
 func (m model) toolForKey(key string) (Tool, bool) {
 	for _, tool := range m.tools {
@@ -168,7 +168,7 @@ func (m model) runAction(act keyAction) (tea.Model, tea.Cmd) {
 		m.confirmTool = &tool
 		return m, nil
 	case actExpand:
-		// Presentation only: what the Checks panel and the toolbox draw, never
+		// Presentation only: what the Checks panel draws, never
 		// what ran, what the diagnosis concluded, or what the report carries.
 		m.expanded = !m.expanded
 		return m, nil

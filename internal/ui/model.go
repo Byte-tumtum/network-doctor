@@ -256,9 +256,8 @@ type model struct {
 	pendingKeys []string
 
 	// expanded is presentation state and nothing else: the finished-run view
-	// collapses the passing checks and the toolbox chips behind one summary
-	// line each, and the expand action toggles that. No probe, diagnosis, or
-	// report path reads it.
+	// collapses the passing checks behind one summary line, and the expand
+	// action toggles that. No probe, diagnosis, or report path reads it.
 	expanded bool
 	// explaining swaps the focused Details panel to the diagnosis's typed
 	// causal evidence. It changes no result, diagnosis, or report.

@@ -22,7 +22,7 @@ func sendKey(t *testing.T, m model, key string) model {
 	return asModel(t, u)
 }
 
-// menuModel is a finished run with a full toolbox, the state with the most to
+// menuModel is a finished run with a full tool set, the state with the most to
 // offer. The tool table is pinned to one GOOS so the rows are the same
 // wherever the suite runs.
 func menuModel(t *testing.T) model {
@@ -290,9 +290,12 @@ func TestActionsMenuKeysComeFromTheActivePreset(t *testing.T) {
 	}
 }
 
-// Tool rows are the toolbox, not a copy of it.
+// Tool rows come straight from their metadata, with no duplicate main-view row.
 func TestActionsMenuToolsComeFromToolMetadata(t *testing.T) {
 	m := menuModel(t)
+	if v := m.View(); strings.Contains(v, "Dig deeper") {
+		t.Fatalf("the main view duplicates the Actions menu tools:\n%s", v)
+	}
 	var want []string
 	for _, tool := range m.tools {
 		want = append(want, strings.ToUpper(tool.Name[:1])+tool.Name[1:])

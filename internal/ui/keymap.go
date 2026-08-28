@@ -104,7 +104,7 @@ var actionDefs = []actionDef{
 	}},
 	{actCancelJob, "cancel-job", "Cancel job", map[keyContext]actionHelp{ctxList: {"cancel job", "cancel the focused job, or leave an opened device on the network map"}}},
 	{actNetworkMap, "network-map", "Network map", map[keyContext]actionHelp{ctxList: {"network map", "find a device on the local network, and back to the checks"}}},
-	{actExpand, "expand", "Expand checks", map[keyContext]actionHelp{ctxList: {"expand", "show the collapsed passing checks and the whole toolbox"}}},
+	{actExpand, "expand", "Expand checks", map[keyContext]actionHelp{ctxList: {"expand", "show the collapsed passing checks"}}},
 	{actExplain, "explain", "Explain why", map[keyContext]actionHelp{ctxList: {"why", "show why the selected diagnosis follows from the observed checks"}}},
 	{actIncidents, "incidents", "Incidents", map[keyContext]actionHelp{ctxList: {"incidents", "inspect failures recorded during this watch session"}}},
 	{actRestart, "restart", "Restart", map[keyContext]actionHelp{ctxList: {"restart", "restart with a new target"}}},

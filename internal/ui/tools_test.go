@@ -31,7 +31,7 @@ func TestToolAvailabilityCachedUntilRestart(t *testing.T) {
 	initialCalls := calls
 	installed = false
 	for range 10 {
-		m.toolboxView(false)
+		m.actionsView(0)
 		m.nextStep(diagnostic.ProbeDNS)
 	}
 	if calls != initialCalls {
@@ -50,7 +50,7 @@ func TestToolAvailabilityCachedUntilRestart(t *testing.T) {
 // TestToolsForDefinitions pins the complete, ordered tool list returned by
 // toolsFor (Key, Name, Bin, argv, env, and display) for both the no-target and
 // with-host sets, plus per-call slice independence. These are user-visible (hotkeys,
-// labels, toolbox order, exact command shapes) and frozen, so any swap, rename, or
+// labels, Actions menu order, exact command shapes) and frozen, so any swap, rename, or
 // argv drift from the staticTool refactor must fail here.
 func TestToolsForDefinitions(t *testing.T) {
 	tgt := mustTarget(t, "github.com") // https default, port not explicit

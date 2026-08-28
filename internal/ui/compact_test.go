@@ -120,24 +120,6 @@ func collapsedRow(v string) string {
 	return ""
 }
 
-// toolboxLine is the whole "Dig deeper" block, which is full width and so
-// sits outside the panels. The chips wrap at chip boundaries, so the block
-// runs from its title to the blank line above the help bar.
-func toolboxLine(v string) string {
-	var block []string
-	for _, line := range strings.Split(v, "\n") {
-		line = strings.TrimRight(line, " ")
-		if len(block) == 0 && !strings.HasPrefix(line, "Dig deeper") {
-			continue
-		}
-		if len(block) > 0 && line == "" {
-			break
-		}
-		block = append(block, line)
-	}
-	return strings.Join(block, "\n")
-}
-
 // renderAt is the view at a terminal size wide enough for two columns and
 // tall enough that nothing is shed for want of rows.
 func renderAt(t *testing.T, m model) (model, string) {
@@ -397,9 +379,6 @@ func TestNothingCollapsesWhileTheRunIsUnfinished(t *testing.T) {
 			t.Errorf("row %q disappeared mid-run:\n%s", probe.Name, v)
 		}
 	}
-	if strings.Contains(toolboxLine(v), "tools (") {
-		t.Errorf("the toolbox collapsed before there was a verdict: %q", toolboxLine(v))
-	}
 }
 
 // TestCursorRowStaysVisibleInCompactView: the Details panel describes the
@@ -503,69 +482,6 @@ func TestExpandIsPresentationOnly(t *testing.T) {
 	}
 	if after.selected != before.selected || len(after.started) != len(before.started) {
 		t.Errorf("expand touched cursor or probe execution state")
-	}
-}
-
-// TestToolboxCollapsesOnlyOnAHealthyRun: a clean run has nothing to dig into,
-// so the chips collapse to their count. A run with a verdict to investigate
-// keeps them, because the banner's "Next:" line points at one of them.
-func TestToolboxCollapsesOnlyOnAHealthyRun(t *testing.T) {
-	healthy, hv := renderAt(t, healthyModel(t))
-	line := toolboxLine(hv)
-	if !strings.Contains(line, fmt.Sprintf("%d tools", len(healthy.tools)+1)) {
-		t.Errorf("healthy toolbox = %q, want the tool count", line)
-	}
-	if !strings.Contains(line, "a expand") {
-		t.Errorf("healthy toolbox = %q, want the key that expands it", line)
-	}
-	for _, tool := range healthy.tools {
-		if strings.Contains(line, tool.Name) {
-			t.Errorf("healthy toolbox still spells out %q: %q", tool.Name, line)
-		}
-	}
-
-	_, ev := renderAt(t, press(t, healthy, "a"))
-	for _, tool := range healthy.tools {
-		if !strings.Contains(toolboxLine(ev), tool.Name) {
-			t.Errorf("expand did not bring back the %q chip: %q", tool.Name, toolboxLine(ev))
-		}
-	}
-
-	// The black hole verdict names the trace tool; collapsing the chips would
-	// hide the one the banner just told the reader to press.
-	blackHole, bv := renderAt(t, blackHoleModel(t))
-	if !strings.Contains(bv, "Next: press t for trace the path") {
-		t.Fatalf("the banner no longer points at a tool, so this case proves nothing:\n%s", bv)
-	}
-	for _, tool := range blackHole.tools {
-		if !strings.Contains(toolboxLine(bv), tool.Name) {
-			t.Errorf("an abnormal run collapsed the %q chip away: %q", tool.Name, toolboxLine(bv))
-		}
-	}
-}
-
-// TestToolboxModeKeepsItsChips: --toolbox opens on the chips and defers the
-// chain until r, so the tools are the reason the program is running. A clean
-// verdict collapses the checks there like anywhere else, but not the chips.
-func TestToolboxModeKeepsItsChips(t *testing.T) {
-	m := newModel(mustTarget(t, "example.com:443"), true)
-	doneResults(&m, "")
-	for _, p := range m.probes {
-		m.started[p.ID] = true // the chain ran, so this is the post-r screen
-	}
-	tb, v := renderAt(t, m)
-	line := toolboxLine(v)
-	if _, verdict := tb.diagnose(tb.probeOrder()); verdict != diagnostic.VerdictOK {
-		t.Fatalf("fixture is not a healthy run (%v), so this case proves nothing", verdict)
-	}
-	for _, tool := range tb.tools {
-		if !strings.Contains(line, tool.Name) {
-			t.Errorf("toolbox mode collapsed the %q chip away: %q", tool.Name, line)
-		}
-	}
-	// Only the chips are exempt: the passing checks still collapse.
-	if collapsedRow(v) == "" {
-		t.Errorf("toolbox mode stopped collapsing the passing checks:\n%s", v)
 	}
 }
 

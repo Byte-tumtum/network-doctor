@@ -104,7 +104,7 @@ Left deliberately unchanged and unbound: `dig` and `nslookup`, which query the s
 
 The target parser has two independent axes: **port** (explicit `:port` > scheme default > 443) and **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp` scheme wins; otherwise it is inferred from the port: `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP, `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 
-`space` opens the Actions menu: the actions and drill-down tools that apply to the current state, each labelled with the key that runs it under the active preset. Up/down or `j`/`k` move, `enter` runs the selected row, `esc` closes, and any shortcut pressed while it is open runs exactly as it does outside it, the confirmation gate on the active scans included. The rows are generated from the same table that drives dispatch, the help bar, and the cheatsheet, and from the same tool definitions as the toolbox chips, so the menu can neither offer a key that does nothing nor miss one that works. It is discovery only: no probe, diagnosis, report, or exit code changes with it.
+`space` opens the Actions menu: the actions and drill-down tools that apply to the current state, each labelled with the key that runs it under the active preset. Up/down or `j`/`k` move, `enter` runs the selected row, `esc` closes, and any shortcut pressed while it is open runs exactly as it does outside it, the confirmation gate on the active scans included. The rows are generated from the same table that drives dispatch, the help bar, and the cheatsheet, and from the same tool definitions as the hotkeys, so the menu can neither offer a key that does nothing nor miss one that works. It is discovery only: no probe, diagnosis, report, or exit code changes with it.
 
 `T` opens the theme picker: up/down or `j`/`k` move through the built-in themes and apply the highlighted one at once, `enter` keeps it, and `esc` restores the theme that was active when the picker opened. It is presentation only, so no probe, diagnosis, status, report, snapshot, or exit code changes with it, and every status keeps the glyph and word it always had. The built-ins are `terminal` (the default, the 16 ANSI colours, which follow your terminal's own palette), `harbor`, `ember`, `contrast` (high contrast), and `monochrome` (colour-free, with bold and faint emphasis). There is no `--theme` flag: the picker is the way to choose one. `NO_COLOR=1 netdoc ...` disables colour for a run; an empty `NO_COLOR` value does not.
 
@@ -570,7 +570,7 @@ were not evaluated. Press `e` again for the ordinary row details. The full key
 cheatsheet behind `?` is generated from the same binding, so custom key presets
 cannot make dispatch and help disagree.
 
-Each diagnosis row is *evidence*; when you want proof beyond the built-in observations, run the real tools as cancellable streaming jobs: several run at once, and `tab` switches between the live ones. A contextual toolbox shows the tools available for the current target with their hotkeys, greying out missing binaries with an install hint. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.
+Each diagnosis row is *evidence*; when you want proof beyond the built-in observations, run the real tools as cancellable streaming jobs: several run at once, and `tab` switches between the live ones. The Actions menu shows the tools available for the current target with their hotkeys and omits missing binaries. Output is bounded and sanitized (no terminal-escape injection from a hostile server); reports include version/OS metadata plus each job's command, status, duration, and last 15 output lines.
 Review your local copy before sharing, since tool evidence may contain sensitive data.
 
 The same hotkeys map to each OS's built-in tools:
@@ -594,7 +594,7 @@ The `c` slot is protocol-aware: HTTP(S) and unknown-port targets get `curl`, whi
 
 The routes and sockets tools are target-independent; the rest need a host. Tools run with an argument slice (never a shell string), in their own process group on Unix (so cancelling kills descendants too), and without privilege escalation. The displayed command is copy-pasteable in a POSIX shell (Linux/macOS) or PowerShell (Windows; cmd.exe paste is not supported).
 
-`--toolbox [<host>]` opens straight into the toolbox without auto-running the chain (press `r` to run it). With no host, only the target-independent tools are offered.
+`--toolbox [<host>]` starts without auto-running the chain (press `space` for the Actions menu or `r` to run the checks). With no host, only the target-independent tools are offered.
 
 ### Local devices
 

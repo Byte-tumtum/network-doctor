@@ -1052,8 +1052,8 @@ func TestViewFitsTerminal(t *testing.T) {
 	}
 }
 
-// A short or narrow terminal sheds the toolbox names, then scrolls the panels
-// down, then drops the chips and the panels outright. The banner never yields:
+// A short or narrow terminal scrolls the panels down, then drops them outright.
+// The banner never yields:
 // it carries the plain-English verdict, and it is the first thing the renderer
 // would eat. See TestPersistentBlockSurvivesLongResultList for the header and
 // the help bar, which outlive the panels for the same reason.

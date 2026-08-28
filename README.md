@@ -298,7 +298,7 @@ netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 |-----|--------|
 | `space` | the Actions menu: everything the run can do right now, each with its own key; `↑`/`↓` select, `enter` runs, `esc` closes |
 | `↑`/`↓` (`k`/`j`) | select a probe row, or a device or service in the network map |
-| `a` | expand the checks a finished run collapsed (the passing rows, and the toolbox on a clean run), and collapse them again |
+| `a` | expand the checks a finished run collapsed, and collapse them again |
 | `e` | show why the selected diagnosis follows from the observed checks, and return to normal details |
 | `i` | in Watch Mode, inspect recorded incidents; use left/right to choose one, and `w` to save it as `.ndoc` |
 | `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
@@ -318,7 +318,7 @@ netdoc --two-sided here.ndoc there.ndoc  # which machine a failure belongs to
 
 ### Actions menu
 
-`space` opens the Actions menu, in the help bar's place so the run stays on screen behind it. It lists what this state can actually do, and nothing else: the report rows appear once the checks finish, the job rows once a tool has output, incidents in Watch Mode, and the toolbox tools whose binary is installed. Every row carries the key that runs it under your preset, so the menu teaches the shortcuts you would otherwise have to look up, and pressing one of those keys with the menu open runs it just as it would with the menu closed.
+`space` opens the Actions menu, in the help bar's place so the run stays on screen behind it. It lists what this state can actually do, and nothing else: the report rows appear once the checks finish, the job rows once a tool has output, incidents in Watch Mode, and the drill-down tools whose binary is installed. Every row carries the key that runs it under your preset, so the menu teaches the shortcuts you would otherwise have to look up, and pressing one of those keys with the menu open runs it just as it would with the menu closed.
 
 ### Themes
 

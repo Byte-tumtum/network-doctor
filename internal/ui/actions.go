@@ -1,7 +1,7 @@
 // The Actions menu: one list of what the run can do right now, so a reader who
 // has not learned the keys can still find them. It owns no commands of its
-// own. Every row is an action from the shared key table or a tool from the
-// toolbox, it carries whatever key the active preset binds, and running one
+// own. Every row is an action from the shared key table or a drill-down tool,
+// it carries whatever key the active preset binds, and running one
 // goes through the same dispatch the keyboard does.
 
 package ui
@@ -63,7 +63,7 @@ func (m model) actionAvailable(act keyAction) bool {
 			return m.allDone()
 		}
 		_, hiddenPass, hiddenNA := m.compactRows()
-		return hiddenPass+hiddenNA > 0 || m.toolsCollapsed()
+		return hiddenPass+hiddenNA > 0
 	case actNetworkMap, actRestart, actActions, actTheme, actHelp, actQuit:
 		return true
 	}
@@ -104,10 +104,10 @@ func (m model) actionName(def actionDef) string {
 }
 
 // actionItems is what the current state can do: the bound list-context actions
-// that are available right now, in cheatsheet order, then the toolbox tools
+// that are available right now, in cheatsheet order, then the drill-down tools
 // whose binary is installed. Both halves are read from the definitions dispatch
 // itself uses, so the menu cannot offer a key that does nothing, miss one that
-// works, or name a tool the toolbox spells differently.
+// works, or name a tool differently from its hotkey.
 func (m model) actionItems() []actionItem {
 	var items []actionItem
 	for _, def := range actionDefs {
@@ -121,7 +121,7 @@ func (m model) actionItems() []actionItem {
 		})
 	}
 	for _, tool := range m.tools {
-		// A missing binary has a chip that says so; the menu is what can run now.
+		// The menu lists only tools it can run now.
 		if !tool.Available {
 			continue
 		}

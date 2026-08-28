@@ -170,7 +170,7 @@ func (m model) pathView() string {
 		}
 	}
 	// The title rides on the first rung so line 1's width math includes it,
-	// the way the toolbox chips carry theirs.
+	// so the first label participates in the strip's width calculation.
 	chips[0] = m.st.title.Render("Target path") + "  " + chips[0]
 	// An unknown width puts every rung on its own line, which the row guard
 	// below then drops, and no strip is the right answer for a terminal that

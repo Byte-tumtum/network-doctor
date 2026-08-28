@@ -120,7 +120,6 @@ func (m model) View() string {
 		// they leave rather than pushing them off the top of the screen.
 		help = m.actionsView(m.height - strings.Count(banner+header+path, "\n"))
 	}
-	toolbox := m.toolboxView(false)
 	tail := help + "\n"
 	// Adaptive tail: the job pane gets whatever rows the rest doesn't use.
 	// avail is a budget in newlines: jobView's output must add at most avail
@@ -132,11 +131,8 @@ func (m model) View() string {
 		if body != "" {
 			// Blank rows above and below: with no border around the sections,
 			// the space is what holds the block off the context strip over it
-			// and off the toolbox or job pane under it.
+			// and off the job pane under it.
 			fixed += "\n" + body + "\n\n"
-		}
-		if toolbox != "" {
-			fixed += toolbox + "\n"
 		}
 		avail = m.height - strings.Count(fixed, "\n") - strings.Count(tail, "\n") - 1
 	}
@@ -155,17 +151,11 @@ func (m model) View() string {
 		minAvail = 5
 	}
 	// Still overflowing: shed in order of what the reader can do without. The
-	// toolbox chips lose their names first (they wrap to a row per couple of
-	// tools on a narrow terminal), then the results block scrolls down toward a
-	// single probe row, then the causal strip goes, then the chips and finally
-	// the block go entirely.
+	// results block scrolls down toward a single probe row, then the causal strip
+	// goes, then the block goes entirely.
 	// The banner carries the answer with its Fix, Next and Evidence lines, the
 	// header carries the target that answer is about, and the help bar is the
 	// way to anywhere else, so those three never yield to the results block.
-	if m.height > 0 && avail < minAvail {
-		toolbox = m.toolboxView(true)
-		budget()
-	}
 	if m.height > 0 && avail < minAvail {
 		body = shrink(max(lipgloss.Height(body)+avail-minAvail, bodyMinRows))
 		budget()
@@ -176,10 +166,6 @@ func (m model) View() string {
 	// thing carrying the evidence.
 	if m.height > 0 && avail < minAvail && path != "" {
 		path = ""
-		budget()
-	}
-	if m.height > 0 && avail < minAvail && toolbox != "" {
-		toolbox = ""
 		budget()
 	}
 	if m.height > 0 && avail < minAvail && body != "" {
@@ -1848,26 +1834,7 @@ func (m model) collapsedChecksRow(hiddenPass, hiddenNA int) string {
 	return m.st.faint.Render(fmt.Sprintf("· %s (%s expand)", summary, m.keys.label(ctxList, actExpand)))
 }
 
-// toolsCollapsed reports whether the "Dig deeper" chips have to justify their
-// rows. A finished run the diagnosis calls healthy has nothing to dig into, so
-// they collapse to their count. Every other state keeps them: an unfinished
-// run has no verdict yet, and an abnormal one puts the banner's "Next:" line
-// one keypress from a chip it names.
-//
-// --toolbox is the state that outranks the verdict. That mode opens on the
-// chips and holds the chain back until r, so the chips are what the reader
-// came for; a clean run is not a reason to take away the thing they asked
-// for. The checks still collapse there, since the diagnosis is the part a
-// clean verdict has finished talking about.
-func (m model) toolsCollapsed() bool {
-	if m.toolbox || m.expanded || !m.allDone() || !m.keys.bound(ctxList, actExpand) {
-		return false
-	}
-	_, verdict := m.diagnose(m.probeOrder())
-	return verdict == diagnostic.VerdictOK
-}
-
-// probeNextTool maps a blamed probe to the toolbox hotkey that best
+// probeNextTool maps a blamed probe to the tool hotkey that best
 // investigates it.
 var probeNextTool = map[diagnostic.ProbeID]string{
 	diagnostic.ProbeInternet:  "p",
@@ -1881,7 +1848,7 @@ var probeNextTool = map[diagnostic.ProbeID]string{
 	diagnostic.ProbeSMTP:      "t",
 }
 
-// nextStep suggests the toolbox key worth pressing after a failure, e.g.
+// nextStep suggests the tool key worth pressing after a failure, e.g.
 // "Next: press d for DNS lookup (dig)". Empty when no tool applies or the
 // binary is missing.
 func (m model) nextStep(id diagnostic.ProbeID) string {
@@ -2099,53 +2066,6 @@ func progressBar(st styles, done, total, w int) string {
 	}
 	filled := min(done*w/total, w)
 	return st.sel.Render(strings.Repeat("█", filled)) + st.faint.Render(strings.Repeat("░", w-filled))
-}
-
-// toolboxView renders the "Dig deeper" chip row. compact keeps only the keys:
-// on a short terminal the names are the first thing View sheds, and the letters
-// alone still say which keys are bound, and ? lists what they do.
-func (m model) toolboxView(compact bool) string {
-	if len(m.tools) == 0 {
-		return m.st.faint.Render("Tools need a host, press ") + m.st.key.Render("r") + m.st.faint.Render(" to set one") + "\n"
-	}
-	// The SSH chip below is not in m.tools, so the count has to include it.
-	if m.toolsCollapsed() {
-		return m.st.title.Render("Dig deeper") + m.st.faint.Render(fmt.Sprintf("  %d tools (%s expand)",
-			len(m.tools)+1, m.keys.label(ctxList, actExpand))) + "\n"
-	}
-	chip := func(available bool, key, rest string) string {
-		if compact {
-			rest = ""
-		}
-		if !available {
-			return m.st.faint.Render("[" + key + "]" + rest)
-		}
-		return m.st.key.Render("["+key+"]") + rest
-	}
-	parts := make([]string, len(m.tools))
-	for i, t := range m.tools {
-		rest := " " + t.Name
-		if !t.Available {
-			rest = " " + t.Name + " (" + t.Bin + " missing)"
-		}
-		parts[i] = chip(t.Available, t.Key, rest)
-	}
-	// SSH login isn't a Tool: it takes over the terminal instead of streaming
-	// output into a job pane, so it rides along as a plain chip. It logs in to
-	// the target, which the target-independent tools don't need.
-	if m.target == nil {
-		parts = append(parts, chip(false, "S", " SSH login (needs a target)"))
-	} else {
-		parts = append(parts, chip(true, "S", " SSH login"))
-	}
-	sep := m.st.faint.Render("  ·  ")
-	if compact {
-		sep = " "
-	}
-	// The title rides on the first chip so line 1's width math includes it;
-	// wrapping happens only between chips, never inside one.
-	parts[0] = m.st.title.Render("Dig deeper") + "  " + parts[0]
-	return joinChips(m.width, sep, parts) + "\n"
 }
 
 // jobView renders the job pane with an adaptive tail: avail is the screen

@@ -4,9 +4,8 @@
 #
 # Record on a clean Linux machine whose interface name and optional Wi-Fi name
 # are safe to publish. The machine needs ordinary internet access, Go, VHS
-# v0.11.0, plus ping, dig, curl, traceroute, mtr, ss, ip, nmap, and ssh so every
-# Dig deeper action is available. VHS also needs its normal ttyd, browser,
-# ffmpeg, and font setup.
+# v0.11.0, plus the tools needed by the live probes. VHS also needs its normal
+# ttyd, browser, ffmpeg, and font setup.
 #
 # Regenerate with:
 #
