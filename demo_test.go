@@ -267,7 +267,7 @@ func TestDemoWorkflowRefreshesTheTrackedGIFOnMain(t *testing.T) {
 	if checkout == nil || checkout.With["persist-credentials"] != "true" {
 		t.Fatal("demo.yml checkout does not persist GITHUB_TOKEN credentials for the push")
 	}
-	if token := checkout.With["token"]; token != "" && token != "${{ github.token }}" {
+	if token := checkout.With["token"]; token != "" && token != "${{ github.token }}" { //nolint:gosec // G101: workflow key name, not a credential
 		t.Errorf("demo.yml checkout uses custom token %q; the GITHUB_TOKEN recursion protection is required", token)
 	}
 	if commit == nil {
@@ -291,10 +291,12 @@ func TestDemoWorkflowRefreshesTheTrackedGIFOnMain(t *testing.T) {
 		t.Error("demo.yml does not exit without a commit when assets/hero.gif is unchanged")
 	}
 	ordered := []int{noChange, remoteHead, compareHead, rejectStale, addGIF, commitGIF, pushGIF}
-	for i, position := range ordered {
-		if position < 0 || i > 0 && position <= ordered[i-1] {
+	prev := -1
+	for _, position := range ordered {
+		if position < 0 || position <= prev {
 			t.Fatal("demo.yml must check for a changed GIF, reject an advanced main, then add, commit, and push the recording")
 		}
+		prev = position
 	}
 	for _, want := range []string{
 		`git config user.name "github-actions[bot]"`,
