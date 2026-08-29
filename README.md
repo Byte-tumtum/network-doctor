@@ -99,30 +99,51 @@ The Homebrew Core formula, bottled for both platforms, so `brew upgrade` picks u
 
 ### Linux
 
-Fedora: the [COPR repo](https://copr.fedorainfracloud.org/coprs/heymaikol/network-doctor/) builds from source, upgrades through `dnf` like any other repo:
+#### Fedora
+
+**Fedora stable uses the prebuilt release RPM. Fedora Rawhide uses COPR.**
+
+##### Fedora stable: prebuilt release RPM
+
+Download the `.rpm` for your architecture from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), then install it locally:
+
+```sh
+sudo dnf install ./network-doctor_X.Y.Z_linux_ARCH.rpm    # ARCH is amd64 or arm64
+```
+
+The release RPM is prebuilt, so the Go-version limitation that prevents COPR
+source builds on Fedora 43, 44, and 45 does not apply. It is a standalone
+package: installing it does not add a Network Doctor repository, and `dnf`
+will not automatically pull the next release.
+
+##### Fedora Rawhide: COPR repository
+
+The [COPR repo](https://copr.fedorainfracloud.org/coprs/heymaikol/network-doctor/)
+builds from source and publishes only for Fedora Rawhide on `x86_64` and
+`aarch64`:
 
 ```sh
 sudo dnf copr enable heymaikol/network-doctor
 sudo dnf install network-doctor
 ```
 
-COPR currently publishes only for Fedora Rawhide on `x86_64` and `aarch64`.
-Fedora 43, 44, and 45 cannot build the source package in COPR because their
-standard repositories do not provide the Go version the project requires. This
-is a COPR build limitation, not a limitation of the prebuilt release artifacts.
-A new COPR package appears after its Rawhide builds finish, so it may trail the
-GitHub release. COPR signs with its own per-project key (a separate trust root
-from the GitHub attestation below), which `dnf copr enable` installs for you.
+This repository-backed install upgrades normally through `dnf`. A new COPR
+package appears after its Rawhide builds finish, so it may trail the GitHub
+release. COPR signs with its own per-project key, a separate trust root from
+the GitHub attestation below, which `dnf copr enable` installs for you.
 
-Everything else: `.deb`, `.rpm`, and `.apk` packages are on the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), for `amd64` and `arm64`. Download one and install it locally:
+#### Other Linux distributions
+
+Prebuilt `.deb`, `.rpm`, and `.apk` packages are on the [latest release](https://github.com/heymaikol/network-doctor/releases/latest), for `amd64` and `arm64`. Download one and install it locally:
 
 ```sh
 sudo apt install ./network-doctor_X.Y.Z_linux_amd64.deb    # Debian, Ubuntu, Mint
-sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # Fedora, RHEL, Rocky, Alma
+sudo dnf install ./network-doctor_X.Y.Z_linux_amd64.rpm    # RHEL, Rocky, Alma
 sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpine
 ```
 
-These don't auto-update the way COPR does, so `dnf`/`apt` won't pull the next version for you.
+These standalone packages do not add an update repository, so `dnf`/`apt`
+will not pull the next version for you.
 
 Every Linux package (COPR, `.deb`, `.rpm`, `.apk`) installs two commands at the same version: `netdoc`, and `netdoc-sim`, the simulator behind [Challenge Mode](#think-you-can-beat-network-doctor). Confirm both:
 

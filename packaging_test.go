@@ -247,6 +247,35 @@ func TestReleaseWorkflowRestrictsCOPRTargets(t *testing.T) {
 	}
 }
 
+func TestREADMEPresentsCOPRAsFedoraRawhideOnly(t *testing.T) {
+	data, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, linux, ok := strings.Cut(string(data), "\n### Linux\n")
+	if !ok {
+		t.Fatal("README has no Linux installation section")
+	}
+	linux, _, ok = strings.Cut(linux, "\n### ")
+	if !ok {
+		t.Fatal("README's Linux installation section never ends")
+	}
+
+	stableAt := strings.Index(linux, "Fedora stable")
+	stableInstallAt := strings.Index(linux, "dnf install ./network-doctor_")
+	coprEnableAt := strings.Index(linux, "dnf copr enable")
+	if stableAt < 0 || stableInstallAt < 0 || coprEnableAt < 0 {
+		t.Fatal("Fedora guidance must include separate stable RPM and Rawhide COPR installation paths")
+	}
+	rawhideAt := strings.LastIndex(linux[:coprEnableAt], "Fedora Rawhide")
+	if rawhideAt < 0 {
+		t.Fatal("the COPR command must identify Fedora Rawhide as its installation path")
+	}
+	if !(stableAt < stableInstallAt && stableInstallAt < rawhideAt && rawhideAt < coprEnableAt) {
+		t.Error("Fedora stable's release RPM must appear before the Rawhide-only COPR command")
+	}
+}
+
 // The release publishes the image from the tag it is building, with that tag as
 // the version the binaries report. Reading it from the workflow keeps the two
 // halves of "the image tag names the build inside it" from drifting apart.
