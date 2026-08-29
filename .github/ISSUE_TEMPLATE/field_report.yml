@@ -1,0 +1,100 @@
+name: Real network field report
+description: What Network Doctor saw on a real, broken, or unusual network, even when you are unsure it has a bug
+title: "field report: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form collects observations from real networks: VPNs, work and campus networks, captive portals, hotels, airports, public Wi-Fi, IPv6-heavy or IPv6-only setups, unusual DNS, and proxies. Report what was happening and what Network Doctor said, even when you are not sure Network Doctor has a bug. Reproducible software defects belong in a bug report instead. Security vulnerabilities must be reported through SECURITY.md, not publicly.
+
+        Corporate, campus, VPN, DNS, and proxy details can be sensitive. Remove or replace anything you would not want public before submitting.
+  - type: checkboxes
+    attributes:
+      label: Before submitting
+      options:
+        - label: I reviewed what I am posting for private hostnames, addresses, credentials, and other sensitive data.
+          required: true
+        - label: This is not a security vulnerability (those should be reported using SECURITY.md).
+          required: true
+  - type: input
+    attributes:
+      label: Network Doctor version
+      description: Output of `netdoc --version`.
+      placeholder: Paste the full output here
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Platform details
+      description: OS version, distribution, and architecture.
+      placeholder: Fedora 43, x86_64
+  - type: checkboxes
+    attributes:
+      label: What is this network?
+      description: Check everything that applies.
+      options:
+        - label: VPN
+        - label: Corporate or work network
+        - label: University or campus network
+        - label: Captive portal, hotel, airport, or public Wi-Fi
+        - label: IPv6-heavy or IPv6-only-ish
+        - label: Unusual or custom DNS
+        - label: Proxy in use
+        - label: Other unusual network
+  - type: textarea
+    attributes:
+      label: What was actually wrong with the network?
+      description: >
+        Briefly describe the real connectivity problem or unusual behavior,
+        for example one site working while another does not, DNS behaving
+        differently with a VPN on or off, a portal blocking traffic, or IPv4
+        failing while IPv6 works. There is no wrong answer.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What did Network Doctor diagnose?
+      description: What it reported or concluded. You do not need to understand how it works internally.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Was Network Doctor's diagnosis correct?
+      options:
+        - Yes
+        - Mostly
+        - No
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: How did you verify it?
+      description: >
+        For example: you fixed the issue using the diagnosis, compared it with
+        another diagnostic tool, changed the VPN, DNS, or proxy state, already
+        knew the actual failure, or you are still unsure.
+  - type: textarea
+    attributes:
+      label: Sanitized Network Doctor evidence
+      description: >
+        Optional. `netdoc --support support.ndoc example.com` writes a
+        sanitized `.ndoc` snapshot locally. Review the file before posting it,
+        then paste the useful parts here or drag the file into this box to
+        attach it. The sanitizer covers known identifiers, addresses, and
+        credential patterns, but it is not a guarantee, so read the file
+        yourself. Do not include secrets, VPN configuration, or confidential
+        corporate or campus information.
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Anything useful that does not fit above.
