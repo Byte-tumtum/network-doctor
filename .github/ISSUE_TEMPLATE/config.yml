@@ -1,5 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
+  - name: Questions / help
+    url: https://github.com/heymaikol/network-doctor/discussions/categories/q-a
+    about: Ask a usage or troubleshooting question in GitHub Discussions.
+  - name: Real-world testing
+    url: https://github.com/heymaikol/network-doctor/discussions/24
+    about: Learn where Network Doctor needs real-network testing and how to participate.
   - name: Report a security vulnerability
     url: https://github.com/heymaikol/network-doctor/blob/main/SECURITY.md
     about: Report security issues privately instead of opening a public issue.
