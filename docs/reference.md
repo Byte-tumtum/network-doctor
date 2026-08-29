@@ -104,6 +104,32 @@ Left deliberately unchanged and unbound: `dig` and `nslookup`, which query the s
 
 The target parser has two independent axes: **port** (explicit `:port` > scheme default > 443) and **protocol rows** (an explicit `http`/`https`/`ssh`/`smtp` scheme wins; otherwise it is inferred from the port: `443/8443`→HTTP+TLS+HTTPS, `80`→HTTP, `22`→SSH, `25/587`→SMTP). Hosts are validated against a strict allowlist; IPv6 literals are accepted bare (`::1`) or bracketed with a port (`[::1]:443`).
 
+The TUI's default key bindings:
+
+| Key | Action |
+|-----|--------|
+| `space` | the Actions menu: everything the run can do right now, each with its own key; `↑`/`↓` select, `enter` runs, `esc` closes |
+| `↑`/`↓` (`k`/`j`) | select a probe row, or a device or service in the network map |
+| `a` | expand the checks a finished run collapsed, and collapse them again |
+| `e` | show why the selected diagnosis follows from the observed checks, and return to normal details |
+| `i` | in Watch Mode, inspect recorded incidents; use left/right to choose one, and `w` to save it as `.ndoc` |
+| `v` | run a LAN scan and show a network map of the local private `/24` (unprivileged `nmap`) |
+| `enter` | open the selected map device, then diagnose one of the services it answers on, or open the current tool job's output |
+| `/` (viewer) | filter the viewer to matching lines (`enter` commits, `esc` clears it, a second `esc` leaves) |
+| `home`/`end`, `pgup`/`pgdn` (viewer) | jump to top/bottom (`end` re-enables follow) or page through the output |
+| `y` / `w` (viewer) | copy / save the viewer's retained output (up to 5,000 lines; respects its filter) |
+| `r` | restart with a new target |
+| `R` | retest: rerun the same checks on the same target, after acting on the remediation the Details panel shows |
+| `S` | SSH login: a form for username, key, and password, then hands the terminal to `ssh` (hinted only once the SSH banner check passes, but usable against any target) |
+| `tab` | switch between running tool jobs |
+| `esc` | cancel the focused job only (`tab` picks which), or leave an opened device on the map; `q` is the stop-everything path |
+| `y` / `w` | yank / write (copy / save locally) a reviewable report of the chain plus every tool job |
+| `T` | pick a colour theme, previewed as you move; `enter` keeps it, `esc` restores the one you had |
+| `?` | full-screen key cheatsheet; any key closes it |
+| `q` | quit (cancels running jobs first, then exits) |
+
+`--keys vim` adds `gg`/`G` for first/last, `ctrl+b`/`ctrl+f` for page up/down, and `ctrl+u`/`ctrl+d` for half-page up/down; the existing keys continue to work.
+
 `space` opens the Actions menu: the actions and drill-down tools that apply to the current state, each labelled with the key that runs it under the active preset. Up/down or `j`/`k` move, `enter` runs the selected row, `esc` closes, and any shortcut pressed while it is open runs exactly as it does outside it, the confirmation gate on the active scans included. The rows are generated from the same table that drives dispatch, the help bar, and the cheatsheet, and from the same tool definitions as the hotkeys, so the menu can neither offer a key that does nothing nor miss one that works. It is discovery only: no probe, diagnosis, report, or exit code changes with it.
 
 `T` opens the theme picker: up/down or `j`/`k` move through the built-in themes and apply the highlighted one at once, `enter` keeps it, and `esc` restores the theme that was active when the picker opened. It is presentation only, so no probe, diagnosis, status, report, snapshot, or exit code changes with it, and every status keeps the glyph and word it always had. The built-ins are `terminal` (the default, the 16 ANSI colours, which follow your terminal's own palette), `harbor`, `ember`, `contrast` (high contrast), and `monochrome` (colour-free, with bold and faint emphasis). There is no `--theme` flag: the picker is the way to choose one. `NO_COLOR=1 netdoc ...` disables colour for a run; an empty `NO_COLOR` value does not.
@@ -111,6 +137,23 @@ The target parser has two independent axes: **port** (explicit `:port` > scheme 
 The chosen theme persists as a single name in `$XDG_CONFIG_HOME/netdoc/theme` (normally `~/.config/netdoc/theme`) on Linux, `~/Library/Application Support/netdoc/theme` on macOS, or `%AppData%\netdoc\theme` on Windows. It is convenience state: a missing file, an unreadable one, and an unknown or obsolete name all mean the default theme, and a preference that cannot be written never stops a run. `--no-history` does not affect it, since that flag is about the targets you type. Exit `netdoc` and delete the file to go back to the default.
 
 The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netdoc/history` (normally `~/.config/netdoc/history`) on Linux, `~/Library/Application Support/netdoc/history` on macOS, or `%AppData%\netdoc\history` on Windows. `--no-history` turns that off for one run: the file is neither read nor written, so the targets you type stay in that session only. It leaves an existing file untouched, so exit `netdoc` and delete it to clear what is already saved.
+
+### Exit codes
+
+| Situation | Exit |
+|---|---|
+| Chain completed, no failed row (Skips allowed) | `0` |
+| Peer tests completed with authenticated traffic passing both ways | `0` |
+| Any failed row | `1` |
+| Peer diagnostic failed, stayed incomplete, or the session errored | `1` |
+| `--two-sided`: no check failed on either machine | `0` |
+| `--two-sided`: a failure was placed, or the evidence could not place one | `1` |
+| `--two-sided`: the two snapshots observed different targets | `2` |
+| Quit before the chain finished | `1` |
+| Bad arguments, pairing-input reject, validation reject, or no terminal for the TUI | `2` |
+| `--via`: SSH failed, no usable `netdoc` on the SSH host, or a remote protocol mismatch | `2` |
+
+The per-situation table for `--via` is [below, in the remote section](#exit-codes-1).
 
 ## Service profiles
 
@@ -657,7 +700,7 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 }
 ```
 
-`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`, or `INCOMPLETE`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`, `routes`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`. `target_tcp.address_families` records the same states for a dual-stack target after comparison with the host's independent family paths. Under `--iface` or an explicit source address, a family the selected source has no address for is never dialed and its key is omitted, meaning untested rather than unreachable. A target family is also omitted when the target publishes it but the host did not prove a usable local path for it. A selection leaving no usable family at all reports the whole egress row as `N/A`, as the QUIC and encrypted-DNS rows already do. A configured egress family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed QUIC, encrypted-DNS, proxy, and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; QUIC uses `timeout` or `quic_handshake_failure`, encrypted DNS uses `timeout` or `encrypted_dns_unavailable`, while TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. Failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`, read from the local routing and neighbor tables on Linux, macOS, and Windows. When both families fail, the cause comes from a family that has default routes to describe: a host with no IPv4 default route at all is not reported as routeless when the IPv6 routing it actually uses is what broke. macOS route entries carry no preference metric, so `preferred_route_failed` comes only from Linux and Windows, and `gateway_unreachable` needs a neighbor cache entry that exists and shows the next hop unresolved, so an unseen next hop leaves the weaker `selected_path_failed` rather than a guess. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable, so they are safe to script against. Exit codes follow the table in [README.md](../README.md#exit-codes) (`ok: false` ⇒ exit `1`).
+`status` is one of `PASS`, `WARN`, `FAIL`, `SKIP`, `N/A`, or `INCOMPLETE`. `target` is `null` in generic (no-target) mode. `ms` is the check's wall time truncated to milliseconds but floored at `1`, so `0` means the check never ran. Optional per-check fields (`cause`, `address_families`, `fix`, `addrs`, `selected_ip`, `source`, `iface`, `network`, `portal`, `attempts`, `routes`) are omitted when empty. `internet_tcp.address_families` records the independently tested IPv4 and IPv6 state as `reachable` or `unreachable`. `target_tcp.address_families` records the same states for a dual-stack target after comparison with the host's independent family paths. Under `--iface` or an explicit source address, a family the selected source has no address for is never dialed and its key is omitted, meaning untested rather than unreachable. A target family is also omitted when the target publishes it but the host did not prove a usable local path for it. A selection leaving no usable family at all reports the whole egress row as `N/A`, as the QUIC and encrypted-DNS rows already do. A configured egress family whose path fails while the other succeeds warns with `ipv4_unreachable` or `ipv6_unreachable`. Failed QUIC, encrypted-DNS, proxy, and TLS checks populate `cause` so automation can distinguish failure stages without parsing `detail`; QUIC uses `timeout` or `quic_handshake_failure`, encrypted DNS uses `timeout` or `encrypted_dns_unavailable`, while TLS values include `certificate_expired`, `certificate_not_yet_valid`, `hostname_mismatch`, `untrusted_issuer`, `tls_handshake_failure`, `tcp_unreachable`, `timeout`, and `connection_closed`. Failed direct egress may use `no_default_route`, `gateway_unreachable`, `selected_path_failed`, or `preferred_route_failed`, read from the local routing and neighbor tables on Linux, macOS, and Windows. When both families fail, the cause comes from a family that has default routes to describe: a host with no IPv4 default route at all is not reported as routeless when the IPv6 routing it actually uses is what broke. macOS route entries carry no preference metric, so `preferred_route_failed` comes only from Linux and Windows, and `gateway_unreachable` needs a neighbor cache entry that exists and shows the next hop unresolved, so an unseen next hop leaves the weaker `selected_path_failed` rather than a guess. The `portal` object marks detected HTTP interception and includes `redirect_url` only when the response supplied a valid HTTP(S) sign-in URL; the app displays that URL but never opens it. Field names and the status vocabulary are stable, so they are safe to script against. Exit codes follow the [table in Usage details](#exit-codes) (`ok: false` ⇒ exit `1`).
 
 `INCOMPLETE` is the one status value no probe can return, and it carries the same meaning here as it does in [a snapshot](#diagnostic-snapshots). The check was in the run's check set but never reported a result at all, which is what a cancelled or interrupted run leaves behind. It is not a `SKIP`: nothing decided to leave it out, the run ended first. An `INCOMPLETE` row is never a pass, and a report holding one is never `"ok": true`, so the absence of an observation can never be read as a passing check. The row itself is still emitted, so a reader can see that the check existed and was not reached.
 
