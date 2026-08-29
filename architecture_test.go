@@ -20,6 +20,7 @@ func TestPackageLayering(t *testing.T) {
 	// Checking every direct edge also rules out a transitive path to the same or
 	// a higher layer.
 	layers := map[string]int{
+		"internal/app":        4,
 		"internal/textsafe":   0,
 		"internal/report":     0,
 		"internal/snapshot":   0,

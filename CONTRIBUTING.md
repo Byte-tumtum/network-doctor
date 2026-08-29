@@ -29,7 +29,7 @@ go run . github.com
 
 The code is split by responsibility:
 
-- `main.go` owns CLI arguments, process I/O, and application startup.
+- `internal/app` owns CLI arguments, process I/O, and application startup; the root `main.go` and `cmd/netdoc/main.go` are thin entrypoints into it, the second being the `go install` path that yields a binary named `netdoc`.
 - `internal/diagnostic` owns target parsing, native probes, per-OS route/SSID lookups, and verdict logic without depending on terminal presentation.
 - `internal/ui` owns Bubble Tea state, rendering, and tool jobs.
 - `internal/textsafe` sanitizes untrusted remote and subprocess text shared by both layers.

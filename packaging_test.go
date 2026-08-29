@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/heymaikol/network-doctor/internal/app"
 	"github.com/heymaikol/network-doctor/internal/profile"
 	"github.com/heymaikol/network-doctor/internal/ui"
 	"gopkg.in/yaml.v3"
@@ -332,8 +333,8 @@ var flagSurfaces = map[string]func(string) []string{
 
 func TestShippedSurfacesDeclareExactlyTheRealFlags(t *testing.T) {
 	var usage bytes.Buffer
-	if code := run([]string{"--help"}, &usage, io.Discard); code != 0 {
-		t.Fatalf("run(--help) = %d, want 0", code)
+	if code := app.Run(version, []string{"--help"}, &usage, io.Discard); code != 0 {
+		t.Fatalf("app.Run(--help) = %d, want 0", code)
 	}
 	// PrintDefaults writes "  -name value", then the usage text on its own
 	// indented line.

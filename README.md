@@ -174,10 +174,10 @@ netdoc-sim help
 Grab a prebuilt binary from the [latest release](https://github.com/heymaikol/network-doctor/releases/latest) (Windows ships as a `.zip`, the rest as bare binaries), or install with Go 1.27+:
 
 ```sh
-go install github.com/heymaikol/network-doctor@latest
+go install github.com/heymaikol/network-doctor/cmd/netdoc@latest
 ```
 
-(`go install` names the binary `network-doctor` after the module; rename it to `netdoc` if you like.) Check what you are running with `netdoc --version`.
+Check what you are running with `netdoc --version`.
 
 Or build from clone:
 

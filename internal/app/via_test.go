@@ -1,7 +1,7 @@
 // --via: what the local side forwards, what it does with the answer, and the
 // line it keeps between a broken remote network and a broken connection.
 
-package main
+package app
 
 import (
 	"bytes"
