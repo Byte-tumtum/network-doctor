@@ -368,7 +368,16 @@ func (m model) bodyView(deferred bool, rows int) string {
 	// column lays a section out in its own width, which is what wraps the rows
 	// and what squares the block off for a side-by-side join.
 	column := func(width int, rows []string) string {
-		return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+		out := lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+		// cellbuf.Wrap can leave a trailing space on the line that breaks at a
+		// hyphen, and lipgloss then pads the whole block out to that over-wide
+		// line, so a "Run: ifconfig -a" row would spill a column past the
+		// section at any width. Trim the ragged edge back to the column.
+		lines := strings.Split(out, "\n")
+		for i, l := range lines {
+			lines[i] = strings.TrimRight(l, " ")
+		}
+		return strings.Join(lines, "\n")
 	}
 
 	if m.width < 80 { // too narrow for two columns, so stack
