@@ -1590,13 +1590,15 @@ func TestPreferredPathFailureMutationIsIndependentlyObserved(t *testing.T) {
 			if truthFingerprint(truth) == truthFingerprint(baselineTruth) {
 				t.Fatal("routing consequence did not change truth fingerprint")
 			}
-			// The last client test, not the first: that is the diagnosis the
-			// oracle grades and the one a user reads, and asserting the cause
-			// on an earlier run let the two disagree unnoticed once already.
-			last := rep.Tests[len(rep.Tests)-1]
-			check := diagnosisCheck(last, string(diagnostic.ProbeInternet))
-			if check.Cause != diagnostic.RouteCausePreferredPathFailed || diagnosedFamily(last.Diagnosis, tc.family) != FamilyStateUnreachable {
-				t.Fatalf("diagnosis did not recognize %s preferred-path failure: %+v stderr=%s", tc.family, check, last.Stderr)
+			// Read the same authoritative run the oracle grades. Earlier client
+			// tests can legitimately describe an older network state.
+			final := finalClientTest(&rep)
+			if final == nil {
+				t.Fatal("final client test is absent")
+			}
+			check := diagnosisCheck(*final, string(diagnostic.ProbeInternet))
+			if check.Cause != diagnostic.RouteCausePreferredPathFailed || diagnosedFamily(final.Diagnosis, tc.family) != FamilyStateUnreachable {
+				t.Fatalf("diagnosis did not recognize %s preferred-path failure: %+v stderr=%s", tc.family, check, final.Stderr)
 			}
 			if findings := unrecognizedConditionFindings(&rep, truth); len(findings) != 0 {
 				t.Fatalf("independent %s truth was not reconciled with diagnosis: %+v", tc.family, findings)

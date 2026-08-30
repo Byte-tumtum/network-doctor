@@ -22,6 +22,35 @@ func oracleReport(diagnosis *Diagnosis, evidence Evidence) *Report {
 
 func oracleDiagnosis(checks ...DiagnosisCheck) *Diagnosis { return &Diagnosis{Checks: checks} }
 
+func TestOracleAndDiagnosisChecksShareTheFinalClientTest(t *testing.T) {
+	first := oracleDiagnosis(DiagnosisCheck{ID: string(diagnostic.ProbeInternet), Status: "WARN",
+		Cause:    diagnostic.RouteCausePreferredPathFailed,
+		Families: &DiagnosisFamilies{IPv4: FamilyStateReachable}})
+	final := oracleDiagnosis(DiagnosisCheck{ID: string(diagnostic.ProbeInternet), Status: "FAIL",
+		Cause:    diagnostic.RouteCauseNoDefaultRoute,
+		Families: &DiagnosisFamilies{IPv4: FamilyStateUnreachable}})
+	report := oracleReport(first, noDefaultRouteEvidence())
+	report.Tests = append(report.Tests, TestOutcome{Name: "final", Node: "client", ProcessOutcome: ProcessExited, Diagnosis: final})
+
+	authoritative := finalClientTest(report)
+	if authoritative != &report.Tests[1] || finalClientDiagnosis(report) != authoritative.Diagnosis {
+		t.Fatalf("authoritative test = %p diagnosis=%p, want final test %p diagnosis=%p",
+			authoritative, finalClientDiagnosis(report), &report.Tests[1], final)
+	}
+	check := checkByID(authoritative.Diagnosis, string(diagnostic.ProbeInternet))
+	if check == nil || check.Cause != diagnostic.RouteCauseNoDefaultRoute ||
+		diagnosedFamily(authoritative.Diagnosis, "ipv4") != FamilyStateUnreachable {
+		t.Fatalf("authoritative diagnosis check = %+v diagnosis=%+v", check, authoritative.Diagnosis)
+	}
+	established, recognized, comparable := caseConditions(report, ObservedTruth{IPv4: FamilyStateUnreachable})
+	if !comparable || !slices.Contains(established, ConditionNoDefaultRoute) ||
+		!slices.Contains(recognized, ConditionNoDefaultRoute) ||
+		!slices.Contains(recognized, ConditionIPv4InternetUnreachable) ||
+		slices.Contains(recognized, ConditionPreferredRouteFailed) {
+		t.Fatalf("oracle established=%v recognized=%v comparable=%t", established, recognized, comparable)
+	}
+}
+
 // Independent evidence fixtures. Each one is what a node holder would have
 // written down; none of them can be produced by reading netdoc's report.
 func expiredTLSEvidence() Evidence {

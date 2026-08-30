@@ -167,7 +167,7 @@ func assertEvidenceObservation(t *testing.T, selected DiagnosisID, evidence Caus
 	case ObservationStatusNA:
 		observed = r.Status == StatusNA && evidence.Kind == EvidenceNotEvaluated && evidence.Reason == NotEvaluatedNotApplicable
 	case ObservationCause:
-		observed = r.Cause != ""
+		observed = r.Cause != "" && evidence.Value == r.causeFamily
 	case ObservationDNSAnswers:
 		observed = len(r.Addrs) > 0 && (evidence.Value == "" || slices.ContainsFunc(r.Addrs, func(ip net.IP) bool {
 			return ip.String() == evidence.Value

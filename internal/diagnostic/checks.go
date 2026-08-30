@@ -155,6 +155,7 @@ type ProbeResult struct {
 	// Cause is an optional stable machine-readable reason for failures where a
 	// single probe has materially different remediation paths.
 	Cause       string
+	causeFamily string // address family that supplied Cause; empty when shared or family-neutral
 	Families    *FamilyConnectivity
 	downgraded  bool     // downgradeEgress rewrote a direct-egress failure to Warn.
 	Portal      *Portal  // non-nil when egress is intercepted, not dead.
@@ -1006,19 +1007,7 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 			return r
 		}
 		if o.routeCause != nil {
-			r.Cause = o.routeCause(all[0])
-			// all[0] is an IPv4 endpoint whenever this dial had one, and a
-			// host with no IPv4 default route classifies as no_default_route
-			// however healthy its IPv6 routing is. An IPv6-only machine whose
-			// preferred IPv6 path just died would be told to go and create a
-			// default route it does not need, so when the other family holds
-			// defaults of its own and still failed, its verdict is the one
-			// that explains this row.
-			if r.Cause == RouteCauseNoDefaultRoute && len(v4.ips) > 0 && len(v6.ips) > 0 {
-				if other := o.routeCause(v6.ips[0]); other != "" && other != RouteCauseNoDefaultRoute {
-					r.Cause = other
-				}
-			}
+			r.Cause, r.causeFamily = failedRouteCause(o.routeCause, v4.ips, v6.ips)
 		}
 		// The routing table decides the advice: a missing default route and a
 		// filtered upstream are different repairs. An empty or unrecognized
@@ -1064,16 +1053,57 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	if sec.conn == nil && secName == "IPv6" && o.hasGlobalUnicast(false) {
 		extra = append(extra, "IPv6 address configured but no IPv6 egress (black-holed)")
 		r.Cause = FamilyCauseIPv6Unreachable
+		r.causeFamily = counterfactualIPv6
 		r.Fix = "check the IPv6 default route, gateway, and forwarding path"
 	}
 	if sec.conn == nil && secName == "IPv4" && o.hasGlobalUnicast(true) {
 		extra = append(extra, "IPv4 address configured but no IPv4 egress (black-holed)")
 		r.Cause = FamilyCauseIPv4Unreachable
+		r.causeFamily = counterfactualIPv4
 		r.Fix = "check the IPv4 default route, gateway, and forwarding path"
 	}
 	applyDialWarnings(&r, prim.rtt, extra...)
 	r.Attempts = append(prim.attempts, sec.attempts...)
 	return r
+}
+
+// failedRouteCause chooses the strongest route fact proved by any failed
+// family. A routed failure is more useful than an unrelated family's missing
+// default, and the order of endpoint candidates cannot decide the repair.
+func failedRouteCause(classify func(net.IP) string, families ...[]net.IP) (cause, family string) {
+	priority := func(cause string) int {
+		switch cause {
+		case RouteCausePreferredPathFailed:
+			return 4
+		case RouteCauseGatewayUnreachable:
+			return 3
+		case RouteCauseSelectedPathFailed:
+			return 2
+		case RouteCauseNoDefaultRoute:
+			return 1
+		default:
+			return 0
+		}
+	}
+	best := -1
+	for _, ips := range families {
+		if len(ips) == 0 {
+			continue
+		}
+		candidate := classify(ips[0])
+		if candidate == "" {
+			continue
+		}
+		rank := priority(candidate)
+		switch {
+		case rank > best:
+			cause, family, best = candidate, routeFamily(ips[0]), rank
+		case rank == best && candidate == cause:
+			// The same fact held for both families, so neither alone owns it.
+			family = ""
+		}
+	}
+	return cause, family
 }
 
 // proxyFromEnvironment is http.ProxyFromEnvironment plus ALL_PROXY, which Go

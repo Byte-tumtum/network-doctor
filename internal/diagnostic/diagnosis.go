@@ -146,6 +146,7 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 			e.Observation = ObservationDNSNotFound
 		case r.Cause != "":
 			e.Observation = ObservationCause
+			e.Value = r.causeFamily
 		case r.timedOut:
 			e.Observation = ObservationTimeout
 		case r.downgraded:

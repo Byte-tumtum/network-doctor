@@ -320,12 +320,12 @@ func caseConditions(report *Report, truth ObservedTruth) (established, recognize
 	if report == nil || !finalStateComparable(report) {
 		return nil, nil, false
 	}
-	diagnosis := finalClientDiagnosis(report)
-	if diagnosis == nil {
+	test := finalClientTest(report)
+	if test == nil || test.Diagnosis == nil {
 		return nil, nil, false
 	}
 	return observedConditions(observation{Evidence: report.Evidence, Truth: truth, Client: observedClient(report)}),
-		recognizedConditions(diagnosis), true
+		recognizedConditions(test.Diagnosis), true
 }
 
 // unrecognizedConditionFindings reconciles the two halves. A condition the
@@ -351,21 +351,30 @@ func unrecognizedConditionFindings(report *Report, truth ObservedTruth) []HuntCa
 	return findings
 }
 
-// finalClientDiagnosis returns the last diagnosis the one client node produced.
-// Final because it is closest in time to the final evidence collection; earlier
-// runs in a multi-test timeline scenario can legitimately describe an older
-// state.
-func finalClientDiagnosis(report *Report) *Diagnosis {
+// finalClientTest returns the last run from the observed client. It is closest
+// in time to final evidence collection; earlier runs can describe older state.
+func finalClientTest(report *Report) *TestOutcome {
+	if report == nil {
+		return nil
+	}
 	client := observedClient(report)
 	if client == "" {
 		return nil
 	}
 	for i := len(report.Tests) - 1; i >= 0; i-- {
 		if report.Tests[i].Node == client {
-			return report.Tests[i].Diagnosis
+			return &report.Tests[i]
 		}
 	}
 	return nil
+}
+
+func finalClientDiagnosis(report *Report) *Diagnosis {
+	test := finalClientTest(report)
+	if test == nil {
+		return nil
+	}
+	return test.Diagnosis
 }
 
 // flaggedCause reports whether the diagnosis raised its hand on a row carrying
