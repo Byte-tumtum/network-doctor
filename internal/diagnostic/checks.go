@@ -855,6 +855,39 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 
 // ---- probe implementations ----
 
+// routedInterface names the interface that carries general Internet traffic,
+// when the run's reference routes identify one and that route lands on a
+// usable interface. referenceRouteDecisions come back ordered IPv4 then IPv6,
+// which is the preference: IPv4 is the default route almost every machine has,
+// and a v6-only host still yields a v6 decision. A routed interface that is not
+// usable (down, loopback, or a name the kernel and the interface list do not
+// share) is skipped.
+//
+// usable lists the interfaces that are up, running, and not loopback, as
+// discovered once in ifaceProbe. It answers "" when routing cannot name a
+// usable interface, which leaves the enumeration-order fallback, and when the
+// interface was pinned by --iface or a source, which already names the
+// interface on purpose.
+//
+// ponytail: this reads referenceRouteDecisions, the reference routes the iface
+// probe already reports, so it reuses the kernel lookup the pass collected
+// rather than asking the routing table a second time.
+func (o *netops) routedInterface(usable []string) string {
+	if o.sources != nil {
+		return ""
+	}
+	set := map[string]bool{}
+	for _, name := range usable {
+		set[name] = true
+	}
+	for _, d := range o.referenceRouteDecisions() {
+		if d.Iface != "" && set[d.Iface] {
+			return d.Iface
+		}
+	}
+	return ""
+}
+
 func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 	var r ProbeResult
 	ifaces, err := o.interfaces()
@@ -897,22 +930,30 @@ func (o *netops) ifaceProbe(_ context.Context, _ map[ProbeID]ProbeResult) ProbeR
 		}
 		return r
 	}
-	// First up-and-running non-loopback interface wins, which is kernel
-	// enumeration order, not the routing table's opinion. With Wi-Fi and
-	// Ethernet both up this may name the one traffic doesn't use; that's fine,
-	// this probe only proves "a link is alive". The egress probes report the
-	// interface packets actually take (pathIdentity).
+	// Prefer the interface the routing table says carries general Internet
+	// traffic; only fall back to kernel enumeration order when routing names
+	// none. Enumeration order is not the routing table's opinion, and with
+	// Wi-Fi and Ethernet both up it may name the one traffic does not use,
+	// which is what makes SSID detection pick the wrong link.
+	var usable []string
 	for _, ifi := range ifaces {
 		if ifi.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 		if ifi.Flags&net.FlagUp != 0 && ifi.Flags&net.FlagRunning != 0 {
-			r.Status, r.Iface, r.Detail = StatusPass, ifi.Name, "interface "+ifi.Name+" is up"
-			return r
+			usable = append(usable, ifi.Name)
 		}
 	}
-	r.Status = StatusFail
-	r.Detail, r.Fix = "no interface up", ifaceFix(runtime.GOOS)
+	if len(usable) == 0 {
+		r.Status = StatusFail
+		r.Detail, r.Fix = "no interface up", ifaceFix(runtime.GOOS)
+		return r
+	}
+	iface := usable[0]
+	if routed := o.routedInterface(usable); routed != "" {
+		iface = routed
+	}
+	r.Status, r.Iface, r.Detail = StatusPass, iface, "interface "+iface+" is up"
 	return r
 }
 

@@ -921,6 +921,84 @@ func TestIfaceProbeFailures(t *testing.T) {
 	}
 }
 
+// ifaceProbe follows the reference route, not kernel enumeration order. This is
+// the case the old path got wrong: a loopback or secondary link named first
+// would win enumeration, so SSID detection probed the wrong link.
+func TestIfaceProbeFollowsTheReferenceRoute(t *testing.T) {
+	var ssidIface string
+	o := &netops{
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{
+				{Name: "NpcapLoopback", Flags: net.FlagUp | net.FlagRunning},
+				{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagRunning},
+			}, nil
+		},
+		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+			return []net.IP{net.ParseIP("198.51.100.7")}, "192.168.1.1:53", nil
+		},
+		ssid: func(_ context.Context, iface string) string {
+			ssidIface = iface
+			return "Home"
+		},
+		routeFor: func(net.IP) (RouteDecision, bool) {
+			return RouteDecision{Iface: "Wi-Fi", Tunnel: TunnelDirect}, true
+		},
+	}
+	o.routes = newRouteCache(o.routeFor)
+
+	r := o.ifaceProbe(context.Background(), nil)
+	if r.Status != StatusPass || r.Iface != "Wi-Fi" {
+		t.Fatalf("ifaceProbe = %v iface %q, want PASS on Wi-Fi, the interface the reference route uses", r.Status, r.Iface)
+	}
+	network := o.ssidProbe(context.Background(), map[ProbeID]ProbeResult{ProbeIface: r})
+	if network.Status != StatusPass || network.Network != "Home" {
+		t.Errorf("ssidProbe = %+v, want PASS on Home", network)
+	}
+	if ssidIface != "Wi-Fi" {
+		t.Errorf("ssid lookup called on %q, want Wi-Fi", ssidIface)
+	}
+}
+
+// When the routing table names nothing, ifaceProbe keeps the enumeration-order
+// fallback, which still names the first up-and-running non-loopback interface.
+func TestIfaceProbeFallsBackToEnumerationWhenRoutingNamesNothing(t *testing.T) {
+	o := &netops{
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{
+				{Name: "NpcapLoopback", Flags: net.FlagUp | net.FlagRunning},
+				{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagRunning},
+			}, nil
+		},
+		routeFor: func(net.IP) (RouteDecision, bool) { return RouteDecision{}, false },
+	}
+	o.routes = newRouteCache(o.routeFor)
+	r := o.ifaceProbe(context.Background(), nil)
+	if r.Status != StatusPass || r.Iface != "NpcapLoopback" {
+		t.Fatalf("ifaceProbe = %v iface %q, want fallback to the first enumerated interface", r.Status, r.Iface)
+	}
+}
+
+// A routed interface that is not usable (here, down) is skipped, so the probe
+// falls back to the first usable interface rather than reporting a dead link.
+func TestIfaceProbeSkipsARoutedInterfaceThatIsNotUsable(t *testing.T) {
+	o := &netops{
+		interfaces: func() ([]net.Interface, error) {
+			return []net.Interface{
+				{Name: "Ethernet", Flags: 0}, // down
+				{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagRunning},
+			}, nil
+		},
+		routeFor: func(net.IP) (RouteDecision, bool) {
+			return RouteDecision{Iface: "Ethernet", Tunnel: TunnelDirect}, true
+		},
+	}
+	o.routes = newRouteCache(o.routeFor)
+	r := o.ifaceProbe(context.Background(), nil)
+	if r.Status != StatusPass || r.Iface != "Wi-Fi" {
+		t.Fatalf("ifaceProbe = %v iface %q, want Wi-Fi since the routed Ethernet is down", r.Status, r.Iface)
+	}
+}
+
 // targetTCPProbe against the stub dialer: empty DNS input, a clean connect
 // (with path identity resolved through the stubbed interface list), and the
 // all-addresses-failed fallback.
