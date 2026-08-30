@@ -132,6 +132,20 @@ func TestREADMEKeepsDownloadLinksOnTheReleasesPage(t *testing.T) {
 	}
 }
 
+func TestPersonalDiagnosisUsesCanonicalIntakeURL(t *testing.T) {
+	const intakeURL = "https://tally.so/r/KYK7Y7"
+	for _, name := range []string{"README.md", "site/index.md"} {
+		// #nosec G304 -- name comes from this fixed list of public surfaces.
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count := strings.Count(string(data), intakeURL); count != 1 {
+			t.Errorf("%s contains the Personal Network Diagnosis intake URL %d times, want once", name, count)
+		}
+	}
+}
+
 // The README's complete contributor gate promises to use the same tool
 // versions as CI. Keep that promise tied to the commands and action inputs that
 // actually run them, rather than to version strings copied into this test.

@@ -77,6 +77,29 @@ service?**
 - [TLS failure causes, from expired certificates to hostname mismatch]({{ '/docs/reference/#how-it-diagnoses' | relative_url }})
 - [A port that refuses versus one that is filtered]({{ '/wiki/How-Network-Doctor-Works/#why-each-branch-is-separate' | relative_url }})
 
+## Still stuck?
+
+If Network Doctor found a problem but you are still unsure what it means or
+what to try next, I offer **Personal Network Diagnosis**. I personally review
+your sanitized Network Doctor support report, investigate the evidence for one
+networking problem, and send a written explanation of the likely cause with
+specific troubleshooting steps to try next. One follow-up reply about the
+diagnosis is included.
+
+Create the sharing artifact locally with
+`netdoc --support support.ndoc example.com`, or omit the target for a general
+connectivity problem. Network Doctor does not upload the file.
+
+The introductory price is **$25 USD as a one-time payment, limited to the first
+5 cases**. I normally send the written diagnosis within 2 business days after
+receiving the information needed to investigate the problem.
+
+**[Request a personal diagnosis](https://tally.so/r/KYK7Y7)**
+
+This is diagnostic assistance, not a guarantee of repair. It is separate from
+ordinary project support and does not provide priority for GitHub issues,
+feature requests, or development.
+
 ## Where the documentation lives
 
 This site publishes both halves of Network Doctor's documentation. The

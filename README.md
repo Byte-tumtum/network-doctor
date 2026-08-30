@@ -334,6 +334,21 @@ Please report suspected vulnerabilities privately as described in
 
 ## Support
 
+### Personal Network Diagnosis
+
+Still stuck after running Network Doctor? I offer
+[Personal Network Diagnosis](https://tally.so/r/KYK7Y7) for one networking
+problem. Send a description, relevant context, and a sanitized report created
+locally with `netdoc --support support.ndoc example.com`, or omit the target for
+a general connectivity problem. Network Doctor does not upload the file.
+
+I personally investigate the evidence and send a written diagnosis of the
+likely cause, concrete troubleshooting steps to try next, and one follow-up
+reply. The introductory price is **$25 USD as a one-time payment, limited to the
+first 5 cases**. This is diagnostic assistance, not a guarantee of repair.
+
+### GitHub Sponsors
+
 Network Doctor is free software maintained independently. If it saves you time,
 you can [sponsor its development](https://github.com/sponsors/heymaikol). Your
 support helps fund the time spent on cross-platform testing, packaging, releases,
