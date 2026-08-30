@@ -651,22 +651,9 @@ func findHTTPTestTarget(s *Scenario, tests []Test) (httpTarget, bool) {
 }
 
 func dnsAddress(s *Scenario, name string) string {
-	key := dnsKey(name)
-	for _, node := range s.Topology.Nodes {
-		for _, service := range node.Services {
-			if service.Type != ServiceDNS {
-				continue
-			}
-			for zoneName, address := range service.Zone {
-				if dnsKey(zoneName) == key {
-					return address
-				}
-			}
-			for _, record := range service.Records {
-				if dnsKey(record.Name) == key && strings.Contains(record.Address, ".") {
-					return record.Address
-				}
-			}
+	for _, address := range scenarioTargetAddresses(s, &diagnostic.Target{Host: name}) {
+		if parsed, err := netip.ParseAddr(address); err == nil && parsed.Is4() {
+			return address
 		}
 	}
 	return ""

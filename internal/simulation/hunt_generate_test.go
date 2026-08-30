@@ -245,6 +245,26 @@ func TestPMTUBlackholeGeneratorNarrowsTheHopToTheBriefedTarget(t *testing.T) {
 	}
 }
 
+func TestBriefedHTTPTargetUsesCanonicalDNSAddress(t *testing.T) {
+	scenario := &Scenario{
+		Topology: Topology{Nodes: []Node{
+			{Name: "resolver", Services: []Service{{
+				Type:    ServiceDNS,
+				Zone:    map[string]string{"target.test": "2001:db8::20"},
+				Records: []DNSRecord{{Name: "target.test", Address: "192.0.2.20"}},
+			}}},
+			{Name: "ipv6-target", Interfaces: []Interface{{IPv6: "2001:db8::20/64"}}, Services: []Service{{Type: ServiceHTTP, Port: 80}}},
+			{Name: "ipv4-target", Interfaces: []Interface{{IPv4: "192.0.2.20/24"}}, Services: []Service{{Type: ServiceHTTP, Port: 80}}},
+		}},
+		Tests: []Test{{Name: "target", Type: TestNetdoc, Target: "target.test:80"}},
+	}
+
+	target, ok := briefedHTTPTarget(scenario)
+	if !ok || target.node != "ipv4-target" || briefedTargetEndpoint(scenario) != "192.0.2.20:80" {
+		t.Fatalf("target = %+v, endpoint = %q; want ipv4-target at 192.0.2.20:80", target, briefedTargetEndpoint(scenario))
+	}
+}
+
 // A black hole is a transit condition on the way to the briefed endpoint, so a
 // base with no forwarding hop in between must not host one. Neither must a hop
 // carrying IPv6: minIPv6MTU is the floor IPv6 requires of a link, so such a hop
