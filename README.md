@@ -143,7 +143,15 @@ sudo apk add --allow-untrusted ./network-doctor_X.Y.Z_linux_amd64.apk    # Alpin
 ```
 
 These standalone packages do not add an update repository, so `dnf`/`apt`
-will not pull the next version for you.
+will not pull the next version for you. After downloading a newer Debian
+package, install it over the existing version and confirm the upgrade:
+
+```sh
+sudo apt install ./network-doctor_X.Y.Z_linux_amd64.deb
+netdoc --version
+netdoc-sim version
+dpkg-query -W network-doctor
+```
 
 Every Linux package (COPR, `.deb`, `.rpm`, `.apk`) installs two commands at the same version: `netdoc`, and `netdoc-sim`, the simulator behind [Challenge Mode](#think-you-can-beat-network-doctor). Confirm both:
 
