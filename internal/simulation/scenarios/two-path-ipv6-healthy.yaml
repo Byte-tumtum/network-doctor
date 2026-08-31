@@ -58,10 +58,10 @@ topology:
 tests:
   # The first forwarded IPv6 SYN is held behind cold NDP and retransmitted
   # after Network Doctor's latency warning threshold. DNS takes the explicit
-  # alternate route, warming both real paths without a sleep or synthetic state.
+  # alternate route with its route-selected source, warming that path in both
+  # directions without a sleep or synthetic state.
   - name: warm both IPv6 forwarding paths
     node: client
-    source_segment: preferred-lan
     expect:
       verdict: degraded
       checks:

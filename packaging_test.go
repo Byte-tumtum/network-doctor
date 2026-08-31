@@ -271,7 +271,7 @@ func TestREADMEPresentsCOPRAsFedoraRawhideOnly(t *testing.T) {
 	if rawhideAt < 0 {
 		t.Fatal("the COPR command must identify Fedora Rawhide as its installation path")
 	}
-	if !(stableAt < stableInstallAt && stableInstallAt < rawhideAt && rawhideAt < coprEnableAt) {
+	if stableAt >= stableInstallAt || stableInstallAt >= rawhideAt || rawhideAt >= coprEnableAt {
 		t.Error("Fedora stable's release RPM must appear before the Rawhide-only COPR command")
 	}
 }

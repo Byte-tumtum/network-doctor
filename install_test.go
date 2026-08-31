@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,6 +20,9 @@ import (
 
 func TestCmdNetdocBuildsTheSameCLI(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "netdoc")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	// #nosec G204 -- bin is this test's own temporary output path.
 	build := exec.Command("go", "build", "-o", bin, "./cmd/netdoc")
 	if out, err := build.CombinedOutput(); err != nil {
