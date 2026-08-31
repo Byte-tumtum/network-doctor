@@ -160,6 +160,31 @@ func TestSupportPseudonymsPreserveRelationshipsAndRoundTrip(t *testing.T) {
 	}
 }
 
+// Resanitizing a support artifact is not part of the support-v1 contract. This
+// fixture demonstrates why callers must not use fixed-point equality to prove
+// that an artifact was produced by SanitizeForSupport.
+func TestSupportResanitizationChangesComprehensiveFixture(t *testing.T) {
+	once := SanitizeForSupport(supportFixture())
+	if once.Redaction == nil || !once.Redaction.Sanitized || once.Redaction.Policy != SupportRedactionPolicy {
+		t.Fatalf("first pass has invalid redaction metadata: %+v", once.Redaction)
+	}
+	twice := SanitizeForSupport(once)
+	onceData, err := Encode(once)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twiceData, err := Encode(twice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(once, twice) || string(onceData) == string(twiceData) {
+		t.Fatal("fixture no longer demonstrates non-idempotent support redaction; reevaluate artifact validation")
+	}
+	t.Logf("private address changed from %s to %s; route prefix changed from %s to %s",
+		once.Checks[0].Observed.SelectedIP, twice.Checks[0].Observed.SelectedIP,
+		once.Checks[0].Observed.Routes[0].Prefix, twice.Checks[0].Observed.Routes[0].Prefix)
+}
+
 func TestSupportIncidentUsesOneMappingAndMarksNestedSnapshots(t *testing.T) {
 	onset := supportFixture()
 	onset.CreatedAt = "2026-08-25T17:00:00Z"

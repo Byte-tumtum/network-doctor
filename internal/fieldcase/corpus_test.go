@@ -66,20 +66,18 @@ func TestValidateCorpus(t *testing.T) {
 			path := filepath.Join(dir, SnapshotFilename)
 			write(t, path, bytes.Replace(read(t, path), []byte(snapshot.SupportRedactionPolicy), []byte("support-v2"), 1))
 		}, "invalid redaction metadata"},
-		{"forged redaction marker", func(t *testing.T, _, dir string) {
-			s := baseSnapshot()
-			s.Target = &snapshot.Target{Raw: "private.internal", Host: "private.internal", Port: 443, Protocol: "tls+http"}
-			s.Redaction = &snapshot.Redaction{Sanitized: true, Policy: snapshot.SupportRedactionPolicy}
-			writeSnapshot(t, dir, s)
-		}, "changes when support redaction is reapplied"},
 		{"noncanonical snapshot", func(t *testing.T, _, dir string) {
 			path := filepath.Join(dir, SnapshotFilename)
 			write(t, path, append(read(t, path), '\n'))
 		}, "not the canonical"},
-		{"unknown snapshot field", func(t *testing.T, _, dir string) {
+		{"compatible additive snapshot field is noncanonical", func(t *testing.T, _, dir string) {
 			path := filepath.Join(dir, SnapshotFilename)
 			data := read(t, path)
-			write(t, path, bytes.Replace(data, []byte("{\n"), []byte("{\n  \"private_future_field\": \"value\",\n"), 1))
+			data = bytes.Replace(data, []byte("{\n"), []byte("{\n  \"future_optional_field\": \"value\",\n"), 1)
+			if _, err := snapshot.Decode(data); err != nil {
+				t.Fatalf("snapshot.Decode rejected a compatible additive field: %v", err)
+			}
+			write(t, path, data)
 		}, "not the canonical"},
 		{"invalid assessment", editCase(func(c *Case) { c.NetworkDoctor.Assessment = "yes" }), "invalid diagnosis assessment"},
 		{"invalid category", editCase(func(c *Case) { c.Environment.Categories = []string{"hotel"} }), "invalid environment category"},
@@ -129,6 +127,20 @@ func TestValidateCorpus(t *testing.T) {
 				t.Errorf("error does not name corpus or case path: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateCorpusTrustsDeclaredSupportRedaction(t *testing.T) {
+	root, dir := validCorpus(t)
+	s := baseSnapshot()
+	s.Target = &snapshot.Target{
+		Raw: "private.internal", Host: "private.internal", Port: 443, Protocol: "tls+http",
+	}
+	s.Redaction = &snapshot.Redaction{Sanitized: true, Policy: snapshot.SupportRedactionPolicy}
+	writeSnapshot(t, dir, s)
+
+	if err := ValidateCorpus(root); err != nil {
+		t.Fatalf("ValidateCorpus rejected declared support redaction: %v", err)
 	}
 }
 

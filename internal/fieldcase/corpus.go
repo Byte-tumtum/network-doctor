@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -285,9 +284,6 @@ func validateSnapshot(path string, fieldCase Case) error {
 	}
 	if s.Tool.OS != fieldCase.Environment.Platform {
 		return fmt.Errorf("%s: snapshot platform %q does not match case platform %q", path, s.Tool.OS, fieldCase.Environment.Platform)
-	}
-	if !reflect.DeepEqual(snapshot.SanitizeForSupport(s), s) {
-		return fmt.Errorf("%s: snapshot changes when support redaction is reapplied", path)
 	}
 	canonical, err := snapshot.Encode(s)
 	if err != nil {

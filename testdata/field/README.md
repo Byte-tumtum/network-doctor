@@ -19,8 +19,10 @@ testdata/field/
 ```
 
 Use a lowercase, hyphen-separated ID of at most 80 characters. A date plus a
-short description is recommended. The directory and `case.json` ID must match.
-The `.ndoc` must be the reviewed output of `netdoc --support`, not `--save`, and
+short, broad condition is recommended. Never put an organization, reporter,
+hostname, SSID, address, or other network identifier in an ID. The directory
+and `case.json` ID must match, and a committed ID must not be renamed. The
+`.ndoc` must be the reviewed output of `netdoc --support`, not `--save`, and
 must remain named `snapshot.ndoc`.
 
 `case.json` uses schema `netdoc.field-case.v1`:
@@ -60,14 +62,17 @@ must remain named `snapshot.ndoc`.
 Environment categories are `vpn`, `corporate`, `campus`, `captive_portal`,
 `public_wifi`, `ipv6_first`, `ipv6_only`, `dns64_nat64`, `split_dns`, `proxy`,
 `custom_dns`, and `other`. Add `environment.details` when using `other`.
+Use `other` for a class that does not yet merit a recurring controlled tag.
 Platforms use Go names: `linux`, `darwin` for macOS, and `windows`.
 
 Assessments are `correct`, `mostly_correct`, `incorrect`, and `uncertain`.
 Verification methods are `controlled_change`, `independent_tool`,
 `configuration_review`, `packet_capture`, `successful_remediation`,
 `provider_confirmation`, and `other`. Verification details must say what was
-observed or checked. Ground truth must not copy `snapshot.diagnosis`; that
-object remains Network Doctor's original conclusion.
+observed or checked; use a separate item for each independent method or
+evidence source. Ground truth must not copy `snapshot.diagnosis` or use its
+current verdict or finding IDs as truth; that object remains Network Doctor's
+original conclusion.
 
 ## Adding a verified case
 
@@ -77,6 +82,7 @@ object remains Network Doctor's original conclusion.
    artifact. Record the producing version and broad, safe environment details.
 3. Review both files manually. Remove private hostnames, addresses, SSIDs,
    usernames, paths, credentials, issue text, and confidential network details.
+   Every free-text field in `case.json` needs the same review as the snapshot.
    Support redaction reduces risk but cannot prove an arbitrary string is safe.
 4. Write `case.json`, keeping ground truth concise and naming how it was
    verified. Assess the diagnosis already stored in the snapshot.
@@ -86,9 +92,15 @@ object remains Network Doctor's original conclusion.
 Validation discovers case directories, rejects unknown metadata fields and
 unexpected files, requires real-network provenance, checks controlled
 vocabularies and metadata consistency, decodes the current `.ndoc` schema,
-requires the `support-v1` redaction marker, reapplies support redaction, and
-requires canonical snapshot bytes. These checks catch structural and known
-redaction mistakes. Human privacy review remains mandatory.
+requires the `support-v1` redaction marker, and requires bytes reproducible by
+the current snapshot encoder. A compatible additive v1 field remains valid
+`.ndoc`, but is not a canonical repository artifact until this checkout's
+`internal/snapshot` package knows and preserves it.
+
+Corpus validation verifies that the artifact declares the supported redaction
+policy and is structurally valid. It cannot cryptographically or
+retrospectively prove that arbitrary input was actually passed through the
+sanitizer. Human privacy review remains mandatory.
 
 Future offline re-diagnosis may read this evidence and compare new conclusions
 with the separate ground truth. Reconstructing probe results or rerunning the
