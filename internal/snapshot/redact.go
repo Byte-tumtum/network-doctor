@@ -369,7 +369,7 @@ func (r *redactor) check(c Check) Check {
 func (r *redactor) finding(f Finding) Finding {
 	out := Finding{
 		ID: f.ID, Verdict: f.Verdict, Summary: r.text(f.Summary), Focus: f.Focus,
-		Evidence: append([]string(nil), f.Evidence...),
+		Confidence: f.Confidence, Evidence: append([]string(nil), f.Evidence...),
 	}
 	for _, evidence := range f.CausalEvidence {
 		out.CausalEvidence = append(out.CausalEvidence, r.causalEvidence(evidence))

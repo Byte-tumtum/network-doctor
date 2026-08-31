@@ -51,6 +51,11 @@ const (
 	VerificationSuccessfulFix       = "successful_remediation"
 	VerificationProviderConfirmed   = "provider_confirmation"
 	VerificationOther               = "other"
+
+	ConfidenceHigh                 = "high"
+	ConfidenceMedium               = "medium"
+	ConfidenceLow                  = "low"
+	ConfidenceInsufficientEvidence = "insufficient_evidence"
 )
 
 type Case struct {
@@ -85,10 +90,25 @@ type GroundTruth struct {
 // Expected is the current machine-readable behavior independently verified
 // ground truth requires. Findings is exact; NotFindings names especially
 // important false positives for clearer failures.
+//
+// Confidence is optional and deliberately partial. A case asserts a level only
+// where the reviewer can defend why that evidence warrants it; annotating every
+// fixture with whatever the engine happens to say today would record the
+// implementation rather than a judgment, and later calibration would then be
+// measuring the corpus against itself.
 type Expected struct {
-	Verdict     string   `json:"verdict"`
-	Findings    []string `json:"findings"`
-	NotFindings []string `json:"not_findings,omitempty"`
+	Verdict     string               `json:"verdict"`
+	Findings    []string             `json:"findings"`
+	NotFindings []string             `json:"not_findings,omitempty"`
+	Confidence  []ExpectedConfidence `json:"confidence,omitempty"`
+}
+
+// ExpectedConfidence is the confidence one named finding must be given. Finding
+// has to appear in Expected.Findings, so a case cannot assert a strength for a
+// conclusion it does not also require.
+type ExpectedConfidence struct {
+	Finding string `json:"finding"`
+	Level   string `json:"level"`
 }
 
 type Verification struct {
@@ -119,8 +139,12 @@ var (
 		VerificationSuccessfulFix, VerificationProviderConfirmed,
 		VerificationOther,
 	)
-	platforms = set("linux", "darwin", "windows")
-	verdicts  = set("ok", "degraded", "dns", "network", "service", "incomplete")
+	platforms   = set("linux", "darwin", "windows")
+	verdicts    = set("ok", "degraded", "dns", "network", "service", "incomplete")
+	confidences = set(
+		ConfidenceHigh, ConfidenceMedium,
+		ConfidenceLow, ConfidenceInsufficientEvidence,
+	)
 )
 
 // ValidateCorpus discovers and validates every case directory under root.
@@ -273,6 +297,19 @@ func (c Case) validate() error {
 			}
 			findings[id] = list.name
 		}
+	}
+	asserted := map[string]bool{}
+	for i, expected := range c.Expected.Confidence {
+		if !confidences[expected.Level] {
+			return fmt.Errorf("expected confidence[%d] has invalid level %q", i, expected.Level)
+		}
+		if findings[expected.Finding] != "findings" {
+			return fmt.Errorf("expected confidence[%d] names %q, which is not an expected finding", i, expected.Finding)
+		}
+		if asserted[expected.Finding] {
+			return fmt.Errorf("expected confidence names %q twice", expected.Finding)
+		}
+		asserted[expected.Finding] = true
 	}
 	if c.Provenance.Origin != OriginRealNetwork && c.Provenance.Origin != OriginSynthetic {
 		return fmt.Errorf("invalid provenance origin %q", c.Provenance.Origin)

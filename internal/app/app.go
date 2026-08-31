@@ -1655,7 +1655,7 @@ func buildReport(t *diagnostic.Target, probes []diagnostic.Probe, results map[di
 	d := diagnostic.Interpret(t, order, results)
 	rep.Summary, rep.Verdict = d.Summary, d.Verdict
 	for i, f := range d.Findings {
-		finding := report.Finding{ID: string(f.ID), Focus: string(f.Focus)}
+		finding := report.Finding{ID: string(f.ID), Focus: string(f.Focus), Confidence: string(f.Confidence)}
 		for _, id := range f.EvidenceRows() {
 			finding.Evidence = append(finding.Evidence, string(id))
 		}

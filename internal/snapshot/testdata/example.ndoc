@@ -156,6 +156,7 @@
         "verdict": "network",
         "summary": "example.com resolves but neither it nor the general internet is reachable: local egress problem.",
         "focus": "internet_tcp",
+        "confidence": "medium",
         "evidence": [
           "internet_tcp",
           "target_tcp",

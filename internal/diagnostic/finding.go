@@ -212,6 +212,12 @@ type DiagnosisFinding struct {
 	// Counterfactual is present when this conclusion compares controlled
 	// alternatives observed during the same run.
 	Counterfactual *Counterfactual
+	// Confidence is how strongly the evidence above supports this finding as an
+	// explanation. It is descriptive metadata: nothing in the engine reads it
+	// back, so it can never decide an identity, a verdict, a focused row, or a
+	// remedy. Set once, by confidence.go, after every stage that can add
+	// evidence has run. Empty only on a finding built outside that pass.
+	Confidence Confidence
 }
 
 // EvidenceRows is the compatibility projection used by the original JSON and

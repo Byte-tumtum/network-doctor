@@ -196,6 +196,50 @@ func TestCausalEvidenceValidation(t *testing.T) {
 	}
 }
 
+// Confidence is a closed vocabulary, so it round-trips exactly and a value
+// from outside the set is refused in both directions like every other rule
+// here: reading an unknown strength would be reading a claim this build cannot
+// interpret. Absence stays absent, because a producer that assessed nothing is
+// not the same as one that assessed a weak conclusion.
+func TestConfidenceRoundTripsAndRejectsUnknownValues(t *testing.T) {
+	base := func(confidence string) Snapshot {
+		return Snapshot{
+			Checks: []Check{{ID: "dns", Status: StatusFail, Ran: true, DurationMs: 1}},
+			Diagnosis: Diagnosis{Findings: []Finding{{
+				ID: "dns_failure", Verdict: "dns", Summary: "DNS is failing.", Confidence: confidence,
+			}}},
+		}
+	}
+	for _, level := range []string{"", ConfidenceHigh, ConfidenceMedium, ConfidenceLow, ConfidenceInsufficientEvidence} {
+		data, err := Encode(base(level))
+		if err != nil {
+			t.Fatalf("Encode %q: %v", level, err)
+		}
+		if level == "" && strings.Contains(string(data), "confidence") {
+			t.Errorf("an unassessed finding published a confidence key:\n%s", data)
+		}
+		decoded, err := Decode(data)
+		if err != nil {
+			t.Fatalf("Decode %q: %v", level, err)
+		}
+		if got := decoded.Diagnosis.Findings[0].Confidence; got != level {
+			t.Errorf("confidence round-tripped as %q, want %q", got, level)
+		}
+	}
+
+	if _, err := Encode(base("very_high")); err == nil || !strings.Contains(err.Error(), "unknown confidence") {
+		t.Errorf("Encode error = %v, want it to refuse an unknown confidence", err)
+	}
+	valid, err := Encode(base(ConfidenceHigh))
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := strings.Replace(string(valid), `"confidence": "high"`, `"confidence": "certain"`, 1)
+	if _, err := Decode([]byte(future)); err == nil || !strings.Contains(err.Error(), "unknown confidence") {
+		t.Errorf("Decode error = %v, want it to refuse an unknown confidence", err)
+	}
+}
+
 // Encode stamps the schema itself, so a caller cannot publish a file that
 // claims to be something else, or forget to claim anything.
 func TestEncodeStampsSchema(t *testing.T) {

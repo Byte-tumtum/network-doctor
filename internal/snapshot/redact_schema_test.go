@@ -53,6 +53,7 @@ var retainedBySupportPolicy = map[string]bool{
 	".Checks[0].Observed.Routes[0].Tunnel":                                          true,
 	".Diagnosis.Verdict":                                                            true,
 	".Diagnosis.Findings[0].Verdict":                                                true,
+	".Diagnosis.Findings[0].Confidence":                                             true,
 	".Diagnosis.Findings[0].CausalEvidence[0].Kind":                                 true,
 	".Diagnosis.Findings[0].CausalEvidence[0].Check":                                true,
 	".Diagnosis.Findings[0].CausalEvidence[0].Observation":                          true,

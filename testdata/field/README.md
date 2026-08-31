@@ -65,7 +65,8 @@ not be renamed. The `.ndoc` remains named `snapshot.ndoc`.
   "expected": {
     "verdict": "degraded",
     "findings": ["dns_disagreement"],
-    "not_findings": ["dns_failure", "offline"]
+    "not_findings": ["dns_failure", "offline"],
+    "confidence": [{"finding": "dns_disagreement", "level": "medium"}]
   },
   "provenance": {
     "origin": "real_network",
@@ -78,15 +79,28 @@ not be renamed. The `.ndoc` remains named `snapshot.ndoc`.
 
 `expected.findings` is the exact finding set the current engine must produce.
 `expected.not_findings` names especially important false positives and improves
-failure messages. Ground truth means the real condition was established
+failure messages. `expected.confidence` is optional and deliberately partial: it
+asserts the [confidence](../../docs/reference.md#diagnosis-confidence) a named
+finding must be given, and each entry has to name a finding the case already
+requires. Levels are `high`, `medium`, `low`, and `insufficient_evidence`.
+
+Add one only where you can say why that evidence warrants that level, and write
+the reason in `notes`. Annotating every case with whatever the engine says today
+would record the implementation rather than a judgment, and later calibration
+would then be measuring the corpus against itself. A case with no entry asserts
+nothing about confidence, which is the honest default while the corpus is small:
+the categories are a stated policy, not yet a measured hit rate. Ground truth means the real condition was established
 independently of Network Doctor through controlled change, another tool,
 configuration review, packet capture, successful remediation, provider
 confirmation, or another documented method. It is not whatever the original
 Network Doctor run happened to say.
 
-The `snapshot.diagnosis` object is historical output. Replay ignores it and
-computes a new diagnosis from `target` and typed `checks` observations. Never
-copy its prose into machine-readable inputs or use it as the expected result.
+The `snapshot.diagnosis` object is historical output, and that includes the
+`confidence` recorded on each of its findings. Replay ignores all of it and
+computes a new diagnosis, confidence included, from `target` and typed `checks`
+observations. Never copy its prose into machine-readable inputs or use it as the
+expected result: the stored assessment is what the producing version concluded,
+and the point of replay is to judge the same evidence under today's rules.
 
 The snapshot schema stays `netdoc.snapshot.v1`: replay state added to v1 is
 optional, and absence is a state rather than a gap. An absent `cause_family`

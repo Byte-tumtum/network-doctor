@@ -169,6 +169,13 @@ func TestBuildSnapshotShape(t *testing.T) {
 			t.Errorf("causal evidence has no snapshot check provenance: %+v", evidence)
 		}
 	}
+	// The producing version's own assessment travels with the finding, so a
+	// later reader can compare what this build concluded against what the build
+	// replaying it concludes.
+	live := Interpret(target, probeIDs(probes), results)
+	if got, want := s.Diagnosis.Findings[0].Confidence, string(live.Findings[0].Confidence); got != want || got == "" {
+		t.Errorf("finding confidence = %q, want %q", got, want)
+	}
 	// Probe order is the snapshot's order, so two runs of the same graph line up
 	// row for row without sorting.
 	if len(s.Checks) != len(probes) {
@@ -208,6 +215,9 @@ func TestBuildSnapshotCausalEvidenceRoundTrip(t *testing.T) {
 	got, err := snapshot.Decode(data)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, wanted := got.Diagnosis.Findings[0].Confidence, want.Diagnosis.Findings[0].Confidence; got != wanted {
+		t.Errorf("confidence round-tripped as %q, want %q", got, wanted)
 	}
 	wantEvidence := want.Diagnosis.Findings[0].CausalEvidence
 	gotEvidence := got.Diagnosis.Findings[0].CausalEvidence
@@ -583,4 +593,14 @@ func TestBuildSnapshotOmitsRoutesWhenThePlatformAnsweredNothing(t *testing.T) {
 	if strings.Contains(string(data), "routes") {
 		t.Errorf("a run with no route decisions wrote a routes key:\n%s", data)
 	}
+}
+
+// probeIDs is the executed graph's order, which is what the interpretation pass
+// takes and what the snapshot records.
+func probeIDs(probes []Probe) []ProbeID {
+	order := make([]ProbeID, len(probes))
+	for i, p := range probes {
+		order[i] = p.ID
+	}
+	return order
 }

@@ -1163,21 +1163,24 @@ func TestReportJSONContract(t *testing.T) {
 		{
 			// Findings serialize between failed_stage and ok, and an empty
 			// evidence list stays absent rather than becoming []. Typed causal
-			// evidence is additive beside the original row-id projection.
+			// evidence is additive beside the original row-id projection, and
+			// so is confidence, which sits after focus and stays absent on a
+			// finding that carries no assessment.
 			name: "findings",
 			rep: report.Report{
 				Checks:  []report.Check{{}},
 				Summary: "cert expired",
 				Verdict: "service",
 				Findings: []report.Finding{{
-					ID: "tls_certificate_expired", Focus: "tls", Evidence: []string{"tls", "target_tcp"},
+					ID: "tls_certificate_expired", Focus: "tls", Confidence: "high",
+					Evidence: []string{"tls", "target_tcp"},
 					CausalEvidence: []report.CausalEvidence{
 						{Kind: "support", Check: "tls", Observation: "cause"},
 						{Kind: "ruled_out", Check: "target_tcp", Observation: "status_pass", Candidate: "tls_tcp_unreachable"},
 					},
 				}, {ID: "quic_unavailable"}},
 			},
-			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"cert expired","verdict":"service","findings":[{"id":"tls_certificate_expired","focus":"tls","evidence":["tls","target_tcp"],"causal_evidence":[{"kind":"support","check":"tls","observation":"cause"},{"kind":"ruled_out","check":"target_tcp","observation":"status_pass","candidate":"tls_tcp_unreachable"}]},{"id":"quic_unavailable"}],"ok":false}`,
+			want: `{"version":"","target":null,"checks":[{"id":"","name":"","status":"","ms":0,"detail":""}],"summary":"cert expired","verdict":"service","findings":[{"id":"tls_certificate_expired","focus":"tls","confidence":"high","evidence":["tls","target_tcp"],"causal_evidence":[{"kind":"support","check":"tls","observation":"cause"},{"kind":"ruled_out","check":"target_tcp","observation":"status_pass","candidate":"tls_tcp_unreachable"}]},{"id":"quic_unavailable"}],"ok":false}`,
 		},
 		{
 			// Remediation is additive: it serializes inside its finding, after
@@ -1385,6 +1388,12 @@ func TestBuildReportFindingsComeFromTheDiagnosis(t *testing.T) {
 		got := rep.Findings[i]
 		if got.ID != string(f.ID) || got.Focus != string(f.Focus) {
 			t.Errorf("finding %d = %+v, want id %q focus %q", i, got, f.ID, f.Focus)
+		}
+		// The report publishes the interpretation's own assessment rather than
+		// deciding one here, so a rule change reaches automation and the app
+		// together.
+		if got.Confidence != string(f.Confidence) || got.Confidence == "" {
+			t.Errorf("finding %d confidence = %q, want %q", i, got.Confidence, f.Confidence)
 		}
 		rows := f.EvidenceRows()
 		if len(got.Evidence) != len(rows) {

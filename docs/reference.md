@@ -607,9 +607,9 @@ fields are unchanged.
 ## Drill-down tools
 
 Press `e` after a completed diagnosis to replace the focused Details panel with
-its causal explanation. The view separates observations supporting the answer,
-observations that rule out or contradict alternatives, and relevant checks that
-were not evaluated. Press `e` again for the ordinary row details. The full key
+its causal explanation. It opens with the [confidence](#diagnosis-confidence) in
+the answer, then separates observations supporting it, observations that rule
+out or contradict alternatives, and relevant checks that were not evaluated. Press `e` again for the ordinary row details. The full key
 cheatsheet behind `?` is generated from the same binding, so custom key presets
 cannot make dispatch and help disagree.
 
@@ -758,6 +758,7 @@ Every run is interpreted once, and that one interpretation produces the summary,
   {
     "id": "tls_certificate_expired",
     "focus": "tls",
+    "confidence": "high",
     "evidence": ["tls", "target_tcp"],
     "causal_evidence": [
       {"kind": "support", "check": "tls", "observation": "cause"},
@@ -779,7 +780,7 @@ Every run is interpreted once, and that one interpretation produces the summary,
 ]
 ```
 
-`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `evidence` remains the original compatibility list of observed check IDs, `focus` first. `causal_evidence` is its typed form and may also name a relevant check that was not evaluated. A `value` identifies a member of a structured observation, such as `ipv6` or one attempted address. `counterfactual` names the variable that changed and the observed alternatives, each of which references causal evidence already carried by the finding. `remediation` is what to do about the finding, described below.
+`id` is a stable identity to branch on, and never changes when the English sentence beside it is reworded. `focus` is the check id whose `detail` and `fix` belong to this finding, so the row's own hint stays on the row that wrote it rather than being restated here. `confidence` is how strongly the observations support this finding as an explanation, described in [Diagnosis confidence](#diagnosis-confidence). `evidence` remains the original compatibility list of observed check IDs, `focus` first. `causal_evidence` is its typed form and may also name a relevant check that was not evaluated. A `value` identifies a member of a structured observation, such as `ipv6` or one attempted address. `counterfactual` names the variable that changed and the observed alternatives, each of which references causal evidence already carried by the finding. `remediation` is what to do about the finding, described below.
 
 Each causal item has a `kind`, a check ID in `check`, and, when an observation
 exists, its typed identity in `observation`. The value itself remains on the
@@ -880,6 +881,62 @@ The array is omitted when the run reached no specific conclusion: everything pas
 The TLS identities are drawn from the same classification the `cause` field publishes, so a finding stays as precise as the handshake was. The sentence in `summary` is deliberately more hedged than the identity for the failures a client genuinely cannot tell apart, and `tls_handshake_failure` is what an unclassifiable handshake gets rather than a specific accusation.
 
 Nothing here claims a wrong default route, a missing subnet route, or an operator's intent, because no probe proves those. `id` values are added over time; treat an unrecognized one as "some specific problem" and fall back to `verdict`.
+
+### Diagnosis confidence
+
+Every finding carries a `confidence`: how strongly the run's observations
+support that finding **as an explanation of what is happening**, given the
+alternatives netdoc was able to evaluate.
+
+It is not a probability, and none of these words stands in for a number. It is
+also not the severity, not the `verdict`, not a check's status, not how bad the
+network is, and not a count of how many checks passed. Being certain a service
+is down is not the same as knowing why, and this field is about the why.
+
+| `confidence` | What it claims |
+|---|---|
+| `high` | A probe observed the specific condition that separates this conclusion from its alternatives, and nothing relevant is left open |
+| `medium` | The best explanation the run supports, with an ambiguity remaining: an inference no probe observed directly, an alternative weakened but not excluded, or an observation the run could not make |
+| `low` | A real basis for naming the failure, but the evidence identifies the rung rather than the cause, and several causes stay equally consistent with it |
+| `insufficient_evidence` | No causal claim is warranted at all. This is what an explicitly untested or unexplained run gets, and it is deliberately not high confidence in knowing nothing |
+
+Two things about a finding decide it. The first is what kind of claim the
+identity makes, which never varies between runs: `captive_portal` and
+`tcp_connection_refused` name conditions a probe can observe outright, while
+`probable_path_mtu_problem` is a correlation, `dns_failure` names a rung with
+several live causes, and `reachability_untested` says in its own name that the
+distinguishing observation was never made. The second is what this run's
+`causal_evidence` left standing. A `ruled_out` item excludes an alternative; a
+`contradiction` only weakens one, so a candidate that is contradicted and never
+ruled out is still a live explanation and keeps a finding off `high`. Presence
+is what counts, never quantity: a second ruled-out alternative buys nothing the
+first did not.
+
+A `not_evaluated` item is read by its `reason` rather than treated as a hole.
+`prerequisite_failed` and `not_applicable` describe checks that did not run
+*because* of the failure being diagnosed, so a TLS row skipped behind a dead
+resolver says nothing about the resolver and never lowers its confidence.
+`not_selected` and `incomplete` are the opposite: an observation that could
+have separated two explanations was simply not taken, and that caps the claim.
+
+Confidence is descriptive metadata. It is computed last, once counterfactual
+and route evidence have been attached, and nothing in the engine reads it back:
+it can never change which finding wins, the ordering, the verdict, the focused
+row, the remediation, or the exit code.
+
+It appears as `confidence` on each finding in `--json`, in the `diagnosis`
+block of a `.ndoc` snapshot (including `--support` artifacts, where it survives
+redaction because the vocabulary is closed), and in the TUI under `e`, above
+the evidence it qualifies. A snapshot written before the field existed has no
+`confidence`, which means the producer recorded no assessment rather than a
+weak one. New values are not added silently; the vocabulary is closed for this
+schema.
+
+The four categories are meant to be calibrated against the growing real-world
+[field corpus](https://github.com/heymaikol/network-doctor/tree/main/testdata/field),
+which can record an expected confidence beside its expected findings. Today
+that corpus is small, so the values are a stated policy rather than a measured
+one, and nothing here claims that `high` has an established hit rate yet.
 
 ### Remediation
 

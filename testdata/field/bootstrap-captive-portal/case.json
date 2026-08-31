@@ -28,11 +28,18 @@
     ],
     "not_findings": [
       "offline"
+    ],
+    "confidence": [
+      {
+        "finding": "captive_portal",
+        "level": "high"
+      }
     ]
   },
   "provenance": {
     "origin": "synthetic",
     "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
   },
-  "snapshot": "snapshot.ndoc"
+  "snapshot": "snapshot.ndoc",
+  "notes": "Confidence is asserted here because the interception is observed rather than inferred: the egress probe holds the portal redirect itself, and no competing explanation of that observation is left open."
 }

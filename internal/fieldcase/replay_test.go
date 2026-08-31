@@ -80,6 +80,21 @@ func compareExpected(fieldCase Case, actual diagnostic.Diagnosis) error {
 			problems = append(problems, "unexpected finding: "+id)
 		}
 	}
+	// Confidence is asserted only where the case chose to, so a missing
+	// expectation is silence rather than a pass. Validation has already tied
+	// each entry to a required finding, so a level with nothing to compare
+	// against means that finding is missing, which is reported above.
+	for _, expected := range fieldCase.Expected.Confidence {
+		for _, finding := range actual.Findings {
+			if string(finding.ID) != expected.Finding {
+				continue
+			}
+			if string(finding.Confidence) != expected.Level {
+				problems = append(problems, "finding "+expected.Finding+" confidence: expected "+
+					expected.Level+", actual "+string(finding.Confidence))
+			}
+		}
+	}
 	if len(problems) == 0 {
 		return nil
 	}

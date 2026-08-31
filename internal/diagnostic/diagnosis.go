@@ -75,6 +75,13 @@ func Interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 	// Route intelligence lands last, and only ever as evidence on a
 	// conclusion the branches above already reached.
 	attachRouteEvidence(&d, order, res)
+	// Confidence after all of it, because it is a claim about the strength of
+	// the evidence a finding carries and both stages above are still allowed to
+	// change what that is. It reads the finished finding and writes one field;
+	// nothing below it reads that field back.
+	for i := range d.Findings {
+		d.Findings[i].Confidence = confidenceFor(d.Findings[i])
+	}
 	// The row a caller should point at, which is the row the diagnosis names
 	// when it names one and otherwise the first failure. A verdict about no
 	// single row still leaves a reader wanting somewhere to look.

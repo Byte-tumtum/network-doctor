@@ -90,9 +90,11 @@ func TestReplaySnapshotIgnoresHistoricalDiagnosisAndProse(t *testing.T) {
 			{ID: string(ProbeDNS), Status: snapshot.StatusPass},
 		},
 		Diagnosis: snapshot.Diagnosis{
-			Verdict:  VerdictService,
-			Summary:  "Historical output that must not be replayed.",
-			Findings: []snapshot.Finding{{ID: string(DiagnosisOffline), Verdict: VerdictNetwork}},
+			Verdict: VerdictService,
+			Summary: "Historical output that must not be replayed.",
+			Findings: []snapshot.Finding{{
+				ID: string(DiagnosisOffline), Verdict: VerdictNetwork, Confidence: snapshot.ConfidenceHigh,
+			}},
 		},
 	}
 	got, err := ReplaySnapshot(artifact)
@@ -101,6 +103,41 @@ func TestReplaySnapshotIgnoresHistoricalDiagnosisAndProse(t *testing.T) {
 	}
 	if got.Verdict != VerdictOK || len(got.Findings) != 0 {
 		t.Fatalf("replay used stored diagnosis or prose: %+v", got)
+	}
+}
+
+// The stored confidence is the producing version's assessment, so replay has to
+// recompute it from the observations like every other diagnostic field. That is
+// the property future calibration work depends on: an artifact captured under
+// one policy has to be re-judged under the policy being measured, not read back
+// as its own answer.
+func TestReplayRecomputesConfidenceRatherThanReadingIt(t *testing.T) {
+	artifact := snapshot.Snapshot{
+		Schema: snapshot.Schema,
+		Checks: []snapshot.Check{
+			{ID: string(ProbeIface), Status: snapshot.StatusPass},
+			{ID: string(ProbeInternet), Status: snapshot.StatusFail},
+			{ID: string(ProbeDNS), Status: snapshot.StatusFail},
+		},
+		Diagnosis: snapshot.Diagnosis{
+			Verdict: VerdictNetwork,
+			Summary: "Offline: neither direct egress nor DNS is working.",
+			Findings: []snapshot.Finding{{
+				ID: string(DiagnosisOffline), Verdict: VerdictNetwork, Focus: string(ProbeInternet),
+				Confidence: snapshot.ConfidenceHigh,
+			}},
+		},
+	}
+	got, err := ReplaySnapshot(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].ID != DiagnosisOffline {
+		t.Fatalf("replayed diagnosis = %+v", got)
+	}
+	if got.Findings[0].Confidence != ConfidenceMedium {
+		t.Errorf("confidence = %q, want the recomputed %q rather than the stored high",
+			got.Findings[0].Confidence, ConfidenceMedium)
 	}
 }
 
@@ -168,6 +205,7 @@ func assertDiagnosisSemantics(t *testing.T, got, want Diagnosis) {
 	for i := range want.Findings {
 		gotFinding, wantFinding := got.Findings[i], want.Findings[i]
 		if gotFinding.ID != wantFinding.ID || gotFinding.Verdict != wantFinding.Verdict || gotFinding.Focus != wantFinding.Focus ||
+			gotFinding.Confidence != wantFinding.Confidence ||
 			!reflect.DeepEqual(gotFinding.Evidence, wantFinding.Evidence) ||
 			!reflect.DeepEqual(gotFinding.Counterfactual, wantFinding.Counterfactual) {
 			t.Errorf("finding %d machine semantics =\n%+v\nwant\n%+v", i, gotFinding, wantFinding)

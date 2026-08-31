@@ -104,6 +104,23 @@ func TestValidateCorpus(t *testing.T) {
 			writeCaseMetadata(t, renamed, fieldCase)
 		}, "must declare synthetic"},
 		{"invalid expected verdict", editCase(func(c *Case) { c.Expected.Verdict = "broken" }), "invalid expected verdict"},
+		{"invalid expected confidence", editCase(func(c *Case) {
+			c.Expected.Findings = []string{"dns_failure"}
+			c.Expected.Confidence = []ExpectedConfidence{{Finding: "dns_failure", Level: "very_high"}}
+		}), "invalid level"},
+		{"confidence for an unexpected finding", editCase(func(c *Case) {
+			c.Expected.Confidence = []ExpectedConfidence{{Finding: "dns_failure", Level: ConfidenceHigh}}
+		}), "not an expected finding"},
+		{"confidence for a forbidden finding", editCase(func(c *Case) {
+			c.Expected.Confidence = []ExpectedConfidence{{Finding: "offline", Level: ConfidenceHigh}}
+		}), "not an expected finding"},
+		{"repeated confidence", editCase(func(c *Case) {
+			c.Expected.Findings = []string{"dns_failure"}
+			c.Expected.Confidence = []ExpectedConfidence{
+				{Finding: "dns_failure", Level: ConfidenceHigh},
+				{Finding: "dns_failure", Level: ConfidenceLow},
+			}
+		}), "twice"},
 		{"empty expected finding", editCase(func(c *Case) { c.Expected.Findings = []string{""} }), "empty finding ID"},
 		{"overlapping expected finding", editCase(func(c *Case) {
 			c.Expected.Findings = []string{"dns_failure"}

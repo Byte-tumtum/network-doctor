@@ -105,6 +105,18 @@ const (
 	NotEvaluatedIncomplete    = "incomplete"
 )
 
+// The diagnosis-confidence vocabulary, part of the v1 file contract for the
+// same reason the causal-evidence words are: a reader decides what a finding
+// claims by comparing against these, never by trusting a Go zero value. None of
+// them is a probability, and the set is closed, so a value outside it is a file
+// this build cannot read rather than one to guess at.
+const (
+	ConfidenceHigh                 = "high"
+	ConfidenceMedium               = "medium"
+	ConfidenceLow                  = "low"
+	ConfidenceInsufficientEvidence = "insufficient_evidence"
+)
+
 // UnsupportedSchemaError is what Decode returns for a file whose schema is not
 // this one, including a future version. It carries the schema it found so a
 // caller can say what it was handed rather than "not a snapshot".
@@ -477,11 +489,18 @@ type Diagnosis struct {
 // structured next action is regenerable from ID plus tool.os, so keeping a
 // copy here would be a second catalogue to keep in step.
 type Finding struct {
-	ID       string   `json:"id"`
-	Verdict  string   `json:"verdict"`
-	Summary  string   `json:"summary"`
-	Focus    string   `json:"focus,omitempty"`
-	Evidence []string `json:"evidence,omitempty"`
+	ID      string `json:"id"`
+	Verdict string `json:"verdict"`
+	Summary string `json:"summary"`
+	Focus   string `json:"focus,omitempty"`
+	// Confidence is how strongly the run's observations supported this finding
+	// as an explanation, in the vocabulary below. It is the producing version's
+	// assessment, recorded like the rest of the interpretation; a reader that
+	// wants this build's answer replays the checks. Optional, because a
+	// snapshot written before the field existed recorded no such assessment,
+	// and absence means exactly that rather than a weak one.
+	Confidence string   `json:"confidence,omitempty"`
+	Evidence   []string `json:"evidence,omitempty"`
 	// CausalEvidence preserves the interpretation made during the original
 	// run. It is optional so pre-evidence v1 snapshots remain valid and load
 	// without inventing relationships they never recorded.
@@ -683,6 +702,9 @@ func validate(s Snapshot) error {
 		checks[c.ID] = c
 	}
 	for _, finding := range s.Diagnosis.Findings {
+		if !validConfidence(finding.Confidence) {
+			return fmt.Errorf("snapshot finding %q has unknown confidence %q", finding.ID, finding.Confidence)
+		}
 		seen := make(map[CausalEvidence]bool, len(finding.CausalEvidence))
 		for _, evidence := range finding.CausalEvidence {
 			if evidence.Check == "" {
@@ -820,6 +842,19 @@ func parseIncidentTime(name, value string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("snapshot incident %s time %q is not RFC 3339 UTC", name, value)
 	}
 	return at, nil
+}
+
+// validConfidence accepts the closed vocabulary and the empty value, which is
+// what a producer that never assessed confidence wrote. A value outside the set
+// is refused in both directions like every other rule here: reading it as some
+// unknown strength would be reading a claim this build cannot interpret, and
+// widening the vocabulary is the kind of change that moves the schema version.
+func validConfidence(value string) bool {
+	switch value {
+	case "", ConfidenceHigh, ConfidenceMedium, ConfidenceLow, ConfidenceInsufficientEvidence:
+		return true
+	}
+	return false
 }
 
 func validateCausalEvidence(e CausalEvidence, checks map[string]Check) error {

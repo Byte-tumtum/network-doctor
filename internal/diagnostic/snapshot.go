@@ -92,6 +92,7 @@ func BuildSnapshot(t *Target, probes []Probe, results map[ProbeID]ProbeResult) s
 	for _, f := range d.Findings {
 		finding := snapshot.Finding{
 			ID: string(f.ID), Verdict: f.Verdict, Summary: f.Summary, Focus: string(f.Focus),
+			Confidence: string(f.Confidence),
 		}
 		for _, id := range f.EvidenceRows() {
 			finding.Evidence = append(finding.Evidence, string(id))

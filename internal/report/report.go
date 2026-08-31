@@ -49,9 +49,16 @@ type Report struct {
 // instead of being copied into a second catalogue; Evidence names the checks
 // the conclusion was drawn from, Focus first.
 type Finding struct {
-	ID       string   `json:"id"`
-	Focus    string   `json:"focus,omitempty"`
-	Evidence []string `json:"evidence,omitempty"`
+	ID    string `json:"id"`
+	Focus string `json:"focus,omitempty"`
+	// Confidence is how strongly the observations support this finding as an
+	// explanation, in the stable vocabulary high/medium/low/
+	// insufficient_evidence. It is descriptive: it never decides the id, the
+	// verdict, the focus, the remediation, or the exit code. It is not a
+	// probability and carries no number. Absent from a producer that predates
+	// it, which is not the same as low.
+	Confidence string   `json:"confidence,omitempty"`
+	Evidence   []string `json:"evidence,omitempty"`
 	// CausalEvidence states how each observed check fact bears on this finding
 	// or an alternative. Evidence above remains the compatible row-ID
 	// projection for existing consumers.

@@ -52,6 +52,12 @@ func TestWhyActionUsesTheExistingDetailsPanel(t *testing.T) {
 	view := ansi.Strip(strings.Join(m.detailRows(false), "\n"))
 	for _, want := range []string{
 		"Why: DNS example.com",
+		// The system resolver failed where an independent one answered, which
+		// is an observed comparison, but the branch also records that a general
+		// DNS failure was only weakened and not excluded. That surviving
+		// alternative is what keeps this off the strongest claim.
+		"Confidence",
+		"MEDIUM: the best explanation, with an ambiguity unresolved",
 		"Evidence",
 		"the configured resolver returned SERVFAIL",
 		"DNS (public 8.8.8.8) returned an address",
@@ -91,12 +97,54 @@ func TestWhyActionIsUnavailableWithoutACompletedFinding(t *testing.T) {
 func TestCausalExplanationReachesTheTextReport(t *testing.T) {
 	rep := resolverExplanationModel(t).report()
 	for _, want := range []string{
-		"why:\n  Evidence",
+		"why:\n  Confidence\n    MEDIUM: the best explanation, with an ambiguity unresolved\n  Evidence",
 		"General network outage",
 		"TCP example.com:443: a prerequisite failed",
 	} {
 		if !strings.Contains(rep, want) {
 			t.Errorf("report is missing %q:\n%s", want, rep)
+		}
+	}
+}
+
+// TestConfidenceLineCoversTheVocabulary pins the one presentation rule this
+// panel adds: each level renders as a word plus what that word means here, and
+// nothing else renders at all. A percentage or a meter would be inventing a
+// precision the four categories do not have, and a level the app does not know
+// is drawn as nothing rather than as a bare token.
+func TestConfidenceLineCoversTheVocabulary(t *testing.T) {
+	tests := []struct {
+		in   diagnostic.Confidence
+		want string
+	}{
+		{diagnostic.ConfidenceHigh, "HIGH: specific evidence, with no alternative left open"},
+		{diagnostic.ConfidenceMedium, "MEDIUM: the best explanation, with an ambiguity unresolved"},
+		{diagnostic.ConfidenceLow, "LOW: the failure is named, its cause barely narrowed"},
+		{diagnostic.ConfidenceInsufficientEvidence, "INSUFFICIENT EVIDENCE: this run cannot say what caused it"},
+		// A finding from an artifact written before confidence existed, and a
+		// value from a build that knows more words than this one.
+		{"", ""},
+		{"certain", ""},
+	}
+	for _, test := range tests {
+		if got := confidenceLine(test.in); got != test.want {
+			t.Errorf("confidenceLine(%q) = %q, want %q", test.in, got, test.want)
+		}
+		if strings.ContainsAny(confidenceLine(test.in), "%") {
+			t.Errorf("confidenceLine(%q) renders confidence as a quantity", test.in)
+		}
+	}
+}
+
+// The Why panel is the only place confidence appears. The probe table is a list
+// of measurements, and a strength-of-evidence word on one of its rows would read
+// as a claim about that measurement.
+func TestConfidenceStaysOutOfTheChecksPanel(t *testing.T) {
+	m := resolverExplanationModel(t)
+	view := ansi.Strip(m.View())
+	for _, word := range []string{"HIGH:", "MEDIUM:", "LOW:", "INSUFFICIENT EVIDENCE:"} {
+		if strings.Contains(view, word) {
+			t.Errorf("the ordinary view shows %q before e was pressed:\n%s", word, view)
 		}
 	}
 }

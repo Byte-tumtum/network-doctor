@@ -547,6 +547,13 @@ func (m model) whyLines() []string {
 	}
 	finding := d.Findings[0]
 	lines := []string{"Why?"}
+	// Confidence leads, because it qualifies everything under it: the same
+	// evidence list reads differently once the reader knows whether it settled
+	// the question or merely narrowed it. It appears only here, in the view
+	// somebody opened to ask why, and never on the probe table.
+	if label := confidenceLine(finding.Confidence); label != "" {
+		lines = append(lines, "Confidence", "  "+label)
+	}
 	sections := []struct {
 		kind  diagnostic.EvidenceKind
 		title string
@@ -569,6 +576,26 @@ func (m model) whyLines() []string {
 		}
 	}
 	return lines
+}
+
+// confidenceLine states how strongly the evidence below supports the
+// conclusion, in the word and a short sentence of what that word means here. No
+// percentage and no bar: the four values are epistemic categories, and drawing
+// one as a quantity would invent a precision netdoc never claimed. Empty for a
+// finding that carries no assessment, which is a finding from an artifact
+// written before there was one.
+func confidenceLine(c diagnostic.Confidence) string {
+	switch c {
+	case diagnostic.ConfidenceHigh:
+		return "HIGH: specific evidence, with no alternative left open"
+	case diagnostic.ConfidenceMedium:
+		return "MEDIUM: the best explanation, with an ambiguity unresolved"
+	case diagnostic.ConfidenceLow:
+		return "LOW: the failure is named, its cause barely narrowed"
+	case diagnostic.ConfidenceInsufficientEvidence:
+		return "INSUFFICIENT EVIDENCE: this run cannot say what caused it"
+	}
+	return ""
 }
 
 func (m model) causalEvidenceLine(e diagnostic.CausalEvidence) string {

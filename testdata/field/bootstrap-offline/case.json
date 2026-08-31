@@ -28,11 +28,18 @@
     ],
     "not_findings": [
       "dns_failure"
+    ],
+    "confidence": [
+      {
+        "finding": "offline",
+        "level": "medium"
+      }
     ]
   },
   "provenance": {
     "origin": "synthetic",
     "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
   },
-  "snapshot": "snapshot.ndoc"
+  "snapshot": "snapshot.ndoc",
+  "notes": "Confidence is asserted here for the opposite reason: both paths are demonstrably dead, but nothing in the run separates a broken link from a broken upstream, so the conclusion is a state rather than a localized cause."
 }
