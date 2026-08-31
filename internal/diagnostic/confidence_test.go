@@ -2,12 +2,14 @@ package diagnostic
 
 import (
 	"go/ast"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // confidenceOf runs one matrix case and returns the primary finding's
@@ -49,7 +51,7 @@ func TestConfidenceOfRepresentativeFindings(t *testing.T) {
 		},
 		{
 			matrixCase: "generic system resolver failing", want: ConfidenceMedium,
-			why: "the resolver comparison is observed, but the branch records that a general DNS failure is only weakened and never excluded",
+			why: "one query each, at one moment, does not separate a resolver that is broken from a name whose own servers were briefly failing for everyone",
 		},
 		{
 			matrixCase: "path MTU black hole", want: ConfidenceMedium,
@@ -205,6 +207,105 @@ func TestMaterialContradictionPreventsHighConfidence(t *testing.T) {
 	}
 	if got := confidenceFor(repeated); got != ConfidenceHigh {
 		t.Errorf("repeated evidence = %q, want %q", got, ConfidenceHigh)
+	}
+}
+
+// TestCertificateDateFindingsNeedTheClockRuledOut is the rule mustRuleOut
+// exists for. A certificate-date rejection is measured against this machine's
+// own clock, so it is the same rejection whether the certificate expired or the
+// clock ran ahead, and netdoc has a separate identity for the second. The truth
+// table only separates them when the egress probe took a reading, and a run
+// with no reading has not looked: it must not read the same as one that looked
+// and settled it.
+func TestCertificateDateFindingsNeedTheClockRuledOut(t *testing.T) {
+	target := &Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}
+	// The clock reading comes from the egress probe, and TLS does not depend on
+	// it, so --check tls or --skip internet_tcp produces exactly this run.
+	unchecked := []ProbeID{ProbeIface, ProbeDNS, ProbeTargetTCP, ProbeTLS}
+	measured := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP, ProbeTLS}
+	for _, cause := range []string{TLSCauseCertificateExpired, TLSCauseCertificateNotYet} {
+		t.Run(cause, func(t *testing.T) {
+			base := map[ProbeID]ProbeResult{
+				ProbeIface: {Status: StatusPass}, ProbeDNS: {Status: StatusPass},
+				ProbeTargetTCP: {Status: StatusPass}, ProbeTLS: {Status: StatusFail, Cause: cause},
+			}
+			blind := Interpret(target, unchecked, base)
+			if got := blind.Findings[0].Confidence; got != ConfidenceMedium {
+				t.Errorf("no clock reading in the run = %q, want %q: the alternative was never looked at",
+					got, ConfidenceMedium)
+			}
+
+			// The same rejection with an offset that runs the wrong way to have
+			// caused it. Now the run has looked, and the identity is earned.
+			withClock := map[ProbeID]ProbeResult{ProbeInternet: {Status: StatusPass, clockOffset: skewAgainst(cause)}}
+			for id, r := range base {
+				withClock[id] = r
+			}
+			looked := Interpret(target, measured, withClock)
+			if looked.Findings[0].ID != blind.Findings[0].ID {
+				t.Fatalf("the clock reading changed the identity to %q", looked.Findings[0].ID)
+			}
+			if got := looked.Findings[0].Confidence; got != ConfidenceHigh {
+				t.Errorf("clock measured and excluded = %q, want %q", got, ConfidenceHigh)
+			}
+		})
+	}
+}
+
+// skewAgainst is an offset large enough to act on that points away from the
+// rejection, which is what takes the clock off the list of explanations.
+func skewAgainst(cause string) time.Duration {
+	if cause == TLSCauseCertificateExpired {
+		return -2 * time.Hour
+	}
+	return 2 * time.Hour
+}
+
+// TestConfidenceDoesNotDependOnWhichPassBuiltTheFinding is the invariant the
+// evidence rules cannot supply on their own. Both rules read what a branch
+// wrote down, so a branch that records nothing about an alternative reads as
+// settled, and the counterfactual pass records less than the truth table does.
+// The same identity, on the same observations, must not be more confident for
+// having been assembled by the shorter path.
+func TestConfidenceDoesNotDependOnWhichPassBuiltTheFinding(t *testing.T) {
+	target := &Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeDNSPublic, ProbeTargetTCP, ProbeTLS}
+	resolvers := map[ProbeID]ProbeResult{
+		ProbeDNS:       {Status: StatusFail},
+		ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1")}},
+	}
+	// The truth table reaches the resolver comparison itself.
+	fromTable := map[ProbeID]ProbeResult{
+		ProbeIface: {Status: StatusPass}, ProbeInternet: {Status: StatusPass},
+		ProbeTargetTCP: SkipPrereq(ProbeTargetTCP), ProbeTLS: SkipPrereq(ProbeTLS),
+	}
+	// A portal is decided ahead of the DNS rung, so here the same comparison
+	// arrives only as a counterfactual finding appended afterwards.
+	fromCounterfactual := map[ProbeID]ProbeResult{
+		ProbeIface:     {Status: StatusPass},
+		ProbeInternet:  {Status: StatusFail, Portal: &Portal{RedirectURL: "http://portal.example/"}},
+		ProbeTargetTCP: SkipPrereq(ProbeTargetTCP), ProbeTLS: SkipPrereq(ProbeTLS),
+	}
+	confidence := func(res map[ProbeID]ProbeResult) Confidence {
+		t.Helper()
+		for id, r := range resolvers {
+			res[id] = r
+		}
+		for _, f := range Interpret(target, order, res).Findings {
+			if f.ID == DiagnosisSystemDNSFailure {
+				return f.Confidence
+			}
+		}
+		t.Fatalf("run produced no %s finding", DiagnosisSystemDNSFailure)
+		return ""
+	}
+	table, counterfactual := confidence(fromTable), confidence(fromCounterfactual)
+	if table != counterfactual {
+		t.Errorf("%s = %q from the truth table but %q from the counterfactual pass",
+			DiagnosisSystemDNSFailure, table, counterfactual)
+	}
+	if table != ConfidenceMedium {
+		t.Errorf("%s = %q, want %q", DiagnosisSystemDNSFailure, table, ConfidenceMedium)
 	}
 }
 

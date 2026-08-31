@@ -912,6 +912,15 @@ ruled out is still a live explanation and keeps a finding off `high`. Presence
 is what counts, never quantity: a second ruled-out alternative buys nothing the
 first did not.
 
+A few identities need one named exclusion on the record before they can reach
+`high`, because their supporting observation is not by itself the differential.
+`tls_certificate_expired` and `tls_certificate_not_yet_valid` are read against
+this machine's own clock, so a clock that is wrong produces either of them from
+a perfectly good certificate, and netdoc has a separate `tls_clock_skew` for
+that case. Unless the run took a clock reading and ruled the skew out, those
+two stay at `medium`: a run that never looked must not read like one that
+looked and settled it.
+
 A `not_evaluated` item is read by its `reason` rather than treated as a hole.
 `prerequisite_failed` and `not_applicable` describe checks that did not run
 *because* of the failure being diagnosed, so a TLS row skipped behind a dead

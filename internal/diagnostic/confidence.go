@@ -11,7 +11,7 @@ package diagnostic
 //
 // The derivation lives here and nowhere else. It reads two things and nothing
 // else: what kind of claim the conclusion is, which is a fixed property of the
-// diagnosis identity and is written down in one table below, and what this
+// diagnosis identity and is written down in the tables below, and what this
 // particular run's structured evidence left standing. It never reads a summary
 // sentence, never scores, never weights, and never counts.
 
@@ -104,12 +104,16 @@ var diagnosisConfidence = map[DiagnosisID]confidenceClass{
 	DiagnosisProbablePathMTU: classInferred,
 
 	// Name resolution. Two resolvers asked the same question is a controlled
-	// comparison, and their agreement or disagreement is observed. A resolver
-	// failing with no second opinion names the rung and no cause; a
-	// disagreement is a difference, which is as often a design as a fault; and
-	// an encrypted resolver that cannot complete an exchange looks the same
-	// whether it is unavailable or interfered with.
-	DiagnosisSystemDNSFailure:        classObserved,
+	// comparison, and their agreeing on a negative answer is observed: a name
+	// with no records has none whichever resolver is asked. Their disagreeing
+	// is weaker than it looks. One query each, at one moment, shows the
+	// configured resolver failing then, and does not separate a resolver that
+	// is broken or filtering from a name whose own servers were briefly
+	// failing for everyone. A resolver failing with no second opinion names
+	// the rung and no cause; a difference in answers is as often a design as a
+	// fault; and an encrypted resolver that cannot complete an exchange looks
+	// the same whether it is unavailable or interfered with.
+	DiagnosisSystemDNSFailure:        classInferred,
 	DiagnosisDNSNameNotFound:         classObserved,
 	DiagnosisDNSFailure:              classBroad,
 	DiagnosisDNSDisagreement:         classInferred,
@@ -137,6 +141,11 @@ var diagnosisConfidence = map[DiagnosisID]confidenceClass{
 	// the observation. A timeout, a close, and a dial that could not reach a
 	// port the endpoint check reached are all events whose cause stays open,
 	// and an unclassifiable handshake failure is the broad case by definition.
+	//
+	// The two date rejections are observed only once the clock is: they are
+	// read against this machine's own now, so a wrong clock produces them from
+	// a perfectly good certificate. mustRuleOut below is what holds them to
+	// that.
 	DiagnosisTLSCertificateExpired:     classObserved,
 	DiagnosisTLSCertificateNotYetValid: classObserved,
 	DiagnosisTLSHostnameMismatch:       classObserved,
@@ -162,10 +171,32 @@ var diagnosisConfidence = map[DiagnosisID]confidenceClass{
 	DiagnosisSelectedNetworkCheckFailed: classUnresolved,
 }
 
+// mustRuleOut names the one competing identity that an observed conclusion has
+// to have excluded before it can claim the strongest level, for the identities
+// where the supporting observation is not by itself the differential.
+//
+// A certificate-date rejection is the case: the handshake compares the
+// certificate's validity window against this machine's clock, so "the
+// certificate is expired" and "the clock is fast" produce the same rejection,
+// and netdoc has a separate identity for the second. The truth table already
+// separates them, but only in the arm where the egress probe took a clock
+// reading. Without that reading the run has not looked, and the difference
+// between having looked and not having looked is exactly what confidence is
+// for. Left to the two rules below it would be invisible, because a branch
+// that records nothing about an alternative reads the same as one that
+// settled it.
+//
+// One candidate per identity, because this is a specific claim about a
+// specific pair, not a scoring input to be extended by degrees.
+var mustRuleOut = map[DiagnosisID]DiagnosisID{
+	DiagnosisTLSCertificateExpired:     DiagnosisTLSClockSkew,
+	DiagnosisTLSCertificateNotYetValid: DiagnosisTLSClockSkew,
+}
+
 // confidenceFor is the whole derivation: the class ceiling, lowered by what
 // this run's evidence left open. Nothing else feeds in, so the same finding
 // always produces the same value and a maintainer can predict it from the
-// table above plus the finding's own evidence.
+// tables above plus the finding's own evidence.
 //
 // An identity with no class is deliberately the most conservative answer rather
 // than a guess. A test makes the table total, so this only fires for a finding
@@ -175,10 +206,26 @@ func confidenceFor(f DiagnosisFinding) Confidence {
 	if !known {
 		return ConfidenceInsufficientEvidence
 	}
-	if class == classObserved && (unresolvedAlternative(f.Evidence) || missingDifferential(f.Evidence)) {
+	if class == classObserved && (unresolvedAlternative(f.Evidence) ||
+		missingDifferential(f.Evidence) || !excludes(f.Evidence, mustRuleOut[f.ID])) {
 		return ConfidenceMedium
 	}
 	return class.ceiling()
+}
+
+// excludes reports whether the evidence puts a named candidate out of the
+// running. An identity with nothing to rule out passes trivially, which is
+// most of them.
+func excludes(evidence []CausalEvidence, candidate DiagnosisID) bool {
+	if candidate == "" {
+		return true
+	}
+	for _, e := range evidence {
+		if e.Kind == EvidenceRuledOut && e.Candidate == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // unresolvedAlternative reports whether the finding left a named competing
