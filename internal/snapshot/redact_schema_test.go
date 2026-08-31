@@ -44,6 +44,7 @@ var retainedBySupportPolicy = map[string]bool{
 	".Target.Protocol":                                                              true,
 	".Checks[0].Status":                                                             true,
 	".Checks[0].Cause":                                                              true,
+	".Checks[0].CauseFamily":                                                        true,
 	".Checks[0].Observed.Families.IPv4":                                             true,
 	".Checks[0].Observed.Families.IPv6":                                             true,
 	".Checks[0].Observed.Attempts[0].Cause":                                         true,

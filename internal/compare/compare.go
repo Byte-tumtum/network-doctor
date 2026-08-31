@@ -526,6 +526,7 @@ func diffCheck(d *diff, id string, before, after snapshot.Check) {
 		})
 	}
 	d.field(SectionCheck, id, "checks."+id+".cause", id+" cause", before.Cause, after.Cause)
+	d.field(SectionCheck, id, "checks."+id+".cause_family", id+" cause family", before.CauseFamily, after.CauseFamily)
 	// Whether the probe body executed at all, which duration_ms cannot answer
 	// and status only narrows.
 	d.field(SectionCheck, id, "checks."+id+".ran", id+" ran", yesNo(before.Ran), yesNo(after.Ran))

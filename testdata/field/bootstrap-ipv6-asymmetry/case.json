@@ -1,0 +1,40 @@
+{
+  "schema": "netdoc.field-case.v1",
+  "id": "bootstrap-ipv6-asymmetry",
+  "environment": {
+    "categories": [
+      "other"
+    ],
+    "platform": "linux",
+    "details": "Synthetic dual-stack bootstrap fixture whose IPv6 path to the endpoint is dead; no real network or user data."
+  },
+  "network_doctor": {
+    "version": "bootstrap",
+    "assessment": "correct"
+  },
+  "ground_truth": {
+    "statement": "The synthetic endpoint answers over IPv4 and never over IPv6, while general egress works in both families.",
+    "verification": [
+      {
+        "method": "controlled_change",
+        "details": "The fixture directly controls every typed probe observation."
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "degraded",
+    "findings": [
+      "ipv6_target_unreachable"
+    ],
+    "not_findings": [
+      "target_unreachable",
+      "offline"
+    ]
+  },
+  "provenance": {
+    "origin": "synthetic",
+    "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
+  },
+  "snapshot": "snapshot.ndoc",
+  "notes": "Exercises per-family reachability, the selected address, and per-address attempts, which is the evidence the address-family counterfactual rests on."
+}

@@ -307,9 +307,12 @@ type Check struct {
 	Status string `json:"status"`
 	// Cause is the stable machine-readable reason, empty when the outcome
 	// needs none. Branch on this, never on Detail.
-	Cause      string `json:"cause,omitempty"`
-	Ran        bool   `json:"ran"`
-	DurationMs int64  `json:"duration_ms"`
+	Cause string `json:"cause,omitempty"`
+	// CauseFamily identifies the address family that supplied Cause. It is
+	// absent when the cause is shared, family-neutral, or unknown.
+	CauseFamily string `json:"cause_family,omitempty"`
+	Ran         bool   `json:"ran"`
+	DurationMs  int64  `json:"duration_ms"`
 	// Detail and Fix are derived human sentences. They are kept because a
 	// snapshot is also read by a person, and never parsed back.
 	Detail string `json:"detail,omitempty"`
@@ -670,6 +673,8 @@ func validate(s Snapshot) error {
 		switch {
 		case c.Status == "":
 			return fmt.Errorf("snapshot check %q has no status: a row with no completed result must say %s", c.ID, StatusIncomplete)
+		case c.CauseFamily != "" && c.Cause == "":
+			return fmt.Errorf("snapshot check %q has a cause family without a cause", c.ID)
 		case c.Status == StatusIncomplete && c.Ran:
 			return fmt.Errorf("snapshot check %q is %s and also ran: a row that reported has an outcome", c.ID, StatusIncomplete)
 		case c.Status == StatusIncomplete && s.OK:
@@ -884,7 +889,7 @@ func observationMatches(e CausalEvidence, check Check) bool {
 	case ObservationStatusNA:
 		return check.Status == StatusNA
 	case ObservationCause:
-		return check.Cause != ""
+		return check.Cause != "" && (e.Value == "" || check.CauseFamily == "" || e.Value == check.CauseFamily)
 	case ObservationDNSAnswers:
 		return check.Observed != nil && len(check.Observed.Addresses) > 0 &&
 			(e.Value == "" || slices.Contains(check.Observed.Addresses, e.Value))

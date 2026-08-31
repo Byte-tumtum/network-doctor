@@ -1,10 +1,23 @@
-# Real network field corpus
+# Field diagnosis replay corpus
 
-This directory stores sanitized Network Doctor evidence from real networks,
-with ground truth established independently of Network Doctor. It is not a
-simulator fixture set, a snapshot golden directory, or an offline replay
-engine. The corpus starts empty rather than presenting synthetic evidence as a
-field observation.
+This directory stores sanitized Network Doctor snapshots with separately
+reviewed ground truth. The replay test reconstructs typed diagnostic inputs
+from each `snapshot.ndoc`, runs the current `diagnostic.Interpret`, and compares
+the result with `case.json`. It is a data-only path: it builds no probes, opens
+no sockets, resolves no names, and reads nothing about the host it runs on, so
+it produces the same answer on a machine with no network at all.
+
+The Linux simulator and this corpus cover different boundaries:
+
+* The simulator tests network mechanics and probe behavior against controlled
+  broken networks.
+* Field replay tests current diagnostic reasoning against evidence observed in
+  an earlier run.
+
+The `bootstrap-*` cases are synthetic fixtures generated from typed in-memory
+observations. They prove the harness while the real-network corpus is empty.
+They are labeled `provenance.origin: "synthetic"` and do not claim to be field
+captures. All other committed cases must use `real_network` provenance.
 
 ## Case format
 
@@ -19,11 +32,10 @@ testdata/field/
 ```
 
 Use a lowercase, hyphen-separated ID of at most 80 characters. A date plus a
-short, broad condition is recommended. Never put an organization, reporter,
-hostname, SSID, address, or other network identifier in an ID. The directory
-and `case.json` ID must match, and a committed ID must not be renamed. The
-`.ndoc` must be the reviewed output of `netdoc --support`, not `--save`, and
-must remain named `snapshot.ndoc`.
+short, broad condition is recommended for a real case. Never put an
+organization, reporter, hostname, SSID, address, or other network identifier
+in an ID. The directory and `case.json` ID must match, and a committed ID must
+not be renamed. The `.ndoc` remains named `snapshot.ndoc`.
 
 `case.json` uses schema `netdoc.field-case.v1`:
 
@@ -50,58 +62,92 @@ must remain named `snapshot.ndoc`.
       }
     ]
   },
+  "expected": {
+    "verdict": "degraded",
+    "findings": ["dns_disagreement"],
+    "not_findings": ["dns_failure", "offline"]
+  },
   "provenance": {
     "origin": "real_network",
     "summary": "Captured during a verified field report and reviewed by a maintainer."
   },
   "snapshot": "snapshot.ndoc",
-  "notes": "Network Doctor detected disagreement but could not know it was intentional."
+  "notes": "The disagreement is intentional, but the diagnostic should still identify it."
 }
 ```
+
+`expected.findings` is the exact finding set the current engine must produce.
+`expected.not_findings` names especially important false positives and improves
+failure messages. Ground truth means the real condition was established
+independently of Network Doctor through controlled change, another tool,
+configuration review, packet capture, successful remediation, provider
+confirmation, or another documented method. It is not whatever the original
+Network Doctor run happened to say.
+
+The `snapshot.diagnosis` object is historical output. Replay ignores it and
+computes a new diagnosis from `target` and typed `checks` observations. Never
+copy its prose into machine-readable inputs or use it as the expected result.
+
+The snapshot schema stays `netdoc.snapshot.v1`: replay state added to v1 is
+optional, and absence is a state rather than a gap. An absent `cause_family`
+means the cause was family-neutral, which is what the direct-egress probe
+records when the same route fact held for both stacks. Where absence would
+instead be a missing measurement, replay refuses the case rather than guess: a
+check ID this version does not know, a status or protocol outside the current
+vocabulary, an unrecognized cause family or tunnel state, a relaxed status on a
+row that is not WARN, and a failed target attempt carrying only human error
+text with no typed cause.
+
+Two limits are worth knowing before writing `expected` for a real case.
+Support redaction pseudonymizes every address, and every public address in one
+artifact lands in a single /16. `answersAgree` compares that /16, so two
+disagreeing sets of public DNS answers can read as agreeing on replay. The
+`dns_disagreement` finding still survives, because the cross-probe pass stamped
+the WARN before the snapshot was written; the resolver counterfactual under it
+may not. Second, evidence values that are addresses are the sanitized
+addresses, not the originals, which is what the artifact actually records.
+
+If a change to the snapshot encoder makes a committed fixture non-canonical,
+re-encode it in place rather than editing the JSON by hand: decode the file
+with `snapshot.Decode` and write back `snapshot.Encode`. Nothing about the
+observations changes, so the expected diagnosis does not either.
 
 Environment categories are `vpn`, `corporate`, `campus`, `captive_portal`,
 `public_wifi`, `ipv6_first`, `ipv6_only`, `dns64_nat64`, `split_dns`, `proxy`,
 `custom_dns`, and `other`. Add `environment.details` when using `other`.
-Use `other` for a class that does not yet merit a recurring controlled tag.
 Platforms use Go names: `linux`, `darwin` for macOS, and `windows`.
 
-Assessments are `correct`, `mostly_correct`, `incorrect`, and `uncertain`.
-Verification methods are `controlled_change`, `independent_tool`,
-`configuration_review`, `packet_capture`, `successful_remediation`,
-`provider_confirmation`, and `other`. Verification details must say what was
-observed or checked; use a separate item for each independent method or
-evidence source. Ground truth must not copy `snapshot.diagnosis` or use its
-current verdict or finding IDs as truth; that object remains Network Doctor's
-original conclusion.
+Assessments are `correct`, `mostly_correct`, `incorrect`, and `uncertain` and
+describe the diagnosis stored by the producing version. Verification methods
+are `controlled_change`, `independent_tool`, `configuration_review`,
+`packet_capture`, `successful_remediation`, `provider_confirmation`, and
+`other`.
 
-## Adding a verified case
+## Adding a confirmed field report
 
-1. Confirm the report came from a real network and independently establish the
-   ground truth. Simulator output is never a field case.
+1. Independently establish what happened and how it was verified. Simulator
+   output is never a real field case.
 2. Ask the reporter for a locally created `netdoc --support snapshot.ndoc ...`
-   artifact. Record the producing version and broad, safe environment details.
+   artifact. Never commit a raw `--save` snapshot or any other unsanitized
+   real-user artifact.
 3. Review both files manually. Remove private hostnames, addresses, SSIDs,
    usernames, paths, credentials, issue text, and confidential network details.
-   Every free-text field in `case.json` needs the same review as the snapshot.
    Support redaction reduces risk but cannot prove an arbitrary string is safe.
-4. Write `case.json`, keeping ground truth concise and naming how it was
-   verified. Assess the diagnosis already stored in the snapshot.
-5. Run `go test ./internal/fieldcase` and include both files in one focused
-   review.
+4. Write `case.json`. Set the expected verdict, the exact finding list, and
+   important forbidden findings from the independently confirmed condition.
+5. Run `go test ./internal/fieldcase -count=1` and include both files in one
+   focused review.
 
-Validation discovers case directories, rejects unknown metadata fields and
-unexpected files, requires real-network provenance, checks controlled
-vocabularies and metadata consistency, decodes the current `.ndoc` schema,
-requires the `support-v1` redaction marker, and requires bytes reproducible by
-the current snapshot encoder. A compatible additive v1 field remains valid
-`.ndoc`, but is not a canonical repository artifact until this checkout's
-`internal/snapshot` package knows and preserves it.
+Validation discovers every case directory in filename order, rejects unknown
+metadata fields and unexpected files, checks controlled vocabularies and
+metadata consistency, decodes the current `.ndoc` schema, and requires canonical
+snapshot bytes. Every fixture, including a synthetic bootstrap, must declare
+`redaction.sanitized: true` with the current `support-v1` policy. Real fixtures
+must also declare `real_network` provenance. The support marker is mechanically
+required, but human privacy review remains mandatory.
 
-Corpus validation verifies that the artifact declares the supported redaction
-policy and is structurally valid. It cannot cryptographically or
-retrospectively prove that arbitrary input was actually passed through the
-sanitizer. Human privacy review remains mandatory.
+Run only the replay harness with:
 
-Future offline re-diagnosis may read this evidence and compare new conclusions
-with the separate ground truth. Reconstructing probe results or rerunning the
-diagnosis engine is intentionally outside this corpus layer.
+```sh
+go test ./internal/fieldcase -run '^TestReplayCorpus$' -count=1
+```

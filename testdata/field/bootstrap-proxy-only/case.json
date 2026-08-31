@@ -1,0 +1,40 @@
+{
+  "schema": "netdoc.field-case.v1",
+  "id": "bootstrap-proxy-only",
+  "environment": {
+    "categories": [
+      "proxy"
+    ],
+    "platform": "linux",
+    "details": "Synthetic bootstrap fixture; no real network or user data."
+  },
+  "network_doctor": {
+    "version": "bootstrap",
+    "assessment": "correct"
+  },
+  "ground_truth": {
+    "statement": "The synthetic client has no direct route off the link, and only the environment proxy carries traffic.",
+    "verification": [
+      {
+        "method": "controlled_change",
+        "details": "The fixture directly controls every typed probe observation."
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "degraded",
+    "findings": [
+      "proxy_only_network"
+    ],
+    "not_findings": [
+      "offline",
+      "direct_egress_blocked"
+    ]
+  },
+  "provenance": {
+    "origin": "synthetic",
+    "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
+  },
+  "snapshot": "snapshot.ndoc",
+  "notes": "The direct-egress row reads WARN only because the cross-probe pass relaxed a failure, which replay must take from derived.status_downgraded and never from the status alone."
+}

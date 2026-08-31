@@ -91,7 +91,24 @@ func TestValidateCorpus(t *testing.T) {
 		{"missing verification", editCase(func(c *Case) { c.GroundTruth.Verification = nil }), "ground_truth.verification is required"},
 		{"invalid verification method", editCase(func(c *Case) { c.GroundTruth.Verification[0].Method = "network_doctor" }), "invalid method"},
 		{"missing verification details", editCase(func(c *Case) { c.GroundTruth.Verification[0].Details = " " }), "verification[0].details is required"},
-		{"synthetic provenance", editCase(func(c *Case) { c.Provenance.Origin = "simulator" }), "invalid provenance origin"},
+		{"invalid provenance", editCase(func(c *Case) { c.Provenance.Origin = "simulator" }), "invalid provenance origin"},
+		{"synthetic non-bootstrap provenance", editCase(func(c *Case) { c.Provenance.Origin = OriginSynthetic }), "reserved for bootstrap"},
+		{"real bootstrap provenance", func(t *testing.T, root, dir string) {
+			renamed := filepath.Join(root, "bootstrap-test")
+			if err := os.Rename(dir, renamed); err != nil {
+				t.Fatal(err)
+			}
+			fieldCase := validCase()
+			fieldCase.ID = "bootstrap-test"
+			fieldCase.Provenance.Origin = OriginRealNetwork
+			writeCaseMetadata(t, renamed, fieldCase)
+		}, "must declare synthetic"},
+		{"invalid expected verdict", editCase(func(c *Case) { c.Expected.Verdict = "broken" }), "invalid expected verdict"},
+		{"empty expected finding", editCase(func(c *Case) { c.Expected.Findings = []string{""} }), "empty finding ID"},
+		{"overlapping expected finding", editCase(func(c *Case) {
+			c.Expected.Findings = []string{"dns_failure"}
+			c.Expected.NotFindings = []string{"dns_failure"}
+		}), "appears in both"},
 		{"version mismatch", editCase(func(c *Case) { c.NetworkDoctor.Version = "9.9.9" }), "does not match case version"},
 		{"platform mismatch", editCase(func(c *Case) { c.Environment.Platform = "windows" }), "does not match case platform"},
 		{"missing tool provenance", func(t *testing.T, _, dir string) {
@@ -183,6 +200,7 @@ func validCase() Case {
 				Method: VerificationControlledChange, Details: "The test fixture controls both outcomes.",
 			}},
 		},
+		Expected: Expected{Verdict: "ok", Findings: []string{}, NotFindings: []string{"offline"}},
 		Provenance: Provenance{
 			Origin:  OriginRealNetwork,
 			Summary: "Fictitious real-network metadata under internal package testdata only.",

@@ -1,6 +1,6 @@
-// Package fieldcase validates the repository's corpus of independently
-// verified real-network cases. It adds metadata around a support snapshot and
-// never reconstructs live diagnostic state.
+// Package fieldcase validates the repository's field replay corpus. It adds
+// reviewed ground truth around a support snapshot and never reconstructs live
+// diagnostic state.
 package fieldcase
 
 import (
@@ -29,6 +29,7 @@ const (
 	AssessmentUncertain     = "uncertain"
 
 	OriginRealNetwork = "real_network"
+	OriginSynthetic   = "synthetic"
 
 	CategoryVPN        = "vpn"
 	CategoryCorporate  = "corporate"
@@ -58,6 +59,7 @@ type Case struct {
 	Environment   Environment   `json:"environment"`
 	NetworkDoctor NetworkDoctor `json:"network_doctor"`
 	GroundTruth   GroundTruth   `json:"ground_truth"`
+	Expected      Expected      `json:"expected"`
 	Provenance    Provenance    `json:"provenance"`
 	Snapshot      string        `json:"snapshot"`
 	Notes         string        `json:"notes,omitempty"`
@@ -78,6 +80,15 @@ type NetworkDoctor struct {
 type GroundTruth struct {
 	Statement    string         `json:"statement"`
 	Verification []Verification `json:"verification"`
+}
+
+// Expected is the current machine-readable behavior independently verified
+// ground truth requires. Findings is exact; NotFindings names especially
+// important false positives for clearer failures.
+type Expected struct {
+	Verdict     string   `json:"verdict"`
+	Findings    []string `json:"findings"`
+	NotFindings []string `json:"not_findings,omitempty"`
 }
 
 type Verification struct {
@@ -109,6 +120,7 @@ var (
 		VerificationOther,
 	)
 	platforms = set("linux", "darwin", "windows")
+	verdicts  = set("ok", "degraded", "dns", "network", "service", "incomplete")
 )
 
 // ValidateCorpus discovers and validates every case directory under root.
@@ -244,8 +256,32 @@ func (c Case) validate() error {
 			return fmt.Errorf("ground_truth.verification[%d].details is required", i)
 		}
 	}
-	if c.Provenance.Origin != OriginRealNetwork {
-		return fmt.Errorf("invalid provenance origin %q, want %q", c.Provenance.Origin, OriginRealNetwork)
+	if !verdicts[c.Expected.Verdict] {
+		return fmt.Errorf("invalid expected verdict %q", c.Expected.Verdict)
+	}
+	findings := map[string]string{}
+	for _, list := range []struct {
+		name   string
+		values []string
+	}{{"findings", c.Expected.Findings}, {"not_findings", c.Expected.NotFindings}} {
+		for _, id := range list.values {
+			if blank(id) {
+				return fmt.Errorf("expected %s contains an empty finding ID", list.name)
+			}
+			if first := findings[id]; first != "" {
+				return fmt.Errorf("expected finding %q appears in both %s and %s", id, first, list.name)
+			}
+			findings[id] = list.name
+		}
+	}
+	if c.Provenance.Origin != OriginRealNetwork && c.Provenance.Origin != OriginSynthetic {
+		return fmt.Errorf("invalid provenance origin %q", c.Provenance.Origin)
+	}
+	if c.Provenance.Origin == OriginSynthetic && !strings.HasPrefix(c.ID, "bootstrap-") {
+		return fmt.Errorf("synthetic provenance is reserved for bootstrap-* fixtures")
+	}
+	if c.Provenance.Origin == OriginRealNetwork && strings.HasPrefix(c.ID, "bootstrap-") {
+		return fmt.Errorf("bootstrap-* fixtures must declare synthetic provenance")
 	}
 	if blank(c.Provenance.Summary) {
 		return errors.New("provenance.summary is required")

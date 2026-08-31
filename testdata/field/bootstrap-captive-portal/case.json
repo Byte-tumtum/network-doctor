@@ -1,0 +1,38 @@
+{
+  "schema": "netdoc.field-case.v1",
+  "id": "bootstrap-captive-portal",
+  "environment": {
+    "categories": [
+      "captive_portal"
+    ],
+    "platform": "linux",
+    "details": "Synthetic bootstrap fixture; no real network or user data."
+  },
+  "network_doctor": {
+    "version": "bootstrap",
+    "assessment": "correct"
+  },
+  "ground_truth": {
+    "statement": "The synthetic direct-egress observation contains explicit captive-portal interception evidence.",
+    "verification": [
+      {
+        "method": "controlled_change",
+        "details": "The fixture directly controls every typed probe observation."
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "network",
+    "findings": [
+      "captive_portal"
+    ],
+    "not_findings": [
+      "offline"
+    ]
+  },
+  "provenance": {
+    "origin": "synthetic",
+    "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
+  },
+  "snapshot": "snapshot.ndoc"
+}

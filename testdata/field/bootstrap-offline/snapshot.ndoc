@@ -1,0 +1,92 @@
+{
+  "schema": "netdoc.snapshot.v1",
+  "created_at": "2026-08-31T12:00:00Z",
+  "tool": {
+    "version": "bootstrap",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "target": null,
+  "options": {
+    "probe_timeout_ms": 4000,
+    "public_dns": "8.8.8.8"
+  },
+  "checks": [
+    {
+      "id": "iface",
+      "name": "iface",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1,
+      "observed": {
+        "routes": [
+          {
+            "destination": "198.18.0.1",
+            "family": "ipv4",
+            "unreachable": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "internet_tcp",
+      "name": "internet_tcp",
+      "status": "FAIL",
+      "cause": "no_default_route",
+      "cause_family": "ipv4",
+      "ran": true,
+      "duration_ms": 1
+    },
+    {
+      "id": "dns",
+      "name": "dns",
+      "status": "FAIL",
+      "cause": "dns_timeout",
+      "ran": true,
+      "duration_ms": 1
+    }
+  ],
+  "diagnosis": {
+    "verdict": "network",
+    "summary": "Offline: neither direct egress nor DNS is working.",
+    "blamed": "internet_tcp",
+    "failed_stage": "internet_tcp",
+    "findings": [
+      {
+        "id": "offline",
+        "verdict": "network",
+        "summary": "Offline: neither direct egress nor DNS is working.",
+        "focus": "internet_tcp",
+        "evidence": [
+          "internet_tcp",
+          "dns",
+          "iface"
+        ],
+        "causal_evidence": [
+          {
+            "kind": "support",
+            "check": "internet_tcp",
+            "observation": "cause",
+            "value": "ipv4"
+          },
+          {
+            "kind": "support",
+            "check": "dns",
+            "observation": "cause"
+          },
+          {
+            "kind": "support",
+            "check": "iface",
+            "observation": "route_unreachable",
+            "value": "198.18.0.1"
+          }
+        ]
+      }
+    ]
+  },
+  "ok": false,
+  "redaction": {
+    "sanitized": true,
+    "policy": "support-v1"
+  }
+}

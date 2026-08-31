@@ -504,6 +504,19 @@ func TestRelaxedStatusIsItsOwnDifference(t *testing.T) {
 	}
 }
 
+func TestCauseFamilyIsItsOwnDifference(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	check(t, &before, "internet_tcp").Cause = "no_default_route"
+	check(t, &after, "internet_tcp").Cause = "no_default_route"
+	check(t, &before, "internet_tcp").CauseFamily = "ipv4"
+	check(t, &after, "internet_tcp").CauseFamily = "ipv6"
+
+	got := changeAt(t, Snapshots(before, after), "checks.internet_tcp.cause_family")
+	if got.Before != "ipv4" || got.After != "ipv6" {
+		t.Errorf("change = %+v", got)
+	}
+}
+
 // A portal that advertised no sign-in URL and no portal at all are different
 // states, and the empty URL must not read as the absence of interception.
 func TestCaptivePortalPresenceIsSeparateFromItsURL(t *testing.T) {

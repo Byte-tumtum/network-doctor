@@ -314,7 +314,7 @@ func (r *redactor) snapshot(s Snapshot) Snapshot {
 func (r *redactor) check(c Check) Check {
 	out := Check{
 		ID: c.ID, Name: r.text(c.Name), Deps: append([]string(nil), c.Deps...),
-		Status: c.Status, Cause: c.Cause, Ran: c.Ran, DurationMs: c.DurationMs,
+		Status: c.Status, Cause: c.Cause, CauseFamily: c.CauseFamily, Ran: c.Ran, DurationMs: c.DurationMs,
 		Detail: r.text(c.Detail), Fix: r.text(c.Fix),
 	}
 	if c.Derived != nil {

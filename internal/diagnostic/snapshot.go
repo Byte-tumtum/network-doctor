@@ -61,10 +61,11 @@ func BuildSnapshot(t *Target, probes []Probe, results map[ProbeID]ProbeResult) s
 			s.Diagnosis.FailedStage = string(p.ID)
 		}
 		c := snapshot.Check{
-			ID:     string(p.ID),
-			Name:   p.Name,
-			Status: status,
-			Cause:  r.Cause,
+			ID:          string(p.ID),
+			Name:        p.Name,
+			Status:      status,
+			Cause:       r.Cause,
+			CauseFamily: r.causeFamily,
 			// Every probe the DAG builds is wrapped in a timer that floors at
 			// one nanosecond, so a nonzero duration is exactly "the probe body
 			// executed". A row skipped for a failed prerequisite, and one an

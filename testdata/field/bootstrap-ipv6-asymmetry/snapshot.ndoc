@@ -1,0 +1,162 @@
+{
+  "schema": "netdoc.snapshot.v1",
+  "created_at": "2026-08-31T12:00:00Z",
+  "tool": {
+    "version": "bootstrap",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "target": {
+    "raw": "host-2.invalid:443",
+    "host": "host-2.invalid",
+    "port": 443,
+    "protocol": "none",
+    "port_explicit": true
+  },
+  "options": {
+    "probe_timeout_ms": 4000,
+    "public_dns": "8.8.8.8"
+  },
+  "checks": [
+    {
+      "id": "iface",
+      "name": "iface",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1,
+      "observed": {
+        "interface": "interface-1"
+      }
+    },
+    {
+      "id": "internet_tcp",
+      "name": "internet_tcp",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1,
+      "observed": {
+        "address_families": {
+          "ipv4": "reachable",
+          "ipv6": "reachable"
+        }
+      }
+    },
+    {
+      "id": "dns",
+      "name": "dns",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1,
+      "observed": {
+        "addresses": [
+          "198.18.0.1",
+          "2001:db8::2"
+        ]
+      }
+    },
+    {
+      "id": "target_tcp",
+      "name": "target_tcp",
+      "status": "WARN",
+      "ran": true,
+      "duration_ms": 2,
+      "detail": "connected over IPv4; warning: IPv6 target connectivity failed while IPv4 succeeded",
+      "observed": {
+        "selected_ip": "198.18.0.1",
+        "address_families": {
+          "ipv4": "reachable",
+          "ipv6": "unreachable"
+        },
+        "attempts": [
+          {
+            "ip": "198.18.0.1",
+            "duration_ms": 1
+          },
+          {
+            "ip": "2001:db8::2",
+            "duration_ms": 1,
+            "error": "i/o timeout",
+            "cause": "unreachable"
+          }
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "verdict": "degraded",
+    "summary": "IPv6 connectivity to host-2.invalid is failing, but IPv4 works.",
+    "blamed": "target_tcp",
+    "findings": [
+      {
+        "id": "ipv6_target_unreachable",
+        "verdict": "degraded",
+        "summary": "IPv6 connectivity to host-2.invalid is failing, but IPv4 works.",
+        "focus": "target_tcp",
+        "evidence": [
+          "target_tcp",
+          "internet_tcp"
+        ],
+        "causal_evidence": [
+          {
+            "kind": "support",
+            "check": "target_tcp",
+            "observation": "family_failed",
+            "value": "ipv6"
+          },
+          {
+            "kind": "support",
+            "check": "internet_tcp",
+            "observation": "family_reachable",
+            "value": "ipv6"
+          },
+          {
+            "kind": "support",
+            "check": "target_tcp",
+            "observation": "family_reachable",
+            "value": "ipv4"
+          }
+        ],
+        "counterfactual": {
+          "variable": "address_family",
+          "alternatives": [
+            {
+              "value": "ipv6",
+              "outcome": "failed",
+              "evidence": [
+                {
+                  "kind": "support",
+                  "check": "target_tcp",
+                  "observation": "family_failed",
+                  "value": "ipv6"
+                },
+                {
+                  "kind": "support",
+                  "check": "internet_tcp",
+                  "observation": "family_reachable",
+                  "value": "ipv6"
+                }
+              ]
+            },
+            {
+              "value": "ipv4",
+              "outcome": "succeeded",
+              "evidence": [
+                {
+                  "kind": "support",
+                  "check": "target_tcp",
+                  "observation": "family_reachable",
+                  "value": "ipv4"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "ok": true,
+  "redaction": {
+    "sanitized": true,
+    "policy": "support-v1"
+  }
+}

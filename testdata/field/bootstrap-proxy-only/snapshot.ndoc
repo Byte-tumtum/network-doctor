@@ -1,0 +1,106 @@
+{
+  "schema": "netdoc.snapshot.v1",
+  "created_at": "2026-08-31T12:00:00Z",
+  "tool": {
+    "version": "bootstrap",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "target": null,
+  "options": {
+    "probe_timeout_ms": 4000,
+    "public_dns": "8.8.8.8"
+  },
+  "checks": [
+    {
+      "id": "iface",
+      "name": "iface",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1
+    },
+    {
+      "id": "internet_tcp",
+      "name": "internet_tcp",
+      "status": "WARN",
+      "cause": "no_default_route",
+      "ran": true,
+      "duration_ms": 1,
+      "detail": "no direct TCP egress to 198.18.0.1 (port 443), but another path works",
+      "fix": "no internet egress: proxy-only/filtered network? check upstream",
+      "observed": {
+        "attempts": [
+          {
+            "ip": "198.18.0.1",
+            "duration_ms": 1,
+            "error": "i/o timeout",
+            "cause": "unreachable"
+          }
+        ]
+      },
+      "derived": {
+        "status_downgraded": true
+      }
+    },
+    {
+      "id": "proxy_connect",
+      "name": "proxy_connect",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1,
+      "detail": "proxy CONNECT succeeded"
+    },
+    {
+      "id": "dns",
+      "name": "dns",
+      "status": "PASS",
+      "ran": true,
+      "duration_ms": 1,
+      "observed": {
+        "addresses": [
+          "198.18.0.1"
+        ]
+      }
+    }
+  ],
+  "diagnosis": {
+    "verdict": "degraded",
+    "summary": "Online via the environment proxy: direct egress is blocked (proxy-only network).",
+    "blamed": "internet_tcp",
+    "findings": [
+      {
+        "id": "proxy_only_network",
+        "verdict": "degraded",
+        "summary": "Online via the environment proxy: direct egress is blocked (proxy-only network).",
+        "focus": "internet_tcp",
+        "evidence": [
+          "internet_tcp",
+          "proxy_connect",
+          "dns"
+        ],
+        "causal_evidence": [
+          {
+            "kind": "support",
+            "check": "internet_tcp",
+            "observation": "cause"
+          },
+          {
+            "kind": "support",
+            "check": "proxy_connect",
+            "observation": "status_pass"
+          },
+          {
+            "kind": "support",
+            "check": "dns",
+            "observation": "dns_answers"
+          }
+        ]
+      }
+    ]
+  },
+  "ok": true,
+  "redaction": {
+    "sanitized": true,
+    "policy": "support-v1"
+  }
+}

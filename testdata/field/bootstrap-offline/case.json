@@ -1,0 +1,38 @@
+{
+  "schema": "netdoc.field-case.v1",
+  "id": "bootstrap-offline",
+  "environment": {
+    "categories": [
+      "other"
+    ],
+    "platform": "linux",
+    "details": "Synthetic bootstrap fixture; no real network or user data."
+  },
+  "network_doctor": {
+    "version": "bootstrap",
+    "assessment": "correct"
+  },
+  "ground_truth": {
+    "statement": "The synthetic client has no IPv4 default route, so direct egress and DNS fail.",
+    "verification": [
+      {
+        "method": "controlled_change",
+        "details": "The fixture directly controls every typed probe observation."
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "network",
+    "findings": [
+      "offline"
+    ],
+    "not_findings": [
+      "dns_failure"
+    ]
+  },
+  "provenance": {
+    "origin": "synthetic",
+    "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
+  },
+  "snapshot": "snapshot.ndoc"
+}

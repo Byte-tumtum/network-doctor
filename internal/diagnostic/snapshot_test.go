@@ -76,8 +76,8 @@ func fixtureRun() (*Target, []Probe, map[ProbeID]ProbeResult) {
 			ID: ProbeTargetTCP, Status: StatusFail, Dur: 33 * time.Millisecond,
 			Cause: ConnectionCauseRefused, Source: net.ParseIP("192.0.2.10"), Iface: "eth0",
 			Attempts: []Attempt{
-				{IP: net.ParseIP("93.184.216.34"), Dur: 21 * time.Millisecond, Err: errors.New("connect: connection refused")},
-				{IP: net.ParseIP("2606:2800:220:1:248:1893:25c8:1946"), Dur: 12 * time.Millisecond, Err: errors.New("connect: network is unreachable")},
+				{IP: net.ParseIP("93.184.216.34"), Dur: 21 * time.Millisecond, Err: errors.New("connect: connection refused"), Cause: ConnectionCauseRefused},
+				{IP: net.ParseIP("2606:2800:220:1:248:1893:25c8:1946"), Dur: 12 * time.Millisecond, Err: errors.New("connect: network is unreachable"), Cause: ConnectionCauseUnreachable},
 			},
 			Detail: "connection to port 443 was refused on all 2 attempted address(es): 93.184.216.34, 2606:2800:220:1:248:1893:25c8:1946",
 			Fix:    "check that the service is listening on port 443",
@@ -121,6 +121,9 @@ func TestBuildSnapshotGolden(t *testing.T) {
 // artifact, or a later comparison reads an inferred state as a measured one.
 func TestBuildSnapshotCarriesUnexportedEvidence(t *testing.T) {
 	target, probes, results := fixtureRun()
+	internetResult := results[ProbeInternet]
+	internetResult.Cause, internetResult.causeFamily = RouteCauseNoDefaultRoute, counterfactualIPv4
+	results[ProbeInternet] = internetResult
 	checks := checksByID(BuildSnapshot(target, probes, results))
 
 	internet := checks[string(ProbeInternet)]
@@ -132,6 +135,9 @@ func TestBuildSnapshotCarriesUnexportedEvidence(t *testing.T) {
 	}
 	if got := checks[string(ProbeDNSPublic)]; got.Observed == nil || got.Observed.Resolver != "8.8.8.8" {
 		t.Errorf("second-opinion resolver lost: %+v", got.Observed)
+	}
+	if got := checks[string(ProbeInternet)]; got.CauseFamily != counterfactualIPv4 {
+		t.Errorf("cause family = %q, want %q", got.CauseFamily, counterfactualIPv4)
 	}
 	// A row nothing rewrote must not claim it was rewritten.
 	if got := checks[string(ProbeDNS)]; got.Derived != nil {

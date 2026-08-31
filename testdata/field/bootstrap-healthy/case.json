@@ -1,0 +1,37 @@
+{
+  "schema": "netdoc.field-case.v1",
+  "id": "bootstrap-healthy",
+  "environment": {
+    "categories": [
+      "other"
+    ],
+    "platform": "linux",
+    "details": "Synthetic bootstrap fixture; no real network or user data."
+  },
+  "network_doctor": {
+    "version": "bootstrap",
+    "assessment": "correct"
+  },
+  "ground_truth": {
+    "statement": "The synthetic generic network has working direct egress and DNS.",
+    "verification": [
+      {
+        "method": "controlled_change",
+        "details": "The fixture directly controls every typed probe observation."
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "ok",
+    "findings": [],
+    "not_findings": [
+      "offline",
+      "dns_failure"
+    ]
+  },
+  "provenance": {
+    "origin": "synthetic",
+    "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
+  },
+  "snapshot": "snapshot.ndoc"
+}

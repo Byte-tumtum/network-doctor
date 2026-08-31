@@ -1,0 +1,40 @@
+{
+  "schema": "netdoc.field-case.v1",
+  "id": "bootstrap-split-dns",
+  "environment": {
+    "categories": [
+      "split_dns",
+      "custom_dns"
+    ],
+    "platform": "linux",
+    "details": "Synthetic bootstrap fixture; no real network or user data."
+  },
+  "network_doctor": {
+    "version": "bootstrap",
+    "assessment": "correct"
+  },
+  "ground_truth": {
+    "statement": "The synthetic system and independent resolvers return addresses from different network prefixes.",
+    "verification": [
+      {
+        "method": "controlled_change",
+        "details": "The fixture directly controls every typed probe observation."
+      }
+    ]
+  },
+  "expected": {
+    "verdict": "degraded",
+    "findings": [
+      "dns_disagreement"
+    ],
+    "not_findings": [
+      "dns_failure",
+      "offline"
+    ]
+  },
+  "provenance": {
+    "origin": "synthetic",
+    "summary": "Generated from typed in-memory observations solely to bootstrap the replay harness."
+  },
+  "snapshot": "snapshot.ndoc"
+}
