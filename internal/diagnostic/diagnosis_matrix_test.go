@@ -223,7 +223,7 @@ func diagnosisMatrix() []matrixCase {
 			res: map[ProbeID]ProbeResult{
 				ProbeIface: ok(StatusPass), ProbeInternet: ok(StatusFail), ProbeDNS: ok(StatusPass),
 			},
-			summary: "DNS resolves but there's no direct TCP egress (proxy-only or filtered network?).",
+			summary: "DNS resolves but there's no direct TCP egress to the egress check's reference endpoints (proxy-only or filtered network?).",
 			verdict: VerdictNetwork, focus: ProbeInternet,
 			id: "direct_egress_blocked", evidence: []ProbeID{ProbeInternet, ProbeDNS},
 		},
@@ -232,7 +232,7 @@ func diagnosisMatrix() []matrixCase {
 			res: map[ProbeID]ProbeResult{
 				ProbeIface: ok(StatusPass), ProbeInternet: ok(StatusFail), ProbeDNS: ok(StatusFail),
 			},
-			summary: "Offline: neither direct egress nor DNS is working.",
+			summary: "Offline: neither DNS nor direct TCP to the egress check's reference endpoints is working.",
 			verdict: VerdictNetwork, focus: ProbeInternet,
 			id: "offline", evidence: []ProbeID{ProbeInternet, ProbeDNS},
 		},
@@ -385,12 +385,23 @@ func diagnosisMatrix() []matrixCase {
 			id: "reachability_untested", evidence: []ProbeID{ProbeTargetTCP},
 		},
 		{
-			name: "local device silent and this machine is offline", target: local,
+			name: "local device and reference endpoints both silent", target: local,
 			order: []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
 			res: map[ProbeID]ProbeResult{
 				ProbeIface: ok(StatusPass), ProbeInternet: ok(StatusFail), ProbeDNS: ok(StatusNA), ProbeTargetTCP: ok(StatusFail),
 			},
-			summary: "192.168.1.10:9100 did not answer, and this machine has no working network egress either: fix this machine's own connection first.",
+			summary: "192.168.1.10:9100 did not answer, and neither did the egress check's reference endpoints; nothing this run observed says whether the break is on this machine, on the device, or between them.",
+			verdict: VerdictNetwork, focus: ProbeInternet,
+			id: "reachability_unlocalized", evidence: []ProbeID{ProbeInternet, ProbeTargetTCP},
+		},
+		{
+			name: "local device silent and the routing table names the break", target: local,
+			order: []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: ok(StatusPass), ProbeInternet: {Status: StatusFail, Cause: RouteCauseNoDefaultRoute},
+				ProbeDNS: ok(StatusNA), ProbeTargetTCP: ok(StatusFail),
+			},
+			summary: "192.168.1.10:9100 did not answer, and neither did the egress check's reference endpoints; this machine's own routing state says why: fix this machine's own connection first.",
 			verdict: VerdictNetwork, focus: ProbeInternet,
 			id: "local_egress_failure", evidence: []ProbeID{ProbeInternet, ProbeTargetTCP},
 		},
@@ -429,9 +440,19 @@ func diagnosisMatrix() []matrixCase {
 			id: "reachability_untested", evidence: []ProbeID{ProbeTargetTCP},
 		},
 		{
-			name: "target unreachable and so is the internet", target: tls, order: webOrder,
+			name: "target and reference endpoints both unreachable", target: tls, order: webOrder,
 			res:     with(map[ProbeID]ProbeResult{ProbeInternet: ok(StatusFail), ProbeTargetTCP: ok(StatusFail)}),
-			summary: "example.com resolves but neither it nor the general internet is reachable: local egress problem.",
+			summary: "example.com resolves but neither it nor the egress check's reference endpoints answered, and nothing this run observed says where the path breaks.",
+			verdict: VerdictNetwork, focus: ProbeInternet,
+			id: "reachability_unlocalized", evidence: []ProbeID{ProbeInternet, ProbeTargetTCP, ProbeDNS},
+		},
+		{
+			name: "target unreachable and the routing table names the break", target: tls, order: webOrder,
+			res: with(map[ProbeID]ProbeResult{
+				ProbeInternet:  {Status: StatusFail, Cause: RouteCauseNoDefaultRoute},
+				ProbeTargetTCP: ok(StatusFail),
+			}),
+			summary: "example.com resolves but neither it nor the egress check's reference endpoints are reachable, and this machine's own routing state says why: local egress problem.",
 			verdict: VerdictNetwork, focus: ProbeInternet,
 			id: "local_egress_failure", evidence: []ProbeID{ProbeInternet, ProbeTargetTCP, ProbeDNS},
 		},
@@ -601,11 +622,27 @@ func diagnosisMatrix() []matrixCase {
 			id: "encrypted_dns_unavailable", evidence: []ProbeID{ProbeDNSEncrypted, ProbeDNS, ProbeInternet},
 		},
 		{
-			name: "target works, direct egress blocked", target: tls, order: webOrder,
+			// The endpoint under test answered a direct connection, so the
+			// reference endpoints failing is a fact about those addresses.
+			name: "target works, reference endpoints unreachable", target: tls, order: webOrder,
 			res:     with(map[ProbeID]ProbeResult{ProbeInternet: ok(StatusFail)}),
-			summary: "The target works but direct internet egress is blocked (proxy-only or filtered network?).",
+			summary: "The target answered a direct connection, so direct egress works; the egress check's own fixed reference endpoints are what did not answer.",
 			verdict: VerdictDegraded, focus: ProbeInternet,
-			id: "direct_egress_blocked", evidence: []ProbeID{ProbeInternet, ProbeHTTP, ProbeHTTPS},
+			id: "reference_egress_unreachable", evidence: []ProbeID{ProbeInternet, ProbeTargetTCP, ProbeHTTP, ProbeHTTPS},
+		},
+		{
+			// The same egress failure with a device on the local network as
+			// the target: reaching it never leaves the network, so it
+			// contradicts nothing and the blocked reading stands.
+			name: "local device works, direct egress blocked", target: local,
+			order: []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: ok(StatusPass), ProbeInternet: ok(StatusFail),
+				ProbeDNS: ok(StatusNA), ProbeTargetTCP: ok(StatusPass),
+			},
+			summary: "The target works but direct TCP egress to the egress check's reference endpoints is blocked (proxy-only or filtered network?).",
+			verdict: VerdictDegraded, focus: ProbeInternet,
+			id: "direct_egress_blocked", evidence: []ProbeID{ProbeInternet, ProbeTargetTCP},
 		},
 		{
 			name: "target works, proxy failed", target: tls, order: append([]ProbeID{ProbeProxy}, webOrder...),
@@ -617,7 +654,7 @@ func diagnosisMatrix() []matrixCase {
 		{
 			name: "target works, direct egress degraded", target: tls, order: webOrder,
 			res:     with(map[ProbeID]ProbeResult{ProbeInternet: ok(StatusWarn)}),
-			summary: "The target works but direct internet egress is degraded (see the ! row for details).",
+			summary: "The target works but direct egress to the egress check's reference endpoints is degraded (see the ! row for details).",
 			verdict: VerdictDegraded, focus: ProbeInternet,
 			id: "direct_egress_degraded", evidence: []ProbeID{ProbeInternet, ProbeHTTP, ProbeHTTPS},
 		},

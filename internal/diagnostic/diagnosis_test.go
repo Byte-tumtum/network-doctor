@@ -135,7 +135,7 @@ func TestDiagnoseTargetProxyOnly(t *testing.T) {
 	}
 	res[ProbeInternet] = ProbeResult{Status: StatusWarn}
 	res[ProbeTargetTCP] = ProbeResult{Status: StatusPass}
-	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is degraded") {
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "direct egress to the egress check's reference endpoints is degraded") {
 		t.Errorf("got %q, want a degraded direct-egress verdict", v)
 	}
 }
@@ -264,10 +264,12 @@ func TestDiagnoseTarget(t *testing.T) {
 		t.Errorf("got %q, want target healthy verdict", v)
 	}
 
-	// A raw egress failure must never fall through to the all-clear verdict.
+	// A raw egress failure must never fall through to the all-clear verdict,
+	// and with the target answering directly it must not be called an egress
+	// outage either.
 	res[ProbeInternet] = ProbeResult{Status: StatusFail}
-	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "direct internet egress is blocked") {
-		t.Errorf("got %q, want blocked-egress verdict", v)
+	if v, _ := Diagnose(tg, order, res); !strings.Contains(v, "reference endpoints are what did not answer") {
+		t.Errorf("got %q, want the reference-endpoint verdict", v)
 	}
 }
 
@@ -718,11 +720,11 @@ func TestDiagnoseLocalDeviceTargetTCPFailure(t *testing.T) {
 			want:     "did not answer, though this machine's network is working", wantVerdict: VerdictService,
 		},
 		{
-			// Nothing this machine sends is arriving anywhere, so the device
-			// has not been given a fair test yet.
-			name: "silent with the internet down", target: "192.168.1.23:9100",
+			// The device and the egress check's reference endpoints were both
+			// silent, and nothing observed which end of the path is at fault.
+			name: "silent with the reference endpoints down", target: "192.168.1.23:9100",
 			internet: StatusFail,
-			want:     "no working network egress either", wantVerdict: VerdictNetwork,
+			want:     "nothing this run observed says whether the break is on this machine", wantVerdict: VerdictNetwork,
 		},
 		{
 			name: "silent with egress unchecked", target: "192.168.1.23:9100",

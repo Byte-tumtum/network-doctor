@@ -114,8 +114,10 @@ func certWindow(c *x509.Certificate) string {
 
 // egressFix is what a dead direct path gets when the routing table has nothing
 // specific to say, and what downgradeEgress restores once another path proves
-// the network usable.
-const egressFix = "no internet egress: proxy-only/filtered network? check upstream"
+// the network usable. It names the endpoints rather than the internet on
+// purpose: this row dials a fixed pair of reference addresses, and their
+// silence is a fact about them until something else in the run widens it.
+const egressFix = "no egress to the reference endpoints: proxy-only/filtered network? check upstream"
 
 // routeFix turns a route cause the local kernel supplied into advice about the
 // thing that actually broke. The routing backends decide the cause; the prose

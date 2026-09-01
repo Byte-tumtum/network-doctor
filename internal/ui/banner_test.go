@@ -68,21 +68,21 @@ func TestBannerFailureGuidance(t *testing.T) {
 			// Degraded: the target works, so the banner warns rather than
 			// painting a red failure over a sentence that says so. The
 			// remediation block is unchanged by that.
-			want: "! The target works but direct internet egress is blocked (proxy-only or filtered network?).\n" +
+			want: "! The target answered a direct connection, so direct egress works; the egress check's own fixed reference endpoints are what did not answer.\n" +
 				"  Fix: " + egressFix + "\n" +
 				"  Next: press p for ping the host (ping)",
 		},
 		{
 			name: "egress fails and every rung below it fails too",
 			results: map[diagnostic.ProbeID]diagnostic.ProbeResult{
-				diagnostic.ProbeInternet:  fail(egressFix),
+				diagnostic.ProbeInternet:  {Status: diagnostic.StatusFail, Fix: egressFix, Cause: diagnostic.RouteCauseNoDefaultRoute},
 				diagnostic.ProbeProxy:     fail(proxyFix),
 				diagnostic.ProbeTargetTCP: fail(tcpFix),
 				diagnostic.ProbeTLS:       fail(tlsFix),
 				diagnostic.ProbeHTTP:      fail(httpFix),
 				diagnostic.ProbeHTTPS:     fail(httpsFix),
 			},
-			want: "✗ example.com resolves but neither it nor the general internet is reachable: local egress problem.\n" +
+			want: "✗ example.com resolves but neither it nor the egress check's reference endpoints are reachable, and this machine's own routing state says why: local egress problem.\n" +
 				"  Fix: " + egressFix + "\n" +
 				"  Next: press p for ping the host (ping)",
 		},

@@ -154,16 +154,16 @@
   ],
   "diagnosis": {
     "verdict": "network",
-    "summary": "example.com resolves but neither it nor the general internet is reachable: local egress problem.",
+    "summary": "example.com resolves but neither it nor the egress check's reference endpoints answered, and nothing this run observed says where the path breaks.",
     "blamed": "internet_tcp",
     "failed_stage": "target_tcp",
     "findings": [
       {
-        "id": "local_egress_failure",
+        "id": "reachability_unlocalized",
         "verdict": "network",
-        "summary": "example.com resolves but neither it nor the general internet is reachable: local egress problem.",
+        "summary": "example.com resolves but neither it nor the egress check's reference endpoints answered, and nothing this run observed says where the path breaks.",
         "focus": "internet_tcp",
-        "confidence": "medium",
+        "confidence": "insufficient_evidence",
         "evidence": [
           "internet_tcp",
           "target_tcp",

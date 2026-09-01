@@ -33,7 +33,7 @@ Each row lands in one of five states: **✓ Pass**, **! Warn** (reachable but de
 | Probe | Passes when | Notes |
 |-------|-------------|-------|
 | **Interface** | A non-loopback interface is up and running | |
-| **Internet (TCP egress)** | A TCP connect to well-known anycast `:443` endpoints succeeds | IPv4 and IPv6 probed independently in parallel; either family passes, both are reported |
+| **Internet (TCP egress)** | A TCP connect to a fixed pair of well-known anycast `:443` reference endpoints succeeds | IPv4 and IPv6 probed independently in parallel; either family passes, both are reported. This row samples those reference destinations rather than the internet: a failure is evidence about the paths to them, and the diagnosis only widens it where nothing else in the run reached a public destination directly |
 | **QUIC / UDP 443** | A certificate-validated QUIC handshake negotiates HTTP/3 with the fixed connectivity endpoint | A timeout says only that this endpoint did not complete the UDP/443 exchange; browsers and applications normally fall back to TCP |
 | **Internet (env proxy)** | The `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` proxy grants a tunnel | HTTP `CONNECT`; `socks5` resolves locally and sends an address, while `socks5h` sends the hostname for proxy-side DNS; N/A when no proxy is configured or `NO_PROXY` exempts the probe host |
 | **DNS** | The host resolves to an IPv4 or IPv6 address (system resolution) | IP-literal targets are N/A; all A/AAAA records are retained |
@@ -871,11 +871,12 @@ The array is omitted when the run reached no specific conclusion: everything pas
 |---|---|
 | `no_usable_interface` | No interface is up, so the link is down |
 | `captive_portal` | Traffic is intercepted by a sign-in portal |
-| `offline` | Neither direct egress nor DNS is working |
-| `direct_egress_blocked` | Direct TCP egress is dead while something else still works |
+| `offline` | Neither DNS nor direct egress to the reference endpoints is working |
+| `direct_egress_blocked` | Direct TCP egress to the reference endpoints failed while something else still works, and nothing in the run reached a public destination directly |
+| `reference_egress_unreachable` | The reference endpoints are unreachable while the endpoint under test answered a direct connection, so egress itself works |
 | `direct_egress_degraded` | Direct egress carries traffic but is impaired |
 | `proxy_only_network` | Only the environment proxy has egress |
-| `local_egress_failure` | This machine's own path is broken, so nothing beyond it was fairly tested |
+| `local_egress_failure` | Local routing state classified this machine's own path as broken, so nothing beyond it was fairly tested |
 | `probable_path_mtu_problem` | A protocol exchange and a bulk write both stall, which is what a path MTU black hole looks like |
 | `system_dns_failure` | The configured resolver fails on a name public DNS resolves |
 | `dns_name_not_found` | Neither resolver has A/AAAA records for the name |
@@ -888,6 +889,7 @@ The array is omitted when the run reached no specific conclusion: everything pas
 | `target_unreachable` | The target does not answer though DNS and the internet work |
 | `local_device_unreachable` | A device on the local network is silent while this machine's network works |
 | `reachability_untested` | The target is silent and direct egress was not checked, so neither end can be blamed |
+| `reachability_unlocalized` | The target and the reference endpoints were both silent and nothing observed where the path breaks |
 | `ipv4_target_unreachable` | The target works over IPv6 while its IPv4 alternatives fail despite an independently proved IPv4 path |
 | `ipv6_target_unreachable` | The target works over IPv4 while its IPv6 alternatives fail despite an independently proved IPv6 path |
 | `partial_endpoint_reachability` | An attempted resolved address fails while another address for the same target and port succeeds |

@@ -407,11 +407,11 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 				rulesOut(DiagnosisOffline, ProbeInternet, ObservationStatusPass))
 			return withEvidence(DiagnosisDNSFailure, ProbeDNS, "Internet egress works but DNS resolution is failing.", gv, evidence)
 		case hasInternet && !directOK() && dn:
-			return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "DNS resolves but there's no direct TCP egress (proxy-only or filtered network?).", gv, ProbeDNS)
+			return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "DNS resolves but there's no direct TCP egress to the egress check's reference endpoints (proxy-only or filtered network?).", gv, ProbeDNS)
 		case fail(ProbeInternet) && fail(ProbeDNS):
 			// Egress, not the resolver: nothing this machine sends is
 			// arriving, so the resolver has not been given a fair test yet.
-			return blame(DiagnosisOffline, ProbeInternet, "Offline: neither direct egress nor DNS is working.", gv, ProbeDNS)
+			return blame(DiagnosisOffline, ProbeInternet, "Offline: neither DNS nor direct TCP to the egress check's reference endpoints is working.", gv, ProbeDNS)
 		default:
 			return fallback()
 		}
@@ -503,10 +503,16 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 				evidence := addEvidence(supportRows(ProbeTargetTCP),
 					notEvaluated(ProbeInternet, NotEvaluatedNotSelected))
 				return withEvidence(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" did not answer, and this machine's own network was not checked, so a problem here cannot be told apart from one on the device.", VerdictNetwork, evidence)
+			case localPathObserved(res[ProbeInternet].Cause):
+				// The routing tables observed the break, so nothing this
+				// machine sends is arriving anywhere and the device has not
+				// been given a fair test yet.
+				return blame(DiagnosisLocalEgressFailure, ProbeInternet, hp+" did not answer, and neither did the egress check's reference endpoints; this machine's own routing state says why: fix this machine's own connection first.", VerdictNetwork, ProbeTargetTCP)
 			default:
-				// Nothing this machine sends is arriving anywhere, so the
-				// device has not been given a fair test yet.
-				return blame(DiagnosisLocalEgressFailure, ProbeInternet, hp+" did not answer, and this machine has no working network egress either: fix this machine's own connection first.", VerdictNetwork, ProbeTargetTCP)
+				// Everything tried was silent and nothing looked at where. A
+				// device that is switched off and a machine whose traffic
+				// never leaves are the same picture from here.
+				return blame(DiagnosisReachabilityUnlocalized, ProbeInternet, hp+" did not answer, and neither did the egress check's reference endpoints; nothing this run observed says whether the break is on this machine, on the device, or between them.", VerdictNetwork, ProbeTargetTCP)
 			}
 		}
 		// Without working direct egress we can't tell a closed port from a dead
@@ -533,10 +539,15 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 				notEvaluated(ProbeInternet, NotEvaluatedNotSelected))
 			return withEvidence(DiagnosisReachabilityUntested, ProbeTargetTCP, hp+" is unreachable, but general internet reachability was not checked, so a local path problem cannot be told apart from a remote service failure.", VerdictNetwork, evidence)
 		}
-		// The egress row, not the target row: this sentence is about the local
-		// path, and the target connect is what that dead path looks like from
-		// one rung further up.
-		return blame(DiagnosisLocalEgressFailure, ProbeInternet, host+" resolves but neither it nor the general internet is reachable: local egress problem.", VerdictNetwork, ProbeTargetTCP, ProbeDNS)
+		// The egress row, not the target row: both sentences below are about
+		// this machine's path off the network, and the target connect is what
+		// that path looks like from one rung further up. Which of the two the
+		// run has earned is decided by whether anything observed where the
+		// break is; two destinations going silent together does not.
+		if localPathObserved(res[ProbeInternet].Cause) {
+			return blame(DiagnosisLocalEgressFailure, ProbeInternet, host+" resolves but neither it nor the egress check's reference endpoints are reachable, and this machine's own routing state says why: local egress problem.", VerdictNetwork, ProbeTargetTCP, ProbeDNS)
+		}
+		return blame(DiagnosisReachabilityUnlocalized, ProbeInternet, host+" resolves but neither it nor the egress check's reference endpoints answered, and nothing this run observed says where the path breaks.", VerdictNetwork, ProbeTargetTCP, ProbeDNS)
 	case warn(ProbePMTU) && len(stalled) > 0:
 		// A protocol timeout and a separate bulk-write stall are correlated
 		// evidence for a path problem. Immediate failures such as a bad
@@ -588,11 +599,30 @@ func interpret(t *Target, order []ProbeID, res map[ProbeID]ProbeResult) Diagnosi
 	case encryptedDNSBlocked(res):
 		return blame(DiagnosisEncryptedDNSUnavailable, ProbeDNSEncrypted, encryptedDNSSummary, VerdictDegraded, ProbeDNS, ProbeDNSPublic, ProbeInternet)
 	case targetOK && (fail(ProbeInternet) || (warn(ProbeInternet) && res[ProbeInternet].downgraded)):
-		return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "The target works but direct internet egress is blocked (proxy-only or filtered network?).", VerdictDegraded, endpoint...)
+		if publicTargetReachedDirectly(t, res) {
+			// A public destination answered a direct connection on this run,
+			// which refutes "direct egress is blocked" rather than softening
+			// it: traffic did leave this machine without a proxy. What the run
+			// observed is narrower and still worth saying, so it says that.
+			// The row that observed the connection, in whichever state it
+			// reported it: a target that answered slowly still answered, and
+			// citing only a clean Pass would drop the refutation on exactly
+			// the runs where the path is impaired.
+			reached := ObservationStatusPass
+			if warn(ProbeTargetTCP) {
+				reached = ObservationStatusWarn
+			}
+			evidence := addEvidence(supportRows(append([]ProbeID{ProbeInternet, ProbeTargetTCP}, endpoint...)...),
+				rulesOut(DiagnosisDirectEgressBlocked, ProbeTargetTCP, reached))
+			return withEvidence(DiagnosisReferenceEgressUnreachable, ProbeInternet,
+				"The target answered a direct connection, so direct egress works; the egress check's own fixed reference endpoints are what did not answer.",
+				VerdictDegraded, evidence)
+		}
+		return blame(DiagnosisDirectEgressBlocked, ProbeInternet, "The target works but direct TCP egress to the egress check's reference endpoints is blocked (proxy-only or filtered network?).", VerdictDegraded, endpoint...)
 	case targetOK && prxDown && directOK():
 		return blame(DiagnosisProxyFailure, ProbeProxy, "The target and direct egress work, but the configured environment proxy check failed, so apps that use the proxy will fail (see the proxy row).", VerdictDegraded, ProbeInternet)
 	case targetOK && warn(ProbeInternet):
-		return blame(DiagnosisDirectEgressDegraded, ProbeInternet, "The target works but direct internet egress is degraded (see the ! row for details).", VerdictDegraded, endpoint...)
+		return blame(DiagnosisDirectEgressDegraded, ProbeInternet, "The target works but direct egress to the egress check's reference endpoints is degraded (see the ! row for details).", VerdictDegraded, endpoint...)
 	case targetOK && warn(ProbeDNSPublic) && has(ProbeDNS) && functional(res[ProbeDNS].Status):
 		return blame(DiagnosisDNSDisagreement, ProbeDNSPublic, "The target works, but system DNS and public DNS disagree; split DNS or filtering may be intentional (see the DNS rows).", VerdictDegraded, ProbeDNS)
 	case targetOK && degraded:
@@ -697,6 +727,39 @@ func localIP(ip net.IP) bool {
 func directEgressOK(res map[ProbeID]ProbeResult) bool {
 	r, ok := res[ProbeInternet]
 	return ok && functional(r.Status) && !r.downgraded
+}
+
+// The egress row is a sample, not an oracle. It dials a fixed pair of anycast
+// reference addresses, so what a failure there observes is that those
+// addresses did not answer. Two other things in a run bear on how far that
+// observation may be carried, and these are the only two questions the
+// interpretation pass asks about it.
+
+// publicTargetReachedDirectly reports whether some destination other than the
+// reference addresses answered a direct connection on this run. The endpoint
+// check dials the target itself, with no proxy in the path, so a public target
+// answering is a direct counterexample to "direct egress is blocked": one
+// destination refusing a run's traffic while another accepts it is a fact
+// about those destinations. A device on the local network proves nothing here,
+// because it is reached without leaving the network at all.
+func publicTargetReachedDirectly(t *Target, res map[ProbeID]ProbeResult) bool {
+	r, ok := res[ProbeTargetTCP]
+	return ok && functional(r.Status) && t != nil && !localTarget(t, res)
+}
+
+// localPathObserved reports whether the operating system's own routing and
+// neighbor tables classified the dead direct path. Those causes are read from
+// local state rather than inferred from what failed to answer, which is what
+// separates a located break from a set of destinations that happened to be
+// silent together. Without one, reference endpoints and a target failing at the
+// same moment is a correlation, and naming the local path would be a guess.
+func localPathObserved(cause string) bool {
+	switch cause {
+	case RouteCauseNoDefaultRoute, RouteCauseGatewayUnreachable,
+		RouteCauseSelectedPathFailed, RouteCausePreferredPathFailed:
+		return true
+	}
+	return false
 }
 
 // proxyCarries reports whether the configured environment proxy is carrying

@@ -79,9 +79,21 @@ func TestDiagnoseTargetBranches(t *testing.T) {
 			want: "unreachable though DNS and the general internet work",
 		},
 		{
-			name: "target and internet both unreachable",
+			// Both silent, and nothing looked at where: the run may say what
+			// did not answer and may not say whose fault it is.
+			name: "target and reference endpoints both unreachable",
 			res: map[ProbeID]ProbeResult{
 				ProbeIface: pass, ProbeInternet: fail, ProbeDNS: pass,
+				ProbeTargetTCP: fail, ProbeTLS: skip, ProbeHTTP: fail, ProbeHTTPS: skip,
+			},
+			want: "nothing this run observed says where the path breaks",
+		},
+		{
+			// The same two failures with the routing table's own verdict
+			// beside them, which is what earns the located conclusion.
+			name: "target and reference endpoints unreachable with a routing cause",
+			res: map[ProbeID]ProbeResult{
+				ProbeIface: pass, ProbeInternet: {Status: StatusFail, Cause: RouteCauseNoDefaultRoute}, ProbeDNS: pass,
 				ProbeTargetTCP: fail, ProbeTLS: skip, ProbeHTTP: fail, ProbeHTTPS: skip,
 			},
 			want: "local egress problem",
@@ -137,7 +149,7 @@ func TestDiagnoseNamesRefusalOnlyWithWorkingEgressControl(t *testing.T) {
 		wantVerdict string
 	}{
 		{"working egress isolates refusal", StatusPass, "explicitly refused", VerdictService},
-		{"failed egress keeps broader diagnosis", StatusFail, "local egress problem", VerdictNetwork},
+		{"failed egress keeps broader diagnosis", StatusFail, "nothing this run observed says where the path breaks", VerdictNetwork},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			res := make(map[ProbeID]ProbeResult, len(base)+1)

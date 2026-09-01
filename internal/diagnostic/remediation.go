@@ -307,7 +307,7 @@ var remedies = map[remedyKey]remedy{
 	{id: DiagnosisOffline}: {
 		id:     RemedyCheckLocalPath,
 		action: "Check this machine's own path off the network",
-		why:    "Neither direct egress nor DNS is getting through, and the routing table offered no specific cause, so the break is between this machine and the router.",
+		why:    "Neither DNS nor a direct connection to the egress check's reference endpoints is getting through, and the routing table offered no specific cause. This machine's own path is the first thing to rule out rather than something the run established.",
 		steps: []string{
 			"Confirm the link is up and this machine has an address from DHCP.",
 			"Restart the router or modem if other devices are offline too.",
@@ -326,13 +326,34 @@ var remedies = map[remedyKey]remedy{
 	{id: DiagnosisLocalEgressFailure}: {
 		id:     RemedyFixLocalEgressFirst,
 		action: "Fix this machine's own connection first",
-		why:    "Nothing this machine sends is arriving anywhere, so the far end has not been given a fair test yet. Anything concluded about it now would be a claim about a test that never really ran.",
+		why:    "The local routing state classified this machine's path off the network as broken, so the far end has not been given a fair test yet. Anything concluded about it now would be a claim about a test that never really ran.",
 		steps: []string{
 			"Work down the local rungs in order: link up, address from DHCP, default route, gateway answering.",
 			"Retest the target once the general checks pass, so its result means something.",
 		},
 		command: showRoutes,
 		expect:  "The general connectivity checks passing, with the target retested afterwards.",
+	},
+	{id: DiagnosisReferenceEgressUnreachable}: {
+		id:     RemedyReadEgressWarning,
+		action: "Read which reference endpoints the egress row could not reach",
+		why:    "The endpoint under test answered a direct connection, so traffic does leave this machine without a proxy. What failed is the fixed set of reference addresses the egress check dials, which a filter, a policy route, or an outage at those addresses can take out on their own without touching anything else.",
+		steps: []string{
+			"Read the egress row's attempts for the addresses that did not answer.",
+			"Treat general connectivity as proved by this run: retest anything else against the destination you actually care about.",
+		},
+		expect: "Either those addresses answering again, or a confirmed filter that leaves the rest of this machine's egress working.",
+	},
+	{id: DiagnosisReachabilityUnlocalized}: {
+		id:     RemedyCheckLocalPath,
+		action: "Check this machine's own path off the network",
+		why:    "Every destination this run tried was silent, and nothing it observed says where the path breaks. This machine's own path is the cheapest half to rule out, which is why it comes first, not because the run located the fault there.",
+		steps: []string{
+			"Confirm the link is up and this machine has an address from DHCP.",
+			"Check whether another device on the same network reaches the same destinations, which is what separates this machine from the network around it.",
+		},
+		command: showRoutes,
+		expect:  "A default route and a gateway that answers, or a second device failing the same way and moving the question off this machine.",
 	},
 	{id: DiagnosisDirectEgressBlocked}: {
 		id:     RemedyUseProxyPath,

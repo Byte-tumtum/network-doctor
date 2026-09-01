@@ -763,7 +763,7 @@ func (m model) probeLabel(id diagnostic.ProbeID) string {
 	}
 	switch id {
 	case diagnostic.ProbeInternet:
-		return "General internet reachability"
+		return "Egress to the reference endpoints"
 	case diagnostic.ProbeTargetTCP:
 		return "Target TCP connection"
 	case diagnostic.ProbeDNS:
@@ -790,6 +790,8 @@ func diagnosisLabel(id diagnostic.DiagnosisID) string {
 		return "Destination unreachable"
 	case diagnostic.DiagnosisLocalEgressFailure:
 		return "This machine's general network path"
+	case diagnostic.DiagnosisDirectEgressBlocked:
+		return "Direct egress blocked"
 	case diagnostic.DiagnosisIPv4TargetUnreachable:
 		return "IPv4 target connectivity"
 	case diagnostic.DiagnosisIPv6TargetUnreachable:

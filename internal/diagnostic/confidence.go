@@ -87,17 +87,35 @@ func (c confidenceClass) ceiling() Confidence {
 // TestEveryDiagnosisIDHasAConfidenceClass fails the build on one that does not,
 // so a new identity cannot be added without deciding what kind of claim it is.
 var diagnosisConfidence = map[DiagnosisID]confidenceClass{
-	// Link and path. A dead link, an interception, and a direct path that fails
-	// while another carries traffic are all observed states. Being offline, or
-	// blaming this machine's own egress, is not: from one host, a broken link,
-	// a broken upstream, and a network that drops this traffic look identical.
+	// Link and path. A dead link, an interception, and an impairment the egress
+	// probe measured for itself are observed states, and so is the proxy
+	// carrying traffic the direct path did not.
+	//
+	// The egress row's failures are weaker than they look, because that row
+	// dials a fixed pair of reference addresses. "Direct egress is blocked"
+	// generalizes from that sample to every destination, which no observation
+	// in the run separates from those addresses alone being unreachable, so it
+	// is an inference however cleanly the row failed. Being offline, or blaming
+	// this machine's own egress, is inferred for the same reason plus one more:
+	// from one host, a broken link, a broken upstream, and a network that drops
+	// this traffic look identical. Local egress is only ever concluded where
+	// the routing and neighbor tables classified the dead path, which is the
+	// observation the identity rests on rather than the silence around it.
 	DiagnosisNoUsableInterface:    classObserved,
 	DiagnosisCaptivePortal:        classObserved,
 	DiagnosisOffline:              classInferred,
-	DiagnosisDirectEgressBlocked:  classObserved,
+	DiagnosisDirectEgressBlocked:  classInferred,
 	DiagnosisDirectEgressDegraded: classObserved,
 	DiagnosisProxyOnlyNetwork:     classObserved,
 	DiagnosisLocalEgressFailure:   classInferred,
+	// The one reference-egress failure a run can settle: the endpoint under
+	// test answered a direct connection while the reference addresses did not,
+	// which is the controlled comparison that separates unreachable
+	// destinations from unreachable egress.
+	DiagnosisReferenceEgressUnreachable: classObserved,
+	// Its opposite. Everything the run tried was silent and nothing observed
+	// where, which is the definition of no causal claim rather than a weak one.
+	DiagnosisReachabilityUnlocalized: classUnresolved,
 	// Two stalls that correlate, which is what a black hole looks like and also
 	// what a slow server looks like. The identity says "probable" for the same
 	// reason this says inferred.

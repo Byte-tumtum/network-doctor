@@ -216,7 +216,7 @@ func TestFindingsCompareAsASetWithAPrimary(t *testing.T) {
 	}, after.Diagnosis.Findings...)
 
 	c := Snapshots(before, after)
-	if got := changeAt(t, c, "diagnosis.findings.primary"); got.Before != "local_egress_failure" || got.After != "dns_failure" {
+	if got := changeAt(t, c, "diagnosis.findings.primary"); got.Before != "reachability_unlocalized" || got.After != "dns_failure" {
 		t.Errorf("primary finding change = %+v", got)
 	}
 	added := changeAt(t, c, "diagnosis.findings.dns_failure")
@@ -225,7 +225,7 @@ func TestFindingsCompareAsASetWithAPrimary(t *testing.T) {
 	}
 	// The finding both runs share is untouched, so nothing is reported for it.
 	for _, change := range c.Changes {
-		if strings.HasPrefix(change.Path, "diagnosis.findings.local_egress_failure") {
+		if strings.HasPrefix(change.Path, "diagnosis.findings.reachability_unlocalized") {
 			t.Errorf("unchanged finding reported: %+v", change)
 		}
 	}
@@ -243,7 +243,7 @@ func TestFindingEvidenceKeepsItsOrder(t *testing.T) {
 	after.Diagnosis.Findings[0].Evidence = reversed
 
 	c := Snapshots(before, after)
-	if got := changeAt(t, c, "diagnosis.findings.local_egress_failure.evidence"); got.Kind != KindChanged {
+	if got := changeAt(t, c, "diagnosis.findings.reachability_unlocalized.evidence"); got.Kind != KindChanged {
 		t.Errorf("evidence change = %+v", got)
 	}
 }
@@ -261,7 +261,7 @@ func TestFindingCausalEvidenceKeepsItsOrder(t *testing.T) {
 	after.Diagnosis.Findings[0].CausalEvidence = reversed
 
 	c := Snapshots(before, after)
-	if got := changeAt(t, c, "diagnosis.findings.local_egress_failure.causal_evidence"); got.Kind != KindChanged {
+	if got := changeAt(t, c, "diagnosis.findings.reachability_unlocalized.causal_evidence"); got.Kind != KindChanged {
 		t.Errorf("causal evidence change = %+v", got)
 	}
 }

@@ -31,6 +31,13 @@ const (
 	DiagnosisProxyOnlyNetwork     DiagnosisID = "proxy_only_network"
 	DiagnosisLocalEgressFailure   DiagnosisID = "local_egress_failure"
 	DiagnosisProbablePathMTU      DiagnosisID = "probable_path_mtu_problem"
+	// The egress row dials a fixed pair of reference addresses, so these two
+	// are what is left of a reference failure once the run's other
+	// observations have had their say: one where a public destination
+	// answered a direct connection anyway, and one where nothing answered and
+	// nothing observed where the path breaks.
+	DiagnosisReferenceEgressUnreachable DiagnosisID = "reference_egress_unreachable"
+	DiagnosisReachabilityUnlocalized    DiagnosisID = "reachability_unlocalized"
 
 	// Name resolution.
 	DiagnosisSystemDNSFailure        DiagnosisID = "system_dns_failure"

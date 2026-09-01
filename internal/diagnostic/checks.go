@@ -295,6 +295,14 @@ var portalProbeURL = "http://" + ConnectivityProbeHost + "/generate_204"
 // internetEndpoints4/6 are the ordered direct-egress endpoints per address
 // family; first connect wins within a family. Honestly "direct TCP egress":
 // proxy-only networks can fail this.
+//
+// They are a fixed reference sample and not the internet. Two operators and
+// two families is enough to make an unlucky single outage unlikely, and it is
+// still a handful of addresses that a filter, a policy route, or their own bad
+// day can take out while everything else this machine dials keeps working.
+// What this row observes is therefore a fact about these destinations;
+// diagnosis.go is where that is weighed against the rest of a run, and adding
+// more addresses here would not change the shape of the claim.
 const (
 	internetEndpointCloudflareIPv4 = "1.1.1.1"
 	internetEndpointGoogleIPv4     = "8.8.8.8"
@@ -307,8 +315,8 @@ var (
 	internetEndpoints6 = []net.IP{net.ParseIP(internetEndpointCloudflareIPv6), net.ParseIP(internetEndpointGoogleIPv6)}
 )
 
-// InternetProbeEndpoints returns the ordered direct-egress endpoints for IPv4
-// and IPv6. The slices and every IP in them are defensive copies.
+// InternetProbeEndpoints returns the ordered direct-egress reference endpoints
+// for IPv4 and IPv6. The slices and every IP in them are defensive copies.
 func InternetProbeEndpoints() (ipv4, ipv6 []net.IP) {
 	return cloneIPs(internetEndpoints4), cloneIPs(internetEndpoints6)
 }
