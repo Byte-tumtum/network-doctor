@@ -4,6 +4,8 @@
 package diagnostic
 
 import (
+	"context"
+	"errors"
 	"net"
 	"slices"
 	"strings"
@@ -514,10 +516,10 @@ func TestReconcileDNS(t *testing.T) {
 	t.Run("unrelated answers warn", func(t *testing.T) {
 		res := map[ProbeID]ProbeResult{
 			ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{ip1}},
-			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{elsewhere}, resolver: DefaultPublicDNS},
+			ProbeDNSPublic: {Status: StatusPass, Addrs: []net.IP{elsewhere}, resolver: "8.8.8.8"},
 		}
 		reconcileDNS(res)
-		if !strings.Contains(res[ProbeDNSPublic].Detail, "public "+DefaultPublicDNS+":") {
+		if !strings.Contains(res[ProbeDNSPublic].Detail, "public 8.8.8.8:") {
 			t.Errorf("detail = %q, want it to name the resolver", res[ProbeDNSPublic].Detail)
 		}
 		if res[ProbeDNSPublic].Status != StatusWarn || !strings.Contains(res[ProbeDNSPublic].Detail, "split DNS") {
@@ -799,5 +801,42 @@ func TestDiagnoseLocalTargetFollowsResolvedAddresses(t *testing.T) {
 				t.Errorf("summary = %q, want substring %q", v, c.want)
 			}
 		})
+	}
+}
+
+// A default second opinion that had to change address family is still a second
+// opinion, and the run has to spend it as one. The IPv4 candidate being
+// unreachable is a fact about that resolver, not about DNS: the row that
+// answered agrees with the system resolver, so nothing here is degraded and
+// nothing blames DNS. Before the default could change family this run had no
+// public row at all and reached the same verdict for a worse reason.
+func TestIPv6OnlyDefaultSecondOpinionDoesNotReadAsDNSTrouble(t *testing.T) {
+	tg := mustTarget(t, "example.com")
+	answer := net.ParseIP("192.0.2.9")
+	ops := &netops{lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, []string, error) {
+		if server == publicDNSServer("8.8.8.8") {
+			return nil, []string{server}, errors.New("connect: network is unreachable")
+		}
+		return []net.IP{answer}, []string{server}, nil
+	}}
+	public := ops.publicDNSProbe("example.com", nil, PublicDNSCandidates(DefaultPublicDNS, true))(context.Background(), nil)
+
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeDNSPublic, ProbeTargetTCP}
+	res := map[ProbeID]ProbeResult{
+		ProbeIface: {Status: StatusPass}, ProbeInternet: {Status: StatusPass},
+		ProbeDNS:       {Status: StatusPass, Addrs: []net.IP{answer}},
+		ProbeDNSPublic: public,
+		ProbeTargetTCP: {Status: StatusPass},
+	}
+	reconcileDNS(res)
+	if got := res[ProbeDNSPublic]; got.Status != StatusPass || got.resolver != "2001:4860:4860::8888" {
+		t.Fatalf("public row = %+v, want a pass credited to the resolver that answered", got)
+	}
+	summary, verdict := Diagnose(tg, order, res)
+	if verdict != VerdictOK {
+		t.Errorf("verdict = %q (%q), want %q: one unreachable resolver is not a DNS problem", verdict, summary, VerdictOK)
+	}
+	if strings.Contains(summary, "DNS") {
+		t.Errorf("summary = %q, want no DNS claim", summary)
 	}
 }

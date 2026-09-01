@@ -20,7 +20,7 @@ import (
 func watchModel(t *testing.T) model {
 	t.Helper()
 	return NewWithSelection(mustTarget(t, "example.com:443"), nil, false, true, "", "test",
-		diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+		diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 }
 
 func statusOr(status map[diagnostic.ProbeID]diagnostic.Status, id diagnostic.ProbeID) diagnostic.Status {

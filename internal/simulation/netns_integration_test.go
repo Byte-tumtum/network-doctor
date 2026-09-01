@@ -598,7 +598,7 @@ func TestDNSHijackingScenarioReachesSplitDNSDiagnosis(t *testing.T) {
 	}
 	if public.Status != "WARN" || public.Cause != "" ||
 		!strings.Contains(public.Detail, "answers point elsewhere; system: "+wrongAddress) ||
-		!strings.Contains(public.Detail, "public "+diagnostic.DefaultPublicDNS+": "+publicAddress) {
+		!strings.Contains(public.Detail, "public "+diagnostic.PublicDNSCandidates(diagnostic.DefaultPublicDNS, true)[0]+": "+publicAddress) {
 		t.Errorf("public DNS = %+v, want the split-DNS reconciliation detail", public)
 	}
 	if target := diagnosisCheck(out, string(diagnostic.ProbeTargetTCP)); target.Status != "PASS" || !strings.Contains(target.Detail, wrongAddress) {

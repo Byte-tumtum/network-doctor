@@ -342,7 +342,7 @@ func TestEveryProbeTheGraphBuildsIsReplayable(t *testing.T) {
 		{Host: "example.invalid", Port: 9100, Proto: ProtoNone},
 	}
 	for _, target := range targets {
-		for _, p := range BuildProbesFromSources(target, nil, "8.8.8.8") {
+		for _, p := range BuildProbesFromSources(target, nil, DefaultPublicDNS, true) {
 			if !replayProbeID(p.ID) {
 				t.Errorf("probe %q is in the graph but not replayable", p.ID)
 			}

@@ -1082,3 +1082,30 @@ func TestSanitizedSideIsNamedInTheReport(t *testing.T) {
 		t.Errorf("comparison did not name which side is sanitized:\n%s", text)
 	}
 }
+
+// The default and "--public-dns 8.8.8.8" leave the same address in the file and
+// are not the same run: only the first could try a second address family when
+// the first resolver could not be reached. A comparison that read the address
+// alone would call them identical.
+func TestComparesHowThePublicResolverWasChosenAndNotJustWhichOne(t *testing.T) {
+	before := fixture(t)
+	before.Options.PublicDNS, before.Options.PublicDNSAuto = "8.8.8.8", true
+	after := fixture(t)
+	after.Options.PublicDNS, after.Options.PublicDNSAuto = "8.8.8.8", false
+
+	c := Snapshots(before, after)
+	got := changeAt(t, c, "options.public_dns_auto")
+	if got.Before != "yes" || got.After != "no" {
+		t.Errorf("change = %+v, want yes to no", got)
+	}
+	for _, p := range paths(c) {
+		if p == "options.public_dns" {
+			t.Error("the resolver address is reported as changed; it did not change")
+		}
+	}
+	// And two runs that chose it the same way have nothing to report here.
+	after.Options.PublicDNSAuto = true
+	if paths := paths(Snapshots(before, after)); len(paths) != 0 {
+		t.Errorf("changes = %v, want none between two identical runs", paths)
+	}
+}

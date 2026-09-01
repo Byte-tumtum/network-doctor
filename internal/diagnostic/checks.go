@@ -283,6 +283,49 @@ const quicProbePort = 443
 // egress policy never dials it.
 const DefaultPublicDNS = "8.8.8.8"
 
+// autoPublicDNSFallback is the resolver tried after DefaultPublicDNS when the
+// run named none, so a host with only IPv6 still gets a second opinion instead
+// of losing the row to an IPv4 dial it cannot make. It is Google Public DNS,
+// the operator the default already names, so the second opinion still comes
+// from one place.
+//
+// Spelled out rather than taken from the direct-egress endpoints below, which
+// happen to be the same address. Those are a reference sample of the Internet
+// and this is a resolver to ask a question of: moving one has never been a
+// reason to move the other.
+const autoPublicDNSFallback = "2001:4860:4860::8888"
+
+// PublicDNSCandidates is the resolver list one run queries, in attempt order.
+// An empty publicDNS switches the row off and asks nothing at all. Otherwise
+// that address is asked first, and auto adds the other family behind it when
+// it is not already the address in hand.
+//
+// auto means the run named no resolver, so the choice is still open and may
+// follow whichever family this machine can reach. A user who named an address
+// gets that address and nothing else: "--public-dns 8.8.8.8" is a choice, not
+// a preference, and it must not quietly acquire a second resolver just because
+// the default happens to be spelled the same way.
+func PublicDNSCandidates(publicDNS string, auto bool) []string {
+	switch {
+	case publicDNS == "":
+		return nil
+	case auto && publicDNS != autoPublicDNSFallback:
+		return []string{publicDNS, autoPublicDNSFallback}
+	default:
+		return []string{publicDNS}
+	}
+}
+
+// publicDNSRowName labels the second-opinion row. An automatic run names no
+// resolver there, because which one answered is not decided until the probe has
+// run, and the finished row says so itself.
+func publicDNSRowName(publicDNS string, auto bool) string {
+	if auto {
+		return "DNS (public)"
+	}
+	return "DNS (public " + publicDNS + ")"
+}
+
 // publicDNSServer is the dial address for a second-opinion resolver IP; it
 // brackets IPv6 literals.
 func publicDNSServer(ip string) string { return net.JoinHostPort(ip, "53") }
@@ -458,10 +501,16 @@ var dialFamily = func(ctx context.Context, source net.IP, network, addr string, 
 var errFamilyLost = errors.New("connection superseded by the other address family")
 
 // BuildProbesFromSources constructs the DAG with separate selected-interface
-// addresses for IPv4 and IPv6. publicDNS is a bare IP, or "" to leave that
-// probe out of the DAG altogether, since a skipped row would still have had to dial
-// to be skipped.
-func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS string) []Probe {
+// addresses for IPv4 and IPv6. publicDNS is a bare IP, or "" to leave the
+// second-opinion probe out of the DAG altogether, since a skipped row would
+// still have had to dial to be skipped. publicDNSAuto says nobody named that
+// resolver, which is what lets the row cross to the other address family.
+//
+// The candidates are worked out here rather than at the flag, so they are
+// worked out by the machine that runs the probes: --via builds this graph on
+// the far end, and an IPv6-only remote must not be pinned to the caller's
+// address family.
+func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS string, publicDNSAuto bool) []Probe {
 	// A copy either way, so the per-pass route cache installed below belongs
 	// to this pass rather than to the package-level ops every pass shares.
 	o := opsFromSources(sources)
@@ -470,7 +519,7 @@ func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS strin
 	// than once; a later pass must not be answered from an earlier one, since
 	// the whole point of Watch Mode is to see the route change.
 	o.routes = newRouteCache(o.routeFor, o.sources)
-	probes := o.buildProbes(t, publicDNS)
+	probes := o.buildProbes(t, publicDNS, publicDNSAuto)
 	for i := range probes {
 		probes[i].Run = wrapRun(probes[i].Run)
 	}
@@ -507,9 +556,11 @@ func cleanResult(r ProbeResult) ProbeResult {
 	return r
 }
 
-// buildProbes assembles the DAG. publicDNSIP names the second-opinion
-// resolver; "" leaves the row out entirely rather than emitting a skipped one.
-func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
+// buildProbes assembles the DAG. publicDNS is the second-opinion resolver;
+// "" leaves the row out entirely rather than emitting a skipped one, and
+// publicDNSAuto lets an unnamed one cross to the other address family.
+func (o *netops) buildProbes(t *Target, publicDNS string, publicDNSAuto bool) []Probe {
+	publicDNSResolvers := PublicDNSCandidates(publicDNS, publicDNSAuto)
 	// The interface row carries the run's reference paths: where traffic to
 	// the general Internet goes, per family. Every other route decision in the
 	// run is explained against these, so they belong on the row that is about
@@ -537,8 +588,8 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 		// depends only on the interface, so one failure never hides another.
 		dns := Probe{ID: ProbeDNS, Name: "DNS", Deps: []ProbeID{ProbeIface}, Run: o.dnsProbe(ConnectivityProbeHost, nil)}
 		probes := []Probe{iface, internet, quicProbe, proxy, dns}
-		if publicDNSIP != "" {
-			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(ConnectivityProbeHost, nil, publicDNSIP)})
+		if len(publicDNSResolvers) > 0 {
+			probes = append(probes, Probe{ID: ProbeDNSPublic, Name: publicDNSRowName(publicDNS, publicDNSAuto), Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(ConnectivityProbeHost, nil, publicDNSResolvers)})
 		}
 		probes = append(probes, encryptedDNS)
 		return append(probes, network)
@@ -552,8 +603,8 @@ func (o *netops) buildProbes(t *Target, publicDNSIP string) []Probe {
 	// black hole breaks SSH and SMTP exactly as thoroughly as it breaks TLS.
 	pmtu := Probe{ID: ProbePMTU, Name: "Path MTU " + hp, Deps: []ProbeID{ProbeTargetTCP}, Run: o.pmtuProbe(port, t.Proto)}
 	probes := []Probe{iface, internet, quicProbe, proxy, dns}
-	if publicDNSIP != "" {
-		probes = append(probes, Probe{ID: ProbeDNSPublic, Name: "DNS (public " + publicDNSIP + ")", Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP, publicDNSIP)})
+	if len(publicDNSResolvers) > 0 {
+		probes = append(probes, Probe{ID: ProbeDNSPublic, Name: publicDNSRowName(publicDNS, publicDNSAuto), Deps: []ProbeID{ProbeIface}, Run: o.publicDNSProbe(host, t.IP, publicDNSResolvers)})
 	}
 	probes = append(probes, encryptedDNS, ttcp, pmtu, network)
 

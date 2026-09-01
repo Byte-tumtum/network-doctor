@@ -178,7 +178,7 @@ func TestProbeGraphStagesAndWorstCaseBudget(t *testing.T) {
 			if tc.target != "" {
 				target = mustTarget(t, tc.target)
 			}
-			probes := BuildProbesFromSources(target, nil, DefaultPublicDNS)
+			probes := BuildProbesFromSources(target, nil, DefaultPublicDNS, true)
 			got := layersOf(probeDepths(t, probes))
 			for _, stage := range tc.stages {
 				slices.Sort(stage)
@@ -197,7 +197,7 @@ func TestProbeGraphStagesAndWorstCaseBudget(t *testing.T) {
 // can only ever be shallower than the full one. Pinning that keeps the budget
 // above meaningful for every run netdoc can be asked for, not just the default.
 func TestProbeSelectionNeverDeepensTheGraph(t *testing.T) {
-	probes := BuildProbesFromSources(mustTarget(t, "target.test:443"), nil, DefaultPublicDNS)
+	probes := BuildProbesFromSources(mustTarget(t, "target.test:443"), nil, DefaultPublicDNS, true)
 	full := len(layersOf(probeDepths(t, probes)))
 	for _, id := range []ProbeID{ProbeHTTPS, ProbeTLS, ProbePMTU, ProbeDNS, ProbeInternet} {
 		for _, sel := range []ProbeSelection{
@@ -272,7 +272,7 @@ func TestRunAllOverlapsEveryReadyProbe(t *testing.T) {
 			if target != "" {
 				tg = mustTarget(t, target)
 			}
-			probes := gatedProbes(t, BuildProbesFromSources(tg, nil, DefaultPublicDNS))
+			probes := gatedProbes(t, BuildProbesFromSources(tg, nil, DefaultPublicDNS, true))
 			// Long enough that a healthy machine never trips it, short enough
 			// that a genuinely serialized executor fails in seconds.
 			res := RunAll(context.Background(), probes, 2*time.Second)
@@ -471,7 +471,7 @@ func timedProbes(probes []Probe) []Probe {
 // which starts sitting on a timer that a working path never fires.
 func TestHealthyRunStaysInsideItsBudget(t *testing.T) {
 	f := newBudgetFixture(t)
-	probes := timedProbes(f.ops().buildProbes(mustTarget(t, budgetTargetHost+":443"), DefaultPublicDNS))
+	probes := timedProbes(f.ops().buildProbes(mustTarget(t, budgetTargetHost+":443"), DefaultPublicDNS, true))
 
 	start := time.Now()
 	res := RunAll(context.Background(), probes, DefaultProbeTimeout)
@@ -616,7 +616,7 @@ func TestEveryProbeReturnsWithinItsDeadline(t *testing.T) {
 		if target != "" {
 			tg = mustTarget(t, target)
 		}
-		for _, p := range timedProbes(o.buildProbes(tg, DefaultPublicDNS)) {
+		for _, p := range timedProbes(o.buildProbes(tg, DefaultPublicDNS, true)) {
 			if !seen[p.ID] {
 				seen[p.ID] = true
 				probes = append(probes, p)

@@ -461,6 +461,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		*publicDNS = ip.String() // canonical form, so the row label matches the probe
 	}
+	// Nobody named a resolver, so the row is free to follow whichever address
+	// family this machine can actually use. Asked of the flag set rather than
+	// of the value, because the default is a real address a user may also type,
+	// and typing it is a choice this must not overrule.
+	publicDNSAuto := !setFlagNames(fs)["public-dns"]
 	// Not resolved for --via: -iface names an interface on the machine the
 	// probes run on, and for a remote run that is the far end. The spelling is
 	// forwarded and the remote resolves it with this same function, so the flag
@@ -505,7 +510,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	h := headless{
 		target: t, sources: sources, iface: *iface, selection: selection,
-		check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
+		check: checks, skip: skips, publicDNS: *publicDNS, publicDNSAuto: publicDNSAuto, timeout: *timeout,
 		watch: *watch, json: *jsonOut, save: artifact, support: *support != "",
 	}
 	h.via, h.viaCommand = *viaDest, os.Getenv(remote.CommandEnv)
@@ -540,7 +545,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// No mouse tracking: terminals translate the wheel to arrow keys in the
 	// alt screen (alternate scroll), and grabbing the mouse would break
 	// native text selection.
-	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, selection,
+	p := tea.NewProgram(ui.NewWithSelection(t, sources, *toolbox, *watch, historyFile(*noHistory), version, *publicDNS, publicDNSAuto, selection,
 		ui.WithKeymap(keymap), ui.WithProbeTimeout(*timeout), ui.WithThemeFile(themeFile()),
 		ui.WithSnapshotSelection(checks.strings(), skips.strings())), tea.WithAltScreen())
 	final, err := p.Run()
@@ -947,8 +952,12 @@ type headless struct {
 	check     probeList
 	skip      probeList
 	publicDNS string
-	timeout   time.Duration
-	watch     bool
+	// publicDNSAuto says publicDNS is the default rather than a resolver this
+	// run named, which is what lets the second-opinion row cross to the other
+	// address family.
+	publicDNSAuto bool
+	timeout       time.Duration
+	watch         bool
 	// json asks for the report on stdout. It is independent of save: a run can
 	// want the artifact, the report, or both.
 	json bool
@@ -1034,7 +1043,7 @@ func runHeadless(ctx context.Context, h headless, stdout, stderr io.Writer) int 
 	// success, so an interrupt before the first line lands has to fail closed.
 	code := 1
 	for {
-		probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
+		probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS, h.publicDNSAuto))
 		results := runAll(ctx, probes, h.timeout)
 		if ctx.Err() != nil {
 			// Interrupted mid-pass: every probe failed because we cancelled it,
@@ -1212,7 +1221,7 @@ func diagnoseHeadless(ctx context.Context, h headless) diagnosisOutput {
 		}
 		return diagnosisOutput{report: *resp.Report, snapshot: *resp.Snapshot, tool: resp.Tool}
 	}
-	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
+	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS, h.publicDNSAuto))
 	results := runAll(ctx, probes, h.timeout)
 	if ctx.Err() != nil {
 		return diagnosisOutput{err: ctx.Err()}
@@ -1308,8 +1317,9 @@ var workerStdin io.Reader = os.Stdin
 
 func requestForRemote(h headless) remote.Request {
 	req := remote.Request{
-		Iface: h.iface, PublicDNS: h.publicDNS, TimeoutMs: h.timeout.Milliseconds(),
-		Check: h.check.strings(), Skip: h.skip.strings(),
+		Iface: h.iface, PublicDNS: h.publicDNS, PublicDNSAuto: h.publicDNSAuto,
+		TimeoutMs: h.timeout.Milliseconds(),
+		Check:     h.check.strings(), Skip: h.skip.strings(),
 	}
 	if h.target != nil {
 		// The remote parses the same validated spelling again, so a build that
@@ -1511,7 +1521,11 @@ func diagnoseRemote(ctx context.Context, req remote.Request) (*report.Report, *s
 	h := headless{
 		iface:     req.Iface,
 		publicDNS: req.PublicDNS,
-		timeout:   time.Duration(req.TimeoutMs) * time.Millisecond,
+		// Absent from a netdoc that predates the automatic default, and absent
+		// means false: an old local side named this resolver as far as it knew,
+		// and reinterpreting its request would answer a question it never asked.
+		publicDNSAuto: req.PublicDNSAuto,
+		timeout:       time.Duration(req.TimeoutMs) * time.Millisecond,
 	}
 	if h.timeout <= 0 {
 		return nil, nil, errors.New("-timeout must be positive")
@@ -1523,6 +1537,11 @@ func diagnoseRemote(ctx context.Context, req remote.Request) (*report.Report, *s
 		}
 		h.target = t
 	}
+	// Validated exactly as the local flag is: an address or empty, which is
+	// what every protocol 1 netdoc has ever put in this field. Whether the
+	// caller named it is the separate bit above, and it is the far end that
+	// turns that into candidates, so a dual-stack caller cannot pin this
+	// machine to a family it does not have.
 	if req.PublicDNS != "" {
 		ip := net.ParseIP(req.PublicDNS)
 		if ip == nil {
@@ -1559,7 +1578,7 @@ func diagnoseRemote(ctx context.Context, req remote.Request) (*report.Report, *s
 		h.sources = sources
 	}
 
-	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
+	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS, h.publicDNSAuto))
 	results := runAll(ctx, probes, h.timeout)
 	if ctx.Err() != nil {
 		// Cancelled mid-pass, which for a worker means the local side went
@@ -1598,6 +1617,7 @@ func buildSnapshotArtifact(h headless, probes []diagnostic.Probe, results map[di
 	s.Options = snapshot.Options{
 		ProbeTimeoutMs: h.timeout.Milliseconds(),
 		PublicDNS:      h.publicDNS,
+		PublicDNSAuto:  h.publicDNSAuto,
 	}
 	s.Options.Check = h.check.strings()
 	s.Options.Skip = h.skip.strings()

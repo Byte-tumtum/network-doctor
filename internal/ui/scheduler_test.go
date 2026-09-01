@@ -160,7 +160,7 @@ func TestWatchRecordsAndRestarts(t *testing.T) {
 
 func TestWatchAndTargetRestartPreserveProbeSelection(t *testing.T) {
 	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
-	m := NewWithSelection(mustTarget(t, "example.com"), nil, false, true, "", "test", diagnostic.DefaultPublicDNS, selection).(model)
+	m := NewWithSelection(mustTarget(t, "example.com"), nil, false, true, "", "test", diagnostic.DefaultPublicDNS, true, selection).(model)
 	want := []diagnostic.ProbeID{diagnostic.ProbeIface, diagnostic.ProbeDNS, diagnostic.ProbeTargetTCP, diagnostic.ProbeTLS}
 	ids := func(probes []diagnostic.Probe) []diagnostic.ProbeID {
 		got := make([]diagnostic.ProbeID, len(probes))
@@ -183,7 +183,7 @@ func TestWatchAndTargetRestartPreserveProbeSelection(t *testing.T) {
 	}
 
 	conditional := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeSSH: {}}}
-	m = NewWithSelection(nil, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, conditional).(model)
+	m = NewWithSelection(nil, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, true, conditional).(model)
 	if len(m.probes) != 0 {
 		t.Fatalf("generic SSH selection = %v, want empty", ids(m.probes))
 	}
@@ -196,7 +196,7 @@ func TestWatchAndTargetRestartPreserveProbeSelection(t *testing.T) {
 
 func TestEmptySelectionCompletesAndKeepsWatching(t *testing.T) {
 	selection := diagnostic.ProbeSelection{Check: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeTLS: {}}}
-	m := NewWithSelection(nil, nil, false, true, "", "test", diagnostic.DefaultPublicDNS, selection).(model)
+	m := NewWithSelection(nil, nil, false, true, "", "test", diagnostic.DefaultPublicDNS, true, selection).(model)
 	if !m.allDone() || ExitCode(m) != 0 || !strings.Contains(m.banner(), "No checks selected") {
 		t.Fatalf("empty selection did not complete cleanly: done=%v exit=%d banner=%q", m.allDone(), ExitCode(m), m.banner())
 	}
@@ -393,11 +393,11 @@ func TestRunProbeTimeoutIsPerModel(t *testing.T) {
 		return diagnostic.ProbeResult{Status: diagnostic.StatusPass}
 	}}
 
-	m1 := NewWithSelection(nil, nil, false, false, "", "test", "", diagnostic.ProbeSelection{}, WithProbeTimeout(short)).(model)
+	m1 := NewWithSelection(nil, nil, false, false, "", "test", "", false, diagnostic.ProbeSelection{}, WithProbeTimeout(short)).(model)
 	m1.ctx = context.Background()
 	cmd := m1.runProbe(reportBudget)
 
-	m2 := NewWithSelection(nil, nil, false, false, "", "test", "", diagnostic.ProbeSelection{}, WithProbeTimeout(long)).(model)
+	m2 := NewWithSelection(nil, nil, false, false, "", "test", "", false, diagnostic.ProbeSelection{}, WithProbeTimeout(long)).(model)
 	m2.ctx = context.Background()
 
 	cmd()

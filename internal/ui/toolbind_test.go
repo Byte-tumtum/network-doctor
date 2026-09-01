@@ -314,7 +314,7 @@ func TestBoundToolArgvIndependentPerCall(t *testing.T) {
 func TestModelToolsCarryTheIfaceSelection(t *testing.T) {
 	tgt := mustTarget(t, "github.com")
 	sources := &diagnostic.SourceAddresses{IPv4: src4, IPv6: src6, Iface: "wg0"}
-	m := NewWithSelection(tgt, sources, false, false, "", "test", diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+	m := NewWithSelection(tgt, sources, false, false, "", "test", diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 
 	bound := func(m model) bool {
 		args, _, _ := toolByKey(t, m.tools, "c").Build(tgt, src4)
@@ -331,7 +331,7 @@ func TestModelToolsCarryTheIfaceSelection(t *testing.T) {
 	}
 
 	// Without --iface the same table stays exactly as it was.
-	plain := NewWithSelection(tgt, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+	plain := NewWithSelection(tgt, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 	if bound(plain) {
 		args, _, _ := toolByKey(t, plain.tools, "c").Build(tgt, src4)
 		t.Errorf("curl argv without --iface = %q, want no binding", args)

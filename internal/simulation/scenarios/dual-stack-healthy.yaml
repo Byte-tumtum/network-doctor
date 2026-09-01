@@ -67,5 +67,6 @@ expect:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: PASS, ipv4: reachable, ipv6: reachable}
     - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
     - {id: target_tcp, status: PASS}
     - {id: http, status: PASS}

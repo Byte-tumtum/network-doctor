@@ -239,6 +239,9 @@ func TestSettingsThatChangeWhatWasMeasuredAreCaveats(t *testing.T) {
 		{"timeout", func(s *snapshot.Snapshot) { s.Options.ProbeTimeoutMs = 9000 }, "probe timeouts differ"},
 		{"public dns", func(s *snapshot.Snapshot) { s.Options.PublicDNS = "9.9.9.9" }, "second-opinion resolvers differ"},
 		{"selection", func(s *snapshot.Snapshot) { s.Options.Skip = []string{"dns"} }, "selected different probes"},
+		// The same resolver, reached two different ways: only the side that did
+		// not name it could have crossed to the other address family.
+		{"public dns chosen two ways", func(s *snapshot.Snapshot) { s.Options.PublicDNSAuto = true }, "took the default"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, b := fixture(t), fixture(t)

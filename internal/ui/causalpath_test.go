@@ -23,7 +23,7 @@ func planFor(t *testing.T, spec string, sel diagnostic.ProbeSelection) []diagnos
 	if spec != "" {
 		target = mustTarget(t, spec)
 	}
-	return sel.Apply(diagnostic.BuildProbesFromSources(target, nil, diagnostic.DefaultPublicDNS))
+	return sel.Apply(diagnostic.BuildProbesFromSources(target, nil, diagnostic.DefaultPublicDNS, true))
 }
 
 // pathRun is a finished run over spec in which the named rows carry the named

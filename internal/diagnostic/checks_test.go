@@ -62,7 +62,7 @@ func TestBuildProbesShape(t *testing.T) {
 		if c.target != "" {
 			tg = mustTarget(t, c.target)
 		}
-		if got := len(BuildProbesFromSources(tg, nil, DefaultPublicDNS)); got != c.want {
+		if got := len(BuildProbesFromSources(tg, nil, DefaultPublicDNS, true)); got != c.want {
 			t.Errorf("BuildProbesFromSources(%q) = %d probes, want %d", c.target, got, c.want)
 		}
 	}
@@ -71,20 +71,25 @@ func TestBuildProbesShape(t *testing.T) {
 // --public-dns names the second-opinion resolver, and both target and generic
 // mode have to honor it. An empty value removes the row from the DAG rather
 // than emitting a skipped one: a row that still had to dial in order to report
-// itself skipped would not be an opt-out.
+// itself skipped would not be an opt-out. The default names no resolver at all,
+// so its row cannot name one either; an address the user typed is on the row
+// even when it is the same address the default would have reached first.
 func TestBuildProbesPublicDNSIsConfigurable(t *testing.T) {
 	for _, tc := range []struct {
-		name, publicDNS, want string
+		name, publicDNS string
+		auto            bool
+		want            string
 	}{
-		{"default", DefaultPublicDNS, "DNS (public 8.8.8.8)"},
-		{"custom IPv4", "9.9.9.9", "DNS (public 9.9.9.9)"},
-		{"custom IPv6", "2620:fe::fe", "DNS (public 2620:fe::fe)"},
-		{"disabled", "", ""}, // absent, so the loop below leaves want empty
+		{"default", DefaultPublicDNS, true, "DNS (public)"}, // no resolver decided yet
+		{"explicit default address", "8.8.8.8", false, "DNS (public 8.8.8.8)"},
+		{"custom IPv4", "9.9.9.9", false, "DNS (public 9.9.9.9)"},
+		{"custom IPv6", "2620:fe::fe", false, "DNS (public 2620:fe::fe)"},
+		{"disabled", "", false, ""}, // absent, so the loop below leaves want empty
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, target := range []*Target{nil, mustTarget(t, "example.com:443")} {
 				got := ""
-				for _, p := range BuildProbesFromSources(target, nil, tc.publicDNS) {
+				for _, p := range BuildProbesFromSources(target, nil, tc.publicDNS, tc.auto) {
 					if p.ID == ProbeDNSPublic {
 						got = p.Name
 					}
@@ -125,7 +130,7 @@ func TestDisabledPublicDNSNeverQueriesTheResolver(t *testing.T) {
 			return nil, errors.New("no network in tests")
 		},
 	}
-	for _, p := range o.buildProbes(nil, "") {
+	for _, p := range o.buildProbes(nil, "", false) {
 		if p.ID == ProbeDNSPublic {
 			t.Fatal("the public DNS probe is still in the DAG")
 		}
@@ -141,7 +146,7 @@ func TestDisabledPublicDNSNeverQueriesTheResolver(t *testing.T) {
 }
 
 func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
-	probes := BuildProbesFromSources(nil, nil, DefaultPublicDNS)
+	probes := BuildProbesFromSources(nil, nil, DefaultPublicDNS, true)
 	deps := make(map[ProbeID][]ProbeID, len(probes))
 	for _, p := range probes {
 		deps[p.ID] = p.Deps
@@ -158,7 +163,7 @@ func TestSSIDDoesNotGateNetworkProbes(t *testing.T) {
 }
 
 func TestQUICProbeIsConcurrentSiblingAfterInternetTCP(t *testing.T) {
-	probes := BuildProbesFromSources(nil, nil, DefaultPublicDNS)
+	probes := BuildProbesFromSources(nil, nil, DefaultPublicDNS, true)
 	for i, probe := range probes {
 		if probe.ID != ProbeQUIC {
 			continue
@@ -175,7 +180,7 @@ func TestQUICProbeIsConcurrentSiblingAfterInternetTCP(t *testing.T) {
 }
 
 func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
-	https := BuildProbesFromSources(mustTarget(t, "https://example.com"), nil, DefaultPublicDNS)
+	https := BuildProbesFromSources(mustTarget(t, "https://example.com"), nil, DefaultPublicDNS, true)
 	want := []struct {
 		id   ProbeID
 		name string
@@ -195,7 +200,7 @@ func TestBuildProbesNamesProtocolApplicationRow(t *testing.T) {
 		}
 	}
 
-	http := BuildProbesFromSources(mustTarget(t, "http://example.com"), nil, DefaultPublicDNS)
+	http := BuildProbesFromSources(mustTarget(t, "http://example.com"), nil, DefaultPublicDNS, true)
 	got := http[len(http)-1]
 	if got.ID != ProbeHTTP || got.Name != "HTTP example.com" || len(got.Deps) != 1 || got.Deps[0] != ProbeTargetTCP {
 		t.Errorf("plain HTTP application probe = %+v, want HTTP depending on target TCP", got)

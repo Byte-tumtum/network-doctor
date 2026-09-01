@@ -59,7 +59,7 @@ func responseForLiveRequest(req remote.Request, targetStatus string) (remote.Res
 		target: target, selection: diagnostic.ProbeSelection{Check: checks.set(), Skip: skips.set()},
 		check: checks, skip: skips, publicDNS: req.PublicDNS, timeout: time.Duration(req.TimeoutMs) * time.Millisecond,
 	}
-	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(target, nil, req.PublicDNS))
+	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(target, nil, req.PublicDNS, req.PublicDNSAuto))
 	results := resultsWithTargetStatus(probes, targetStatus)
 	rep := buildReport(target, probes, results)
 	rep.Version = remoteTool.Version

@@ -52,7 +52,7 @@ func TestProbesRecordTheRoutesForTheirOwnDestinations(t *testing.T) {
 	o := stubRouteOps(answers, &asked)
 	target := &Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}
 	res := map[ProbeID]ProbeResult{}
-	for _, p := range o.buildProbes(target, "") {
+	for _, p := range o.buildProbes(target, "", false) {
 		if p.ID == ProbeIface || p.ID == ProbeDNS || p.ID == ProbeTargetTCP {
 			res[p.ID] = p.Run(context.Background(), res)
 		}
@@ -107,7 +107,7 @@ func TestOneRunAsksTheKernelOncePerDestination(t *testing.T) {
 	var asked []string
 	o := stubRouteOps(answers, &asked)
 	res := map[ProbeID]ProbeResult{}
-	for _, p := range o.buildProbes(&Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}, "") {
+	for _, p := range o.buildProbes(&Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}, "", false) {
 		if p.ID == ProbeIface || p.ID == ProbeDNS || p.ID == ProbeTargetTCP || p.ID == ProbeInternet {
 			res[p.ID] = p.Run(context.Background(), res)
 		}
@@ -145,11 +145,11 @@ func TestEachPassGetsAFreshRouteCache(t *testing.T) {
 		}
 		return ""
 	}
-	if got := run(BuildProbesFromSources(nil, nil, "")); got != "eth0" {
+	if got := run(BuildProbesFromSources(nil, nil, "", false)); got != "eth0" {
 		t.Fatalf("first pass = %q, want eth0", got)
 	}
 	iface = "wg0"
-	if got := run(BuildProbesFromSources(nil, nil, "")); got != "wg0" {
+	if got := run(BuildProbesFromSources(nil, nil, "", false)); got != "wg0" {
 		t.Errorf("second pass = %q, want wg0: the cache outlived its pass", got)
 	}
 }
@@ -171,7 +171,7 @@ func TestAPlatformThatCannotAnswerRecordsNothing(t *testing.T) {
 	}
 	o.routes = newRouteCache(o.routeFor, o.sources)
 	res := map[ProbeID]ProbeResult{}
-	for _, p := range o.buildProbes(&Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}, "") {
+	for _, p := range o.buildProbes(&Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}, "", false) {
 		if p.ID != ProbeIface && p.ID != ProbeDNS && p.ID != ProbeTargetTCP {
 			continue
 		}

@@ -848,9 +848,14 @@ func checkProbeCarrier(t *testing.T, scenario *Scenario, carrier Node, usedAlias
 
 func fixedScenarioAliases(family string) []string {
 	aliases := internetEndpointsForFamily(family)
-	if resolver, err := netip.ParseAddr(diagnostic.DefaultPublicDNS); err == nil && addressFamily(resolver) == family &&
-		!slices.Contains(aliases, resolver.String()) {
-		aliases = append(aliases, resolver.String())
+	// Every resolver the untouched default may query, not just one: the default
+	// picks per address family, so a scenario that carries a family has to claim
+	// that family's candidate or netdoc dials the real Internet from it.
+	for _, candidate := range diagnostic.PublicDNSCandidates(diagnostic.DefaultPublicDNS, true) {
+		if resolver, err := netip.ParseAddr(candidate); err == nil && addressFamily(resolver) == family &&
+			!slices.Contains(aliases, resolver.String()) {
+			aliases = append(aliases, resolver.String())
+		}
 	}
 	return aliases
 }
@@ -866,7 +871,10 @@ func aliasesForFamily(aliases []string, family string) []string {
 }
 
 func scenarioAliasConsumers(scenario *Scenario) map[string]bool {
-	used := map[string]bool{diagnostic.DefaultPublicDNS: true}
+	used := map[string]bool{}
+	for _, candidate := range diagnostic.PublicDNSCandidates(diagnostic.DefaultPublicDNS, true) {
+		used[candidate] = true
+	}
 	for _, node := range scenario.Topology.Nodes {
 		if addr, err := netip.ParseAddr(node.Resolver); err == nil {
 			used[addr.String()] = true
@@ -901,8 +909,10 @@ func nodeHasService(node Node, serviceType, name string) bool {
 }
 
 func nodeProvidesConfiguredResolver(scenario *Scenario, node Node) bool {
-	if nodeOwnsAddress(node, diagnostic.DefaultPublicDNS) {
-		return true
+	for _, candidate := range diagnostic.PublicDNSCandidates(diagnostic.DefaultPublicDNS, true) {
+		if nodeOwnsAddress(node, candidate) {
+			return true
+		}
 	}
 	for _, consumer := range scenario.Topology.Nodes {
 		if nodeOwnsAddress(node, consumer.Resolver) {

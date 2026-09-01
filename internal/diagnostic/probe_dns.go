@@ -302,48 +302,106 @@ func (o *netops) dnsProbe(host string, litIP net.IP) func(context.Context, map[P
 	}
 }
 
-func (o *netops) publicDNSProbe(host string, litIP net.IP, publicDNSIP string) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
+// publicDNSProbe asks a second-opinion resolver the same question the system
+// resolver was asked. resolvers is the one address the user named, or the
+// automatic candidates, which are tried in order and only moved along when a
+// resolver could not be reached at all: a resolver that answered, refused, or
+// said the name does not exist has answered this row, whatever it said. That is
+// what keeps a host with one working address family from losing the second
+// opinion, and it is deliberately not offered to an explicit --public-dns,
+// which names the resolver to ask and no other.
+//
+// The row reports the attempt that ended it, and carries every resolver it
+// dialed. Both are needed and neither substitutes for the other: the targets
+// are what this run tried, and the answer is only ever credited to the server
+// that supplied it.
+func (o *netops) publicDNSProbe(host string, litIP net.IP, resolvers []string) func(context.Context, map[ProbeID]ProbeResult) ProbeResult {
 	return func(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
 		if litIP != nil {
 			return ProbeResult{Status: StatusNA, Detail: "literal IP " + litIP.String() + ", no DNS needed"}
 		}
-		ips, targets, err := o.lookupPublicIP(ctx, host, publicDNSServer(publicDNSIP))
-		// A resolver this run dialed is still only a resolver this run tried, so
-		// the targets stay on the row as attempt evidence while the answer they
-		// did not prove is dropped. Ahead of the target count deliberately: under
-		// "hosts: dns files" the public server really was queried, so "never
-		// asked" would be the wrong reason for the same N/A.
-		if errors.Is(err, errHostsFileAnswer) {
-			return ProbeResult{Status: StatusNA, ResolverTargets: targets,
-				Detail: "no second opinion: this machine resolves " + host + " without DNS, so a local override cannot be told from " + publicDNSIP + "'s answer"}
-		}
-		if len(targets) == 0 {
-			detail := "lookup completed without querying public DNS"
-			if err != nil {
-				detail = "public DNS was not queried: " + err.Error()
+		var tried []string
+		var unreachable []string
+		var last ProbeResult
+		for i, ip := range resolvers {
+			attemptCtx, cancel := publicDNSAttemptContext(ctx, len(resolvers)-i)
+			r, err := o.publicDNSAttempt(attemptCtx, host, ip)
+			cancel()
+			// Every resolver dialed so far, in the order they were dialed, on
+			// whichever attempt ends up being reported.
+			tried = append(tried, r.ResolverTargets...)
+			if len(tried) > 0 {
+				r.ResolverTargets = tried
 			}
-			return ProbeResult{Status: StatusNA, Detail: detail}
-		}
-		if dnsNotFound(err) || err == nil && len(ips) == 0 {
-			return ProbeResult{
-				Status:          StatusPass,
-				DNSNotFound:     true,
-				ResolverTargets: targets,
-				resolver:        publicDNSIP,
-				Detail:          publicDNSIP + " reports no A/AAAA records for " + host,
+			if err == nil {
+				return r
 			}
+			unreachable = append(unreachable, ip+": "+err.Error())
+			last = r
 		}
+		if len(unreachable) > 1 {
+			last.Detail = "public DNS unavailable via " + strings.Join(unreachable, "; via ")
+		}
+		return last
+	}
+}
+
+// publicDNSAttemptContext bounds one automatic candidate to an even share of
+// the time the probe has left, so a resolver that is routed but silently
+// dropped cannot spend the whole row and leave the other family untried. The
+// last candidate, a lone explicit resolver, and a probe running without a
+// deadline are left alone: they have nothing to make room for.
+func publicDNSAttemptContext(ctx context.Context, left int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || left < 2 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/time.Duration(left)))
+}
+
+// publicDNSAttempt queries one resolver. A non-nil error means that resolver
+// could not be reached at all, which is the one outcome another candidate could
+// still improve on; every other outcome is this row's answer.
+func (o *netops) publicDNSAttempt(ctx context.Context, host, publicDNSIP string) (ProbeResult, error) {
+	ips, targets, err := o.lookupPublicIP(ctx, host, publicDNSServer(publicDNSIP))
+	// A resolver this run dialed is still only a resolver this run tried, so
+	// the targets stay on the row as attempt evidence while the answer they
+	// did not prove is dropped. Ahead of the target count deliberately: under
+	// "hosts: dns files" the public server really was queried, so "never
+	// asked" would be the wrong reason for the same N/A.
+	if errors.Is(err, errHostsFileAnswer) {
+		return ProbeResult{Status: StatusNA, ResolverTargets: targets,
+			Detail: "no second opinion: this machine resolves " + host + " without DNS, so a local override cannot be told from " + publicDNSIP + "'s answer"}, nil
+	}
+	if len(targets) == 0 {
+		// No query left this machine, so no other resolver would have been
+		// asked either: this is the lookup declining to go out, not a path.
+		detail := "lookup completed without querying public DNS"
 		if err != nil {
-			return ProbeResult{Status: StatusNA, ResolverTargets: targets, resolver: publicDNSIP, Detail: "public DNS unavailable via " + publicDNSIP + ": " + err.Error()}
+			detail = "public DNS was not queried: " + err.Error()
 		}
+		return ProbeResult{Status: StatusNA, Detail: detail}, nil
+	}
+	if dnsNotFound(err) || err == nil && len(ips) == 0 {
 		return ProbeResult{
 			Status:          StatusPass,
-			Addrs:           ips,
+			DNSNotFound:     true,
 			ResolverTargets: targets,
 			resolver:        publicDNSIP,
-			Detail:          host + " → " + joinIPs(ips) + " (via " + publicDNSIP + ")",
-		}
+			Detail:          publicDNSIP + " reports no A/AAAA records for " + host,
+		}, nil
 	}
+	if err != nil {
+		return ProbeResult{Status: StatusNA, ResolverTargets: targets, resolver: publicDNSIP,
+			Detail: "public DNS unavailable via " + publicDNSIP + ": " + err.Error()}, err
+	}
+	return ProbeResult{
+		Status:          StatusPass,
+		Addrs:           ips,
+		ResolverTargets: targets,
+		resolver:        publicDNSIP,
+		Detail:          host + " → " + joinIPs(ips) + " (via " + publicDNSIP + ")",
+	}, nil
 }
 
 func dnsNotFound(err error) bool {

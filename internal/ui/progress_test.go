@@ -112,7 +112,7 @@ func TestProgressDenominatorIsTheCurrentPlan(t *testing.T) {
 		{"skip", diagnostic.ProbeSelection{Skip: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeDNSEncrypted: {}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := NewWithSelection(mustTarget(t, "example.com:443"), nil, false, false, "", "test", diagnostic.DefaultPublicDNS, tc.sel).(model)
+			m := NewWithSelection(mustTarget(t, "example.com:443"), nil, false, false, "", "test", diagnostic.DefaultPublicDNS, true, tc.sel).(model)
 			if len(m.probes) >= full {
 				t.Fatalf("selection did not reduce the plan: %d of %d probes", len(m.probes), full)
 			}

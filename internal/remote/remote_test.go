@@ -473,3 +473,75 @@ func (endless) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// Both halves of the second-opinion setting cross protocol 1 without moving it.
+// public_dns keeps carrying an address or the empty opt-out, which is all a
+// netdoc from before this feature has ever accepted there, and the bit beside
+// it is additive: absent on the wire when false, ignored by a remote that has
+// never heard of it, and read as false when a remote that knows it receives a
+// request from one that does not.
+func TestPublicDNSAutoCrossesProtocolOneAsAnAdditiveField(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  Request
+	}{
+		{"default", Request{Protocol: Protocol, PublicDNS: "8.8.8.8", PublicDNSAuto: true, TimeoutMs: 4000}},
+		{"resolver the user named", Request{Protocol: Protocol, PublicDNS: "8.8.8.8", TimeoutMs: 4000}},
+		{"switched off", Request{Protocol: Protocol, PublicDNS: "", TimeoutMs: 4000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.req)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			// The worker netdoc used to be: protocol 1, and public_dns is the
+			// only thing it knows about the second opinion.
+			var legacy struct {
+				Protocol  int    `json:"protocol"`
+				PublicDNS string `json:"public_dns"`
+				TimeoutMs int64  `json:"timeout_ms"`
+			}
+			if err := json.Unmarshal(data, &legacy); err != nil {
+				t.Fatalf("legacy decode: %v", err)
+			}
+			if legacy.Protocol != Protocol {
+				t.Errorf("protocol = %d, want %d: an added field is not a new protocol", legacy.Protocol, Protocol)
+			}
+			if legacy.PublicDNS != tc.req.PublicDNS || legacy.TimeoutMs != tc.req.TimeoutMs {
+				t.Errorf("legacy request = %+v, want the run it was given", legacy)
+			}
+			var keys map[string]json.RawMessage
+			if err := json.Unmarshal(data, &keys); err != nil {
+				t.Fatalf("read keys: %v", err)
+			}
+			if _, present := keys["public_dns_auto"]; present != tc.req.PublicDNSAuto {
+				t.Errorf("public_dns_auto present = %v, want %v", present, tc.req.PublicDNSAuto)
+			}
+			var back Request
+			if err := json.Unmarshal(data, &back); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if back.PublicDNS != tc.req.PublicDNS || back.PublicDNSAuto != tc.req.PublicDNSAuto {
+				t.Errorf("request = %+v, want %+v", back, tc.req)
+			}
+		})
+	}
+
+	// The other direction: a request from a netdoc that predates the field.
+	var legacy Request
+	if err := json.Unmarshal([]byte(`{"protocol":1,"public_dns":"8.8.8.8","timeout_ms":4000}`), &legacy); err != nil {
+		t.Fatalf("decode legacy request: %v", err)
+	}
+	if legacy.PublicDNS != "8.8.8.8" || legacy.PublicDNSAuto {
+		t.Errorf("legacy request = %+v, want 8.8.8.8 with auto=false", legacy)
+	}
+	// And an unknown field from a newer one is ignored rather than fatal, which
+	// is the same promise in the other direction.
+	var newer Request
+	if err := json.Unmarshal([]byte(`{"protocol":1,"public_dns":"8.8.8.8","public_dns_auto":true,"nonesuch":{"a":1}}`), &newer); err != nil {
+		t.Fatalf("decode newer request: %v", err)
+	}
+	if newer.PublicDNS != "8.8.8.8" || !newer.PublicDNSAuto {
+		t.Errorf("newer request = %+v, want 8.8.8.8 with auto=true", newer)
+	}
+}

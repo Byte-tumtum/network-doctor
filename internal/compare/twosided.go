@@ -296,6 +296,11 @@ func caveats(a, b snapshot.Snapshot, rows []SideRow) []string {
 	if a.Options.PublicDNS != b.Options.PublicDNS {
 		out = append(out, "The second-opinion resolvers differ ("+display(a.Options.PublicDNS)+" and "+display(b.Options.PublicDNS)+
 			"), so the public DNS row asked two different questions.")
+	} else if a.Options.PublicDNSAuto != b.Options.PublicDNSAuto {
+		// Same address, and still not the same question: only the side that
+		// did not name it could have crossed to the other address family.
+		out = append(out, "One run named its second-opinion resolver and the other took the default, "+
+			"so only one of them could try a second address family.")
 	}
 	if !sameSet(a.Options.Check, b.Options.Check) || !sameSet(a.Options.Skip, b.Options.Skip) {
 		out = append(out, "The two runs selected different probes, so they did not measure the same set of checks.")

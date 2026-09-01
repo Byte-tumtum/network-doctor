@@ -158,7 +158,7 @@ func TestStableProbeRowNames(t *testing.T) {
 		ProbeQUIC:         "QUIC / UDP 443",
 		ProbeProxy:        "Internet (env proxy)",
 		ProbeDNS:          "DNS",
-		ProbeDNSPublic:    "DNS (public " + DefaultPublicDNS + ")",
+		ProbeDNSPublic:    "DNS (public)",
 		ProbeDNSEncrypted: "DNS (encrypted DoH/DoT)",
 		ProbeSSID:         "Wi-Fi network",
 	}
@@ -198,9 +198,9 @@ func TestStableProbeRowNames(t *testing.T) {
 	}
 	// Naming rows runs no probe, so an empty seam is all the DAG needs here.
 	o := &netops{}
-	check(o.buildProbes(nil, DefaultPublicDNS), generic)
+	check(o.buildProbes(nil, DefaultPublicDNS, true), generic)
 	for proto := range protoNames {
-		check(o.buildProbes(&Target{Host: probeRowNameHost, Port: 443, Proto: Proto(proto)}, DefaultPublicDNS), withTarget)
+		check(o.buildProbes(&Target{Host: probeRowNameHost, Port: 443, Proto: Proto(proto)}, DefaultPublicDNS, true), withTarget)
 	}
 
 	// A pinned name no DAG produces any more is a name that moved without this
@@ -238,7 +238,7 @@ func TestProbeSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probes := BuildProbesFromSources(target, nil, DefaultPublicDNS)
+	probes := BuildProbesFromSources(target, nil, DefaultPublicDNS, true)
 	tests := []struct {
 		name       string
 		selection  ProbeSelection
@@ -343,7 +343,7 @@ func TestProbeSelectionGraphClosureAndPruning(t *testing.T) {
 }
 
 func TestEmptyProbeSelectionPreservesBuiltDAG(t *testing.T) {
-	probes := BuildProbesFromSources(mustTarget(t, "example.com"), nil, DefaultPublicDNS)
+	probes := BuildProbesFromSources(mustTarget(t, "example.com"), nil, DefaultPublicDNS, true)
 	got := (ProbeSelection{}).Apply(probes)
 	if len(got) != len(probes) {
 		t.Fatalf("probe count = %d, want %d", len(got), len(probes))
@@ -440,7 +440,7 @@ func TestProbeSelectionValidation(t *testing.T) {
 
 func TestDiagnoseUnfilteredCompatibility(t *testing.T) {
 	target := mustTarget(t, "example.com")
-	targetProbes := BuildProbesFromSources(target, nil, DefaultPublicDNS)
+	targetProbes := BuildProbesFromSources(target, nil, DefaultPublicDNS, true)
 	targetOrder := selectedIDs(targetProbes)
 	targetResults := make(map[ProbeID]ProbeResult, len(targetOrder))
 	for _, id := range targetOrder {
@@ -455,7 +455,7 @@ func TestDiagnoseUnfilteredCompatibility(t *testing.T) {
 		t.Fatalf("full target precedence = %q/%q", got, verdict)
 	}
 
-	genericProbes := BuildProbesFromSources(nil, nil, DefaultPublicDNS)
+	genericProbes := BuildProbesFromSources(nil, nil, DefaultPublicDNS, true)
 	genericOrder := selectedIDs(genericProbes)
 	genericResults := make(map[ProbeID]ProbeResult, len(genericOrder))
 	for _, id := range genericOrder {

@@ -333,6 +333,11 @@ func diffOptions(d *diff, before, after snapshot.Options) {
 	d.field(SectionOptions, "", "options.probe_timeout_ms", "probe timeout",
 		strconv.FormatInt(before.ProbeTimeoutMs, 10)+"ms", strconv.FormatInt(after.ProbeTimeoutMs, 10)+"ms")
 	d.field(SectionOptions, "", "options.public_dns", "second-opinion resolver", before.PublicDNS, after.PublicDNS)
+	// Beside the address rather than folded into it: the same resolver reached
+	// two different ways is a real difference, because only the run that did
+	// not name it could cross to the other address family.
+	d.field(SectionOptions, "", "options.public_dns_auto", "second-opinion resolver chosen by netdoc",
+		yesNo(before.PublicDNSAuto), yesNo(after.PublicDNSAuto))
 	// The selection is a set. The snapshot keeps the order it was typed in
 	// because that is what the user wrote, but the run applied it as a set, so
 	// a reordered --check is not a different run.

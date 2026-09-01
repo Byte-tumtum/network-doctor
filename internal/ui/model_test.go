@@ -26,7 +26,7 @@ func asModel(t *testing.T, m tea.Model) model {
 }
 
 func newModel(t *diagnostic.Target, toolbox bool) model {
-	return NewWithSelection(t, nil, toolbox, false, "", "test", diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+	return NewWithSelection(t, nil, toolbox, false, "", "test", diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 }
 
 func keyMsg(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
@@ -284,7 +284,7 @@ func TestProbeSelectionPreservesDiagnosis(t *testing.T) {
 	wantSummary, wantVerdict := baseline.diagnose(order)
 
 	selection := diagnostic.ProbeSelection{Skip: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeSSID: {}}}
-	selected := NewWithSelection(target, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, selection).(model)
+	selected := NewWithSelection(target, nil, false, false, "", "test", diagnostic.DefaultPublicDNS, true, selection).(model)
 	doneResults(&selected, diagnostic.ProbeTargetTCP)
 	order = selected.probeOrder()
 	if summary, verdict := selected.diagnose(order); summary != wantSummary || verdict != wantVerdict {

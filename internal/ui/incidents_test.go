@@ -138,3 +138,53 @@ func TestCancelDuringIncidentKeepsItActive(t *testing.T) {
 		t.Error("cancellation during a failing incident lost the last completed failing exit state")
 	}
 }
+
+// A TUI run outlives the flags that started it: it rebuilds the probe graph on
+// every target switch and writes its own artifacts from Watch Mode. Both have
+// to ask the question the run was started with, and whether anyone named the
+// second-opinion resolver is part of that question, not something either one
+// can re-derive from the address.
+func TestTargetSwitchAndIncidentKeepHowThePublicResolverWasChosen(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		publicDNS string
+		auto      bool
+		wantRow   string
+	}{
+		{"nobody named it", diagnostic.DefaultPublicDNS, true, "DNS (public)"},
+		{"the user named it", diagnostic.DefaultPublicDNS, false, "DNS (public 8.8.8.8)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewWithSelection(mustTarget(t, "example.com:443"), nil, false, false, "", "test",
+				tc.publicDNS, tc.auto, diagnostic.ProbeSelection{}).(model)
+			m.watch, m.width, m.height = true, 100, 40
+			if got := publicRowName(&m); got != tc.wantRow {
+				t.Errorf("public DNS row = %q, want %q", got, tc.wantRow)
+			}
+			m.applyTarget(mustTarget(t, "other.test:443"))
+			if got := publicRowName(&m); got != tc.wantRow {
+				t.Errorf("after a target switch the public DNS row = %q, want %q", got, tc.wantRow)
+			}
+			start := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+			recordWatchPass(&m, start, false, "wlan0")
+			recordWatchPass(&m, start.Add(5*time.Second), true, "wlan0")
+			active, ok := m.incidents.Active()
+			if !ok || active.Before == nil {
+				t.Fatalf("watch recorded no incident to carry the setting")
+			}
+			got := active.Before.Snap.Options
+			if got.PublicDNS != tc.publicDNS || got.PublicDNSAuto != tc.auto {
+				t.Errorf("incident options = %+v, want %q auto=%v", got, tc.publicDNS, tc.auto)
+			}
+		})
+	}
+}
+
+func publicRowName(m *model) string {
+	for _, p := range m.probes {
+		if p.ID == diagnostic.ProbeDNSPublic {
+			return p.Name
+		}
+	}
+	return ""
+}

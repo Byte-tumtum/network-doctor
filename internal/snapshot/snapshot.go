@@ -273,8 +273,17 @@ type Target struct {
 type Options struct {
 	ProbeTimeoutMs int64 `json:"probe_timeout_ms"`
 	// PublicDNS is the second-opinion resolver, empty when that row was
-	// switched off.
+	// switched off. It is an address or empty in every version of this schema,
+	// so the automatic default records itself in PublicDNSAuto instead of
+	// spending a word here: changing what this field can hold would change the
+	// meaning of a v1 field, and that is a new schema, not a new flag.
 	PublicDNS string `json:"public_dns"`
+	// PublicDNSAuto says PublicDNS is the default rather than a resolver the
+	// run named, which is what let the probe try the other address family when
+	// that one could not be reached. Additive and absent when false, so a
+	// reader that has never heard of it still sees the resolver the run
+	// started from and reads the rest of the file unchanged.
+	PublicDNSAuto bool `json:"public_dns_auto,omitempty"`
 	// Check and Skip are the probe selection as given, absent when the run
 	// took the whole graph.
 	Check []string `json:"check,omitempty"`

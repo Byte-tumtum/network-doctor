@@ -448,3 +448,18 @@ func TestSupportRedactsAddressesFoundOnlyInText(t *testing.T) {
 			detail, summary, got.Checks[0].Fix)
 	}
 }
+
+// Whether the run named its second-opinion resolver is not an address and
+// cannot be inferred from one: the automatic default and an explicit
+// "--public-dns 8.8.8.8" leave the same value in public_dns. A support snapshot
+// that dropped the bit would describe the wrong run, so it survives beside the
+// well-known resolver the address pass already keeps.
+func TestSanitizeKeepsWhetherThePublicResolverWasChosen(t *testing.T) {
+	for _, auto := range []bool{true, false} {
+		s := Snapshot{Schema: Schema, Options: Options{PublicDNS: "8.8.8.8", PublicDNSAuto: auto}}
+		got := SanitizeForSupport(s).Options
+		if got.PublicDNS != "8.8.8.8" || got.PublicDNSAuto != auto {
+			t.Errorf("options = %+v, want 8.8.8.8 with auto=%v", got, auto)
+		}
+	}
+}

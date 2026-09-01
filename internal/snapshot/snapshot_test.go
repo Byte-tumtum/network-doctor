@@ -3,6 +3,7 @@ package snapshot
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -920,4 +921,86 @@ func TestEncodeRefusesUnsupportedRouteEvidence(t *testing.T) {
 	if _, err := Encode(s); err == nil {
 		t.Error("a tunnel claim with no tunnel in the file was written anyway")
 	}
+}
+
+// public_dns has held a resolver address or the empty opt-out since v1, and a
+// reader of any vintage parses it that way. Whether the run named that resolver
+// is a second fact, so it gets a second field rather than a word this one has
+// never been able to hold: changing what an existing field means is a new
+// schema, and this feature does not need one.
+func TestPublicDNSAutoIsAdditiveToTheV1Option(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts Options
+	}{
+		{"automatic default", Options{PublicDNS: "8.8.8.8", PublicDNSAuto: true}},
+		{"resolver the user named", Options{PublicDNS: "8.8.8.8"}},
+		{"switched off", Options{PublicDNS: ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := Encode(Snapshot{Options: tc.opts})
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			// The v1 reader netdoc used to be: it knows public_dns and nothing
+			// about the field beside it.
+			var legacy struct {
+				Schema  string `json:"schema"`
+				Options struct {
+					PublicDNS string `json:"public_dns"`
+				} `json:"options"`
+			}
+			if err := json.Unmarshal(data, &legacy); err != nil {
+				t.Fatalf("legacy decode: %v", err)
+			}
+			if legacy.Schema != Schema {
+				t.Errorf("schema = %q, want %q: an added option is not a new format", legacy.Schema, Schema)
+			}
+			if legacy.Options.PublicDNS != tc.opts.PublicDNS {
+				t.Errorf("legacy public_dns = %q, want %q", legacy.Options.PublicDNS, tc.opts.PublicDNS)
+			}
+			if got := legacy.Options.PublicDNS; got != "" && net.ParseIP(got) == nil {
+				t.Errorf("legacy public_dns = %q, want an address or empty", got)
+			}
+			// Absent rather than false, so a file from a run that named its
+			// resolver is byte-identical to one an older netdoc would write.
+			if _, present := optionKeys(t, data)["public_dns_auto"]; present != tc.opts.PublicDNSAuto {
+				t.Errorf("public_dns_auto present = %v, want %v", present, tc.opts.PublicDNSAuto)
+			}
+			// And the round trip a current reader makes of it.
+			back, err := Decode(data)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if back.Options.PublicDNS != tc.opts.PublicDNS || back.Options.PublicDNSAuto != tc.opts.PublicDNSAuto {
+				t.Errorf("options = %+v, want %+v", back.Options, tc.opts)
+			}
+		})
+	}
+}
+
+// A file written before this field existed has no automatic bit, and absence
+// means the run named the resolver it recorded. Reading it any other way would
+// credit an old snapshot with a fallback its probes never had.
+func TestDecodeReadsAMissingPublicDNSAutoAsAResolverThatWasNamed(t *testing.T) {
+	s, err := Decode([]byte(`{"schema":"` + Schema + `","options":{"public_dns":"8.8.8.8"}}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if s.Options.PublicDNS != "8.8.8.8" || s.Options.PublicDNSAuto {
+		t.Errorf("options = %+v, want 8.8.8.8 with auto=false", s.Options)
+	}
+}
+
+// optionKeys is the key set of the options object as written, read without the
+// struct that produced it so an omitempty that stopped working is visible.
+func optionKeys(t *testing.T, data []byte) map[string]json.RawMessage {
+	t.Helper()
+	var doc struct {
+		Options map[string]json.RawMessage `json:"options"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("read options: %v", err)
+	}
+	return doc.Options
 }

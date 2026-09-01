@@ -3,6 +3,9 @@ description: >-
   Both families are addressed and routed and DNS returns A plus AAAA, but the
   router deliberately drops forwarded IPv6. IPv4 remains a complete working
   path, so this is partial family failure rather than an outage or DNS fault.
+  It is also the mirror of ipv6-works-ipv4-broken for the second-opinion
+  default: the first candidate it reaches for is reachable here, so the row
+  answers from IPv4 and never asks the family the router is dropping.
 
 topology:
   segments:
@@ -35,6 +38,13 @@ topology:
         - {segment: upstream, ipv4: 10.78.2.20/24, ipv6: 2001:db8:77:2::20/64}
       aliases: [1.1.1.1, 8.8.8.8, "2606:4700:4700::1111", "2001:4860:4860::8888"]
       services:
+        - name: public-resolver
+          type: dns
+          records:
+            - {name: dual-target.test, address: 10.78.2.20}
+            - {name: dual-target.test, address: "2001:db8:77:2::20"}
+            - {name: connectivitycheck.gstatic.com, address: 10.78.2.20}
+            - {name: connectivitycheck.gstatic.com, address: "2001:db8:77:2::20"}
         - {name: dual-http, type: http, port: 80}
         - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, records: [{name: connectivitycheck.gstatic.com, address: 10.78.2.20}]}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
@@ -57,3 +67,4 @@ expect:
     - {id: iface, status: PASS}
     - {id: internet_tcp, status: WARN, cause: ipv6_unreachable, ipv4: reachable, ipv6: unreachable}
     - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}

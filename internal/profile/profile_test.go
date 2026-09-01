@@ -101,7 +101,7 @@ func TestComposeSelectionKeepsProfileMinimumAndDependencyClosure(t *testing.T) {
 	if !slices.Contains(check, diagnostic.ProbeHTTPS) || !slices.Contains(check, diagnostic.ProbeQUIC) || len(check) != len(plan.Runs[0].Check)+1 {
 		t.Fatalf("composed check = %v", check)
 	}
-	probes := selection.Apply(diagnostic.BuildProbesFromSources(plan.Runs[0].Target, nil, diagnostic.DefaultPublicDNS))
+	probes := selection.Apply(diagnostic.BuildProbesFromSources(plan.Runs[0].Target, nil, diagnostic.DefaultPublicDNS, true))
 	var ids []diagnostic.ProbeID
 	for _, probe := range probes {
 		ids = append(ids, probe.ID)

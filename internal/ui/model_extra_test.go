@@ -1078,7 +1078,7 @@ func TestPromptTargetHistory(t *testing.T) {
 func TestHistoryPersistsAcrossSessions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "netdoc", "history")
 
-	m := NewWithSelection(mustTarget(t, "github.com:443"), nil, false, false, path, "test", diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+	m := NewWithSelection(mustTarget(t, "github.com:443"), nil, false, false, path, "test", diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 	u, _ := m.Update(keyMsg("r"))
 	m = asModel(t, u)
 	m.input.SetValue("one.test")
@@ -1087,7 +1087,7 @@ func TestHistoryPersistsAcrossSessions(t *testing.T) {
 
 	// A fresh session relaunched with the same target loads both entries,
 	// without duplicating the launch target it already knows.
-	m2 := NewWithSelection(mustTarget(t, "one.test"), nil, false, false, path, "test", diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+	m2 := NewWithSelection(mustTarget(t, "one.test"), nil, false, false, path, "test", diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 	if got := strings.Join(m2.history, ","); got != "github.com:443,one.test" {
 		t.Fatalf("reloaded history = %q, want github.com:443,one.test", got)
 	}
@@ -1103,7 +1103,7 @@ func TestEmptyHistoryPathNeitherLoadsNorWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := NewWithSelection(mustTarget(t, "one.test"), nil, false, false, "", "test", diagnostic.DefaultPublicDNS, diagnostic.ProbeSelection{}).(model)
+	m := NewWithSelection(mustTarget(t, "one.test"), nil, false, false, "", "test", diagnostic.DefaultPublicDNS, true, diagnostic.ProbeSelection{}).(model)
 	if got := strings.Join(m.history, ","); got != "one.test" {
 		t.Fatalf("history = %q, want the launch target alone", got)
 	}

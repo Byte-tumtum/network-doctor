@@ -97,7 +97,7 @@ func TestNetworkNameIsToldOnceOnTheContextStrip(t *testing.T) {
 // disagree with the other. Deriving the expected order from the model, as the
 // order tests around it do, cannot catch that.
 func TestChecksPanelReadsBottomUp(t *testing.T) {
-	public := "DNS (public " + diagnostic.DefaultPublicDNS + ")"
+	public := "DNS (public)"
 	for _, tc := range []struct {
 		name, target string
 		want         []string
@@ -231,7 +231,7 @@ func noChecksModel(t *testing.T) model {
 		Skip: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeIface: {}},
 	}
 	m := NewWithSelection(mustTarget(t, "example.com:443"), nil, false, false, "", "test",
-		diagnostic.DefaultPublicDNS, selection).(model)
+		diagnostic.DefaultPublicDNS, true, selection).(model)
 	if len(m.probes) != 0 {
 		t.Fatalf("this selection still runs %d probes, so it has details to show", len(m.probes))
 	}

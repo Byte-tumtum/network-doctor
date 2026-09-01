@@ -145,9 +145,12 @@ type model struct {
 	// selection is reapplied whenever a target switch rebuilds the probe DAG.
 	selection diagnostic.ProbeSelection
 	// publicDNS is the second-opinion resolver IP the run was started with, or
-	// "" when it is disabled; every probe rebuild reuses it.
-	publicDNS string
-	version   string
+	// "" when it is disabled; every probe rebuild reuses it. publicDNSAuto
+	// travels with it because a rebuilt DAG has to ask the same question the
+	// first one did, including whether the resolver was named or defaulted.
+	publicDNS     string
+	publicDNSAuto bool
+	version       string
 	// snapshotCheck and snapshotSkip preserve the user's selection spelling
 	// for incident artifacts. The applied selection maps above have no order.
 	snapshotCheck []string
@@ -317,28 +320,29 @@ func WithSnapshotSelection(check, skip []string) Option {
 
 // NewWithSelection applies a validated CLI probe policy to this run and every
 // target switch made from it.
-func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
-	probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS))
+func NewWithSelection(t *diagnostic.Target, sources *diagnostic.SourceAddresses, toolbox, watch bool, histFile, version, publicDNS string, publicDNSAuto bool, selection diagnostic.ProbeSelection, opts ...Option) tea.Model {
+	probes := selection.Apply(diagnostic.BuildProbesFromSources(t, sources, publicDNS, publicDNSAuto))
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	m := model{
-		target:       t,
-		probes:       probes,
-		sources:      sources,
-		selection:    selection,
-		publicDNS:    publicDNS,
-		results:      map[diagnostic.ProbeID]diagnostic.ProbeResult{},
-		started:      map[diagnostic.ProbeID]bool{},
-		tools:        toolsFor(t, runtime.GOOS, bindFor(sources)),
-		spinner:      sp,
-		toolbox:      toolbox,
-		watch:        watch,
-		runHistory:   map[diagnostic.ProbeID][]diagnostic.Status{},
-		histPath:     histFile,
-		version:      version,
-		probeTimeout: diagnostic.DefaultProbeTimeout,
-		now:          time.Now,
-		width:        100, // placeholder until the terminal introduces itself (WindowSizeMsg)
+		target:        t,
+		probes:        probes,
+		sources:       sources,
+		selection:     selection,
+		publicDNS:     publicDNS,
+		publicDNSAuto: publicDNSAuto,
+		results:       map[diagnostic.ProbeID]diagnostic.ProbeResult{},
+		started:       map[diagnostic.ProbeID]bool{},
+		tools:         toolsFor(t, runtime.GOOS, bindFor(sources)),
+		spinner:       sp,
+		toolbox:       toolbox,
+		watch:         watch,
+		runHistory:    map[diagnostic.ProbeID][]diagnostic.Status{},
+		histPath:      histFile,
+		version:       version,
+		probeTimeout:  diagnostic.DefaultProbeTimeout,
+		now:           time.Now,
+		width:         100, // placeholder until the terminal introduces itself (WindowSizeMsg)
 	}
 	for _, opt := range opts {
 		opt(&m)

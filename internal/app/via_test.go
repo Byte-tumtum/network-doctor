@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -444,5 +445,97 @@ func stubFailingRun(t *testing.T) {
 			results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusFail, Dur: 2 * time.Millisecond}
 		}
 		return results
+	}
+}
+
+// The second-opinion resolver is chosen per address family, and --via runs the
+// probes on another machine: a dual-stack caller resolving the default for an
+// IPv6-only remote would pin it to a family it cannot use, over an instruction
+// the user never gave. So the address field carries what it has always
+// carried, and whether anyone named it crosses beside it for the remote to act
+// on. A netdoc too old to read that field sees the request it has always seen.
+func TestRunViaLetsTheRemoteChooseItsOwnSecondOpinion(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantDNS  string
+		wantAuto bool
+	}{
+		{"default", nil, diagnostic.DefaultPublicDNS, true},
+		{"explicit address", []string{"--public-dns", "8.8.8.8"}, "8.8.8.8", false},
+		{"explicit IPv6 address", []string{"--public-dns", "2001:4860:4860::8888"}, "2001:4860:4860::8888", false},
+		{"disabled", []string{"--public-dns="}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seen := stubRemote(t, remoteAnswer(true), nil)
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"--via", "ideapad"}, tc.args...)
+			if got := run(append(args, "example.com"), &stdout, &stderr); got != 0 {
+				t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+			}
+			if seen.PublicDNS != tc.wantDNS || seen.PublicDNSAuto != tc.wantAuto {
+				t.Errorf("request public DNS = %q auto=%v, want %q auto=%v",
+					seen.PublicDNS, seen.PublicDNSAuto, tc.wantDNS, tc.wantAuto)
+			}
+			// The wire field stays what every protocol 1 netdoc can parse, so
+			// the graceful downgrade is a downgrade and not a rejection.
+			if seen.PublicDNS != "" && net.ParseIP(seen.PublicDNS) == nil {
+				t.Errorf("request public DNS = %q, want an address or empty", seen.PublicDNS)
+			}
+		})
+	}
+}
+
+// The worker end of the same contract, including the pair of mixed versions
+// that share protocol 1. A request that says nobody named the resolver builds
+// the automatic row here, on the machine the probes run on. A request without
+// that field is an older netdoc's, and an older netdoc meant the address it
+// sent: reinterpreting its default as automatic would answer a question it
+// never asked.
+func TestDiagnoseRemoteBuildsTheDefaultSecondOpinionLocally(t *testing.T) {
+	for _, tc := range []struct {
+		name, publicDNS string
+		auto            bool
+		wantRow         string
+	}{
+		{"default", diagnostic.DefaultPublicDNS, true, "DNS (public)"},
+		{"explicit address", "8.8.8.8", false, "DNS (public 8.8.8.8)"},
+		{"legacy client sending its own default", "8.8.8.8", false, "DNS (public 8.8.8.8)"},
+		{"disabled", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := runAll
+			t.Cleanup(func() { runAll = orig })
+			runAll = func(_ context.Context, probes []diagnostic.Probe, _ time.Duration) map[diagnostic.ProbeID]diagnostic.ProbeResult {
+				results := make(map[diagnostic.ProbeID]diagnostic.ProbeResult, len(probes))
+				for _, p := range probes {
+					results[p.ID] = diagnostic.ProbeResult{ID: p.ID, Status: diagnostic.StatusPass}
+				}
+				return results
+			}
+			rep, snap, err := diagnoseRemote(context.Background(), remote.Request{
+				Protocol: remote.Protocol, Target: "example.com",
+				PublicDNS: tc.publicDNS, PublicDNSAuto: tc.auto, TimeoutMs: 1000,
+			})
+			if err != nil {
+				t.Fatalf("diagnoseRemote: %v", err)
+			}
+			got := ""
+			for _, c := range rep.Checks {
+				if c.ID == string(diagnostic.ProbeDNSPublic) {
+					got = c.Name
+				}
+			}
+			if got != tc.wantRow {
+				t.Errorf("dns_public row = %q, want %q", got, tc.wantRow)
+			}
+			// The snapshot records both halves of what the run was given: the
+			// address, which is all options.public_dns has ever held, and
+			// separately whether anyone named it, so a later comparison can
+			// tell "netdoc chose" from "the user chose".
+			if snap.Options.PublicDNS != tc.publicDNS || snap.Options.PublicDNSAuto != tc.auto {
+				t.Errorf("snapshot options = %+v, want %q auto=%v", snap.Options, tc.publicDNS, tc.auto)
+			}
+		})
 	}
 }

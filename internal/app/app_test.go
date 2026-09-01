@@ -662,7 +662,9 @@ func TestRunPublicDNSFlag(t *testing.T) {
 		wantCode int
 		wantRow  string // "" means the row must be absent
 	}{
-		{"default is unchanged", nil, 0, "DNS (public 8.8.8.8)"},
+		{"the default names no resolver", nil, 0, "DNS (public)"},
+		{"auto is not a resolver anyone can type", []string{"-public-dns", "auto"}, 2, ""},
+		{"explicit default address stays exact", []string{"-public-dns", "8.8.8.8"}, 0, "DNS (public 8.8.8.8)"},
 		{"custom IPv4", []string{"-public-dns", "9.9.9.9"}, 0, "DNS (public 9.9.9.9)"},
 		{"custom IPv6", []string{"-public-dns", "2620:fe::fe"}, 0, "DNS (public 2620:fe::fe)"},
 		{"IPv6 is canonicalized", []string{"-public-dns", "2620:00fe:0000::00FE"}, 0, "DNS (public 2620:fe::fe)"},
@@ -2323,5 +2325,52 @@ func TestRunCompareWorksWithRedirectedStdout(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if got := run([]string{"--compare", path, path}, &stdout, &stderr); got != 0 {
 		t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+	}
+}
+
+// The artifact end of the same distinction. options.public_dns has held a
+// resolver address or the empty opt-out since v1 and still does, so an older
+// reader is not handed a word where it expects an address; whether netdoc chose
+// that resolver is the added field beside it. A saved run is the only place
+// this is durable, which makes it the place worth pinning.
+func TestRunSaveRecordsWhetherThePublicResolverWasChosen(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantDNS  string
+		wantAuto bool
+	}{
+		{"omitted", nil, diagnostic.DefaultPublicDNS, true},
+		{"the default address, typed", []string{"--public-dns", "8.8.8.8"}, "8.8.8.8", false},
+		{"another resolver", []string{"--public-dns", "9.9.9.9"}, "9.9.9.9", false},
+		{"disabled", []string{"--public-dns="}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubPassingRun(t)
+			path := filepath.Join(t.TempDir(), "run.ndoc")
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"--save", path}, tc.args...)
+			if got := run(append(args, "example.com"), &stdout, &stderr); got != 0 {
+				t.Fatalf("exit = %d, want 0; stderr: %s", got, stderr.String())
+			}
+			// #nosec G304 -- path is this test's temporary snapshot file.
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read snapshot: %v", err)
+			}
+			s, err := snapshot.Decode(data)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if s.Schema != snapshot.Schema {
+				t.Errorf("schema = %q, want %q: an added option is not a new format", s.Schema, snapshot.Schema)
+			}
+			if s.Options.PublicDNS != tc.wantDNS || s.Options.PublicDNSAuto != tc.wantAuto {
+				t.Errorf("options = %+v, want %q auto=%v", s.Options, tc.wantDNS, tc.wantAuto)
+			}
+			if got := s.Options.PublicDNS; got != "" && net.ParseIP(got) == nil {
+				t.Errorf("options.public_dns = %q, want an address or empty", got)
+			}
+		})
 	}
 }

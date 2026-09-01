@@ -51,7 +51,7 @@ func TestRetestPreservesTheRunConfiguration(t *testing.T) {
 	sources := &diagnostic.SourceAddresses{IPv4: net.ParseIP("10.7.0.2"), Iface: "wg0"}
 	selection := diagnostic.ProbeSelection{Skip: map[diagnostic.ProbeID]struct{}{diagnostic.ProbeQUIC: {}}}
 	target := mustTarget(t, "example.com:443")
-	m := NewWithSelection(target, sources, false, false, "", "test", "9.9.9.9", selection,
+	m := NewWithSelection(target, sources, false, false, "", "test", "9.9.9.9", false, selection,
 		WithProbeTimeout(1234)).(model)
 	before := probeIDs(m)
 	if slices.Contains(before, diagnostic.ProbeQUIC) {

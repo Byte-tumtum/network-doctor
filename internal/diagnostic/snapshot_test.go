@@ -272,7 +272,7 @@ func TestBuildSnapshotCoversTheRealProbeGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probes := BuildProbesFromSources(target, nil, DefaultPublicDNS)
+	probes := BuildProbesFromSources(target, nil, DefaultPublicDNS, true)
 	if len(probes) < 8 {
 		t.Fatalf("the real DAG built only %d probes; this guard is not reaching it", len(probes))
 	}

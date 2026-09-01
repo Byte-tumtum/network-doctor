@@ -23,7 +23,8 @@ func (m *model) recordIncident(at time.Time) {
 	s.CreatedAt = at.UTC().Format(time.RFC3339)
 	s.Tool = ndoc.Tool{Version: m.version, OS: runtime.GOOS, Arch: runtime.GOARCH}
 	s.Options = ndoc.Options{
-		ProbeTimeoutMs: m.probeTimeout.Milliseconds(), PublicDNS: m.publicDNS,
+		ProbeTimeoutMs: m.probeTimeout.Milliseconds(),
+		PublicDNS:      m.publicDNS, PublicDNSAuto: m.publicDNSAuto,
 		Check: append([]string(nil), m.snapshotCheck...), Skip: append([]string(nil), m.snapshotSkip...),
 	}
 	if m.sources != nil {

@@ -79,11 +79,21 @@ type Request struct {
 	Iface  string `json:"iface,omitempty"`
 	// PublicDNS carries no omitempty: empty is a deliberate opt-out from the
 	// second-opinion resolver, and it must not read as "unset, use the
-	// default" on the far side.
-	PublicDNS string   `json:"public_dns"`
-	TimeoutMs int64    `json:"timeout_ms"`
-	Check     []string `json:"check,omitempty"`
-	Skip      []string `json:"skip,omitempty"`
+	// default" on the far side. It is an address or empty, which is all any
+	// protocol 1 netdoc has ever accepted here.
+	PublicDNS string `json:"public_dns"`
+	// PublicDNSAuto says nobody named that resolver, so the remote may cross to
+	// the other address family when it cannot be reached. Additive and omitted
+	// when false, which is what keeps both mixed pairs working on protocol 1: a
+	// remote too old to know the field ignores it and does what it has always
+	// done with the address beside it, and a local side that never sends it is
+	// read here as the exact resolver an old netdoc meant. Neither is a
+	// protocol break, so the version does not move; bumping it would refuse
+	// every mixed pair over a setting neither side changed.
+	PublicDNSAuto bool     `json:"public_dns_auto,omitempty"`
+	TimeoutMs     int64    `json:"timeout_ms"`
+	Check         []string `json:"check,omitempty"`
+	Skip          []string `json:"skip,omitempty"`
 }
 
 // Response is one finished exchange. A response that carries a report and a

@@ -770,7 +770,7 @@ func TestProxyProbeOnlyAsksAboutProbeHost(t *testing.T) {
 			asked = append(asked, req.URL.Hostname())
 			return nil, nil
 		}}
-		for _, p := range o.buildProbes(target, DefaultPublicDNS) {
+		for _, p := range o.buildProbes(target, DefaultPublicDNS, true) {
 			if p.ID == ProbeProxy {
 				p.Run(context.Background(), nil)
 			}

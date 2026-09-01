@@ -275,7 +275,7 @@ func TestSavedThemePreferenceIsRestored(t *testing.T) {
 		t.Fatalf("loadTheme = %q, want ember", got.Name)
 	}
 	// A new session starts on the saved theme.
-	m := NewWithSelection(nil, nil, false, false, "", "test", "", diagnostic.ProbeSelection{}, WithThemeFile(path)).(model)
+	m := NewWithSelection(nil, nil, false, false, "", "test", "", false, diagnostic.ProbeSelection{}, WithThemeFile(path)).(model)
 	if m.theme.Name != "ember" || !reflect.DeepEqual(m.st, newStyles(resolveTheme("ember"))) {
 		t.Fatalf("new model theme = %q, want ember with matching styles", m.theme.Name)
 	}
@@ -302,7 +302,7 @@ func TestSavedThemePreferenceIsRestored(t *testing.T) {
 func TestThemePickerPreviewAcceptAndCancel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "netdoc", "theme")
 	open := func() model {
-		m := NewWithSelection(mustTarget(t, "example.com:443"), nil, false, false, "", "test", "",
+		m := NewWithSelection(mustTarget(t, "example.com:443"), nil, false, false, "", "test", "", false,
 			diagnostic.ProbeSelection{}, WithThemeFile(path)).(model)
 		m.width, m.height = 100, 40
 		return m

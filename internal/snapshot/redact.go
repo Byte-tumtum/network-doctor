@@ -264,6 +264,7 @@ func (r *redactor) snapshot(s Snapshot) Snapshot {
 		Options: Options{
 			ProbeTimeoutMs: s.Options.ProbeTimeoutMs,
 			PublicDNS:      r.address(s.Options.PublicDNS),
+			PublicDNSAuto:  s.Options.PublicDNSAuto,
 			Check:          append([]string(nil), s.Options.Check...),
 			Skip:           append([]string(nil), s.Options.Skip...),
 		},

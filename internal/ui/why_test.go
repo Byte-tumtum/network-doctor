@@ -60,7 +60,7 @@ func TestWhyActionUsesTheExistingDetailsPanel(t *testing.T) {
 		"MEDIUM: the best explanation, with an ambiguity unresolved",
 		"Evidence",
 		"the configured resolver returned SERVFAIL",
-		"DNS (public 8.8.8.8) returned an address",
+		"DNS (public) returned an address",
 		"Ruled out",
 		"Missing DNS record",
 		"General network outage",

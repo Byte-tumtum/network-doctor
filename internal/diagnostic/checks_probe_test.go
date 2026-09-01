@@ -700,7 +700,7 @@ func TestPublicDNSProbe(t *testing.T) {
 				called, server = true, srv
 				return tc.ips, tc.targets, tc.err
 			}}
-			r := ops.publicDNSProbe("example.com", tc.litIP, DefaultPublicDNS)(context.Background(), nil)
+			r := ops.publicDNSProbe("example.com", tc.litIP, []string{"8.8.8.8"})(context.Background(), nil)
 			if called && server != "8.8.8.8:53" {
 				t.Errorf("queried %q, want 8.8.8.8:53", server)
 			}
@@ -731,7 +731,7 @@ func TestPublicDNSNeedsMoreThanAResolverAttempt(t *testing.T) {
 		// dialed, and the answer that came back is not the server's.
 		return []net.IP{net.ParseIP("198.51.100.77")}, []string{"8.8.8.8:53"}, errHostsFileAnswer
 	}}
-	r := ops.publicDNSProbe("example.com", nil, DefaultPublicDNS)(context.Background(), nil)
+	r := ops.publicDNSProbe("example.com", nil, []string{"8.8.8.8"})(context.Background(), nil)
 	if r.Status != StatusNA {
 		t.Errorf("status = %s, want %s: an attempted resolver is not an answering one", r.Status, StatusNA)
 	}
@@ -2433,4 +2433,193 @@ func selfSignedCert(t *testing.T, hosts ...string) (tls.Certificate, *x509.CertP
 	roots := x509.NewCertPool()
 	roots.AddCert(leaf)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, roots
+}
+
+// The untouched default has to survive a host that has only one working address
+// family. Before the second-opinion setting could mean "choose", it named one
+// IPv4 resolver, so an IPv6-only machine lost the row to an address it had no
+// way to dial while its own DNS and its own Internet worked perfectly. The
+// stub below is the network answering per resolver, which is the only thing the
+// probe can observe about a family from inside this branch.
+func TestPublicDNSDefaultSurvivesAnUnusableAddressFamily(t *testing.T) {
+	const v4, v6 = "8.8.8.8", "2001:4860:4860::8888"
+	unreachable := errors.New("connect: network is unreachable")
+	answer := []net.IP{net.ParseIP("192.0.2.9")}
+
+	for _, tc := range []struct {
+		name      string
+		reachable string
+		wantAsked []string // resolvers dialed, in order
+		wantVia   string   // the resolver the row credits
+	}{
+		{"IPv4 only", v4, []string{v4}, v4},
+		{"IPv6 only", v6, []string{v4, v6}, v6},
+		{"dual stack takes the first candidate", "", []string{v4}, v4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked []string
+			ops := &netops{lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, []string, error) {
+				asked = append(asked, server)
+				// "" means every resolver answers, which is the dual-stack case.
+				if tc.reachable != "" && server != publicDNSServer(tc.reachable) {
+					return nil, []string{server}, unreachable
+				}
+				return answer, []string{server}, nil
+			}}
+			r := ops.publicDNSProbe("example.com", nil, PublicDNSCandidates(DefaultPublicDNS, true))(context.Background(), nil)
+
+			if r.Status != StatusPass || len(r.Addrs) != 1 || !r.Addrs[0].Equal(answer[0]) {
+				t.Fatalf("result = %+v, want a passing second opinion", r)
+			}
+			var want []string
+			for _, resolver := range tc.wantAsked {
+				want = append(want, publicDNSServer(resolver))
+			}
+			if !slices.Equal(asked, want) {
+				t.Errorf("dialed %v, want %v", asked, want)
+			}
+			// Every resolver dialed is attempt evidence; only the one that
+			// answered may be credited with the answer.
+			if !slices.Equal(r.ResolverTargets, want) {
+				t.Errorf("resolver targets = %v, want %v", r.ResolverTargets, want)
+			}
+			if r.resolver != tc.wantVia || !strings.Contains(r.Detail, "via "+tc.wantVia) {
+				t.Errorf("result = %+v, want the answer credited to %s alone", r, tc.wantVia)
+			}
+			for _, resolver := range []string{v4, v6} {
+				if resolver != tc.wantVia && strings.Contains(r.Detail, "via "+resolver) {
+					t.Errorf("detail = %q, credits %s, which supplied nothing", r.Detail, resolver)
+				}
+			}
+		})
+	}
+}
+
+// "--public-dns 8.8.8.8" is a choice, not a preference for Google over the
+// other family. A user who names a resolver gets that resolver queried and no
+// other, even when it is the address the default would have reached for first
+// and even when it cannot be reached at all.
+func TestExplicitPublicDNSQueriesOnlyWhatItNames(t *testing.T) {
+	for _, resolver := range []string{"8.8.8.8", "2001:4860:4860::8888", "9.9.9.9"} {
+		t.Run(resolver, func(t *testing.T) {
+			var asked []string
+			ops := &netops{lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, []string, error) {
+				asked = append(asked, server)
+				return nil, []string{server}, errors.New("connect: network is unreachable")
+			}}
+			r := ops.publicDNSProbe("example.com", nil, PublicDNSCandidates(resolver, false))(context.Background(), nil)
+			if !slices.Equal(asked, []string{publicDNSServer(resolver)}) {
+				t.Errorf("dialed %v, want only %s", asked, publicDNSServer(resolver))
+			}
+			if r.Status != StatusNA {
+				t.Errorf("status = %s, want %s: the named resolver did not answer", r.Status, StatusNA)
+			}
+		})
+	}
+}
+
+// An automatic run that reached nobody must still say who it tried. The row is
+// N/A either way, and burying one of two failed families in a single-resolver
+// sentence would understate what the run actually knows.
+func TestPublicDNSReportsEveryResolverItCouldNotReach(t *testing.T) {
+	ops := &netops{lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, []string, error) {
+		return nil, []string{server}, errors.New("connect: network is unreachable")
+	}}
+	r := ops.publicDNSProbe("example.com", nil, PublicDNSCandidates(DefaultPublicDNS, true))(context.Background(), nil)
+	if r.Status != StatusNA || len(r.Addrs) != 0 || r.DNSNotFound {
+		t.Fatalf("result = %+v, want an unavailable row with nothing claimed", r)
+	}
+	for _, resolver := range PublicDNSCandidates(DefaultPublicDNS, true) {
+		if !slices.Contains(r.ResolverTargets, publicDNSServer(resolver)) {
+			t.Errorf("resolver targets = %v, want %s among them", r.ResolverTargets, publicDNSServer(resolver))
+		}
+		if !strings.Contains(r.Detail, resolver) {
+			t.Errorf("detail = %q, want %s named as tried", r.Detail, resolver)
+		}
+	}
+}
+
+// A resolver that answered has answered the row, whatever it said. Only an
+// unreachable one is worth another family: moving on from an NXDOMAIN would
+// shop for a second answer until one agreed, and moving on from a hosts-file
+// hit would ask a second server about a file it cannot see either.
+func TestPublicDNSStopsAtTheFirstResolverThatAnswered(t *testing.T) {
+	notFound := &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}
+	for _, tc := range []struct {
+		name    string
+		ips     []net.IP
+		targets []string
+		err     error
+		status  Status
+	}{
+		{"an answer", []net.IP{net.ParseIP("192.0.2.1")}, []string{"8.8.8.8:53"}, nil, StatusPass},
+		{"no such name", nil, []string{"8.8.8.8:53"}, notFound, StatusPass},
+		{"a local override", []net.IP{net.ParseIP("192.0.2.1")}, []string{"8.8.8.8:53"}, errHostsFileAnswer, StatusNA},
+		{"a lookup that never went out", nil, nil, nil, StatusNA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asked := 0
+			ops := &netops{lookupPublicIP: func(context.Context, string, string) ([]net.IP, []string, error) {
+				asked++
+				return tc.ips, tc.targets, tc.err
+			}}
+			r := ops.publicDNSProbe("example.com", nil, PublicDNSCandidates(DefaultPublicDNS, true))(context.Background(), nil)
+			if asked != 1 {
+				t.Errorf("dialed %d resolvers, want 1: the first one answered", asked)
+			}
+			if r.Status != tc.status {
+				t.Errorf("status = %s, want %s", r.Status, tc.status)
+			}
+		})
+	}
+}
+
+// A resolver that is routed but silently dropped answers nothing and reports
+// nothing, so a strictly sequential default would spend the row's whole budget
+// on it and never reach the family that works. Each automatic candidate gets an
+// even share of what is left instead. An explicit resolver keeps the entire
+// budget it has always had, because it has nothing to make room for.
+func TestPublicDNSDefaultLeavesTimeForTheOtherFamily(t *testing.T) {
+	const budget = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name      string
+		auto      bool
+		wantAsked int
+	}{
+		{"the default keeps a share for the second family", true, 2},
+		{"an explicit resolver keeps the whole budget", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var deadlines []time.Duration
+			ops := &netops{lookupPublicIP: func(ctx context.Context, _, server string) ([]net.IP, []string, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("attempt ran without a deadline")
+				}
+				deadlines = append(deadlines, time.Until(deadline))
+				<-ctx.Done() // a black hole: nothing comes back until time runs out
+				return nil, []string{server}, ctx.Err()
+			}}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
+			defer cancel()
+			start := time.Now()
+			r := ops.publicDNSProbe("example.com", nil, PublicDNSCandidates(DefaultPublicDNS, tc.auto))(ctx, nil)
+
+			if len(deadlines) != tc.wantAsked {
+				t.Fatalf("dialed %d resolvers, want %d", len(deadlines), tc.wantAsked)
+			}
+			switch shared := deadlines[0] <= budget*3/4; {
+			case tc.wantAsked > 1 && !shared:
+				t.Errorf("first attempt held %v of a %v budget, want a share of it", deadlines[0], budget)
+			case tc.wantAsked == 1 && shared:
+				t.Errorf("first attempt held %v of a %v budget, want all of it", deadlines[0], budget)
+			}
+			if elapsed := time.Since(start); elapsed > 2*budget {
+				t.Errorf("row took %v, want the probe budget of %v to bound every attempt", elapsed, budget)
+			}
+			if r.Status != StatusNA {
+				t.Errorf("status = %s, want %s", r.Status, StatusNA)
+			}
+		})
+	}
 }
