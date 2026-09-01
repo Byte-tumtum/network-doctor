@@ -240,7 +240,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	save := fs.String("save", "", "run the checks headless and write a diagnostic snapshot to `file` (.ndoc)")
 	support := fs.String("support", "", "run the checks headless and write a sanitized support snapshot to `file` (.ndoc)")
 	compareMode := fs.Bool("compare", false, "compare two saved snapshots given as arguments; runs no probes")
-	twoSided := fs.Bool("two-sided", false, "read two saved snapshots of one target as two machines and place the failure; runs no probes")
+	twoSided := fs.Bool("two-sided", false, "localize a failure from two saved snapshots, or from local and -via live runs")
 	watch := fs.Bool("watch", false, "continuously re-run checks (with -json, stream one report per line)")
 	profileName := fs.String("profile", "", "run a service `profile` ("+strings.Join(profiles.Names(), ", ")+"; use list to describe them)")
 	var peerListen peerListenList
@@ -279,10 +279,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		positional = append(positional, fs.Arg(0))
 		args = fs.Args()[1:]
 	}
-	// One argument everywhere except -compare, which reads two files rather
-	// than probing one target.
+	// One argument everywhere except the two artifact readings. With -via,
+	// -two-sided is a live target run again and accepts at most one target.
+	liveTwoSided := *twoSided && *viaDest != ""
+	if liveTwoSided && len(positional) > 1 {
+		fmt.Fprintln(stderr, "netdoc: live -two-sided accepts at most one target; remove -via to read two snapshot files")
+		return 2
+	}
 	allowed := 1
-	if *compareMode || *twoSided {
+	if *compareMode || *twoSided && !liveTwoSided {
 		allowed = 2
 	}
 	if len(positional) > allowed {
@@ -311,10 +316,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	var profilePlan *profile.Plan
 	// Before every other mode, and before a single probe flag is validated:
-	// both readings of two saved snapshots read files and touch the network at
-	// no point, so the settings that decide what probes do have nothing to say
-	// about them. They are two questions about one pair of artifacts, and
-	// asking both at once is asking for two commands.
+	// the artifact readings touch the network at no point, so settings that
+	// decide what probes do have nothing to say about them. The live two-sided
+	// form continues below because it does perform ordinary runs.
 	if *compareMode && *twoSided {
 		fmt.Fprintln(stderr, "netdoc: -compare and -two-sided cannot be combined")
 		return 2
@@ -325,8 +329,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// The second reading of the same two files, and headless and probe-free for
 	// the same reason: it asks where a failure is rather than what changed, and
 	// everything it answers with comes out of the artifacts.
-	if *twoSided {
+	if *twoSided && !liveTwoSided {
 		return runTwoSided(positional, setFlagNames(fs), *jsonOut, stdout, stderr)
+	}
+	if liveTwoSided && rejectLiveTwoSidedFlags(setFlagNames(fs), stderr) {
+		return 2
 	}
 	if *profileName != "" {
 		definition, ok := profiles.Lookup(*profileName)
@@ -501,15 +508,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		check: checks, skip: skips, publicDNS: *publicDNS, timeout: *timeout,
 		watch: *watch, json: *jsonOut, save: artifact, support: *support != "",
 	}
+	h.via, h.viaCommand = *viaDest, os.Getenv(remote.CommandEnv)
+	if liveTwoSided {
+		return runLiveTwoSided(context.Background(), h, stdout, stderr)
+	}
 	if profilePlan != nil {
-		h.via, h.viaCommand = *viaDest, os.Getenv(remote.CommandEnv)
 		return runProfile(context.Background(), h, *profilePlan, stdout, stderr)
 	}
 	// --via is headless for the same reason -json is: the run is over by the
 	// time this process has anything to show. There is no live scheduling to
 	// watch either, because the probes are running on another machine.
 	if *viaDest != "" {
-		h.via, h.viaCommand = *viaDest, os.Getenv(remote.CommandEnv)
 		return runVia(context.Background(), h, stdout, stderr)
 	}
 
@@ -593,6 +602,7 @@ func printUsage(w io.Writer, fs *flag.FlagSet) {
        netdoc --peer-connect [--json]
        netdoc --compare before.ndoc after.ndoc [--json]
        netdoc --two-sided here.ndoc there.ndoc [--json]
+       netdoc --two-sided --via ssh-destination [target] [--json]
 
 Diagnoses network connectivity layer by layer. With no target it runs the
 generic checks; with a target it also probes that endpoint. Flags may be
@@ -605,7 +615,8 @@ which profiles need a target and which fixed endpoints they test.
 diagnosis here. The destination goes to the system ssh client as typed, so
 ~/.ssh/config aliases work; the SSH host needs its own netdoc on the PATH of a
 non-interactive session, or NETDOC_VIA_COMMAND set to its path. It is headless
-and needs no terminal.
+and needs no terminal. With --two-sided, the same ordinary diagnosis also runs
+locally and the two snapshots are localized together.
 
 Peer mode is headless. The listener prints a temporary direct-connect pairing
 string; the connector reads it from a hidden prompt so it does not enter argv.
@@ -614,10 +625,11 @@ Compare mode is headless and runs no probes: it reads two snapshots written by
 --save or --support and reports what changed between them. It exits 0 when they describe the
 same state and 1 when they do not.
 
---two-sided reads the same two snapshots as two machines looking at one target
-at the same time, and says whether the evidence places a failure on this side,
-on the other side, on something they share, or nowhere. It runs no probes
-either, and refuses two snapshots of different targets.
+--two-sided reads two snapshots as two machines looking at one target and says
+whether the evidence places a failure on side A, side B, something shared, or
+nowhere. With two file arguments it stays offline. With --via it concurrently
+acquires side A locally and side B on the SSH host, then applies the same
+snapshot localization. Both forms refuse different effective targets.
 
 Target forms:
 `+diagnostic.TargetForms+"\n\nFlags:\n")
@@ -770,6 +782,27 @@ var artifactReadingFlags = []string{
 	"profile", "check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
 }
 
+// Live two-sided mode performs one ordinary run per machine. Probe settings
+// with the same meaning on both machines are allowed; presentation modes,
+// multi-run modes, and settings tied to one machine are not.
+var liveTwoSidedRejectedFlags = []string{
+	"toolbox", "watch", "save", "support", "profile", "peer-listen", "peer-connect", "no-history", "keys",
+}
+
+func rejectLiveTwoSidedFlags(setFlags map[string]bool, stderr io.Writer) bool {
+	if setFlags["iface"] {
+		fmt.Fprintln(stderr, "netdoc: -iface cannot be combined with live -two-sided; one interface selector cannot name both machines")
+		return true
+	}
+	for _, name := range liveTwoSidedRejectedFlags {
+		if setFlags[name] {
+			fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with live -two-sided\n", name)
+			return true
+		}
+	}
+	return false
+}
+
 // rejectRunFlags refuses the settings that cannot apply to a reading of two
 // finished runs. mode is the flag that selected the reading, so the message
 // names the command the user actually typed.
@@ -874,6 +907,10 @@ func runTwoSided(paths []string, setFlags map[string]bool, jsonOut bool, stdout,
 		fmt.Fprintln(stderr, "netdoc: -two-sided:", textsafe.Clean(err.Error()))
 		return 2
 	}
+	return emitTwoSided(result, jsonOut, result.Text(), stdout, stderr)
+}
+
+func emitTwoSided(result compare.TwoSided, jsonOut bool, human string, stdout, stderr io.Writer) int {
 	if jsonOut {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
@@ -882,7 +919,7 @@ func runTwoSided(paths []string, setFlags map[string]bool, jsonOut bool, stdout,
 			return 1
 		}
 	} else {
-		fmt.Fprint(stdout, result.Text())
+		fmt.Fprint(stdout, human)
 	}
 	if result.Placed() {
 		return 1
@@ -922,6 +959,54 @@ type headless struct {
 	// viaCommand overrides the netdoc to start there.
 	via        string
 	viaCommand string
+}
+
+// runLiveTwoSided acquires the two ordinary runs together, then hands their
+// canonical snapshots to the existing offline localization engine. A remote
+// transport failure cancels the local probes; an interruption cancels both.
+func runLiveTwoSided(parent context.Context, h headless, stdout, stderr io.Writer) int {
+	signalCtx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(signalCtx)
+	defer cancel()
+
+	localRun := h
+	localRun.via, localRun.viaCommand = "", ""
+	var local, remote diagnosisOutput
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		local = diagnoseHeadless(ctx, localRun)
+		if local.err != nil {
+			cancel()
+		}
+	})
+	wg.Go(func() {
+		remote = diagnoseHeadless(ctx, h)
+		if remote.err != nil {
+			cancel()
+		}
+	})
+	wg.Wait()
+
+	if signalCtx.Err() != nil {
+		fmt.Fprintln(stderr, "netdoc: -two-sided: the run was interrupted")
+		return 1
+	}
+	if remote.err != nil {
+		fmt.Fprintln(stderr, "netdoc: -two-sided -via:", remote.err)
+		return 2
+	}
+	if local.err != nil {
+		fmt.Fprintln(stderr, "netdoc: -two-sided:", textsafe.Clean(local.err.Error()))
+		return 1
+	}
+	result, err := compare.TwoSidedSnapshots(local.snapshot, remote.snapshot)
+	if err != nil {
+		fmt.Fprintln(stderr, "netdoc: -two-sided:", textsafe.Clean(err.Error()))
+		return 2
+	}
+	human := result.TextWithHeadings("LOCAL (SIDE A)", h.via+" (SIDE B)")
+	return emitTwoSided(result, h.json, human, stdout, stderr)
 }
 
 // runHeadless runs the probe DAG headless, prints the JSON report when one was
@@ -997,7 +1082,7 @@ func runHeadless(ctx context.Context, h headless, stdout, stderr io.Writer) int 
 	}
 }
 
-type profileComponentOutput struct {
+type diagnosisOutput struct {
 	report   report.Report
 	snapshot snapshot.Snapshot
 	tool     snapshot.Tool
@@ -1074,12 +1159,12 @@ func runProfile(parent context.Context, base headless, plan profile.Plan, stdout
 }
 
 func runProfilePass(ctx context.Context, base headless, plan profile.Plan) (profile.Result, []snapshot.Snapshot, []snapshot.Tool, error) {
-	outputs := make([]profileComponentOutput, len(plan.Runs))
+	outputs := make([]diagnosisOutput, len(plan.Runs))
 	run := func(i int, spec profile.Run) {
 		h := base
 		h.target = spec.Target
 		h.selection, h.check = profileSelection(spec, base.check, base.skip)
-		outputs[i] = diagnoseProfileComponent(ctx, h)
+		outputs[i] = diagnoseHeadless(ctx, h)
 	}
 	if base.via != "" {
 		for i, spec := range plan.Runs {
@@ -1116,25 +1201,24 @@ func profileSelection(spec profile.Run, extra, skip probeList) (diagnostic.Probe
 	return selection, probeList(check)
 }
 
-func diagnoseProfileComponent(ctx context.Context, h headless) profileComponentOutput {
+// diagnoseHeadless performs one ordinary diagnosis and returns both canonical
+// artifacts. A via run uses the worker's artifacts; a local run builds them
+// from the same probe results.
+func diagnoseHeadless(ctx context.Context, h headless) diagnosisOutput {
 	if h.via != "" {
-		req := remote.Request{
-			Target: h.target.Raw, Iface: h.iface, PublicDNS: h.publicDNS,
-			TimeoutMs: h.timeout.Milliseconds(), Check: h.check.strings(), Skip: h.skip.strings(),
-		}
-		resp, err := remoteRun(ctx, h.via, h.viaCommand, req)
+		resp, err := remoteRun(ctx, h.via, h.viaCommand, requestForRemote(h))
 		if err != nil {
-			return profileComponentOutput{err: err}
+			return diagnosisOutput{err: err}
 		}
-		return profileComponentOutput{report: *resp.Report, snapshot: *resp.Snapshot, tool: resp.Tool}
+		return diagnosisOutput{report: *resp.Report, snapshot: *resp.Snapshot, tool: resp.Tool}
 	}
 	probes := h.selection.Apply(diagnostic.BuildProbesFromSources(h.target, h.sources, h.publicDNS))
 	results := runAll(ctx, probes, h.timeout)
 	if ctx.Err() != nil {
-		return profileComponentOutput{err: ctx.Err()}
+		return diagnosisOutput{err: ctx.Err()}
 	}
 	s := buildSnapshotArtifact(h, probes, results)
-	return profileComponentOutput{report: buildReport(h.target, probes, results), snapshot: s, tool: s.Tool}
+	return diagnosisOutput{report: buildReport(h.target, probes, results), snapshot: s, tool: s.Tool}
 }
 
 func buildProfileArtifact(result profile.Result, snapshots []snapshot.Snapshot) snapshot.ProfileSnapshot {
@@ -1222,6 +1306,19 @@ var remoteRun = remote.Run
 // workerStdin is the protocol's inbound channel, stubbed in tests.
 var workerStdin io.Reader = os.Stdin
 
+func requestForRemote(h headless) remote.Request {
+	req := remote.Request{
+		Iface: h.iface, PublicDNS: h.publicDNS, TimeoutMs: h.timeout.Milliseconds(),
+		Check: h.check.strings(), Skip: h.skip.strings(),
+	}
+	if h.target != nil {
+		// The remote parses the same validated spelling again, so a build that
+		// resolves it differently records that difference in its snapshot.
+		req.Target = h.target.Raw
+	}
+	return req
+}
+
 // runVia performs the diagnosis on another machine and presents it here.
 //
 // Nothing about the answer is re-derived locally. The report and the snapshot
@@ -1244,20 +1341,7 @@ func runVia(parent context.Context, h headless, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	req := remote.Request{
-		Iface:     h.iface,
-		PublicDNS: h.publicDNS,
-		TimeoutMs: h.timeout.Milliseconds(),
-		Check:     h.check.strings(),
-		Skip:      h.skip.strings(),
-	}
-	// The spelling the user typed, not netdoc's parse of it: the remote parses
-	// it again with the same parser, so what gets probed is what was asked for
-	// and one build's idea of a target cannot be imposed on another's.
-	if h.target != nil {
-		req.Target = h.target.Raw
-	}
-	resp, err := remoteRun(ctx, h.via, h.viaCommand, req)
+	resp, err := remoteRun(ctx, h.via, h.viaCommand, requestForRemote(h))
 	if err != nil {
 		fmt.Fprintln(stderr, "netdoc: -via:", err)
 		// An interrupted run is exit 1, the code quitting before the chain

@@ -311,6 +311,14 @@ func TestPrintUsageTargetForms(t *testing.T) {
 	if !strings.Contains(buf.String(), want) {
 		t.Errorf("usage output missing the target-forms section:\n%s", buf.String())
 	}
+	for _, want := range []string{
+		"netdoc --two-sided --via ssh-destination [target] [--json]",
+		"concurrently\nacquires side A locally and side B on the SSH host",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("usage output missing %q:\n%s", want, buf.String())
+		}
+	}
 }
 
 // Both convenience files are only a choice of path handed to the UI, which
@@ -1977,7 +1985,7 @@ func TestRunTwoSidedRejectsRunFlagsAndCompare(t *testing.T) {
 		{"--support", filepath.Join(dir, "out.ndoc")}, {"--check", "dns"}, {"--skip", "dns"},
 		{"--iface", "lo"}, {"--public-dns", "9.9.9.9"}, {"--no-history"}, {"--keys", "vim"},
 		{"--timeout", "1s"}, {"--peer-connect"}, {"--peer-listen", "127.0.0.1:0"},
-		{"--via", "somewhere"}, {"--compare"},
+		{"--compare"},
 	} {
 		t.Run(args[0], func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

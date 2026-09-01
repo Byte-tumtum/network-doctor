@@ -42,6 +42,7 @@ netdoc --watch host     # catch intermittent failures
 netdoc --json host      # structured report for scripts or bug reports
 netdoc --peer-listen 192.168.1.20:4242  # offer one direct, authenticated peer session
 netdoc --peer-connect   # paste the temporary pairing string at the hidden prompt
+netdoc --two-sided --via ideapad example.com  # local and remote: where is the failure?
 netdoc --two-sided here.ndoc there.ndoc  # two machines, one target: which side is it on?
 ```
 
@@ -233,6 +234,7 @@ netdoc --json --watch host  # headless: one JSON report per line, until interrup
 netdoc --check dns,target_tcp,tls example.com  # run only these IDs and their prerequisites
 netdoc --skip internet_tcp,quic_udp_443 example.com  # omit these probe branches
 netdoc --via server host  # run the checks on an SSH host and show the result here
+netdoc --two-sided --via server host  # run here and there, then localize the difference
 netdoc --iface wg0 host # bind probe traffic to wg0's source address
 netdoc --public-dns 9.9.9.9 host  # take the second opinion from Quad9 instead
 netdoc --no-history host          # don't read or save the target history file
@@ -269,7 +271,7 @@ The ignored fields, ordering, version compatibility, and different-target behavi
 
 ### Remote diagnosis over SSH
 
-`--via server host` runs the checks on another machine and presents the finished diagnosis here, for the machine whose network is broken in a way you cannot reproduce on yours. The destination goes to your own `ssh` client exactly as typed, so `~/.ssh/config` aliases, `user@host`, ports, and agent authentication all behave the way they do for `ssh server`, and netdoc installs nothing on the far end.
+`--via server host` runs the checks on another machine and presents the finished diagnosis here, for the machine whose network is broken in a way you cannot reproduce on yours. Add `--two-sided` to run the same target locally and remotely at the same time, then localize their completed snapshots with the ordinary two-sided engine. The destination goes to your own `ssh` client exactly as typed, so `~/.ssh/config` aliases, `user@host`, ports, and agent authentication all behave the way they do for `ssh server`, and netdoc installs nothing on the far end.
 
 A remote network that fails a check exits `1`, exactly as a local one does; a broken SSH connection, a missing remote `netdoc`, or a remote protocol mismatch exits `2` and says which it was, so a broken network is never confused with a broken connection.
 
@@ -285,7 +287,14 @@ The full security, privacy, protocol, and diagnosis contract is in **[docs/refer
 
 ### Two-sided diagnosis
 
-Peer mode answers the path between two machines; `--two-sided` answers a target that fails from one machine and works from another, by reading two ordinary saved runs:
+Peer mode answers the path directly between two Network Doctor machines. Two-sided diagnosis asks why the same external target behaves differently from their two vantage points. The live form starts both ordinary runs together, with this machine as side A and the SSH destination as side B:
+
+```sh
+netdoc --two-sided --via other-host github.com
+netdoc --two-sided --via other-host --json github.com
+```
+
+The artifact form remains offline and network-free:
 
 ```sh
 netdoc --save here.ndoc github.com                     # this machine
@@ -293,7 +302,7 @@ netdoc --via other-host --save there.ndoc github.com   # the other machine
 netdoc --two-sided here.ndoc there.ndoc                # where is it broken?
 ```
 
-It places the failure on the side where it is specific, reports every caveat it cannot rule out, and makes no claim about any device in between.
+Both forms use the same canonical snapshots, conservative localization, and `netdoc.twosided.v1` JSON schema. They place the failure on the vantage point where it is specific, report every caveat they cannot rule out, and make no claim about any device in between. `--compare` instead asks what changed between two saved states, while peer mode measures direct authenticated traffic between the Network Doctor endpoints.
 
 What a placement does and does not prove, and how the three two-machine commands divide the work, are in **[docs/reference.md](docs/reference.md#two-sided-diagnosis)**.
 
@@ -325,7 +334,7 @@ The site is built from `docs/` and the wiki, so each page is still edited exactl
 
 ## Feature summary
 
-Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, built-in service profiles (`--profile`), two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), two-sided failure localization across two machines (`--two-sided`), remote diagnosis over SSH (`--via`), report copy/save.
+Native DAG probes + diagnosis engine + authenticated two-ended peer diagnosis, built-in service profiles (`--profile`), two-pane UI, concurrent cancellable streaming tool jobs (`ping`/`dig`/`curl`/`traceroute`/`mtr`/`ss`/`ip`/`nmap`) + filterable output viewer + `--toolbox` mode, `Warn` state, proxy-aware diagnosis, unprivileged path-MTU check, public-DNS second opinion, LAN network map with per-device service selection, `S` SSH login, source-interface pinning (`--iface`), probe selection (`--check`/`--skip`), `--watch` with bounded incident reconstruction, TUI history strips and `--json` NDJSON, `--json` output, portable `.ndoc` diagnostic snapshots (`--save`), sanitized support snapshots (`--support`), semantic snapshot comparison (`--compare`), saved and live local-vs-remote two-sided localization (`--two-sided`), remote diagnosis over SSH (`--via`), report copy/save.
 
 ## Built with
 

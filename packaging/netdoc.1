@@ -1,4 +1,4 @@
-.TH NETDOC 1 "2026-08-26" "network-doctor" "User Commands"
+.TH NETDOC 1 "2026-08-31" "network-doctor" "User Commands"
 .SH NAME
 netdoc \- diagnose network connectivity and explain where the connection breaks
 .SH SYNOPSIS
@@ -29,6 +29,12 @@ netdoc \- diagnose network connectivity and explain where the connection breaks
 .B netdoc
 .B \-two\-sided
 .I here.ndoc there.ndoc
+.RI [ \-json ]
+.br
+.B netdoc
+.B \-two\-sided
+.BI \-via " destination"
+.RI [ target ]
 .RI [ \-json ]
 .br
 .B netdoc
@@ -286,14 +292,21 @@ schema instead of the table. Cannot be combined with any flag that describes a
 run netdoc would perform.
 .TP
 .B \-two\-sided
-Read two diagnostic snapshots of one target as two machines looking at it, and
-say which side the evidence places a failure on. The two files are given as
-arguments, this machine's run first. Runs no probes and opens no socket, the
-same as
+Say which of two vantage points a same-target failure is specific to. With two
+snapshot arguments, this machine's run is first and the command runs no probes
+and opens no socket, the same as
 .BR \-compare ,
 and asks a different question of the same two files: not what changed between
 two runs, but whether a failure belongs to one machine, the other, something
 they share, or nowhere the evidence can place it.
+.IP
+With
+.BI \-via " destination"
+and zero or one target, start one ordinary diagnosis locally and the equivalent
+ordinary diagnosis over SSH concurrently. The local run is side A and the SSH
+run is side B. Both completed results use the ordinary canonical snapshot path
+and the same two-sided engine as the artifact form. No rendered report text is
+parsed and no remote protocol or result schema is added.
 .IP
 Only rows both machines measured are read. A check that failed on one side and
 passed on the other places the failure on that side's vantage point, which
@@ -310,16 +323,34 @@ unlike
 which allows them: a row that failed against one host and passed against
 another says nothing about which machine is at fault. Exit
 .B 0
-means no check failed on either machine and
+means no comparable check failed on either machine and
 .B 1
 means a failure was placed or the evidence could not place one. Headless, so it
 needs no terminal, and independent of
 .BR \-json ,
 which prints the separate
 .B netdoc.twosided.v1
-schema instead of the table. Cannot be combined with
-.B \-compare
-or with any flag that describes a run netdoc would perform.
+schema instead of the table in either form. Live mode applies
+.BR \-check ,
+.BR \-skip ,
+.BR \-timeout ,
+and
+.B \-public\-dns
+equally to both runs. It rejects
+.B \-iface
+because one machine-specific selector cannot name corresponding interfaces on
+two machines. It also rejects
+.BR \-profile ,
+.BR \-save ,
+.BR \-support ,
+.BR \-watch ,
+.BR \-compare ,
+peer mode,
+.BR \-toolbox ,
+.BR \-no\-history ,
+and
+.BR \-keys .
+The artifact form continues to reject every run setting.
 .TP
 .BI \-peer\-listen " IP:port"
 Open one temporary authenticated peer session on an exact local unicast IP and
@@ -377,6 +408,14 @@ behave as they always do and the snapshot records the remote machine's
 operating system and architecture. An
 .B \-iface
 value names an interface on the SSH host, and is resolved there.
+.IP
+With
+.BR \-two\-sided ,
+one equivalent local run starts concurrently. Its canonical snapshot and the
+returned remote snapshot are localized after both complete. In this form
+.B \-iface
+is rejected rather than silently applying one selector to two different
+machines.
 .IP
 With
 .BR \-profile ,
@@ -513,7 +552,9 @@ Print usage and exit.
 The chain completed with no failed row, or peer traffic passed in both
 directions. Skipped rows are allowed. Under
 .B \-compare
-it means the two snapshots describe the same diagnostic state.
+it means the two snapshots describe the same diagnostic state. Under
+.B \-two\-sided
+it means no comparable check failed on either side.
 .TP
 .B 1
 A row failed, the terminal UI was quit before the chain finished, or the run
@@ -523,6 +564,9 @@ with this status. Under
 this is the last completed pass's status. Under
 .B \-compare
 it means the two snapshots differ, which is an answer rather than a failure.
+Under
+.B \-two\-sided
+it means a failure was placed or the evidence could not place one.
 .TP
 .B 2
 Bad arguments, a target or pairing input the parser rejected, a snapshot
@@ -536,6 +580,10 @@ usable
 ran on the SSH host, or the two ends could not agree on the remote protocol. A
 remote run that did happen and found a broken network exits
 .BR 1 .
+Under live
+.BR \-two\-sided ,
+different effective targets and remote acquisition failures also exit
+.BR 2 .
 .SH ENVIRONMENT
 .TP
 .B NETDOC_VIA_COMMAND
@@ -620,6 +668,17 @@ alias:
 netdoc \-\-via server example.com
 netdoc \-\-via server \-\-json \-\-check dns,target_tcp example.com
 netdoc \-\-via server \-\-save remote.ndoc example.com
+.EE
+.RE
+.PP
+Run the same target locally and over SSH, then localize their differential, or
+perform the same reading later from two saved snapshots:
+.PP
+.RS 4
+.EX
+netdoc \-\-two\-sided \-\-via ideapad example.com
+netdoc \-\-two\-sided \-\-via ideapad \-\-json example.com
+netdoc \-\-two\-sided here.ndoc there.ndoc
 .EE
 .RE
 .PP

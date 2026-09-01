@@ -383,7 +383,13 @@ func sameSet(a, b []string) bool {
 // Everything printed comes out of a file the user was handed, which may not be
 // a file netdoc wrote, so all of it goes through the same sanitizer the probes'
 // output does before it reaches a terminal.
-func (t TwoSided) Text() string {
+func (t TwoSided) Text() string { return t.text("SIDE A", "SIDE B") }
+
+// TextWithHeadings keeps the stable reading while letting a live caller name
+// which machine supplied side A and side B. The labels are presentation only.
+func (t TwoSided) TextWithHeadings(a, b string) string { return t.text(clean(a), clean(b)) }
+
+func (t TwoSided) text(aHeading, bHeading string) string {
 	var b strings.Builder
 	b.WriteString("Network Doctor two-sided diagnosis\n\n")
 	rows := [][3]string{
@@ -396,7 +402,7 @@ func (t TwoSided) Text() string {
 	if t.A.Sanitized || t.B.Sanitized {
 		rows = append(rows, [3]string{"Fidelity", fidelityWord(t.A.Sanitized), fidelityWord(t.B.Sanitized)})
 	}
-	writeColumns(&b, "", "SIDE A", "SIDE B", rows, make([]string, len(rows)))
+	writeColumns(&b, "", aHeading, bHeading, rows, make([]string, len(rows)))
 	if len(t.Checks) > 0 {
 		b.WriteString("\n")
 		checks := make([][3]string, len(t.Checks))
@@ -405,7 +411,7 @@ func (t TwoSided) Text() string {
 			checks[i] = [3]string{row.ID, row.A, row.B}
 			notes[i] = sideNote(row)
 		}
-		writeColumns(&b, "Checks", "SIDE A", "SIDE B", checks, notes)
+		writeColumns(&b, "Checks", aHeading, bHeading, checks, notes)
 	}
 	b.WriteString("\n" + placedWord(t.Diagnosis.Side) + "\n" + clean(t.Diagnosis.Summary) + "\n")
 	if len(t.Diagnosis.Evidence) > 0 {

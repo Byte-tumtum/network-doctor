@@ -90,7 +90,7 @@ it never invents a recovery that was not observed.
 
 `--check` accepts comma-separated stable probe IDs and limits the run to those probes plus the prerequisite closure from the existing DAG. `--skip` removes IDs and any dependent probes whose prerequisites are then unavailable. Both flags are repeatable and combine by union; their argument order never changes row order. Unknown or empty IDs are rejected with exit `2`, before diagnostics start, and the error lists every valid stable ID. A known ID that does not apply to the current target is harmless: `--check` may select no rows, while `--skip` changes nothing. Omitted probes do not run and do not appear in the TUI or JSON. The same selection policy is retained by `--watch`, TUI restarts, and target changes.
 
-`--via` runs the checks on an SSH destination rather than on the local machine; see [Remote diagnosis over SSH](#remote-diagnosis-over-ssh). It is headless, so it needs no terminal, and it cannot be combined with `--toolbox`, `--watch`, `--compare`, or peer mode. Every other flag keeps its meaning, applied on the far end.
+`--via` runs the checks on an SSH destination rather than on the local machine; see [Remote diagnosis over SSH](#remote-diagnosis-over-ssh). It is headless, so it needs no terminal, and an ordinary remote run cannot be combined with `--toolbox`, `--watch`, `--compare`, or peer mode. With `--two-sided`, it instead acquires one local and one remote ordinary run for the same target; that form's complete flag matrix is under [Two-sided diagnosis](#flags-in-live-two-sided-mode).
 
 `--iface` binds IPv4 and IPv6 probe connections and DNS lookups to the interface's first usable address of the matching family. IPv4-only and IPv6-only interfaces use only their available family; pass an exact local IP to restrict probes to that address's family.
 
@@ -146,9 +146,10 @@ The TUI saves up to 50 recent targets between sessions in `$XDG_CONFIG_HOME/netd
 | Peer tests completed with authenticated traffic passing both ways | `0` |
 | Any failed row | `1` |
 | Peer diagnostic failed, stayed incomplete, or the session errored | `1` |
-| `--two-sided`: no check failed on either machine | `0` |
-| `--two-sided`: a failure was placed, or the evidence could not place one | `1` |
-| `--two-sided`: the two snapshots observed different targets | `2` |
+| `--two-sided`, saved or live: no comparable check failed on either machine | `0` |
+| `--two-sided`, saved or live: a failure was placed, or the evidence could not place one | `1` |
+| `--two-sided`, saved or live: the two snapshots observed different targets | `2` |
+| Live `--two-sided --via`: SSH or remote protocol acquisition failed | `2` |
 | Quit before the chain finished | `1` |
 | Bad arguments, pairing-input reject, validation reject, or no terminal for the TUI | `2` |
 | `--via`: SSH failed, no usable `netdoc` on the SSH host, or a remote protocol mismatch | `2` |
@@ -297,8 +298,10 @@ derived sentences remain display text.
   incompatibility.
 - `--toolbox` and `--keys` require the single-run TUI and are rejected with a
   profile. Peer mode is a different live two-machine protocol and is also
-  rejected. `--compare` and `--two-sided` currently accept only single-run
-  snapshots and reject the separate profile artifact schema.
+  rejected. `--compare` and offline `--two-sided` accept only single-run
+  snapshots and reject the separate profile artifact schema. Live
+  `--two-sided --via` rejects `--profile` because a profile is a multi-target
+  plan rather than one target observed from two vantage points.
 
 Target requirements are checked before any probe starts. `github` rejects a
 positional target rather than silently replacing a canonical endpoint. The
@@ -318,7 +321,8 @@ truth table on each machine.
 It answers one half of the two-machine question: the path **between** the two
 machines. For the other half, a target that fails from one machine and works
 from the other, see [two-sided diagnosis](#two-sided-diagnosis), which reads two
-ordinary saved runs and needs no live connection between the machines at all.
+ordinary runs. Those runs can already be saved, or the live form can acquire
+them locally and over SSH before applying the same reading.
 
 ### Pairing workflow
 
@@ -1344,7 +1348,19 @@ Adding fields to the snapshot for the sake of a fuller comparison is deliberatel
 
 ## Two-sided diagnosis
 
-`--two-sided` reads the same two `.ndoc` files `--compare` reads and asks the other question about them: not what changed between two runs, but **which machine a failure belongs to**.
+`--two-sided` asks which vantage point a failure is specific to, rather than what changed between two runs. It has two ways to obtain the same pair of canonical snapshots.
+
+The live form starts the same ordinary diagnosis on this machine and an SSH-accessible machine, as close together in time as practical, then applies the existing two-sided reading:
+
+```sh
+netdoc --two-sided --via other-host github.com
+netdoc --two-sided --via other-host --json github.com
+netdoc --two-sided --via other-host                    # two generic diagnoses
+```
+
+Side A is always the local run. Side B is always the `--via` run. Human output labels them `LOCAL (SIDE A)` and with the sanitized SSH destination as side B. Labels are presentation metadata and never affect localization.
+
+The artifact form remains unchanged:
 
 ```sh
 netdoc --save here.ndoc github.com                     # this machine
@@ -1352,9 +1368,32 @@ netdoc --via other-host --save there.ndoc github.com   # the other machine
 netdoc --two-sided here.ndoc there.ndoc                # where is it broken?
 ```
 
-The two files are arguments, this machine's run first. It runs no probes and opens no socket: both machines already did their probing, and this is the reading of what they recorded. The second file can come from anywhere a snapshot comes from, whether that is `--via` over SSH or a run somebody did by hand and sent you, so the reading works even when the other machine is one you cannot log in to.
+The two files are arguments, this machine's run first. This form runs no probes and opens no socket: both machines already did their probing, and this is the reading of what they recorded. The second file can come from anywhere a snapshot comes from, whether that is `--via` over SSH or a run somebody did by hand and sent you, so the reading works even when the other machine is one you cannot log in to.
 
-Exit `0` means no check failed on either machine, `1` means a failure was placed or the evidence could not place one, and `2` means an argument or an artifact was unusable. It is headless, needs no terminal, and cannot be combined with `--compare` or with any flag that describes a run netdoc would perform.
+Live acquisition does not introduce another report or reasoning model. The local run builds its ordinary report and `netdoc.snapshot.v1` artifact through the normal path. The remote worker returns the same two canonical artifacts over remote protocol version 1. Network Doctor passes those snapshots directly to `compare.TwoSidedSnapshots`; it never parses rendered prose. The two runs start concurrently so changing network conditions have less time to weaken the differential. They retain independent probe dependency graphs and bounded timeouts.
+
+Exit `0` means no comparable check failed on either machine, `1` means a failure was placed or the evidence could not place one, and `2` means an argument or artifact was unusable, the effective targets differed, or live remote acquisition failed. A remote diagnostic `FAIL` is a completed measurement and is localized normally; it is not confused with an SSH or protocol failure. Both forms are headless and need no terminal.
+
+### Flags in live two-sided mode
+
+The artifact form accepts only `--json` because every other run setting is already recorded in its two files. The live compatibility decisions below are enforced before either diagnosis starts:
+
+| Flag | Live behavior |
+|---|---|
+| `--via HOST` | Required to select live acquisition. With two file arguments, it is rejected with an instruction to remove `--via` rather than guessed to be an artifact reading. |
+| `--json` | Accepted. Emits the existing `netdoc.twosided.v1` document, not either ordinary report. |
+| `--check`, `--skip` | Accepted. The same validated probe selection and dependency rules apply locally and remotely. |
+| `--timeout` | Accepted. The same positive per-probe timeout is sent to both runs. |
+| `--public-dns` | Accepted. The same validated resolver IP, including an empty value that disables the row, applies to both runs. |
+| `--iface` | Rejected. One local interface name or source IP cannot honestly identify corresponding interfaces on two different machines. Use two separately saved snapshots when each side needs its own binding. |
+| `--profile` | Rejected. A profile is a multi-target plan, while two-sided localization requires one equivalent target per vantage point. |
+| `--save`, `--support` | Rejected. Each names one output path and neither can represent the two input snapshots without inventing a new artifact contract. Save or sanitize two ordinary runs separately and use the artifact form instead. |
+| `--watch` | Rejected. Watch is a repeated session, not one matched pair of completed runs. |
+| `--compare` | Rejected. Comparison asks what changed between saved states; two-sided diagnosis asks where a same-target differential appears. |
+| `--peer-listen`, `--peer-connect` | Rejected. Peer mode measures direct authenticated traffic between Network Doctor endpoints, not their independent paths to an external target. |
+| `--toolbox`, `--no-history`, `--keys` | Rejected. They belong to the interactive TUI and have no meaning in this headless orchestration path. |
+
+`--help` and `--version` retain their normal immediate behavior. A user interrupt cancels both acquisitions and exits `1`. A remote SSH, worker, or protocol error cancels the local run, emits no two-sided result, and exits `2`; cancelling the SSH process also closes the worker channel so remote probes do not continue unnecessarily.
 
 ### Why it is a separate command from `--compare`
 
@@ -1406,18 +1445,19 @@ Two machines produce six kinds of observation. netdoc gathers them with commands
 
 | Observation | Where it comes from |
 |---|---|
-| this machine's own network state, and this machine to the target | an ordinary local run, saved with `--save` |
-| the other machine's own network state, and the other machine to the target | the same ordinary run over there, `--via` being the way to start it from here |
+| this machine's own network state, and this machine to the target | an ordinary local run |
+| the other machine's own network state, and the other machine to the target | the same ordinary run over there, with `--via` as the transport from here |
 | this machine to the other machine, and the other machine back | [peer mode](#peer-diagnosis) |
 
 | Reading | Command |
 |---|---|
-| where a failure against the target is, given the first two rows | `--two-sided` |
+| what changed between saved states, usually on one machine at different times | `--compare A.ndoc B.ndoc` |
+| where a failure against the target is, given the first two observation rows | `--two-sided A.ndoc B.ndoc`, or acquire both live with `--two-sided --via HOST` |
 | whether the path between the two machines fails in one direction or both | peer mode's own combined diagnosis |
 
-Peer mode and `--two-sided` answer different halves of "is the failure on this machine, on the other machine, or between them". Peer mode measures the path **between the two machines** directly, with live authenticated traffic in both directions, and is the only one of the three that can prove directional asymmetry. `--two-sided` reads two finished ordinary diagnoses and places a failure **against a target** on one machine or the other. Neither reads the other's output, and neither is a substitute for it: peer mode makes no claim about a target, and `--two-sided` makes no claim about the path between the two machines.
+Peer mode and `--two-sided` answer different halves of "is the failure on this machine, on the other machine, or between them". Peer mode measures the path **between the two machines** directly, with live authenticated traffic in both directions, and is the only one of the three that can prove directional asymmetry. `--two-sided` reads two finished ordinary diagnoses and places a failure **against a target** on one vantage point or the other. Live two-sided acquisition happens over SSH, but SSH is only the control transport and contributes no peer-mode observation. Neither mode reads the other's output, and neither is a substitute for it: peer mode makes no claim about an external target, and `--two-sided` makes no claim about the direct path between the Network Doctor endpoints.
 
-`--two-sided` needs no direct reachability between the two machines and no pairing string, because nothing is exchanged live. Peer mode needs both, because something is.
+Offline `--two-sided A.ndoc B.ndoc` needs no reachability and opens no connection. Live `--two-sided --via HOST` needs the same one-way SSH access as ordinary `--via`, but no pairing string, reverse listener, relay, or direct peer reachability. Peer mode needs direct peer reachability because that path is exactly what it measures.
 
 ### Machine-readable two-sided reading
 
@@ -1452,6 +1492,8 @@ Peer mode and `--two-sided` answer different halves of "is the failure on this m
 
 `checks` is every check in either snapshot, in the order side A executed them, followed by the ones only side B had. `comparable` is what says whether the placement was allowed to read the row. Field names, the `side` and ID vocabularies, and the meaning of the exit code are stable for this schema. `caveats` and `summary` are derived sentences and are never parsed back; branch on `diagnosis.id`, `diagnosis.side`, and `diagnosis.evidence`. `same_target` is always `true` in a document that exists at all, since the other case is refused, and it is carried so the document is self-describing.
 
+Live acquisition emits this exact schema. It does not add ordinary diagnosis confidence: two-sided epistemic limits remain represented by `diagnosis.ambiguous`, `alternatives`, and `caveats`, so this orchestration feature requires no schema version change.
+
 ## Remote diagnosis over SSH
 
 `--via <ssh-destination>` performs the diagnosis on another machine and presents it here:
@@ -1460,12 +1502,15 @@ Peer mode and `--two-sided` answer different halves of "is the failure on this m
 netdoc --via server example.com
 netdoc --via server --json --check dns,target_tcp example.com
 netdoc --via server --save remote.ndoc example.com
+netdoc --two-sided --via server example.com
 ```
 
 It is remote *execution*, not remote monitoring: one connection and one answer
 for an ordinary target run. A profile uses one such connection per component
-and aggregates the completed answers. There is no daemon, no agent, no
-installation step, and no persistent state on either machine.
+and aggregates the completed answers. Live two-sided diagnosis pairs one such
+remote run with one concurrently started local ordinary run, then reads their
+canonical snapshots locally. There is no daemon, no agent, no installation
+step, and no persistent state on either machine.
 
 ### How it runs
 
@@ -1485,7 +1530,7 @@ The `-T` is deliberate. The exchange is a byte protocol on a pipe, and a pseudo-
 
 One JSON request in, one JSON response out, over the SSH session's standard input and output.
 
-The request carries the run settings as the user spelled them: target, `--iface`, `--public-dns`, `--timeout`, `--check`, and `--skip`. Nothing is pre-resolved locally, because the machine that will run the probes is the one that has to resolve it. `--iface` is the clearest case: it names an interface on the SSH host, so the local machine has no business resolving it against its own NICs.
+The request carries the run settings as the user spelled them: target, `--iface`, `--public-dns`, `--timeout`, `--check`, and `--skip`. Nothing is pre-resolved locally, because the machine that will run the probes is the one that has to resolve it. `--iface` is the clearest case for an ordinary remote run: it names an interface on the SSH host, so the local machine has no business resolving it against its own NICs. Live two-sided mode reuses this protocol unchanged for its remote half, but rejects `--iface` because the same spelling cannot also select a corresponding local interface honestly.
 
 The response carries the two artifacts netdoc already publishes, built on the far end by the ordinary code paths:
 
@@ -1502,7 +1547,7 @@ The envelope's `protocol` and `error` fields are fixed for all time, at every ve
 
 On the SSH host, worker-mode standard output carries one JSON object and nothing else: no banners, no progress, no logs, no terminal formatting, no human-readable text of any kind. Anything meant for a person goes to standard error, where `ssh` delivers it to the caller.
 
-Locally, the same discipline holds in the other direction. The provenance line naming the SSH host and the remote build goes to standard error, so `netdoc --via server --json host` leaves standard output byte-for-byte the report a local `--json` run leaves in a pipe.
+Locally, the same discipline holds in the other direction. The provenance line naming the SSH host and the remote build goes to standard error, so `netdoc --via server --json host` leaves standard output byte-for-byte the report a local `--json` run leaves in a pipe. Live `--two-sided --json` instead writes only the existing `netdoc.twosided.v1` result assembled after both ordinary artifacts are complete.
 
 ### Exit codes
 
@@ -1541,6 +1586,8 @@ The netdoc there also has to be new enough to know --remote-worker.
 
 Interrupting a `--via` run terminates the local `ssh` process, which drops the channel, which closes the worker's standard input on the far end. The worker treats the end of that stream as the caller having gone away and cancels the running probes, so a cancelled run does not leave a diagnosis finishing on a machine nobody is listening to. The local process exits `1`, the code quitting before the chain finished already spends.
 
+Live two-sided diagnosis gives the local and remote acquisitions one cancellation context. An interrupt stops both. A remote transport or protocol failure also stops the local probe set and exits `2` without producing a localization. A completed remote report containing `FAIL` rows is evidence, not a transport failure, so it remains available to the two-sided engine.
+
 ### What crosses the wire, and what does not
 
 The request holds only the run settings, all of which the user typed. The response holds the report and the snapshot, which is the same information a local run would leave on this machine anyway. Nothing else is collected, and no file on either machine is read on the strength of a path the other end supplied.
@@ -1551,7 +1598,8 @@ Both ends bound what they will read from the other, and neither trusts the other
 
 ### Limits
 
-- One connection per ordinary run and per profile component. `--watch` is not
+- One connection per ordinary run and per profile component. Live two-sided
+  diagnosis uses one connection for its remote half. `--watch` is not
   combinable with `--via`, because a watch that reconnected on every pass is a
   different feature.
 - There is no live progress. The probes run on the far end and the answer arrives when the run is finished, which is why `--via` is headless rather than a remote terminal UI.

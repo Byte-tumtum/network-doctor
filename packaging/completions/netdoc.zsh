@@ -17,10 +17,9 @@ _netdoc_ifaces() {
 # spellings below (-json) would be read as stacked letters.
 # Targets are hostnames, URLs, and IP literals, none of them enumerable, so
 # the positional completes to nothing rather than to local filenames. That
-# holds for the two snapshot files of --compare and --two-sided too: one
-# positional spec cannot be
-# a target here and a filename there, and offering files for every target is
-# the worse of the two mistakes.
+# holds for the two snapshot files of --compare and offline --two-sided too:
+# one positional spec cannot be a target here and a filename there, and
+# offering files for every target is the worse of the two mistakes.
 _arguments \
   '(--toolbox -toolbox --json -json)'{--toolbox,-toolbox}'[start in toolbox mode]' \
   '(--json -json --toolbox -toolbox)'{--json,-json}'[run the checks headless and print a JSON report]' \
@@ -29,10 +28,10 @@ _arguments \
   '(--save -save --support -support)'{--save,-save}'[write a diagnostic snapshot (.ndoc) to a file]:file:_files' \
   '(--support -support --save -save)'{--support,-support}'[write a sanitized support snapshot (.ndoc) to a file]:file:_files' \
   '(--compare -compare --two-sided -two-sided)'{--compare,-compare}'[compare two saved snapshots (.ndoc); runs no probes]' \
-  '(--two-sided -two-sided --compare -compare)'{--two-sided,-two-sided}'[read two saved snapshots (.ndoc) as two machines; runs no probes]' \
+  '(--two-sided -two-sided --compare -compare)'{--two-sided,-two-sided}'[localize two saved snapshots, or local and --via live runs]' \
   '*'{--peer-listen,-peer-listen}'[listen for an authenticated peer on an exact IP\:port]:address:' \
   '(--peer-connect -peer-connect)'{--peer-connect,-peer-connect}'[read a temporary pairing string and run a two-ended diagnosis]' \
-  '(--via -via)'{--via,-via}'[run the checks on this SSH destination instead of on this machine]:destination:_hosts' \
+  '(--via -via)'{--via,-via}'[run remotely, or provide side B for live two-sided diagnosis]:destination:_hosts' \
   '*'{--check,-check}'[run stable probe IDs (comma-separated; repeatable)]:probe IDs:' \
   '*'{--skip,-skip}'[skip stable probe IDs (comma-separated; repeatable)]:probe IDs:' \
   '(--iface -iface)'{--iface,-iface}'[bind probes to an interface name or exact local IP]:interface:_netdoc_ifaces' \

@@ -446,6 +446,18 @@ func TestTwoSidedTextAnswersTheQuestionAndStaysInert(t *testing.T) {
 	}
 }
 
+func TestTwoSidedTextWithHeadingsSanitizesVantageLabels(t *testing.T) {
+	text := twoSided(t, fixture(t), fixture(t)).TextWithHeadings("LOCAL (SIDE A)", "ideapad\x1b[31m (SIDE B)")
+	for _, want := range []string{"LOCAL (SIDE A)", "ideapad (SIDE B)"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "\x1b") {
+		t.Errorf("hostile vantage label reached the terminal:\n%q", text)
+	}
+}
+
 func hasCaveat(got TwoSided, want string) bool {
 	for _, caveat := range got.Caveats {
 		if strings.Contains(caveat, want) {

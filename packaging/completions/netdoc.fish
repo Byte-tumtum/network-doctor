@@ -19,16 +19,16 @@ complete -c netdoc -o profile -l profile -r -f -d 'Run a built-in service profil
 complete -c netdoc -o save -l save -r -F -d 'Write a diagnostic snapshot (.ndoc) to a file'
 complete -c netdoc -o support -l support -r -F -d 'Write a sanitized support snapshot (.ndoc) to a file'
 complete -c netdoc -o compare -l compare -d 'Compare two saved snapshots (.ndoc); runs no probes'
-complete -c netdoc -o two-sided -l two-sided -d 'Read two saved snapshots (.ndoc) as two machines; runs no probes'
-# The two arguments of --compare and --two-sided are local files, so file
-# completion comes back for a bare word once either flag is on the line.
+complete -c netdoc -o two-sided -l two-sided -d 'Localize two saved snapshots, or local and --via live runs'
+# The two arguments of --compare and offline --two-sided are local files, so
+# file completion comes back only while --via is absent.
 complete -c netdoc -n '__fish_seen_argument -o compare -l compare' -F
-complete -c netdoc -n '__fish_seen_argument -o two-sided -l two-sided' -F
+complete -c netdoc -n '__fish_seen_argument -o two-sided -l two-sided; and not __fish_seen_argument -o via -l via' -F
 complete -c netdoc -o peer-listen -l peer-listen -r -d 'Listen for an authenticated peer on an exact IP:port (repeatable)'
 complete -c netdoc -o peer-connect -l peer-connect -d 'Read a temporary pairing string and run a two-ended diagnosis'
 complete -c netdoc -o via -l via -r -f \
     -a '(__fish_print_hostnames)' \
-    -d 'Run the checks on this SSH destination instead of on this machine'
+    -d 'Run remotely, or provide side B for live two-sided diagnosis'
 complete -c netdoc -o check -l check -r -d 'Run stable probe IDs (comma-separated; repeatable)'
 complete -c netdoc -o skip -l skip -r -d 'Skip stable probe IDs (comma-separated; repeatable)'
 complete -c netdoc -o no-history -l no-history -d "Don't read or write the saved target history"
