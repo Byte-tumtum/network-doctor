@@ -36,7 +36,16 @@ func sshFormForTest(t *testing.T, host string) model {
 	t.Helper()
 	old := toolLookPath
 	toolLookPath = func(string) (string, error) { return "ssh", nil }
-	t.Cleanup(func() { toolLookPath = old })
+	// On Windows the resolver checks the client before it reads any config, so
+	// without this stub these model tests would resolve against whichever ssh
+	// the host happens to have on PATH and short-circuit before the stubbed
+	// config read they are actually about.
+	oldVersion := sshVersion
+	sshVersion = func() (string, error) { return "OpenSSH_for_Windows_8.6p1, LibreSSL 3.4.3", nil }
+	t.Cleanup(func() {
+		toolLookPath = old
+		sshVersion = oldVersion
+	})
 	m := asModel(t, must(newModel(mustTarget(t, host), true).Update(keyMsg("S"))))
 	if !m.sshPrompt {
 		t.Fatal("S did not open the SSH form")
@@ -602,7 +611,13 @@ func TestSSHResolutionLeavesUpdateResponsive(t *testing.T) {
 	m = entered.m
 	resolved := make(chan tea.Msg, 1)
 	go func() { resolved <- entered.cmd() }()
-	<-started
+	select {
+	case <-started:
+	case msg := <-resolved:
+		// A resolver that answers before it reads the config gave up early;
+		// report its message instead of waiting out the test timeout.
+		t.Fatalf("resolver finished without reading ssh config: %+v", msg)
+	}
 
 	u, _ := m.Update(tea.WindowSizeMsg{Width: 137, Height: 41})
 	m = asModel(t, u)
