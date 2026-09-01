@@ -299,10 +299,17 @@ const portalMode = "portal"
 // reports the redirect instead of following it.
 const portalSignInURL = "http://portal.test/signin"
 
-// serveHTTP answers netdoc's captive-portal probe with the 204 it wants and
-// everything else with the scenario's configured status. A portal-mode service
-// intercepts that one path instead, which is the whole of what a captive portal
-// looks like to the probe.
+// ncsiCleanBody is the payload netdoc's second connectivity endpoint serves on
+// an unintercepted path, and netdoc checks it rather than accepting any 200.
+// Keep it in step with portalEndpoints in internal/diagnostic/checks.go, as the
+// /generate_204 path beside it is kept.
+const ncsiCleanBody = "Microsoft Connect Test\r\n"
+
+// serveHTTP answers netdoc's two connectivity probes with the clean responses
+// they document and everything else with the scenario's configured status. A
+// portal-mode service intercepts both of those paths instead, which is the
+// whole of what a captive portal looks like to the probes: a real portal grabs
+// whatever plain HTTP a client sends, not one provider's name.
 func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 	body := svc.Body
 	if body == "" {
@@ -316,15 +323,26 @@ func serveHTTP(ln net.Listener, svc Service, recorder *evidenceRecorder) {
 			ServicePort: svc.Port, ServiceStatus: status, Result: replyResponded})
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/generate_204", func(w http.ResponseWriter, r *http.Request) {
-		if svc.Portal {
-			http.Redirect(w, r, portalSignInURL, http.StatusFound)
-			served(http.StatusFound)
-			return
+	// The two endpoints document different clean answers, so the intercepted
+	// half is shared and the clean half is not.
+	connectivity := func(clean func(http.ResponseWriter)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if svc.Portal {
+				http.Redirect(w, r, portalSignInURL, http.StatusFound)
+				served(http.StatusFound)
+				return
+			}
+			clean(w)
 		}
+	}
+	mux.HandleFunc("/generate_204", connectivity(func(w http.ResponseWriter) {
 		w.WriteHeader(http.StatusNoContent)
 		served(http.StatusNoContent)
-	})
+	}))
+	mux.HandleFunc("/connecttest.txt", connectivity(func(w http.ResponseWriter) {
+		fmt.Fprint(w, ncsiCleanBody)
+		served(http.StatusOK)
+	}))
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(svc.Status)
 		fmt.Fprint(w, body)

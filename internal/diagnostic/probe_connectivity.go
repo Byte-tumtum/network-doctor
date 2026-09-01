@@ -3,6 +3,7 @@ package diagnostic
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -10,16 +11,34 @@ import (
 	"time"
 )
 
-// portalCheckWithDial fetches portalProbeURL and reports the status code it got
-// plus a valid HTTP(S) redirect URL, if the response advertised one, and the
-// Date the responder stamped on it.
+// portalObservation is what one connectivity endpoint answered on one pass.
+// A zero value is an endpoint that never answered: code 0 is not a status any
+// responder can send, so it reads as "no observation" everywhere below.
+type portalObservation struct {
+	// clean is true only when the endpoint answered exactly what it documents,
+	// status and payload both. It is not proof of an unmodified path, since
+	// this is plain HTTP and a transparent proxy could synthesize the answer.
+	clean bool
+	code  int
+	// redirect is a valid HTTP(S) sign-in URL the response advertised, empty
+	// when it advertised none.
+	redirect string
+	// date is the Date the responder stamped on it, the zero time when the
+	// header was absent or unparsable.
+	date time.Time
+	// skew is this machine's clock minus date, sampled by the caller so it
+	// carries the HTTP round trip and nothing else.
+	skew time.Duration
+}
+
+// portalCheckWithDial fetches one endpoint and reports what it answered.
 // Proxy and redirect following are both off: the direct-egress row must not
 // borrow the proxy's path, and an interception usually announces itself as
 // the 302 we'd otherwise chase to a sign-in page.
-func portalCheckWithDial(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) (int, string, time.Time, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalProbeURL, nil)
+func portalCheckWithDial(ctx context.Context, ep portalEndpoint, dial func(context.Context, string, string) (net.Conn, error)) (portalObservation, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.url, nil)
 	if err != nil {
-		return 0, "", time.Time{}, err
+		return portalObservation{}, err
 	}
 	c := &http.Client{
 		Transport: &http.Transport{
@@ -32,22 +51,58 @@ func portalCheckWithDial(ctx context.Context, dial func(context.Context, string,
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return 0, "", time.Time{}, err
+		return portalObservation{}, err
 	}
-	_ = resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
+	o := portalObservation{code: resp.StatusCode}
 	// http.ParseTime accepts the three date formats RFC 9110 allows. An absent
 	// or unparsable Date leaves the zero time, and every caller reads that as
 	// "no reading" rather than as a time.
-	date, _ := http.ParseTime(resp.Header.Get("Date"))
+	o.date, _ = http.ParseTime(resp.Header.Get("Date"))
+	o.clean = resp.StatusCode == ep.want && ep.bodyMatches(resp.Body)
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if u, err := resp.Location(); err == nil && u.Hostname() != "" {
 			switch strings.ToLower(u.Scheme) {
 			case "http", "https":
-				return resp.StatusCode, u.String(), date, nil
+				o.redirect = u.String()
 			}
 		}
 	}
-	return resp.StatusCode, "", date, nil
+	return o, nil
+}
+
+// bodyMatches reads exactly as many bytes as the documented payload and not one
+// more, so an endpoint that promises a body has to send that body and an
+// intercepting page cannot be scanned for it.
+func (ep portalEndpoint) bodyMatches(body io.Reader) bool {
+	if ep.body == "" {
+		return true
+	}
+	buf := make([]byte, len(ep.body))
+	_, err := io.ReadFull(body, buf)
+	return err == nil && string(buf) == ep.body
+}
+
+// portalNote states what the discrepant endpoints answered, for a detail
+// string. It reports the observation and never names a cause for it.
+func portalNote(obs []portalObservation, idx []int) string {
+	parts := make([]string, 0, len(idx))
+	for _, i := range idx {
+		parts = append(parts, fmt.Sprintf("%s answered %d, want %d", portalEndpoints[i].url, obs[i].code, portalEndpoints[i].want))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// portalRedirect keeps the first advertised sign-in URL in endpoint order, so
+// which one a corroborated interception carries never depends on which racing
+// request finished first.
+func portalRedirect(obs []portalObservation, idx []int) string {
+	for _, i := range idx {
+		if obs[i].redirect != "" {
+			return obs[i].redirect
+		}
+	}
+	return ""
 }
 
 func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) ProbeResult {
@@ -72,13 +127,11 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	if len(v4.ips) == 0 && len(v6.ips) == 0 {
 		return ProbeResult{Status: StatusNA, Detail: "the selected interface has no address family available for direct egress"}
 	}
-	// portalCode stays 0 when the check is stubbed out or never answered; only
-	// a real status code is evidence either way.
-	var portalCode int
-	var portalURL string
-	// portalSkew is this machine's clock minus the responder's Date, sampled
-	// in the goroutine so it carries the HTTP round trip and nothing else.
-	var portalSkew time.Duration
+	// obs holds one entry per fixed connectivity endpoint, in endpoint order.
+	// An entry stays zero where the check is stubbed out or the endpoint never
+	// answered, and an endpoint that did not answer is the absence of an
+	// observation rather than an observation of trouble.
+	obs := make([]portalObservation, len(portalEndpoints))
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		v4.conn, v4.sel, v4.attempts, v4.rtt = o.dialIPs(ctx, v4.ips, 443)
@@ -87,26 +140,52 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		v6.conn, v6.sel, v6.attempts, v6.rtt = o.dialIPs(ctx, v6.ips, 443)
 	})
 	if o.portalCheck != nil {
-		// Runs alongside the dials rather than after them: it costs nothing
-		// when egress is clean, and its answer is only consulted on success.
-		wg.Go(func() {
-			if code, redirect, date, err := o.portalCheck(ctx); err == nil {
-				portalCode, portalURL = code, redirect
-				if !date.IsZero() {
-					portalSkew = time.Since(date)
+		// One goroutine per endpoint, all alongside the dials rather than after
+		// them and never after each other: two observations cost the same wall
+		// time as one, and they cost nothing at all when egress is clean.
+		for i, ep := range portalEndpoints {
+			wg.Go(func() {
+				got, err := o.portalCheck(ctx, ep)
+				if err != nil {
+					return
 				}
-			}
-		})
+				if !got.date.IsZero() {
+					got.skew = time.Since(got.date)
+				}
+				obs[i] = got
+			})
+		}
 	}
 	wg.Wait()
-	// Only the 204 leaves usable clock evidence: any other status is an
-	// interception this check can see, and an interceptor's clock speaks for
-	// the interceptor. A 204 is not proof of an unmodified path, since this
-	// is plain HTTP and a transparent proxy could synthesize both the status
-	// and the Date. It is the same heuristic the portal verdict already rests
-	// on, and no stronger.
-	if portalCode == http.StatusNoContent {
-		r.clockOffset = portalSkew
+	// One endpoint answering unexpectedly is a fact about that endpoint. A
+	// block aimed at one provider, that provider's own outage, a hijacked DNS
+	// answer for its name, and a captive portal all look identical from here,
+	// so a lone discrepancy is reported as what was seen. Only two
+	// independently operated endpoints intercepted on the same pass corroborate
+	// each other, and corroboration is what carries a portal claim.
+	var intercepted []int
+	clean := -1
+	for i, ob := range obs {
+		switch {
+		case ob.clean:
+			if clean < 0 {
+				clean = i
+			}
+		case ob.code != 0:
+			intercepted = append(intercepted, i)
+		}
+	}
+	corroborated := len(intercepted) > 1
+	if clean >= 0 {
+		// Only a response that matched its endpoint's documented clean answer
+		// leaves usable clock evidence: anything else was written by whatever
+		// answered instead, and an interceptor's clock speaks for the
+		// interceptor. Endpoint order breaks the tie, so a clean Google answer
+		// still supplies the reading it always has. A clean answer is not proof
+		// of an unmodified path either, since this is plain HTTP and a
+		// transparent proxy could synthesize both the status and the Date. It is
+		// the same heuristic the portal verdict rests on, and no stronger.
+		r.clockOffset = obs[clean].skew
 	}
 	r.Families = &FamilyConnectivity{IPv4: familyState(v4.ips, v4.conn), IPv6: familyState(v6.ips, v6.conn)}
 
@@ -123,14 +202,19 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 		src, iface, ambiguous := o.pathIdentity(ctx, nil, all[0], 443)
 		r.Status, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, src, iface, ambiguous
 		// Portals commonly drop 443 outright while still intercepting plain
-		// HTTP. The 204 endpoint answering anything else is proof of a portal
-		// even with no handshake to show for it, so report that, not "check
-		// upstream".
-		if portalCode != 0 && portalCode != http.StatusNoContent {
-			r.Portal = &Portal{RedirectURL: portalURL}
-			r.Detail += fmt.Sprintf(", and HTTP is intercepted: %s answered %d, want 204", portalProbeURL, portalCode)
+		// HTTP. Both endpoints intercepted is a portal even with no handshake to
+		// show for it, so report that, not "check upstream".
+		if corroborated {
+			r.Portal = &Portal{RedirectURL: portalRedirect(obs, intercepted)}
+			r.Detail += ", and HTTP is intercepted: " + portalNote(obs, intercepted)
 			r.Fix = "captive portal or transparent filter: open a browser and sign in to the network"
 			return r
+		}
+		if len(intercepted) > 0 {
+			// Worth recording beside the dead path, but nothing corroborates it,
+			// so it names no portal and changes no verdict: the route cause
+			// below still owns this failure.
+			r.Detail += ", and one connectivity endpoint answered unexpectedly: " + portalNote(obs, intercepted)
 		}
 		if o.routeCause != nil {
 			r.Cause, r.causeFamily = failedRouteCause(o.routeCause, v4.ips, v6.ips)
@@ -148,13 +232,14 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	src, iface, ambiguous := o.pathIdentity(ctx, prim.conn, prim.sel, 443)
 	// A completed handshake only proves that something answered. A captive
 	// portal or transparent filter terminates the connection itself and is
-	// indistinguishable from real egress at this layer; the 204 endpoint is
-	// what tells them apart, so ask before calling the network online.
-	if portalCode != 0 && portalCode != http.StatusNoContent {
+	// indistinguishable from real egress at this layer; the connectivity
+	// endpoints are what tell them apart, so ask before calling the network
+	// online. Both of them, because one is a claim about one provider.
+	if corroborated {
 		r.Status, r.SelectedIP, r.Source, r.Iface, r.ifaceAmbiguous = StatusFail, prim.sel, src, iface, ambiguous
 		r.Attempts = append(prim.attempts, sec.attempts...)
-		r.Portal = &Portal{RedirectURL: portalURL}
-		r.Detail = fmt.Sprintf("TCP reaches %s but HTTP is intercepted: %s answered %d, want 204", prim.sel, portalProbeURL, portalCode)
+		r.Portal = &Portal{RedirectURL: portalRedirect(obs, intercepted)}
+		r.Detail = fmt.Sprintf("TCP reaches %s but HTTP is intercepted: %s", prim.sel, portalNote(obs, intercepted))
 		r.Fix = "captive portal or transparent filter: open a browser and sign in to the network"
 		return r
 	}
@@ -173,6 +258,13 @@ func (o *netops) internetProbe(ctx context.Context, _ map[ProbeID]ProbeResult) P
 	// appended afterwards so the details panel still shows them.
 	r.Attempts = prim.attempts
 	var extra []string
+	if len(intercepted) > 0 {
+		// The endpoints disagree, so the run has not established interception:
+		// it has observed one provider treating this machine differently, which
+		// is a degradation of the row's own evidence and not a diagnosis. Named
+		// as what was seen, with no cause attached.
+		extra = append(extra, "one connectivity endpoint answered unexpectedly ("+portalNote(obs, intercepted)+")")
+	}
 	// The exception: a machine that took a global IPv6 address and still can't
 	// reach IPv6 is broken, not v4-only. Happy Eyeballs hides that from netdoc
 	// and from browsers, but not from software that dials AAAA and waits.

@@ -45,8 +45,8 @@ func opsFromSources(sources *SourceAddresses) *netops {
 	o.lookupPublicIP = func(ctx context.Context, host, server string) ([]net.IP, []string, error) {
 		return lookupIPPublicWithDial(ctx, host, o.dialContext, server)
 	}
-	o.portalCheck = func(ctx context.Context) (int, string, time.Time, error) {
-		return portalCheckWithDial(ctx, o.dialContext)
+	o.portalCheck = func(ctx context.Context, ep portalEndpoint) (portalObservation, error) {
+		return portalCheckWithDial(ctx, ep, o.dialContext)
 	}
 	return &o
 }

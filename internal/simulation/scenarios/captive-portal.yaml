@@ -1,8 +1,8 @@
 name: captive-portal
 description: >-
   A hotel/airport network: the path is up, the resolver answers, TCP/443
-  completes, and the target replies, but plain HTTP is intercepted and the
-  connectivity check is redirected to a sign-in page. Every lower rung looks
+  completes, and the target replies, but plain HTTP is intercepted and both
+  connectivity checks are redirected to a sign-in page. Every lower rung looks
   healthy, so this is what makes the captive-portal verdict outrank the DNS,
   network and service explanations rather than merely coexist with them.
 
@@ -17,10 +17,15 @@ topology:
 
     # The simulated internet, claiming the fixed endpoints netdoc's probes dial,
     # exactly as the healthy control does. Only one thing differs: the plain
-    # HTTP service is the portal, so the connectivity check on port 80 answers
-    # 302 instead of 204 while 443, DNS and QUIC stay perfectly healthy. That is
-    # the interception a portal performs, and the reason a completed TCP
-    # handshake is not proof the network is usable.
+    # HTTP service is the portal, so both connectivity checks on port 80 answer
+    # 302 instead of what they document while 443, DNS and QUIC stay perfectly
+    # healthy. That is the interception a portal performs, and the reason a
+    # completed TCP handshake is not proof the network is usable.
+    #
+    # Both connectivity names resolve here, because a portal grabs plain HTTP
+    # whoever it was addressed to. That is also what makes this a portal rather
+    # than one provider being treated differently: netdoc needs two
+    # independently operated endpoints intercepted before it will say portal.
     - name: internet
       address: 10.77.0.1
       aliases: [1.1.1.1, 8.8.8.8]
@@ -29,6 +34,7 @@ topology:
           zone:
             example.test: 10.77.0.20
             connectivitycheck.gstatic.com: 10.77.0.1
+            www.msftconnecttest.com: 10.77.0.1
         - {name: internet-portal, type: http, port: 80, portal: true}
         - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
         - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}

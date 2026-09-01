@@ -171,10 +171,10 @@ type ProbeResult struct {
 	// the PMTU black-hole correlation. TLS reports the same fact through
 	// Cause, so it has no flag of its own.
 	timedOut bool
-	// clockOffset is this machine's clock minus the Date of a 204 from
-	// portalProbeURL: positive when the local clock runs fast. Zero means
-	// there was no usable reading, which behaves the same as a correct clock
-	// because both leave nothing to say.
+	// clockOffset is this machine's clock minus the Date of a connectivity
+	// endpoint's documented clean response: positive when the local clock runs
+	// fast. Zero means there was no usable reading, which behaves the same as a
+	// correct clock because both leave nothing to say.
 	clockOffset time.Duration
 	// resolver is the second-opinion DNS server ProbeDNSPublic queried, so the
 	// cross-probe pass can name it in prose without reaching for a constant.
@@ -287,10 +287,39 @@ const DefaultPublicDNS = "8.8.8.8"
 // brackets IPv6 literals.
 func publicDNSServer(ip string) string { return net.JoinHostPort(ip, "53") }
 
-// portalProbeURL answers 204 with an empty body on an unintercepted path.
-// Plain HTTP on purpose, since that's the request a captive portal grabs.
-// A var only so tests can point it at a local server; nothing reassigns it.
-var portalProbeURL = "http://" + ConnectivityProbeHost + "/generate_204"
+// ncsiProbeHost is the second connectivity endpoint, operated by someone else
+// entirely. One provider is not enough to establish interception: a block, an
+// outage, a hijacked DNS answer, or any other treatment aimed at that one name
+// looks identical to a portal from here, and none of them is a portal.
+const ncsiProbeHost = "www.msftconnecttest.com"
+
+// ncsiCleanBody is what ncsiProbeHost serves on an unintercepted path. The real
+// payload ends in CRLF; this prefix is all that is read, so an interceptor's
+// page is never searched for it.
+const ncsiCleanBody = "Microsoft Connect Test"
+
+// portalEndpoint is one plain-HTTP connectivity observation point. want and
+// body spell out the clean response that endpoint documents; anything else is
+// an unexpected answer, which on its own is a fact about that endpoint.
+type portalEndpoint struct {
+	url  string
+	want int
+	// body is what a clean response begins with, empty where a clean response
+	// carries none. That is the 204's whole contract, and checking a 200 for
+	// its documented payload is what keeps a filter's "OK" page off the clean
+	// side of the ledger.
+	body string
+}
+
+// portalEndpoints are the two fixed observations, in the order that breaks
+// ties. Plain HTTP on purpose, since that's the request a captive portal grabs.
+// Google stays first, so a pass with both endpoints clean reads the same remote
+// clock netdoc has always read. A var only so tests can point them at a local
+// server; nothing else reassigns it.
+var portalEndpoints = []portalEndpoint{
+	{url: "http://" + ConnectivityProbeHost + "/generate_204", want: http.StatusNoContent},
+	{url: "http://" + ncsiProbeHost + "/connecttest.txt", want: http.StatusOK, body: ncsiCleanBody},
+}
 
 // internetEndpoints4/6 are the ordered direct-egress endpoints per address
 // family; first connect wins within a family. Honestly "direct TCP egress":
@@ -354,11 +383,11 @@ type netops struct {
 	tlsRootCAs   *x509.CertPool
 	ssid         func(ctx context.Context, iface string) string
 	proxyFromEnv func(*http.Request) (*url.URL, error)
-	// portalCheck returns the status code portalProbeURL answered with, an
-	// optional validated HTTP(S) redirect URL, and the response's Date, which
-	// is the zero time when the header was absent or unparsable.
-	// Nil means "don't ask", which is how tests opt out of the HTTP round trip.
-	portalCheck func(ctx context.Context) (int, string, time.Time, error)
+	// portalCheck performs one connectivity observation against one fixed
+	// endpoint. An error is an endpoint that did not answer, which is the
+	// absence of an observation rather than an observation of trouble.
+	// Nil means "don't ask", which is how tests opt out of the HTTP round trips.
+	portalCheck func(ctx context.Context, ep portalEndpoint) (portalObservation, error)
 	// routeCause classifies a failed direct path from OS route/neighbor state.
 	// Nil keeps deterministic probe unit tests independent of the host.
 	routeCause func(net.IP) string
@@ -409,8 +438,8 @@ var defaultOps = &netops{
 	},
 	ssid:         ssid,
 	proxyFromEnv: proxyFromEnvironment,
-	portalCheck: func(ctx context.Context) (int, string, time.Time, error) {
-		return portalCheckWithDial(ctx, new(net.Dialer).DialContext)
+	portalCheck: func(ctx context.Context, ep portalEndpoint) (portalObservation, error) {
+		return portalCheckWithDial(ctx, ep, new(net.Dialer).DialContext)
 	},
 	routeCause:    routeFailureCause,
 	routeFor:      lookupRouteDecision,

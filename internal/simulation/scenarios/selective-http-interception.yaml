@@ -1,0 +1,57 @@
+name: selective-http-interception
+description: >-
+  One connectivity provider intercepted, the other left alone. The path is up,
+  the resolver answers, TCP/443 completes and QUIC handshakes, exactly as under
+  a real portal, but only connectivitycheck.gstatic.com is redirected to a
+  sign-in page while www.msftconnecttest.com answers what it documents. A block
+  aimed at one name, that provider's own outage, and a hijacked answer for it
+  all look like this, so the run has to report the discrepancy it saw and stop
+  there: a degraded egress row, never the captive-portal verdict.
+
+topology:
+  subnet: 10.77.0.0/24
+  nodes:
+    - name: client
+      role: client
+      address: 10.77.0.10
+      gateway: 10.77.0.1
+      resolver: 10.77.0.1
+
+    # The same simulated internet the captive-portal scenario runs, with the
+    # interception aimed at one name instead of at plain HTTP. The intercepting
+    # fixture keeps the Google connectivity host; the other connectivity host
+    # resolves to the plain HTTP service on the server node, which answers it
+    # cleanly. Nothing else here differs from the healthy control.
+    - name: internet
+      address: 10.77.0.1
+      aliases: [1.1.1.1, 8.8.8.8]
+      services:
+        - type: dns
+          zone:
+            example.test: 10.77.0.20
+            connectivitycheck.gstatic.com: 10.77.0.1
+            www.msftconnecttest.com: 10.77.0.20
+        - {name: internet-intercepting-http, type: http, port: 80, portal: true}
+        - {name: internet-encrypted-dns, type: encrypted_dns, port: 443, certificate: {mode: valid, dns_names: [cloudflare-dns.com]}, zone: {connectivitycheck.gstatic.com: 10.77.0.1}}
+        - {name: internet-quic, type: quic, port: 443, certificate: {mode: valid, dns_names: [connectivitycheck.gstatic.com]}}
+
+    - name: server
+      address: 10.77.0.20
+      services:
+        - {name: server-http, type: http, port: 80}
+
+tests:
+  - name: generic checks with one provider intercepted
+    node: client
+
+expect:
+  verdict: degraded
+  checks:
+    - {id: iface, status: PASS}
+    # WARN, not FAIL: direct egress carries traffic, one endpoint answered
+    # exactly what it documents, and one provider treating this machine
+    # differently is not the network being broken.
+    - {id: internet_tcp, status: WARN}
+    - {id: dns, status: PASS}
+    - {id: dns_public, status: PASS}
+    - {id: quic_udp_443, status: PASS}

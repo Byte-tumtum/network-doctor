@@ -904,8 +904,8 @@ const clockSkewThreshold = 5 * time.Minute
 
 // clockSkew returns the signed local-minus-remote offset the egress probe
 // measured, and whether it is large enough to act on. The reading only exists
-// when the captive-portal check got a clean 204 from the fixed connectivity
-// endpoint, so a portal that check can see never supplies it. That is a
+// when a fixed connectivity endpoint answered exactly what it documents, so an
+// interception those checks can see never supplies it. That is a
 // heuristic over plain HTTP, not authentication, which is why this is usable
 // evidence rather than proof: the causal claim is only made when a
 // certificate-date rejection independently points the same way. An offset

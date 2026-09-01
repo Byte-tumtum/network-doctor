@@ -161,15 +161,28 @@ Some semantics are easy to get wrong even after reading a scenario:
   drops port 53 on both transports and leaves the encrypted ports alone. Each
   one asserts the working rows beside the broken one, since an encrypted-DNS
   result collected on a dead network is evidence about the network.
-- An `http` service with `portal: true` intercepts netdoc's connectivity check
-  the way a captive portal does: `/generate_204` answers `302` to a fixed
-  sign-in URL instead of `204`, and every other path it serves is untouched.
+- An `http` service with `portal: true` intercepts netdoc's connectivity checks
+  the way a captive portal does: `/generate_204` and `/connecttest.txt` both
+  answer `302` to a fixed sign-in URL instead of what they document, and every
+  other path it serves is untouched. A plain `http` service answers both of
+  those paths cleanly, so which node a connectivity name resolves to is what
+  decides whether that provider is intercepted.
   [`captive-portal.yaml`](../internal/simulation/scenarios/captive-portal.yaml)
   is the worked example, and it leaves DNS, TCP/443, QUIC and the target
   healthy on purpose. That is what makes it a test of precedence: the portal
   verdict has to outrank the rows that all report success, and the direct-egress
   row has to stay FAIL rather than be downgraded by them, since behind a portal
-  it is the portal answering.
+  it is the portal answering. Both connectivity names resolve to the portal
+  node there, because netdoc needs two independently operated endpoints
+  intercepted on one pass before it will name a portal.
+- [`selective-http-interception.yaml`](../internal/simulation/scenarios/selective-http-interception.yaml)
+  is the negative case on the same topology: the two connectivity names resolve
+  to different nodes, one intercepting and one plain, so exactly one provider is
+  redirected. One provider treated differently is a fact about that provider, so
+  the run has to warn on the direct-egress row and never reach the
+  captive-portal verdict. It is also the drift canary for the second endpoint:
+  if netdoc's expected clean payload changes, the untouched provider stops
+  reading as clean here.
 - An `http` service may set `date_offset` to a signed Go duration such as `72h`
   or `-30m`. Its `Date` header is the server's current wall clock plus that
   offset. Omitting the field leaves the standard HTTP server date unchanged.

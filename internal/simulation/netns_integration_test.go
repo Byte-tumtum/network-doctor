@@ -2435,6 +2435,53 @@ func TestCaptivePortalScenario(t *testing.T) {
 	assertCleanedUp(t, rep)
 }
 
+// TestSelectiveHTTPInterceptionScenario is the negative half of the same
+// detection, over the same wires: one connectivity provider is redirected to a
+// sign-in page and the other answers exactly what it documents. A run that
+// promoted one provider's answer into a verdict would call this a captive
+// portal; netdoc has to report the discrepancy and stop there.
+func TestSelectiveHTTPInterceptionScenario(t *testing.T) {
+	requireBackend(t)
+	rep := runScenario(t, "selective-http-interception")
+	if rep.Result != ResultPass {
+		t.Fatalf("result = %s (error %q); suggestions: %+v; tests: %+v", rep.Result, rep.Error, rep.Suggestions, rep.Tests)
+	}
+
+	// Both halves of the fixture, from the servers' side of the wire, so the
+	// verdict below rests on interception that really was selective rather than
+	// on a second endpoint that simply never got asked.
+	if !hasServiceReply(rep, "internet", "internet-intercepting-http", ServiceHTTP, http.StatusFound) {
+		t.Errorf("the intercepting fixture never redirected its connectivity check: %+v", rep.Evidence.ServiceReplies)
+	}
+	if !hasServiceReply(rep, "server", "server-http", ServiceHTTP, http.StatusOK) {
+		t.Errorf("the untouched provider never answered its connectivity check: %+v", rep.Evidence.ServiceReplies)
+	}
+
+	out := rep.Tests[0]
+	if out.FalsePositives != 0 || out.FalseNegatives != 0 {
+		t.Errorf("comparison fp=%d fn=%d: %+v", out.FalsePositives, out.FalseNegatives, out.Checks)
+	}
+	internet := diagnosisCheck(out, string(diagnostic.ProbeInternet))
+	if internet.Status != "WARN" {
+		t.Errorf("internet_tcp = %+v, want WARN: one provider is not the network", internet)
+	}
+	if strings.Contains(internet.Fix, "sign in") {
+		t.Errorf("internet_tcp fix = %q, want no sign-in hint from a single provider", internet.Fix)
+	}
+	if !strings.Contains(internet.Detail, "answered unexpectedly") || !strings.Contains(internet.Detail, "302") {
+		t.Errorf("internet_tcp detail does not name what was observed: %q", internet.Detail)
+	}
+	for _, finding := range out.Diagnosis.Findings {
+		if finding.ID == string(diagnostic.DiagnosisCaptivePortal) {
+			t.Errorf("one intercepted provider produced the captive-portal finding: %+v", out.Diagnosis)
+		}
+	}
+	if strings.Contains(out.Diagnosis.Summary, "captive portal") {
+		t.Errorf("summary = %q, want no portal claim", out.Diagnosis.Summary)
+	}
+	assertCleanedUp(t, rep)
+}
+
 func TestTLSValidScenario(t *testing.T) {
 	rep := runTLSScenario(t, "tls-valid")
 	out := rep.Tests[0]

@@ -433,8 +433,8 @@ func (f *budgetFixture) ops() *netops {
 		queued:       func(net.Conn) (int, error) { return 0, fmt.Errorf("pipe has no send queue") },
 		ssid:         func(context.Context, string) string { return "" },
 		proxyFromEnv: func(*http.Request) (*url.URL, error) { return nil, nil },
-		portalCheck: func(context.Context) (int, string, time.Time, error) {
-			return http.StatusNoContent, "", time.Now(), nil
+		portalCheck: func(_ context.Context, ep portalEndpoint) (portalObservation, error) {
+			return portalObservation{clean: true, code: ep.want, date: time.Now()}, nil
 		},
 	}
 	o.dialTLS = func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
@@ -574,9 +574,9 @@ func (s *budgetStall) ops() *netops {
 		// A configured proxy, so the proxy row dials and then has to survive an
 		// endpoint that never sends a CONNECT response.
 		proxyFromEnv: func(*http.Request) (*url.URL, error) { return url.Parse("http://127.0.0.1:3128") },
-		portalCheck: func(ctx context.Context) (int, string, time.Time, error) {
+		portalCheck: func(ctx context.Context, _ portalEndpoint) (portalObservation, error) {
 			<-ctx.Done()
-			return 0, "", time.Time{}, ctx.Err()
+			return portalObservation{}, ctx.Err()
 		},
 	}
 	o.dialTLS = func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {

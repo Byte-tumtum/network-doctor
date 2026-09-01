@@ -20,6 +20,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"sort"
@@ -1086,20 +1087,167 @@ func TestDialIPsConstrainsAddressFamily(t *testing.T) {
 	}
 }
 
-// A network whose TCP handshakes all succeed is still not online if the 204
-// endpoint comes back as anything else: that's a portal answering for it.
+// portalAnswers stubs netops.portalCheck with one canned observation per fixed
+// endpoint, in portalEndpoints order. A nil entry is an endpoint that did not
+// answer at all, which is what an unreachable auxiliary service looks like.
+func portalAnswers(t *testing.T, answers ...*portalObservation) func(context.Context, portalEndpoint) (portalObservation, error) {
+	t.Helper()
+	if len(answers) != len(portalEndpoints) {
+		t.Fatalf("portalAnswers got %d answers for %d fixed endpoints", len(answers), len(portalEndpoints))
+	}
+	return func(_ context.Context, ep portalEndpoint) (portalObservation, error) {
+		for i, candidate := range portalEndpoints {
+			if candidate.url == ep.url {
+				if answers[i] == nil {
+					return portalObservation{}, errors.New("no route to host")
+				}
+				return *answers[i], nil
+			}
+		}
+		t.Errorf("probe asked an endpoint that is not in the fixed set: %q", ep.url)
+		return portalObservation{}, errors.New("unknown endpoint")
+	}
+}
+
+// cleanAnswer is an endpoint answering exactly what it documents; seenAnswer is
+// one answering something else. portalCheckWithDial decides which is which from
+// a real response, and TestPortalCheck proves that rule; these two are how the
+// inference above it is stated.
+func cleanAnswer(code int) *portalObservation { return &portalObservation{clean: true, code: code} }
+
+func seenAnswer(code int, redirect string) *portalObservation {
+	return &portalObservation{code: code, redirect: redirect}
+}
+
+// The inference boundary, as the matrix of what the two independently operated
+// connectivity endpoints can say. One provider answering unexpectedly is a fact
+// about that provider: a block aimed at its name, its own outage, or a hijacked
+// DNS answer all look exactly like a portal from here. Only corroboration, both
+// endpoints intercepted on one pass, carries the captive-portal claim.
+func TestInternetProbePortalCorroboration(t *testing.T) {
+	dialOK := func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil }
+	ifaces := func() ([]net.Interface, error) { return nil, nil }
+	const signin = "https://portal.example/signin"
+
+	cases := []struct {
+		name         string
+		google, ncsi *portalObservation
+		want         Status
+		wantPortal   bool
+		wantRedirect string
+	}{
+		{name: "both clean", google: cleanAnswer(204), ncsi: cleanAnswer(200), want: StatusPass},
+		{
+			name: "both intercepted", google: seenAnswer(302, signin), ncsi: seenAnswer(302, "https://portal.example/other"),
+			want: StatusFail, wantPortal: true, wantRedirect: signin,
+		},
+		{name: "google intercepted, other clean", google: seenAnswer(302, signin), ncsi: cleanAnswer(200), want: StatusWarn},
+		// A 200 with the wrong payload is exactly the filter page this endpoint
+		// exists to catch, and on its own it still proves nothing.
+		{name: "google clean, other intercepted", google: cleanAnswer(204), ncsi: seenAnswer(200, ""), want: StatusWarn},
+		{name: "google intercepted, other unavailable", google: seenAnswer(302, signin), ncsi: nil, want: StatusWarn},
+		{name: "other intercepted, google unavailable", google: nil, ncsi: seenAnswer(302, signin), want: StatusWarn},
+		{name: "google clean, other unavailable", google: cleanAnswer(204), ncsi: nil, want: StatusPass},
+		{name: "other clean, google unavailable", google: nil, ncsi: cleanAnswer(200), want: StatusPass},
+		{name: "both unavailable", want: StatusPass},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := &netops{dialContext: dialOK, interfaces: ifaces, portalCheck: portalAnswers(t, c.google, c.ncsi)}
+			r := o.internetProbe(context.Background(), nil)
+			if r.Status != c.want {
+				t.Errorf("status = %v, want %v (detail %q)", r.Status, c.want, r.Detail)
+			}
+			if (r.Portal != nil) != c.wantPortal {
+				t.Fatalf("portal evidence = %+v, want present=%v", r.Portal, c.wantPortal)
+			}
+			if c.wantPortal {
+				if r.Portal.RedirectURL != c.wantRedirect {
+					t.Errorf("redirect = %q, want %q", r.Portal.RedirectURL, c.wantRedirect)
+				}
+				if !strings.Contains(r.Detail, "intercepted") || r.Fix == "" {
+					t.Errorf("corroborated interception = detail %q fix %q", r.Detail, r.Fix)
+				}
+				return
+			}
+			// Nothing but corroboration may name a portal, and a lone
+			// discrepancy must not invent a cause for the row either.
+			if r.Cause != "" {
+				t.Errorf("cause = %q, want none: one endpoint is not a diagnosis", r.Cause)
+			}
+			if c.want == StatusWarn && !strings.Contains(r.Detail, "answered unexpectedly") {
+				t.Errorf("detail = %q, want the observation named", r.Detail)
+			}
+			if c.want == StatusPass && strings.Contains(r.Detail, "unexpected") {
+				t.Errorf("detail = %q, want no discrepancy reported", r.Detail)
+			}
+			// The row stays usable evidence of egress, so a single discrepant
+			// provider cannot turn a working network into a failure.
+			if !directEgressOK(map[ProbeID]ProbeResult{ProbeInternet: r}) {
+				t.Errorf("direct egress read as broken from %+v", r)
+			}
+		})
+	}
+}
+
+// The same matrix carried up to the verdict: the diagnosis a single discrepant
+// provider produces is never the captive-portal one, and the corroborated pair
+// still is.
+func TestPortalDiagnosisNeedsCorroboration(t *testing.T) {
+	dialOK := func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil }
+	ifaces := func() ([]net.Interface, error) { return nil, nil }
+	const signin = "https://portal.example/signin"
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeDNS}
+
+	cases := []struct {
+		name         string
+		google, ncsi *portalObservation
+		wantPortal   bool
+	}{
+		{name: "corroborated", google: seenAnswer(302, signin), ncsi: seenAnswer(302, signin), wantPortal: true},
+		{name: "google alone", google: seenAnswer(302, signin), ncsi: cleanAnswer(200)},
+		{name: "other alone", google: cleanAnswer(204), ncsi: seenAnswer(200, "")},
+		{name: "google alone, other unavailable", google: seenAnswer(302, signin)},
+		{name: "both clean", google: cleanAnswer(204), ncsi: cleanAnswer(200)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := &netops{dialContext: dialOK, interfaces: ifaces, portalCheck: portalAnswers(t, c.google, c.ncsi)}
+			res := map[ProbeID]ProbeResult{
+				ProbeIface:    {ID: ProbeIface, Status: StatusPass},
+				ProbeInternet: o.internetProbe(context.Background(), nil),
+				ProbeDNS:      {ID: ProbeDNS, Status: StatusPass, Addrs: []net.IP{net.ParseIP("192.0.2.1")}},
+			}
+			res[ProbeInternet] = ProbeResult{ID: ProbeInternet, Status: res[ProbeInternet].Status,
+				Detail: res[ProbeInternet].Detail, Portal: res[ProbeInternet].Portal, Families: res[ProbeInternet].Families}
+			d := Interpret(nil, order, res)
+			portal := false
+			for _, f := range d.Findings {
+				if f.ID == DiagnosisCaptivePortal {
+					portal = true
+				}
+			}
+			if portal != c.wantPortal {
+				t.Errorf("captive-portal finding = %v, want %v (summary %q)", portal, c.wantPortal, d.Summary)
+			}
+		})
+	}
+}
+
+// A network whose TCP handshakes all succeed is still not online when both
+// endpoints come back as something else: that's a portal answering for it.
 func TestInternetProbeCaptivePortal(t *testing.T) {
 	dialOK := func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil }
 	ifaces := func() ([]net.Interface, error) { return nil, nil }
+	const signin = "https://portal.example/signin"
+	both := func(o *portalObservation) []*portalObservation { return []*portalObservation{o, o} }
 
 	portal := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, time.Time, error) {
-			return http.StatusFound, "https://portal.example/signin", time.Time{}, nil
-		},
+		portalCheck: portalAnswers(t, both(seenAnswer(http.StatusFound, signin))...),
 	}
 	r := portal.internetProbe(context.Background(), nil)
-	if r.Status != StatusFail || r.Portal == nil || r.Portal.RedirectURL != "https://portal.example/signin" ||
+	if r.Status != StatusFail || r.Portal == nil || r.Portal.RedirectURL != signin ||
 		r.Fix == "" || !strings.Contains(r.Detail, "intercepted") {
 		t.Errorf("portal network = %+v, want FAIL flagged as a portal with a fix", r)
 	}
@@ -1110,51 +1258,115 @@ func TestInternetProbeCaptivePortal(t *testing.T) {
 		t.Errorf("downgraded portal to %v, want FAIL to survive a passing DNS", res[ProbeInternet].Status)
 	}
 
-	clean := &netops{
-		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, time.Time, error) {
-			return http.StatusNoContent, "", time.Time{}, nil
-		},
-	}
-	if r := clean.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
-		t.Errorf("204 network = %+v, want a plain PASS", r)
-	}
-
+	// An interception that advertises nothing is still an interception, and the
+	// retained URL comes from the first endpoint that offered one, whichever
+	// request happened to finish first.
 	noRedirect := &netops{
 		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, time.Time, error) { return http.StatusOK, "", time.Time{}, nil },
+		portalCheck: portalAnswers(t, seenAnswer(http.StatusOK, ""), seenAnswer(http.StatusOK, "")),
 	}
 	if r := noRedirect.internetProbe(context.Background(), nil); r.Status != StatusFail ||
 		r.Portal == nil || r.Portal.RedirectURL != "" {
 		t.Errorf("non-redirect interception = %+v, want portal evidence without a URL", r)
 	}
+	trailing := &netops{
+		dialContext: dialOK, interfaces: ifaces,
+		portalCheck: portalAnswers(t, seenAnswer(http.StatusOK, ""), seenAnswer(http.StatusFound, signin)),
+	}
+	if r := trailing.internetProbe(context.Background(), nil); r.Portal == nil || r.Portal.RedirectURL != signin {
+		t.Errorf("second-endpoint redirect = %+v, want it retained", r.Portal)
+	}
 
 	// Portals that drop 443 entirely still answer plain HTTP; the evidence
 	// must survive having no handshake to attach it to.
+	dead := func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("connection refused") }
 	blocked443 := &netops{
-		dialContext: func(context.Context, string, string) (net.Conn, error) {
-			return nil, errors.New("connection refused")
-		},
-		interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, time.Time, error) {
-			return http.StatusFound, "https://portal.example/signin", time.Time{}, nil
-		},
+		dialContext: dead, interfaces: ifaces,
+		portalCheck: portalAnswers(t, both(seenAnswer(http.StatusFound, signin))...),
 	}
 	if r := blocked443.internetProbe(context.Background(), nil); r.Status != StatusFail ||
-		r.Portal == nil || r.Portal.RedirectURL != "https://portal.example/signin" ||
-		!strings.Contains(r.Fix, "sign in") {
+		r.Portal == nil || r.Portal.RedirectURL != signin || !strings.Contains(r.Fix, "sign in") {
 		t.Errorf("portal blocking 443 = %+v, want portal evidence, not a bare no-egress verdict", r)
 	}
+	// The same dead path with one endpoint discrepant is a dead path, not a
+	// portal: the observation is recorded and nothing is concluded from it.
+	oneEndpoint := &netops{
+		dialContext: dead, interfaces: ifaces,
+		portalCheck: portalAnswers(t, seenAnswer(http.StatusFound, signin), cleanAnswer(200)),
+	}
+	if r := oneEndpoint.internetProbe(context.Background(), nil); r.Status != StatusFail || r.Portal != nil ||
+		strings.Contains(r.Fix, "sign in") || !strings.Contains(r.Detail, "answered unexpectedly") {
+		t.Errorf("one discrepant endpoint on a dead path = %+v, want no portal claim", r)
+	}
 
-	// An unreachable check is not evidence of a portal, so the dial result stands.
-	broken := &netops{
-		dialContext: dialOK, interfaces: ifaces,
-		portalCheck: func(context.Context) (int, string, time.Time, error) {
-			return 0, "", time.Time{}, errors.New("no route to host")
+	// Unreachable checks are not evidence of a portal, so the dial result stands.
+	broken := &netops{dialContext: dialOK, interfaces: ifaces, portalCheck: portalAnswers(t, nil, nil)}
+	if r := broken.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
+		t.Errorf("failed checks = %+v, want the TCP verdict to stand", r)
+	}
+}
+
+// Two observations, one probe budget. No check here answers until every check
+// has started, so an executor that ran them one after the other would let the
+// first spend the whole context and come back with nothing: only an overlapping
+// run collects an answer from both.
+func TestInternetProbeChecksEndpointsConcurrently(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entered := make(chan struct{}, len(portalEndpoints))
+	all := make(chan struct{})
+	go func() {
+		for range portalEndpoints {
+			<-entered
+		}
+		close(all)
+	}()
+	var answered atomic.Int32
+	o := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil },
+		interfaces:  func() ([]net.Interface, error) { return nil, nil },
+		portalCheck: func(ctx context.Context, ep portalEndpoint) (portalObservation, error) {
+			entered <- struct{}{}
+			select {
+			case <-all:
+				answered.Add(1)
+				return portalObservation{clean: true, code: ep.want}, nil
+			case <-ctx.Done():
+				return portalObservation{}, ctx.Err()
+			}
 		},
 	}
-	if r := broken.internetProbe(context.Background(), nil); r.Status != StatusPass || r.Portal != nil {
-		t.Errorf("failed check = %+v, want the TCP verdict to stand", r)
+	r := o.internetProbe(ctx, nil)
+	if got, want := int(answered.Load()), len(portalEndpoints); got != want {
+		t.Fatalf("%d of %d endpoint checks were in flight at once; they ran serially", got, want)
+	}
+	if r.Status != StatusPass || r.Portal != nil {
+		t.Errorf("probe = %+v, want a plain PASS", r)
+	}
+}
+
+// The parent deadline bounds the pair: neither observation gets a budget of its
+// own, and an endpoint that never answers cannot outlive the probe.
+func TestInternetProbeEndpointChecksHonorContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	o := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil },
+		interfaces:  func() ([]net.Interface, error) { return nil, nil },
+		portalCheck: func(ctx context.Context, _ portalEndpoint) (portalObservation, error) {
+			<-ctx.Done()
+			return portalObservation{}, ctx.Err()
+		},
+	}
+	done := make(chan ProbeResult, 1)
+	go func() { done <- o.internetProbe(ctx, nil) }()
+	select {
+	case r := <-done:
+		if r.Portal != nil {
+			t.Errorf("expired checks produced portal evidence: %+v", r.Portal)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("the probe outlived its context")
 	}
 }
 
@@ -1903,14 +2115,31 @@ func TestHTTPSProbeSupportsHTTP2OnlyServer(t *testing.T) {
 	}
 }
 
-// The real portalCheck round trip over in-memory pipes: the status comes back
-// verbatim, a redirect is reported rather than chased, and the proxy env never
+// The real portalCheckWithDial round trip over in-memory pipes: an endpoint is
+// clean only when it answers exactly what it documents, status and payload
+// both, a redirect is reported rather than chased, and the proxy env never
 // enters the path.
 func TestPortalCheck(t *testing.T) {
-	// internetProbe only runs the round trip below when the field is wired, so
+	// internetProbe only runs the round trips below when the field is wired, so
 	// a nil here disables captive-portal detection with nothing else failing.
 	if defaultOps.portalCheck == nil {
 		t.Fatal("defaultOps.portalCheck is nil; captive-portal detection is silently off")
+	}
+	// Two independently operated endpoints is the whole of the fix: with one,
+	// that operator alone decides whether this machine is behind a portal.
+	if len(portalEndpoints) < 2 {
+		t.Fatalf("portalEndpoints = %+v; a single endpoint cannot corroborate itself", portalEndpoints)
+	}
+	hosts := map[string]bool{}
+	for _, ep := range portalEndpoints {
+		u, err := url.Parse(ep.url)
+		if err != nil || u.Scheme != "http" {
+			t.Fatalf("endpoint %q must be a plain-HTTP URL: %v", ep.url, err)
+		}
+		hosts[u.Hostname()] = true
+	}
+	if len(hosts) != len(portalEndpoints) {
+		t.Errorf("endpoints share a host (%v); they have to be independently operated", hosts)
 	}
 
 	var chased bool
@@ -1919,6 +2148,14 @@ func TestPortalCheck(t *testing.T) {
 		switch r.URL.Path {
 		case "/generate_204":
 			w.WriteHeader(http.StatusNoContent)
+		case "/connecttest.txt":
+			fmt.Fprint(w, ncsiCleanBody+"\r\n")
+		case "/truncated":
+			fmt.Fprint(w, ncsiCleanBody[:len(ncsiCleanBody)-1])
+		case "/wrongbody":
+			// The shape of a filter's "everything is fine" page: a 200 that
+			// says something else entirely.
+			fmt.Fprint(w, "<html>You are connected to GuestWiFi</html>")
 		case "/redirect":
 			http.Redirect(w, r, "/signin", http.StatusFound)
 		case "/unsafe":
@@ -1931,32 +2168,49 @@ func TestPortalCheck(t *testing.T) {
 	})}
 	p.serve(t, srv, func() error { return srv.Serve(p) })
 
-	defer func(orig string) { portalProbeURL = orig }(portalProbeURL)
 	const base = "http://portal.example"
+	noBody := func(path string) portalEndpoint {
+		return portalEndpoint{url: base + path, want: http.StatusNoContent}
+	}
+	withBody := func(path string) portalEndpoint {
+		return portalEndpoint{url: base + path, want: http.StatusOK, body: ncsiCleanBody}
+	}
 
 	// A proxy that would divert the request if the transport honored it.
 	t.Setenv("HTTP_PROXY", "http://192.0.2.9:1")
 	t.Setenv("http_proxy", "http://192.0.2.9:1")
 
-	portalProbeURL = base + "/generate_204"
-	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusNoContent || redirect != "" {
-		t.Errorf("clean path = (%d, %q, %v), want (204, empty, nil) with the proxy env ignored", code, redirect, err)
-	}
-
-	portalProbeURL = base + "/redirect"
-	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != base+"/signin" {
-		t.Errorf("intercepted path = (%d, %q, %v), want the 302 and resolved HTTP URL", code, redirect, err)
+	for _, c := range []struct {
+		name         string
+		ep           portalEndpoint
+		wantClean    bool
+		wantCode     int
+		wantRedirect string
+	}{
+		{name: "documented 204", ep: noBody("/generate_204"), wantClean: true, wantCode: http.StatusNoContent},
+		{name: "documented payload", ep: withBody("/connecttest.txt"), wantClean: true, wantCode: http.StatusOK},
+		// The point of reading the body at all: an arbitrary 200 is not a
+		// clean NCSI answer, which is how a filter's own page gets counted.
+		{name: "200 with the wrong payload", ep: withBody("/wrongbody"), wantCode: http.StatusOK},
+		{name: "200 with a short payload", ep: withBody("/truncated"), wantCode: http.StatusOK},
+		{name: "204 where a payload was documented", ep: withBody("/generate_204"), wantCode: http.StatusNoContent},
+		{name: "payload where a 204 was documented", ep: noBody("/connecttest.txt"), wantCode: http.StatusOK},
+		{name: "intercepted", ep: noBody("/redirect"), wantCode: http.StatusFound, wantRedirect: base + "/signin"},
+		{name: "intercepted to a non-HTTP scheme", ep: noBody("/unsafe"), wantCode: http.StatusFound},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := portalCheckWithDial(context.Background(), c.ep, p.dial)
+			if err != nil || got.clean != c.wantClean || got.code != c.wantCode || got.redirect != c.wantRedirect {
+				t.Errorf("observation = %+v (err %v), want clean=%v code=%d redirect=%q",
+					got, err, c.wantClean, c.wantCode, c.wantRedirect)
+			}
+		})
 	}
 	if chased {
 		t.Error("followed the redirect to the sign-in page; the 302 is the answer")
 	}
 
-	portalProbeURL = base + "/unsafe"
-	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err != nil || code != http.StatusFound || redirect != "" {
-		t.Errorf("unsafe redirect = (%d, %q, %v), want the 302 without a non-HTTP URL", code, redirect, err)
-	}
-
-	// Every dial went to the probe URL's own host: the proxy env was ignored,
+	// Every dial went to the endpoint's own host: the proxy env was ignored,
 	// which the pipe dialer can assert directly instead of inferring it from a
 	// request that would have failed.
 	p.mu.Lock()
@@ -1967,16 +2221,17 @@ func TestPortalCheck(t *testing.T) {
 	}
 	p.mu.Unlock()
 
-	// A dead endpoint is an error, not a zero-status verdict callers can read.
+	// A dead endpoint is an error, not a zero-status observation callers can read.
 	_ = p.Close()
-	if code, redirect, _, err := portalCheckWithDial(context.Background(), p.dial); err == nil || code != 0 || redirect != "" {
-		t.Errorf("dead endpoint = (%d, %q, %v), want (0, empty, error)", code, redirect, err)
+	if got, err := portalCheckWithDial(context.Background(), noBody("/generate_204"), p.dial); err == nil ||
+		got != (portalObservation{}) {
+		t.Errorf("dead endpoint = (%+v, %v), want the zero observation and an error", got, err)
 	}
 }
 
-// The Date on the 204 is the only remote clock netdoc gets for free, so the
-// round trip has to hand it back verbatim and degrade to the zero time rather
-// than to a wrong time when the header is absent or unparsable.
+// The Date on a clean answer is the only remote clock netdoc gets for free, so
+// the round trip has to hand it back verbatim and degrade to the zero time
+// rather than to a wrong time when the header is absent or unparsable.
 func TestPortalCheckDate(t *testing.T) {
 	const stamped = "Sun, 06 Nov 1994 08:49:37 GMT"
 	want := time.Date(1994, time.November, 6, 8, 49, 37, 0, time.UTC)
@@ -1996,9 +2251,6 @@ func TestPortalCheckDate(t *testing.T) {
 	})}
 	p.serve(t, srv, func() error { return srv.Serve(p) })
 
-	defer func(orig string) { portalProbeURL = orig }(portalProbeURL)
-	const base = "http://portal.example"
-
 	for _, c := range []struct {
 		path string
 		want time.Time
@@ -2007,46 +2259,55 @@ func TestPortalCheckDate(t *testing.T) {
 		{"/nodate", time.Time{}},
 		{"/baddate", time.Time{}},
 	} {
-		portalProbeURL = base + c.path
-		code, _, date, err := portalCheckWithDial(context.Background(), p.dial)
-		if err != nil || code != http.StatusNoContent {
-			t.Fatalf("%s = (%d, %v), want a clean 204", c.path, code, err)
+		ep := portalEndpoint{url: "http://portal.example" + c.path, want: http.StatusNoContent}
+		got, err := portalCheckWithDial(context.Background(), ep, p.dial)
+		if err != nil || !got.clean {
+			t.Fatalf("%s = (%+v, %v), want a clean answer", c.path, got, err)
 		}
-		if !date.Equal(c.want) {
-			t.Errorf("%s date = %v, want %v", c.path, date, c.want)
+		if !got.date.Equal(c.want) {
+			t.Errorf("%s date = %v, want %v", c.path, got.date, c.want)
 		}
 	}
 }
 
-// Remote time is evidence only when it came from the endpoint we addressed.
-// Anything but the 204 was written by whatever intercepted the request, and an
-// interceptor's clock must never be read as the network's.
+// Remote time is evidence only when it came from a response that matched what
+// the endpoint documents. Anything else was written by whatever answered
+// instead, and an interceptor's clock must never be read as the network's.
+// Endpoint order breaks a tie between two clean answers, so the reading stays
+// the Google-derived one whenever that endpoint answered cleanly.
 func TestInternetProbeClockOffset(t *testing.T) {
 	dialOK := func(context.Context, string, string) (net.Conn, error) { return fakeConn{}, nil }
 	ifaces := func() ([]net.Interface, error) { return nil, nil }
-	behind := time.Now().Add(-3 * time.Hour)
+	dated := func(o *portalObservation, at time.Time) *portalObservation {
+		o.date = at
+		return o
+	}
+	now := time.Now()
+	behind, ahead := now.Add(-3*time.Hour), now.Add(2*time.Hour)
 
 	cases := []struct {
-		name     string
-		code     int
-		date     time.Time
-		wantSkew bool
+		name         string
+		google, ncsi *portalObservation
+		want         time.Duration
 	}{
-		{"clean 204 with a date", http.StatusNoContent, behind, true},
-		{"clean 204 without a date", http.StatusNoContent, time.Time{}, false},
-		{"portal redirect with a date", http.StatusFound, behind, false},
-		{"interception answering 200 with a date", http.StatusOK, behind, false},
+		{name: "clean google with a date", google: dated(cleanAnswer(204), behind), want: 3 * time.Hour},
+		{name: "clean google without a date", google: cleanAnswer(204)},
+		{name: "intercepted google with a date", google: dated(seenAnswer(302, ""), behind), ncsi: cleanAnswer(200)},
+		{name: "interception answering 200 with a date", google: dated(seenAnswer(200, ""), behind), ncsi: cleanAnswer(200)},
+		// The other endpoint is a clean observation too, so its clock counts
+		// when it is the only clean one on the pass.
+		{name: "other endpoint clean with a date", google: dated(seenAnswer(302, ""), ahead), ncsi: dated(cleanAnswer(200), behind), want: 3 * time.Hour},
+		{name: "unavailable google, clean other", ncsi: dated(cleanAnswer(200), behind), want: 3 * time.Hour},
+		// Both clean and both dated: endpoint order decides, so the reading is
+		// the one netdoc has always taken.
+		{name: "both clean and dated", google: dated(cleanAnswer(204), behind), ncsi: dated(cleanAnswer(200), ahead), want: 3 * time.Hour},
+		{name: "both unavailable"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			o := &netops{
-				dialContext: dialOK, interfaces: ifaces,
-				portalCheck: func(context.Context) (int, string, time.Time, error) {
-					return c.code, "", c.date, nil
-				},
-			}
+			o := &netops{dialContext: dialOK, interfaces: ifaces, portalCheck: portalAnswers(t, c.google, c.ncsi)}
 			got := o.internetProbe(context.Background(), nil).clockOffset
-			if !c.wantSkew {
+			if c.want == 0 {
 				if got != 0 {
 					t.Errorf("clockOffset = %v, want no reading", got)
 				}
@@ -2054,8 +2315,8 @@ func TestInternetProbeClockOffset(t *testing.T) {
 			}
 			// The offset carries one in-process round trip, so it is exact to
 			// far better than the minute of slack allowed here.
-			if diff := (got - 3*time.Hour).Abs(); diff > time.Minute {
-				t.Errorf("clockOffset = %v, want about 3h", got)
+			if diff := (got - c.want).Abs(); diff > time.Minute {
+				t.Errorf("clockOffset = %v, want about %v", got, c.want)
 			}
 		})
 	}

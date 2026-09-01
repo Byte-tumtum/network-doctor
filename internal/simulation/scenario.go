@@ -124,9 +124,13 @@ type Service struct {
 	// It uses Go duration syntax and is empty when the ordinary net/http header
 	// should be left untouched.
 	DateOffset string `yaml:"date_offset"`
-	// Portal makes ServiceHTTP intercept the connectivity check the way a
-	// captive portal does: /generate_204 redirects to a fixed sign-in page
-	// instead of answering 204. Intent only, as every other fixture mode is:
+	// Portal makes ServiceHTTP intercept the connectivity checks the way a
+	// captive portal does: both /generate_204 and /connecttest.txt redirect to
+	// a fixed sign-in page instead of answering what they document, since a
+	// portal intercepts plain HTTP rather than one provider's name. Pointing
+	// the two names at a portal node and a plain one is how a scenario models
+	// interception aimed at a single provider.
+	// Intent only, as every other fixture mode is:
 	// the sign-in URL is the simulator's, since a scenario-supplied one would
 	// be a raw URL in a file that is otherwise not allowed to carry any.
 	Portal bool `yaml:"portal"`

@@ -368,7 +368,10 @@ If an internet, captive-portal, default public-DNS, or probe-host constant
 changes, update the corresponding `aliases`, DNS records, and expectations
 under `internal/simulation/scenarios/`, and the internet endpoint list in
 `internal/simulation/runner.go` that the simulator dials for its own
-reachability evidence.
+reachability evidence. The captive-portal check has two endpoints, so that
+includes the paths and clean responses `serveHTTP` answers in
+`internal/simulation/services.go`, which are kept in step with
+`portalEndpoints` by hand.
 
 `healthy` is the canary. It expects the fixed internet, public-DNS, and
 encrypted-DNS probes to pass; endpoint drift makes it fail with a
