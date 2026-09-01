@@ -17,6 +17,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ const (
 	MaxPairingCodeSize  = 512
 	maxMessageSize      = 16 << 10
 	maxEndpointSize     = 96
+	maxZoneSize         = 32
 	maxEndpointCount    = 2
 	maxObservationCount = 2
 	maxPeerNameSize     = 128
@@ -244,6 +246,21 @@ func NormalizeListenAddress(address string) (string, string, error) {
 	return normalizeEndpoint(address, true)
 }
 
+// endpointAddr parses the IP half of an already-formed host:port endpoint.
+// netip keeps the %zone of a scoped IPv6 link-local address; net.ParseIP
+// rejects the address instead, which loses the interface the peer is on.
+func endpointAddr(address string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
 func normalizeEndpoint(address string, allowZero bool) (string, string, error) {
 	if len(address) == 0 || len(address) > maxEndpointSize {
 		return "", "", errInvalidPairing
@@ -252,8 +269,25 @@ func normalizeEndpoint(address string, allowZero bool) (string, string, error) {
 	if err != nil {
 		return "", "", errInvalidPairing
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsGlobalUnicast() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+	// netip.ParseAddr keeps the %zone that scopes an IPv6 link-local address
+	// to one interface; net.ParseIP rejects the whole address instead. Unmap
+	// first so an IPv4-mapped form is judged as the IPv4 address it is.
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return "", "", errInvalidPairing
+	}
+	zone := addr.Zone()
+	addr = addr.Unmap()
+	if addr.Is6() && addr.IsLinkLocalUnicast() {
+		// Without the scope a link-local address names no reachable
+		// destination, so the bare form is not a usable peer endpoint.
+		if !validZone(zone) {
+			return "", "", errInvalidPairing
+		}
+	} else if zone != "" {
+		return "", "", errInvalidPairing
+	}
+	if !addr.IsGlobalUnicast() && !addr.IsLoopback() && !addr.IsLinkLocalUnicast() {
 		return "", "", errInvalidPairing
 	}
 	port, err := strconv.Atoi(portText)
@@ -261,10 +295,28 @@ func normalizeEndpoint(address string, allowZero bool) (string, string, error) {
 		return "", "", errInvalidPairing
 	}
 	family := FamilyIPv6
-	if ip4 := ip.To4(); ip4 != nil {
-		ip, family = ip4, FamilyIPv4
+	if addr.Is4() {
+		family = FamilyIPv4
 	}
-	return net.JoinHostPort(ip.String(), strconv.Itoa(port)), family, nil
+	// JoinHostPort brackets the IPv6 literal, zone included.
+	return net.JoinHostPort(addr.String(), strconv.Itoa(port)), family, nil
+}
+
+// validZone bounds an interface scope to what real zones look like: a Unix
+// interface name or a Windows numeric scope identifier. Endpoints reach here
+// from a peer, and they are stored and displayed, so the zone may not carry
+// arbitrary text.
+func validZone(zone string) bool {
+	if zone == "" || len(zone) > maxZoneSize {
+		return false
+	}
+	for _, r := range zone {
+		alphanumeric := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !alphanumeric && r != '.' && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeSecret(value []byte) string {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"time"
@@ -198,7 +199,7 @@ func Connect(parent context.Context, code string, options Options) (Result, erro
 
 	type request struct {
 		endpoint wireEndpoint
-		source   net.IP
+		source   netip.Addr
 	}
 	requests := make([]request, 0, len(p.Endpoints))
 	for _, endpoint := range p.Endpoints {
@@ -260,9 +261,9 @@ func (control acceptedControl) channel() ChannelObservation {
 	}
 }
 
-func (control acceptedControl) remoteIP() net.IP {
-	host, _, _ := net.SplitHostPort(control.remoteAddr)
-	return net.ParseIP(host)
+func (control acceptedControl) remoteIP() netip.Addr {
+	addr, _ := endpointAddr(control.remoteAddr)
+	return addr
 }
 
 type controlClient struct {
@@ -281,7 +282,7 @@ func (control *controlClient) channel() ChannelObservation {
 	}
 }
 
-func connectControl(ctx context.Context, p pairing, offer wireOffer, sources map[string]net.IP, options Options) (*controlClient, error) {
+func connectControl(ctx context.Context, p pairing, offer wireOffer, sources map[string]netip.Addr, options Options) (*controlClient, error) {
 	for _, endpoint := range p.Endpoints {
 		source, available := sources[endpoint.Family]
 		if options.Sources != nil && !available {
@@ -327,17 +328,18 @@ func connectControl(ctx context.Context, p pairing, offer wireOffer, sources map
 	return nil, errors.New("could not establish the authenticated peer channel")
 }
 
-func probeOffer(ctx context.Context, endpoints []wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, sources, observed map[string]net.IP, timeout time.Duration, direction string) []Observation {
+func probeOffer(ctx context.Context, endpoints []wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, sources, observed map[string]netip.Addr, timeout time.Duration, direction string) []Observation {
 	return parallelObservations(len(endpoints), func(i int) Observation {
 		endpoint := endpoints[i]
 		remote := observed[endpoint.Family]
-		if remote == nil {
+		if !remote.IsValid() {
 			return Observation{
 				Direction: direction, Family: endpoint.Family,
 				Status: diagnostic.StatusNA.String(), Cause: CausePeerAddressUnverified,
 			}
 		}
 		_, port, _ := net.SplitHostPort(endpoint.Address)
+		// remote.String() keeps the %zone of a scoped link-local address.
 		endpoint.Address = net.JoinHostPort(remote.String(), port)
 		return probeEndpoint(ctx, endpoint, pin, token, sources[endpoint.Family], timeout, direction)
 	})
@@ -357,7 +359,7 @@ func evidenceWait(timeout time.Duration) time.Duration {
 	return min(3*timeout, SessionLifetime)
 }
 
-func probeEndpoint(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, source net.IP, timeout time.Duration, direction string) Observation {
+func probeEndpoint(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]byte, token [tokenSize]byte, source netip.Addr, timeout time.Duration, direction string) Observation {
 	started := time.Now()
 	conn, observation := dialPeerTLS(ctx, endpoint, pin, source, timeout, direction)
 	if conn == nil {
@@ -390,7 +392,7 @@ func probeEndpoint(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]
 	return observation
 }
 
-func dialPeerTLS(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]byte, source net.IP, timeout time.Duration, direction string) (*tls.Conn, Observation) {
+func dialPeerTLS(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]byte, source netip.Addr, timeout time.Duration, direction string) (*tls.Conn, Observation) {
 	start := time.Now()
 	observation := Observation{
 		Direction: direction, Family: endpoint.Family, Destination: endpoint.Address,
@@ -399,8 +401,9 @@ func dialPeerTLS(ctx context.Context, endpoint wireEndpoint, pin [sha256.Size]by
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	dialer := net.Dialer{}
-	if source != nil {
-		dialer.LocalAddr = &net.TCPAddr{IP: source}
+	if source.IsValid() {
+		// TCPAddrFromAddrPort carries the zone a link-local bind needs.
+		dialer.LocalAddr = net.TCPAddrFromAddrPort(netip.AddrPortFrom(source, 0))
 	}
 	network := "tcp6"
 	if endpoint.Family == FamilyIPv4 {
@@ -507,7 +510,7 @@ func newEndpointServer(parent context.Context, addresses []string, options Optio
 			return nil, fmt.Errorf("listen on %s: %w", address, err)
 		}
 		server.listeners = append(server.listeners, listener)
-		server.endpoints = append(server.endpoints, wireEndpoint{Address: listener.Addr().String(), Family: family})
+		server.endpoints = append(server.endpoints, wireEndpoint{Address: advertisedEndpoint(address, listener.Addr().String()), Family: family})
 	}
 	for _, listener := range server.listeners {
 		server.wg.Add(1)
@@ -515,6 +518,19 @@ func newEndpointServer(parent context.Context, addresses []string, options Optio
 	}
 	context.AfterFunc(ctx, func() { _ = server.Close() })
 	return server, nil
+}
+
+// advertisedEndpoint is the address peers are told to dial. A listening socket
+// reports no zone for a scoped link-local bind, and that bare address is not
+// connectable, so the requested host is kept and only the port comes from the
+// listener, which is what port zero asks the kernel to choose.
+func advertisedEndpoint(requested, bound string) string {
+	host, _, hostErr := net.SplitHostPort(requested)
+	_, port, portErr := net.SplitHostPort(bound)
+	if hostErr != nil || portErr != nil {
+		return bound
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func (server *endpointServer) accept(listener net.Listener) {
@@ -657,26 +673,24 @@ func (server *endpointServer) verifyReported(reported []Observation, direction s
 	return reported, nil
 }
 
-func (server *endpointServer) sourceIPs() map[string]net.IP {
-	out := make(map[string]net.IP, len(server.endpoints))
+func (server *endpointServer) sourceIPs() map[string]netip.Addr {
+	out := make(map[string]netip.Addr, len(server.endpoints))
 	for _, endpoint := range server.endpoints {
-		host, _, _ := net.SplitHostPort(endpoint.Address)
-		out[endpoint.Family] = net.ParseIP(host)
+		out[endpoint.Family], _ = endpointAddr(endpoint.Address)
 	}
 	return out
 }
 
-func (server *endpointServer) observedRemoteIPs(control net.IP) map[string]net.IP {
-	observed := make(map[string]net.IP, maxEndpointCount)
-	if control != nil {
-		observed[familyForIP(control)] = append(net.IP(nil), control...)
+func (server *endpointServer) observedRemoteIPs(control netip.Addr) map[string]netip.Addr {
+	observed := make(map[string]netip.Addr, maxEndpointCount)
+	if control.IsValid() {
+		observed[familyForAddr(control)] = control
 	}
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	for family, observation := range server.inbound {
-		host, _, err := net.SplitHostPort(observation.Source)
-		if ip := net.ParseIP(host); err == nil && familyForIP(ip) == family {
-			observed[family] = append(net.IP(nil), ip...)
+		if addr, ok := endpointAddr(observation.Source); ok && familyForAddr(addr) == family {
+			observed[family] = addr
 		}
 	}
 	return observed
@@ -736,25 +750,37 @@ func (server *endpointServer) Close() error {
 func connectorBinds(ctx context.Context, endpoints []wireEndpoint, sources *diagnostic.SourceAddresses, timeout time.Duration) ([]string, error) {
 	var binds []string
 	for _, endpoint := range endpoints {
-		var source net.IP
+		var source netip.Addr
 		if sources != nil {
 			if endpoint.Family == FamilyIPv4 {
-				source = sources.IPv4
+				source, _ = netip.AddrFromSlice(sources.IPv4)
 			} else {
-				source = sources.IPv6
+				source, _ = netip.AddrFromSlice(sources.IPv6)
 			}
+			source = source.Unmap()
 		}
-		if source == nil && sources != nil {
+		if !source.IsValid() && sources != nil {
 			continue
 		}
-		if source == nil {
+		if !source.IsValid() {
 			var err error
 			source, err = routeSource(ctx, endpoint, timeout)
 			if err != nil {
 				continue
 			}
 		}
-		binds = append(binds, net.JoinHostPort(source.String(), "0"))
+		if sources != nil && source.Is6() && source.IsLinkLocalUnicast() {
+			// An interface-selected source carries no zone, and a link-local
+			// address needs one; --iface named the interface it belongs to.
+			source = source.WithZone(sources.Iface)
+		}
+		bind := net.JoinHostPort(source.String(), "0")
+		if _, _, err := NormalizeListenAddress(bind); err != nil {
+			// A source that cannot be advertised as a peer endpoint is no
+			// reverse listener for this family, but the other family may be.
+			continue
+		}
+		binds = append(binds, bind)
 	}
 	if len(binds) == 0 {
 		return nil, errors.New("cannot choose a local address for the reverse peer listener")
@@ -762,7 +788,7 @@ func connectorBinds(ctx context.Context, endpoints []wireEndpoint, sources *diag
 	return binds, nil
 }
 
-func routeSource(ctx context.Context, endpoint wireEndpoint, timeout time.Duration) (net.IP, error) {
+func routeSource(ctx context.Context, endpoint wireEndpoint, timeout time.Duration) (netip.Addr, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	network := "udp6"
@@ -771,14 +797,20 @@ func routeSource(ctx context.Context, endpoint wireEndpoint, timeout time.Durati
 	}
 	conn, err := new(net.Dialer).DialContext(dialCtx, network, endpoint.Address)
 	if err != nil {
-		return nil, err
+		return netip.Addr{}, err
 	}
 	defer conn.Close()
 	address, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || address.IP == nil || address.IP.IsUnspecified() {
-		return nil, errors.New("no usable source address")
+	if !ok {
+		return netip.Addr{}, errors.New("no usable source address")
 	}
-	return append(net.IP(nil), address.IP...), nil
+	// AddrPort keeps the zone the kernel reported for a link-local source,
+	// which the reverse listener then has to bind by.
+	source := address.AddrPort().Addr().Unmap()
+	if !source.IsValid() || source.IsUnspecified() {
+		return netip.Addr{}, errors.New("no usable source address")
+	}
+	return source, nil
 }
 
 func identityFromOffer(role, name string, offer wireOffer, observed string) EndpointIdentity {
@@ -817,21 +849,23 @@ func cleanName(name string) string {
 }
 
 func familyForAddress(address string) string {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
+	addr, ok := endpointAddr(address)
+	if !ok {
 		return ""
 	}
-	return familyForIP(net.ParseIP(host))
+	return familyForAddr(addr)
 }
 
-func familyForIP(ip net.IP) string {
-	if ip != nil && ip.To4() != nil {
+// familyForAddr expects an unmapped address, as endpointAddr returns.
+func familyForAddr(addr netip.Addr) string {
+	switch {
+	case addr.Is4():
 		return FamilyIPv4
-	}
-	if ip != nil {
+	case addr.IsValid():
 		return FamilyIPv6
+	default:
+		return ""
 	}
-	return ""
 }
 
 func lenMustDecode(value string) int {

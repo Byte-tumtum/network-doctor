@@ -189,7 +189,7 @@ func (addresses *peerListenList) String() string { return strings.Join(*addresse
 func (addresses *peerListenList) Set(value string) error {
 	address, family, err := peer.NormalizeListenAddress(value)
 	if err != nil {
-		return errors.New("want an exact IP:port (port 0 asks the kernel to choose)")
+		return errors.New("want an exact IP:port (port 0 asks the kernel to choose; a link-local address needs its %zone)")
 	}
 	if len(*addresses) >= 2 {
 		return errors.New("at most one IPv4 and one IPv6 peer listener are allowed")

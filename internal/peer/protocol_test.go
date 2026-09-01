@@ -12,10 +12,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
 type memoryConn struct {
@@ -228,6 +231,21 @@ func TestPairingRejectsInvalidEndpoints(t *testing.T) {
 	}
 }
 
+func TestConnectorBindsScopeAnInterfaceLinkLocalSource(t *testing.T) {
+	endpoints := []wireEndpoint{{Address: "[fe80::1%eth0]:4242", Family: FamilyIPv6}}
+	binds, err := connectorBinds(context.Background(), endpoints,
+		&diagnostic.SourceAddresses{IPv6: net.ParseIP("fe80::2"), Iface: "eth0"}, time.Second)
+	if err != nil || len(binds) != 1 || binds[0] != "[fe80::2%eth0]:0" {
+		t.Fatalf("reverse binds = %v, %v, want [fe80::2%%eth0]:0", binds, err)
+	}
+	// Without a named interface the link-local source cannot be advertised as
+	// an endpoint, so it yields no reverse listener rather than a broken one.
+	if binds, err := connectorBinds(context.Background(), endpoints,
+		&diagnostic.SourceAddresses{IPv6: net.ParseIP("fe80::2")}, time.Second); err == nil {
+		t.Fatalf("unscoped link-local source produced binds %v", binds)
+	}
+}
+
 func TestAuthenticatorRejectsWrongAndReplayedCredentials(t *testing.T) {
 	var token [tokenSize]byte
 	copy(token[:], bytes.Repeat([]byte{7}, tokenSize))
@@ -327,4 +345,66 @@ func FuzzDecodeMessage(f *testing.F) {
 		_, _ = readMessage(context.Background(), conn, time.Second)
 		_, _ = decodePairing(string(data), time.Unix(1_800_000_000, 0))
 	})
+}
+
+func TestEndpointsCarryTheIPv6LinkLocalZone(t *testing.T) {
+	// A link-local address names a destination only together with the
+	// interface scope, so the scoped form is the usable one and the bare
+	// form is not. Windows writes that scope as a number.
+	for _, address := range []string{"[fe80::1%eth0]:4242", "[fe80::1%12]:4242", "[fe80::1%eth0]:0"} {
+		got, family, err := NormalizeListenAddress(address)
+		if err != nil || got != address || family != FamilyIPv6 {
+			t.Errorf("NormalizeListenAddress(%q) = %q, %q, %v", address, got, family, err)
+		}
+	}
+	for _, address := range []string{
+		"[fe80::1]:4242", "[fe80::1%]:4242", "[fe80::1%eth 0]:4242", "[fe80::1%\x1b]0;x\a]:4242",
+		"[2001:db8::1%eth0]:4242", "[::1%lo]:4242", "[::ffff:169.254.1.1%eth0]:4242",
+	} {
+		if _, _, err := NormalizeListenAddress(address); err == nil {
+			t.Errorf("NormalizeListenAddress(%q) returned no error", address)
+		}
+	}
+	scoped := "[fe80::1%eth0]:4242"
+	if family := familyForAddress(scoped); family != FamilyIPv6 {
+		t.Errorf("familyForAddress(%q) = %q, want %q", scoped, family, FamilyIPv6)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	code, err := encodePairing(pairing{
+		Expires:   now.Add(time.Minute),
+		Endpoints: []wireEndpoint{{Address: scoped, Family: FamilyIPv6}},
+	})
+	if err != nil {
+		t.Fatalf("encode scoped pairing: %v", err)
+	}
+	got, err := decodePairing(code, now)
+	if err != nil || len(got.Endpoints) != 1 || got.Endpoints[0].Address != scoped {
+		t.Fatalf("decoded scoped pairing = %+v, %v", got.Endpoints, err)
+	}
+	if err := validateOffer(wireOffer{
+		Endpoints: []wireEndpoint{{Address: scoped, Family: FamilyIPv6}},
+		Pin:       encodedByte(sha256.Size, 1), Token: encodedByte(tokenSize, 2),
+	}); err != nil {
+		t.Fatalf("scoped endpoint in an offer: %v", err)
+	}
+	// The zone has to reach the host-level views too: the source a probe
+	// binds to and the peer address the reverse probe dials.
+	server := &endpointServer{
+		endpoints: []wireEndpoint{{Address: scoped, Family: FamilyIPv6}},
+		inbound:   map[string]Observation{FamilyIPv6: {Source: "[fe80::2%eth0]:5"}},
+	}
+	if source := server.sourceIPs()[FamilyIPv6]; source.String() != "fe80::1%eth0" {
+		t.Errorf("bind source = %q, want fe80::1%%eth0", source)
+	}
+	if remote := server.observedRemoteIPs(netip.Addr{})[FamilyIPv6]; remote.String() != "fe80::2%eth0" {
+		t.Errorf("observed peer = %q, want fe80::2%%eth0", remote)
+	}
+	// A listening socket reports a scoped bind back without its zone, and that
+	// bare address is not connectable, so the advertised endpoint restores it.
+	if got := advertisedEndpoint("[fe80::1%eth0]:0", "[fe80::1]:38825"); got != "[fe80::1%eth0]:38825" {
+		t.Errorf("advertised scoped endpoint = %q, want [fe80::1%%eth0]:38825", got)
+	}
+	if got := advertisedEndpoint("192.0.2.10:0", "192.0.2.10:38825"); got != "192.0.2.10:38825" {
+		t.Errorf("advertised endpoint = %q, want 192.0.2.10:38825", got)
+	}
 }

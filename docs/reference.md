@@ -341,6 +341,14 @@ netdoc \
   --peer-listen '[2001:db8:1234::20]:4242'
 ```
 
+An IPv6 link-local address must carry the interface scope that makes it
+reachable, so the bare address is rejected. Windows writes that scope as a
+number, such as `%12`:
+
+```sh
+netdoc --peer-listen '[fe80::20%eth0]:4242'
+```
+
 The listener prints each direct endpoint and one `ndp1.` pairing string. On the
 other machine, run:
 

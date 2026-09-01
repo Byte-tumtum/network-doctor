@@ -2,7 +2,6 @@
 package peer
 
 import (
-	"net"
 	"slices"
 	"strings"
 
@@ -314,21 +313,20 @@ func onlyLoopback(addresses []string) bool {
 		return false
 	}
 	return !slices.ContainsFunc(addresses, func(address string) bool {
-		host, _, err := net.SplitHostPort(address)
-		return err != nil || !net.ParseIP(strings.Trim(host, "[]")).IsLoopback()
+		addr, ok := endpointAddr(address)
+		return !ok || !addr.IsLoopback()
 	})
 }
 
 func onlyLoopbackForFamily(addresses []string, family string) bool {
 	found := false
 	for _, address := range addresses {
-		host, _, err := net.SplitHostPort(address)
-		ip := net.ParseIP(strings.Trim(host, "[]"))
-		if err != nil || ip == nil || familyForIP(ip) != family {
+		addr, ok := endpointAddr(address)
+		if !ok || familyForAddr(addr) != family {
 			continue
 		}
 		found = true
-		if !ip.IsLoopback() {
+		if !addr.IsLoopback() {
 			return false
 		}
 	}

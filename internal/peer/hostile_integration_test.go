@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -172,7 +173,7 @@ func TestProbePhaseFailuresRemainDistinct(t *testing.T) {
 			}
 		}()
 		observation := probeEndpoint(context.Background(), wireEndpoint{Address: listener.Addr().String(), Family: FamilyIPv4},
-			[sha256.Size]byte{}, [tokenSize]byte{}, nil, time.Second, DirectionConnectorToListener)
+			[sha256.Size]byte{}, [tokenSize]byte{}, netip.Addr{}, time.Second, DirectionConnectorToListener)
 		_ = listener.Close()
 		<-done
 		if !observation.TCPConnected || observation.TLSAuthenticated || observation.Cause != CauseTLSAuthenticationFailed {
@@ -211,7 +212,7 @@ func TestProbePhaseFailuresRemainDistinct(t *testing.T) {
 			done <- writeMessage(ctx, conn, time.Second, wireMessage{Version: ProtocolVersion, Type: "done"})
 		}()
 		observation := probeEndpoint(context.Background(), wireEndpoint{Address: listener.Addr().String(), Family: FamilyIPv4},
-			credential.pin, credential.token, nil, time.Second, DirectionConnectorToListener)
+			credential.pin, credential.token, netip.Addr{}, time.Second, DirectionConnectorToListener)
 		_ = listener.Close()
 		if err := <-done; err != nil {
 			t.Fatal(err)
@@ -334,7 +335,7 @@ func TestCancellationInterruptsAStalledApplicationRead(t *testing.T) {
 	result := make(chan Observation, 1)
 	go func() {
 		result <- probeEndpoint(ctx, wireEndpoint{Address: listener.Addr().String(), Family: FamilyIPv4},
-			credential.pin, credential.token, nil, 10*time.Second, DirectionConnectorToListener)
+			credential.pin, credential.token, netip.Addr{}, 10*time.Second, DirectionConnectorToListener)
 	}()
 	select {
 	case <-requestRead:
