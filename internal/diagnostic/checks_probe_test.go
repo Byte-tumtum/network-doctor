@@ -1680,9 +1680,11 @@ func (p *pipeNet) serve(t *testing.T, srv *http.Server, run func() error) {
 	})
 }
 
-// selfSignedCert mints a throwaway leaf for host plus the pool that trusts it,
+// selfSignedCert mints a throwaway leaf for hosts plus the pool that trusts it,
 // so a TLS round trip needs neither fixture files nor the host's trust store.
-func selfSignedCert(t *testing.T, host string) (tls.Certificate, *x509.CertPool) {
+// More than one name is for a fixture that has to answer as several endpoints
+// on one listener; the first is the subject.
+func selfSignedCert(t *testing.T, hosts ...string) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -1690,14 +1692,14 @@ func selfSignedCert(t *testing.T, host string) (tls.Certificate, *x509.CertPool)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: host},
+		Subject:               pkix.Name{CommonName: hosts[0]},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		DNSNames:              []string{host},
+		DNSNames:              hosts,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {

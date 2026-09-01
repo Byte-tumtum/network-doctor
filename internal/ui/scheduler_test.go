@@ -8,9 +8,12 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/heymaikol/network-doctor/internal/diagnostic"
 )
 
@@ -404,5 +407,82 @@ func TestRunProbeTimeoutIsPerModel(t *testing.T) {
 	m2.runProbe(reportBudget)()
 	if got := <-budget; got <= time.Minute {
 		t.Errorf("second model's probe budget = %v, want well over a minute", got)
+	}
+}
+
+// The TUI half of the concurrency invariant. Bubble Tea runs a batch's commands
+// on their own goroutines, so what this scheduler owes the run is a command per
+// ready probe, each of which does its work when it is called rather than when
+// it is built. A dispatcher that ran probes while assembling the batch would
+// turn the whole layer into one serial pass no matter what the runtime did.
+//
+// The gate is a barrier, not a stopwatch: every probe reports only once its
+// whole layer is in flight, so a serialized dispatcher deadlocks into its own
+// probe timeout instead of producing a wall-clock number a busy runner could
+// also produce.
+func TestScheduleStepDispatchesEveryReadyProbeConcurrently(t *testing.T) {
+	m := newModel(nil, false)
+	m.ctx = context.Background()
+	m.probeTimeout = 2 * time.Second
+
+	// Every probe below the interface row: the seven checks the generic DAG
+	// makes ready at once.
+	var siblings []diagnostic.Probe
+	for _, p := range m.probes {
+		if p.ID != diagnostic.ProbeIface {
+			siblings = append(siblings, p)
+		}
+	}
+	var arrived sync.WaitGroup
+	arrived.Add(len(siblings))
+	open := make(chan struct{})
+	go func() {
+		arrived.Wait()
+		close(open)
+	}()
+	var built atomic.Int32
+	for i, p := range m.probes {
+		if p.ID == diagnostic.ProbeIface {
+			m.probes[i].Run = func(context.Context, map[diagnostic.ProbeID]diagnostic.ProbeResult) diagnostic.ProbeResult {
+				return diagnostic.ProbeResult{Status: diagnostic.StatusPass}
+			}
+			continue
+		}
+		m.probes[i].Run = func(ctx context.Context, _ map[diagnostic.ProbeID]diagnostic.ProbeResult) diagnostic.ProbeResult {
+			built.Add(1)
+			arrived.Done()
+			select {
+			case <-open:
+				return diagnostic.ProbeResult{Status: diagnostic.StatusPass}
+			case <-ctx.Done():
+				return diagnostic.ProbeResult{Status: diagnostic.StatusFail, Detail: "the layer never had every probe in flight at once: " + ctx.Err().Error()}
+			}
+		}
+	}
+
+	m.results[diagnostic.ProbeIface] = diagnostic.ProbeResult{ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass}
+	m.started[diagnostic.ProbeIface] = true
+	cmds := m.scheduleStep()
+	if len(cmds) != len(siblings) {
+		t.Fatalf("scheduleStep dispatched %d commands, want one per ready probe (%d)", len(cmds), len(siblings))
+	}
+	// Assembling the batch must not have run anything: the work belongs to the
+	// command, which the runtime is free to place on its own goroutine.
+	if got := built.Load(); got != 0 {
+		t.Fatalf("%d probes ran while the batch was being built", got)
+	}
+
+	msgs := make(chan tea.Msg, len(cmds))
+	for _, cmd := range cmds {
+		go func() { msgs <- cmd() }()
+	}
+	for range cmds {
+		done, ok := (<-msgs).(probeDoneMsg)
+		if !ok {
+			t.Fatal("a dispatched command produced something other than a probe result")
+		}
+		if done.res.Status != diagnostic.StatusPass {
+			t.Errorf("%s: %s", done.id, done.res.Detail)
+		}
 	}
 }

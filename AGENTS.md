@@ -16,6 +16,8 @@ Real-socket tests must keep `integration` build tag, stay loopback-only. Ordinar
 
 After changing `internal/textsafe`, fuzz sanitizer: `go test -fuzz=FuzzSanitize -fuzztime=10s ./internal/textsafe`. After changing target parsing or the encrypted-DNS response verifier, fuzz it: `go test -fuzz=FuzzParseTarget -fuzztime=10s ./internal/diagnostic` or `go test -fuzz=FuzzEncryptedDNSResponseVerifier -fuzztime=10s ./internal/diagnostic`. After changing the Challenge Mode hunt generator, fuzz it: `go test -fuzz=FuzzGenerateHuntCase -fuzztime=10s ./internal/simulation`. `internal/ui/jobs_test.go` uses `GO_HELPER` subprocesses to verify process-group cancellation.
 
+Runtime is an invariant too: `internal/diagnostic/budget_test.go` pins the probe graph's stage count, proves both executors overlap independent probes, and bounds a healthy in-memory run. Budgets there are derived from `DefaultProbeTimeout` and `attemptDelay`, not from measured wall clock; if one fails, look for a new dependency edge, a serialized executor, or a probe that waits out a deadline before widening it.
+
 Diagnosis reasoning is also pinned against recorded evidence: `internal/diagnostic.ReplaySnapshot` recomputes a diagnosis from a stored `.ndoc` with no probes, and `testdata/field` holds the cases it is replayed against. See `testdata/field/README.md` before adding one.
 
 ## Cross-Platform Guidelines
