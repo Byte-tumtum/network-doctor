@@ -186,10 +186,29 @@ func replayResult(id ProbeID, status Status, check snapshot.Check) (ProbeResult,
 		if tunnel != TunnelUnknown && tunnel != TunnelDirect && tunnel != TunnelLikely && tunnel != TunnelKnown {
 			return ProbeResult{}, fmt.Errorf("unsupported route tunnel state %q", route.Tunnel)
 		}
+		// The next hop and the routing table are restored because the
+		// comparison that reads them is part of the reasoning replay
+		// recomputes: a stored path whose gateway was dropped here would come
+		// back looking on-link, and two flows the run recorded as routed apart
+		// would replay as taking one path. Table knowledge is restored beside
+		// the name for the same reason, since an artifact that named no table
+		// is unknown rather than the main one.
+		gateway, err := replayIP("route gateway", route.Gateway)
+		if err != nil {
+			return ProbeResult{}, err
+		}
+		source, err := replayIP("route source", route.Source)
+		if err != nil {
+			return ProbeResult{}, err
+		}
 		result.Routes = append(result.Routes, RouteDecision{
 			Destination: destination,
 			Family:      route.Family,
 			Iface:       route.Interface,
+			Gateway:     gateway,
+			Source:      source,
+			Table:       route.Table,
+			TableKnown:  route.TableKnown,
 			MTU:         route.InterfaceMTU,
 			Tunnel:      tunnel,
 			Unreachable: route.Unreachable,

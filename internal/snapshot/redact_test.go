@@ -48,7 +48,7 @@ func supportFixture() Snapshot {
 				Routes: []Route{{
 					Destination: "93.184.216.34", Family: "ipv4", Interface: "unique-wg-interface",
 					Gateway: "10.23.45.67", Source: "203.0.113.99", Prefix: "10.23.45.0/24",
-					Metric: &metric, Table: "unique-corporate-table", InterfaceMTU: 1420,
+					Metric: &metric, Table: "unique-corporate-table", TableKnown: true, InterfaceMTU: 1420,
 					Tunnel: "tunnel", TunnelKind: "wireguard", Reason: "lowest_metric",
 					Competing: []CompetingRoute{{Interface: "unique-ethernet-interface", Metric: 20}},
 				}},
@@ -157,6 +157,51 @@ func TestSupportPseudonymsPreserveRelationshipsAndRoundTrip(t *testing.T) {
 	}
 	if decoded.Redaction == nil || !decoded.Redaction.Sanitized || decoded.Redaction.Policy != SupportRedactionPolicy {
 		t.Fatalf("redaction metadata did not round trip: %+v", decoded.Redaction)
+	}
+}
+
+// Policy-routing evidence has to survive sanitization as evidence: the table
+// name is a local label and is replaced, the fact that the platform named one
+// is not and is kept, and the next hop the evidence names keeps the same
+// pseudonym as the route it is talking about. An artifact whose evidence no
+// longer matches its own rows is one the reader cannot check and the encoder
+// will not write.
+func TestSupportKeepsPolicyRoutingEvidenceCheckable(t *testing.T) {
+	original := supportFixture()
+	route := &original.Checks[0].Observed.Routes[0]
+	route.Gateway = "10.23.45.1"
+	// The row the evidence is talking about: general traffic leaves by another
+	// next hop on the same interface.
+	original.Checks = append(original.Checks, Check{
+		ID: "iface", Status: StatusPass, Ran: true, DurationMs: 2,
+		Observed: &Observed{Routes: []Route{{
+			Destination: "1.1.1.1", Family: "ipv4", Interface: "unique-ethernet-interface",
+			Gateway: "10.23.45.9", Tunnel: "direct",
+		}}},
+	})
+	original.Diagnosis.Findings[0].CausalEvidence = []CausalEvidence{
+		{Kind: EvidenceSupport, Check: "dns", Observation: ObservationRouteNextHopDiffers, Value: "10.23.45.9"},
+		{Kind: EvidenceSupport, Check: "dns", Observation: ObservationRouteTableDiffers},
+	}
+	safe := SanitizeForSupport(original)
+	safeRoute := safe.Checks[0].Observed.Routes[0]
+	if !safeRoute.TableKnown {
+		t.Error("sanitization dropped the fact that the platform named a routing table")
+	}
+	if safeRoute.Table == "" || safeRoute.Table == route.Table {
+		t.Errorf("routing table %q sanitized to %q, want a pseudonym", route.Table, safeRoute.Table)
+	}
+	named := safe.Diagnosis.Findings[0].CausalEvidence[0].Value
+	if safeRoute.Gateway == route.Gateway || safeRoute.Gateway == named {
+		t.Errorf("next hops lost their distinct pseudonyms: route=%q evidence=%q", safeRoute.Gateway, named)
+	}
+	if reference := safe.Checks[1].Observed.Routes[0].Gateway; named != reference {
+		t.Errorf("the next hop named by the evidence sanitized to %q, want the other row's %q", named, reference)
+	}
+	// Encode validates every observation against the row that carries it, so a
+	// redaction that broke either claim fails here.
+	if _, err := Encode(safe); err != nil {
+		t.Fatalf("sanitized policy-routing evidence no longer holds: %v", err)
 	}
 }
 

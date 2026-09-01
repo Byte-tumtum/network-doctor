@@ -350,10 +350,13 @@ type netops struct {
 	// routeCause classifies a failed direct path from OS route/neighbor state.
 	// Nil keeps deterministic probe unit tests independent of the host.
 	routeCause func(net.IP) string
-	// routeFor asks the operating system which route one destination takes.
-	// Nil, or a false second return, means this platform cannot answer, and
-	// every consumer then reports nothing rather than a guessed path.
-	routeFor func(net.IP) (RouteDecision, bool)
+	// routeFor asks the operating system which route one destination takes,
+	// from the local source address this pass's probes dial with, or from nil
+	// where the run binds nothing. Nil, or a false second return, means this
+	// platform cannot answer, and every consumer then reports nothing rather
+	// than a guessed path. A platform whose route API takes no source ignores
+	// the argument rather than pretending the constraint was applied.
+	routeFor func(dst, source net.IP) (RouteDecision, bool)
 	// defaultRoutes lists this family's usable default routes, which is what
 	// lets a decision name the competitor it beat. Nil on a platform that
 	// exposes no comparable preference.
@@ -425,7 +428,7 @@ func BuildProbesFromSources(t *Target, sources *SourceAddresses, publicDNS strin
 	// several probes, and a pass must not pay for the same kernel lookup more
 	// than once; a later pass must not be answered from an earlier one, since
 	// the whole point of Watch Mode is to see the route change.
-	o.routes = newRouteCache(o.routeFor)
+	o.routes = newRouteCache(o.routeFor, o.sources)
 	probes := o.buildProbes(t, publicDNS)
 	for i := range probes {
 		probes[i].Run = wrapRun(probes[i].Run)

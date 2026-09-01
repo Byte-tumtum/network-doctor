@@ -37,7 +37,23 @@ const (
 
 var procGetBestRoute2 = modiphlpapi.NewProc("GetBestRoute2")
 
-func lookupRouteDecision(dst net.IP) (RouteDecision, bool) {
+// lookupRouteDecision asks Windows which route one destination takes, for the
+// flow this run actually makes.
+//
+// source is the local address the pass binds its dials to, and GetBestRoute2
+// takes it as an input to the lookup rather than as a filter afterwards, which
+// is what makes the answer this flow's route and not merely the machine's.
+// Windows answers only for a source that is one of its own addresses, so a
+// call it rejects is retried unconstrained: the machine's own decision is what
+// every unbound run already records, and it beats no route intelligence.
+// Windows reporting that no route exists is not one of those rejections. That
+// is an answer, and it is this flow's answer, since the source is an address
+// the run's own sockets bind to.
+//
+// Nothing here fills Table. GetBestRoute2 returns the route it chose and not
+// the routing domain it chose it in, so the field stays unknown rather than
+// claiming the main table.
+func lookupRouteDecision(dst, source net.IP) (RouteDecision, bool) {
 	addr, ok := netip.AddrFromSlice(dst)
 	if !ok {
 		return RouteDecision{}, false
@@ -46,12 +62,33 @@ func lookupRouteDecision(dst net.IP) (RouteDecision, bool) {
 	if err := procGetBestRoute2.Find(); err != nil {
 		return RouteDecision{}, false
 	}
+	src, constrained := netip.AddrFromSlice(source)
+	if src = src.Unmap(); !constrained || src.Is4() != addr.Is4() {
+		constrained = false
+	}
+	decision, ok := bestRoute(addr, src, constrained)
+	if !ok && constrained {
+		return bestRoute(addr, netip.Addr{}, false)
+	}
+	return decision, ok
+}
+
+// bestRoute performs one GetBestRoute2 call, optionally from a chosen source.
+func bestRoute(addr, src netip.Addr, constrained bool) (RouteDecision, bool) {
 	destination := sockaddrInet(addr)
+	// A nil source is the call's own way of saying "no constraint, select one
+	// too", so the pointer is built here and converted inside the call rather
+	// than parked in a uintptr.
+	var from *windows.RawSockaddrInet
+	if constrained {
+		sa := sockaddrInet(src)
+		from = &sa
+	}
 	var best windows.MibIpForwardRow2
 	var bestSource windows.RawSockaddrInet
 	code, _, _ := syscall.SyscallN(procGetBestRoute2.Addr(),
 		0, 0, // no interface constraint: ask for the machine's own decision
-		0, // no source constraint, so Windows selects the source too
+		uintptr(unsafe.Pointer(from)),
 		uintptr(unsafe.Pointer(&destination)),
 		0, // AddressSortOptions
 		uintptr(unsafe.Pointer(&best)),

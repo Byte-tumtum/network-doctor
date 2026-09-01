@@ -756,12 +756,13 @@ func TestRoundTripPreservesRouteDecisions(t *testing.T) {
 		{
 			Destination: "198.51.100.7", Family: "ipv4", Interface: "wg0",
 			Source: "10.20.0.2", Prefix: "10.20.0.0/16", Metric: metricOf(0),
-			Table: "table 51820", InterfaceMTU: 1420, Tunnel: TunnelStateTunnel,
+			Table: "table 51820", TableKnown: true, InterfaceMTU: 1420, Tunnel: TunnelStateTunnel,
 			TunnelKind: "wireguard", Reason: "more_specific_than_default",
 			Competing: []CompetingRoute{{Interface: "wlan0", Metric: 600}},
 		},
 		{Destination: "2001:db8::7", Family: "ipv6", Unreachable: true},
 		{Destination: "192.168.1.1", Family: "ipv4", Interface: "eth0", Gateway: "192.168.1.1", Tunnel: TunnelStateDirect},
+		{Destination: "1.1.1.1", Family: "ipv4", Interface: "eth0", TableKnown: true},
 	}
 	s := Snapshot{Schema: Schema, Checks: []Check{routeCheck("target_tcp", routes...)}}
 	data, err := Encode(s)
@@ -789,6 +790,36 @@ func TestRoundTripPreservesRouteDecisions(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"interface_mtu":0`) {
 		t.Errorf("an unknown interface MTU was written as zero:\n%s", data)
+	}
+	// The main table is a named table with an empty name, so the flag is the
+	// only thing separating "the OS said main" from "the OS said nothing".
+	if !got[0].TableKnown || got[0].Table != "table 51820" {
+		t.Errorf("a named non-main table came back as %q/%v", got[0].Table, got[0].TableKnown)
+	}
+	if !got[3].TableKnown || got[3].Table != "" {
+		t.Errorf("a known main table came back as %q/%v, want a known empty name", got[3].Table, got[3].TableKnown)
+	}
+	if got[1].TableKnown || got[2].TableKnown {
+		t.Error("a route the platform said nothing about came back claiming a routing table")
+	}
+	if strings.Contains(string(data), `"table_known":false`) {
+		t.Errorf("an unknown routing table was written as a field:\n%s", data)
+	}
+}
+
+// A snapshot written before routing tables were distinguishable reads as
+// "unknown" rather than as the main table, which is the reading that would
+// silently make every old artifact agree with a machine that has no policy
+// routing at all.
+func TestDecodePreTableKnowledgeV1ReadsAsUnknown(t *testing.T) {
+	data := []byte(`{"schema":"` + Schema + `","checks":[{"id":"target_tcp","status":"FAIL","ran":true,"duration_ms":1,` +
+		`"observed":{"routes":[{"destination":"198.51.100.7","family":"ipv4","interface":"eth0"}]}}],"ok":false}`)
+	s, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode pre-table v1: %v", err)
+	}
+	if route := s.Checks[0].Observed.Routes[0]; route.TableKnown {
+		t.Errorf("an old snapshot gained table knowledge: %+v", route)
 	}
 }
 
@@ -820,7 +851,14 @@ func TestRouteObservationsAreVerifiedAgainstTheirOwnRow(t *testing.T) {
 	tunnel := Route{Destination: "198.51.100.7", Family: "ipv4", Interface: "wg0", Tunnel: TunnelStateTunnel, TunnelKind: "wireguard", InterfaceMTU: 1420}
 	direct := Route{Destination: "1.1.1.1", Family: "ipv4", Interface: "eth0", Tunnel: TunnelStateDirect}
 	v6 := Route{Destination: "2001:db8::7", Family: "ipv6", Interface: "eth0", Tunnel: TunnelStateDirect}
+	v6main := Route{Destination: "2001:db8::7", Family: "ipv6", Interface: "eth0", TableKnown: true, Tunnel: TunnelStateDirect}
 	noRoute := Route{Destination: "203.0.113.9", Family: "ipv4", Unreachable: true}
+	viaRouter := Route{Destination: "1.1.1.1", Family: "ipv4", Interface: "eth0", Gateway: "10.0.0.1", Tunnel: TunnelStateDirect}
+	policy := Route{Destination: "1.1.1.1", Family: "ipv4", Interface: "eth0", Table: "table 51820", TableKnown: true, Tunnel: TunnelStateDirect}
+	mainTable := Route{Destination: "1.1.1.1", Family: "ipv4", Interface: "eth0", TableKnown: true, Tunnel: TunnelStateDirect}
+	ownTable := Route{Destination: "127.0.0.1", Family: "ipv4", Interface: "lo", Table: "local", TableKnown: true, Tunnel: TunnelStateDirect}
+	v6own := Route{Destination: "::1", Family: "ipv6", Interface: "lo", Table: "local", TableKnown: true, Tunnel: TunnelStateDirect}
+	v4own := Route{Destination: "127.0.0.1", Family: "ipv4", Interface: "lo", TableKnown: true, Tunnel: TunnelStateDirect}
 	cases := []struct {
 		name  string
 		check Check
@@ -837,7 +875,19 @@ func TestRouteObservationsAreVerifiedAgainstTheirOwnRow(t *testing.T) {
 		{"path differs from the named other path", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRoutePathDiffers, Value: "wg0"}, true},
 		{"path differs from itself", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRoutePathDiffers, Value: "eth0"}, false},
 		{"path differs with no other path named", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRoutePathDiffers}, false},
+		{"next hop differs from the named other next hop", routeCheck("dns", viaRouter), CausalEvidence{Observation: ObservationRouteNextHopDiffers, Value: "192.168.1.1"}, true},
+		{"next hop differs from itself", routeCheck("dns", viaRouter), CausalEvidence{Observation: ObservationRouteNextHopDiffers, Value: "10.0.0.1"}, false},
+		{"next hop differs with no other next hop named", routeCheck("dns", viaRouter), CausalEvidence{Observation: ObservationRouteNextHopDiffers}, false},
+		{"next hop differs claimed on a row with no next hop", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRouteNextHopDiffers, Value: "192.168.1.1"}, false},
+		{"another routing table on the row that used one", routeCheck("dns", policy), CausalEvidence{Observation: ObservationRouteTableDiffers}, true},
+		{"another routing table claimed on a main-table row", routeCheck("dns", mainTable), CausalEvidence{Observation: ObservationRouteTableDiffers}, false},
+		{"another routing table claimed where none was read", routeCheck("dns", direct), CausalEvidence{Observation: ObservationRouteTableDiffers}, false},
+		{"another routing table claimed for the kernel's own local one", routeCheck("dns", ownTable), CausalEvidence{Observation: ObservationRouteTableDiffers}, false},
 		{"families on different interfaces", routeCheck("target_tcp", tunnel, v6), CausalEvidence{Observation: ObservationRouteFamilySplit}, true},
+		{"families in different known tables", routeCheck("target_tcp", policy, v6main), CausalEvidence{Observation: ObservationRouteFamilySplit}, true},
+		{"families in the same known table", routeCheck("target_tcp", mainTable, v6main), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
+		{"families whose tables are not both known", routeCheck("target_tcp", policy, v6), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
+		{"localhost in the kernel's own two tables", routeCheck("target_tcp", v4own, v6own), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
 		{"families on the same interface", routeCheck("target_tcp", direct, v6), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
 		{"single stack claims no split", routeCheck("target_tcp", direct), CausalEvidence{Observation: ObservationRouteFamilySplit}, false},
 		{"interface MTU on the row that has one", routeCheck("target_tcp", tunnel), CausalEvidence{Observation: ObservationRouteInterfaceMTU, Value: "wg0"}, true},

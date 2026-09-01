@@ -708,15 +708,17 @@ The whole `ssh` subtree inherits the askpass setting, so with `ProxyJump` in you
 
 `INCOMPLETE` is the one status value no probe can return, and it carries the same meaning here as it does in [a snapshot](#diagnostic-snapshots). The check was in the run's check set but never reported a result at all, which is what a cancelled or interrupted run leaves behind. It is not a `SKIP`: nothing decided to leave it out, the run ended first. An `INCOMPLETE` row is never a pass, and a report holding one is never `"ok": true`, so the absence of an observation can never be read as a passing check. The row itself is still emitted, so a reader can see that the check existed and was not reached.
 
-`routes` is the operating system's own route decision for each destination the check was about, one entry per address, since route selection is per address and not per hostname. netdoc asks the kernel the same question `ip route get` asks and records the answer; it does not read a routing table and re-run the selection itself, and it never dumps one. The lookups are unprivileged and bounded: the general Internet endpoints on the `iface` row, the system resolver on the `dns` row, and each resolved target address on the `target_tcp` row.
+`routes` is the operating system's own route decision for each destination the check was about, one entry per address, since route selection is per address and not per hostname. netdoc asks the kernel the same question `ip route get` asks and records the answer; it does not read a routing table and re-run the selection itself, and it never dumps one. The lookups are unprivileged and bounded: the general Internet endpoints on the `iface` row, the system resolver on the `dns` row, and each resolved target address on the `target_tcp` row. They describe netdoc's own flows: under `--iface` or an explicit source address every dial in the run leaves from a chosen local address, and the lookup carries that source too on the platforms whose route API accepts one, so a rule selecting on source address is resolved the same way it would be for the real connection. Linux passes it to the FIB lookup and Windows passes it to `GetBestRoute2`; a macOS routing socket takes no source, so the answer there is the machine's own decision for the destination, as it is for any unbound run.
 
-Each entry carries `destination`, `family`, and whatever the platform supplied: `interface`, `gateway` (absent when the destination is on-link), `source`, `prefix` (the route entry that matched), `metric`, `table`, `interface_mtu`, `tunnel`, `tunnel_kind`, `unreachable`, `reason`, and `competing`. An absent field means the platform did not supply it and is never to be read as zero, which is why `metric` is omitted rather than written as `0` where none was reported. `routes` itself is absent on a platform netdoc cannot ask, which is not the same as having no route: `"unreachable": true` is how "no route" is said.
+Each entry carries `destination`, `family`, and whatever the platform supplied: `interface`, `gateway` (absent when the destination is on-link), `source`, `prefix` (the route entry that matched), `metric`, `table`, `table_known`, `interface_mtu`, `tunnel`, `tunnel_kind`, `unreachable`, `reason`, and `competing`. An absent field means the platform did not supply it and is never to be read as zero, which is why `metric` is omitted rather than written as `0` where none was reported. `routes` itself is absent on a platform netdoc cannot ask, which is not the same as having no route: `"unreachable": true` is how "no route" is said.
 
 `tunnel` is `tunnel` when the operating system itself names the device an encapsulating kind (`tunnel_kind` then carries which: `wireguard`, `tun`, `gre`, `ppp`, and so on), `likely` when the link only has the shape of one, and `direct` for an ordinary interface. It is absent when nothing classified the interface, which reads as unknown and not as direct. There is no list of VPN product names anywhere in netdoc; a product that installs an ordinary Ethernet device is deliberately not detected rather than guessed at.
 
+`table` names the routing table or routing domain the decision came from, and `table_known` is whether the platform named one at all. The two are needed together because the main table is written as an absent `table`: an operating system that says "this came from the main table" and one that says nothing about routing domains both leave the field out, and only `table_known` tells them apart. Linux reports the table the FIB lookup resolved the destination in, so `table_known` is true there and a policy table keeps its number, which is the whole point of recording it. macOS and Windows expose no routing domain in their route APIs, so `table_known` is absent on both and a reader must take that as unknown rather than as the main table. A snapshot written before the field existed has no table knowledge either, which is the same unknown. A table the operating system consults on its own is not a routing domain anything selected, and comparisons read it as the ordinary case: a Linux machine with no policy routing at all resolves its own addresses in `local` and everything else in `main`, so localhost lands in a different table per family, and treating that as a difference would report one on every dual-stack host. A selected table outside that set is evidence that the kernel resolved this flow through another routing domain, and it is not evidence of which rule, firewall mark, VRF, or application policy sent it there: a route lookup does not report that, and netdoc does not read policy rules on any platform.
+
 `prefix` is the route entry the operating system said it matched, and it is present only where the platform reports one. macOS and Windows do; Linux does not. A Linux route lookup echoes the length the query asked about rather than the length of the entry it matched, so every answer to a host lookup comes back at the full address length whatever the table holds. Reading that back as a matched prefix would report every destination as a host route, so the field stays absent there rather than carrying a number the kernel never meant. Everything that follows from a named entry follows only on the platforms that name one: `competing` and a `lower_metric` reason need both the entry and a preference metric, so they come from Windows alone today, and even there the list is the other default routes that were available rather than an enumeration of every route that could have covered the destination. netdoc reads no policy rules on any platform.
 
-`reason` is the only derived field, and it is what answers where `prefix` cannot. It is drawn from the route entry where the platform names one, and otherwise from comparing this destination's decision with the decision the same kernel gave for general Internet traffic, which is two answers from the operating system rather than a guess about its table. Those two kinds of evidence do not support the same claims, and the vocabulary keeps them apart. `default_route` (the destination matched the default route), `more_specific_than_default` (a narrower entry than a default route matched it, which is the split-tunnel case at the level of the routing table), `host_route`, and `lower_metric` are statements about which entry won, and are reported only where the platform named it. `same_path_as_default` (this destination leaves by the same interface and next hop as general Internet traffic) and `differs_from_default_path` (it leaves by a different one) are the weaker answers available where the entry is unnamed, and they say nothing about why. That distinction is not pedantry: a policy rule, a separate routing table, a VRF, source-specific routing, or a multipath route choosing another next hop each send one destination down a different path with no narrower prefix anywhere in it, and a rule pointing at a table whose winning entry is itself a default route is indistinguishable from here. `on_link` (no next hop between here and the destination) and `no_route` are read from the decision itself on every platform. `interface_mtu` is the selected link's own MTU and is never the end-to-end path MTU, which only the `path_mtu` row measures.
+`reason` is the only derived field, and it is what answers where `prefix` cannot. It is drawn from the route entry where the platform names one, and otherwise from comparing this destination's decision with the decision the same kernel gave for general Internet traffic, which is two answers from the operating system rather than a guess about its table. Those two kinds of evidence do not support the same claims, and the vocabulary keeps them apart. `default_route` (the destination matched the default route), `more_specific_than_default` (a narrower entry than a default route matched it, which is the split-tunnel case at the level of the routing table), `host_route`, and `lower_metric` are statements about which entry won, and are reported only where the platform named it. `same_path_as_default` (this destination leaves by the same interface and next hop as general Internet traffic, and out of the same routing table where the platform named one) and `differs_from_default_path` (it leaves by a different interface, a different next hop, or a different named routing table) are the weaker answers available where the entry is unnamed, and they say nothing about why. That distinction is not pedantry: a policy rule, a separate routing table, a VRF, source-specific routing, or a multipath route choosing another next hop each send one destination down a different path with no narrower prefix anywhere in it, and a rule pointing at a table whose winning entry is itself a default route is indistinguishable from here. `on_link` (no next hop between here and the destination) and `no_route` are read from the decision itself on every platform. `interface_mtu` is the selected link's own MTU and is never the end-to-end path MTU, which only the `path_mtu` row measures.
 
 Resolver failures can add `dns_timeout` or `dns_temporary_failure`; a target TCP
 check whose every attempted address explicitly refuses the connection adds
@@ -803,14 +805,14 @@ The observation vocabulary is `status_pass`, `status_warn`, `status_fail`,
 `dns_not_found`, `captive_portal`, `timeout`, `clock_offset`,
 `status_downgraded`, `family_reachable`, `family_failed`,
 `address_succeeded`, `address_failed`, `route_tunneled`, `route_direct`,
-`route_unreachable`, `route_path_differs`, `route_family_split`, and
-`route_interface_mtu`. Not-evaluated reasons are `prerequisite_failed`,
+`route_unreachable`, `route_path_differs`, `route_next_hop_differs`,
+`route_table_differs`, `route_family_split`, and `route_interface_mtu`. Not-evaluated reasons are `prerequisite_failed`,
 `not_selected`, `not_applicable`, and `incomplete`. A skipped, not-applicable,
 missing, or incomplete check is never enough to rule out a cause. An absent
 `causal_evidence` field means this producer did not record an explanation; it
 does not mean the listed alternatives were tested.
 
-The six `route_*` observations describe the path a row's own traffic took, and
+The eight `route_*` observations describe the path a row's own traffic took, and
 each is a fact about that one row: which interface it left by, whether that
 interface encapsulates, and whether the operating system had a route at all.
 None of them is a verdict. A tunnel is not a fault, and no diagnosis is reached
@@ -820,7 +822,18 @@ rows took different paths, it is recorded as two observations, one on each row,
 because a single item must be checkable against the row that carries it:
 `route_path_differs` on the `dns` row names the target's interface in `value`,
 and a split tunnel appears as `route_tunneled` on one row beside `route_direct`
-on the other. Both of those read exactly as strongly as the row's `tunnel`
+on the other. Two flows can leave by one interface and still be routed apart,
+which is what the other two path observations are for. `route_next_hop_differs`
+is this row being handed to a router other than the one named in `value`, down
+what is otherwise the same link, and it is reported only where both paths have
+a next hop, since "on-link here, through the router there" is the ordinary
+shape of a destination on the local network rather than a routing decision
+worth reporting. `route_table_differs` is the kernel having resolved this row's
+destination in a named routing table other than the ones it consults by
+itself, which is evidence that another routing domain was selected and never
+evidence of what selected it; it carries no `value`, because the fact is about
+this row's own table and the other side is either an ordinary table or
+unknown. Both of those read exactly as strongly as the row's `tunnel`
 state: where the operating system named the device kind, the app says the
 traffic left through that tunnel, and where only the link's shape suggested it,
 the app says the link has the shape of one, since a mobile broadband modem has
@@ -829,9 +842,13 @@ never a proof that nothing encapsulates the path, which is why a VPN presenting
 an ordinary Ethernet device is not detected. A resolver on loopback records no
 path at all: a local stub is reached over `lo` by definition, so it would
 always look like a different path while its own upstream path, the one that
-matters, stays invisible. `route_interface_mtu` reports that the selected link
-is narrower than the one general traffic uses; it is the link's own MTU, never
-a measured path MTU.
+matters, stays invisible. `route_family_split` is one target's two
+families taking materially different routes, compared on the dimensions that
+are not family-scoped: the interface and a routing domain something selected. A next hop
+and a source address are different in IPv4 than in IPv6 on every dual-stack
+host, so neither can be a split. `route_interface_mtu` reports that the
+selected link is narrower than the one general traffic uses; it is the link's
+own MTU, never a measured path MTU.
 
 The same interpretation branch creates the diagnosis and its causal items.
 There is no pass that receives a final diagnosis ID and reconstructs plausible
@@ -1128,7 +1145,7 @@ Treat the file as network information about the machine that produced it. It del
 - the target hostname as typed, which may be a private or internal name
 - the proxy host and port from `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`, where one is configured
 - the second-opinion resolver, and the local clock's offset from the captive-portal endpoint's
-- per-destination route decisions under `observed.routes`: the interface chosen, the next hop, the local source address, the matched prefix, the routing table's name, and the interfaces of any competing default routes. These describe the local network's shape, and a tunnel's device kind says a VPN is in use
+- per-destination route decisions under `observed.routes`: the interface chosen, the next hop, the local source address, the matched prefix, the routing table's name and whether the platform named one, and the interfaces of any competing default routes. These describe the local network's shape, and a tunnel's device kind says a VPN is in use
 
 It contains no credentials. Userinfo in a target is rejected by the parser before a run starts, and the proxy rows record only the proxy's host and port, never the username or password from a proxy URL. Probe text is sanitized on the way out of the runner, so a hostile hostname or server banner lands in the file as inert bytes.
 

@@ -187,6 +187,7 @@ func snapshotRoutes(routes []RouteDecision) []snapshot.Route {
 			Family:       r.Family,
 			Interface:    r.Iface,
 			Table:        r.Table,
+			TableKnown:   r.TableKnown,
 			InterfaceMTU: r.MTU,
 			Tunnel:       string(r.Tunnel),
 			TunnelKind:   r.TunnelKind,

@@ -271,7 +271,7 @@ func TestRouteObservationsRenderAsPathSentences(t *testing.T) {
 		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeDNS,
 			Observation: diagnostic.ObservationRoutePathDiffers, Value: "wg0"}, "different path from the target traffic on wg0", "!"},
 		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
-			Observation: diagnostic.ObservationRouteFamilySplit}, "IPv4 and IPv6 over different interfaces", "!"},
+			Observation: diagnostic.ObservationRouteFamilySplit}, "IPv4 and IPv6 over materially different routes", "!"},
 		{diagnostic.CausalEvidence{Kind: diagnostic.EvidenceSupport, Check: diagnostic.ProbeTargetTCP,
 			Observation: diagnostic.ObservationRouteInterfaceMTU, Value: "wg0"}, "link MTU is smaller than the general path's", "!"},
 	} {

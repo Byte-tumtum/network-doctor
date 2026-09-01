@@ -68,14 +68,16 @@ const (
 	// prove that prefix length is what decided it.
 	RouteReasonMoreSpecific RouteReason = "more_specific_than_default"
 	// RouteReasonSamePathAsDefault is this destination leaving by the same
-	// interface and next hop that general Internet traffic leaves by. It says
+	// interface and next hop that general Internet traffic leaves by, and,
+	// where the platform names one, out of the same routing table. It says
 	// nothing about which entry matched, because a platform that names no
 	// prefix cannot tell a default route from a narrower one pointing the same
 	// way.
 	RouteReasonSamePathAsDefault RouteReason = "same_path_as_default"
 	// RouteReasonDiffersFromDefault is this destination leaving by a different
-	// interface or next hop than general Internet traffic, with no evidence of
-	// what made the kernel choose differently.
+	// interface or next hop than general Internet traffic, or out of a
+	// different routing table where the platform names one, with no evidence
+	// of what made the kernel choose differently.
 	//
 	// This is the honest answer where the matched entry is unnamed, and it is
 	// deliberately weaker than more_specific_than_default. A policy rule, a
@@ -136,8 +138,16 @@ type RouteDecision struct {
 	Metric      int
 	MetricKnown bool
 	// Table names the routing table or routing domain the decision came from,
-	// empty where the platform has one table or does not say which it used.
+	// and is meaningful only with TableKnown. The main table is spelled as the
+	// empty string, since a decision from it is the unremarkable case.
 	Table string
+	// TableKnown is the platform having said which routing table or routing
+	// domain resolved this destination. It is what keeps "the kernel told us
+	// this came from the main table" apart from "this platform never said",
+	// which are the same empty Table and must never compare as equal: only
+	// Linux answers this today, and reading Windows' or Darwin's silence as
+	// the main table would invent a routing domain neither API reported.
+	TableKnown bool
 	// MTU is the selected interface's MTU. It is the link's own number and is
 	// never a claim about the end-to-end path MTU; the path_mtu probe is the
 	// only thing that measures that.
@@ -281,11 +291,139 @@ func beatsDefaultElsewhere(r, reference RouteDecision) bool {
 		r.Iface != "" && reference.Iface != "" && r.Iface != reference.Iface
 }
 
-// samePath reports that two decisions leave by the same interface through the
-// same next hop, which is as much as a platform that names no matched entry
-// can say about two destinations taking the same way out.
+// pathAgreement is what comparing one dimension of two selected paths
+// established. The zero value is the important one: a dimension neither
+// decision can be compared on is not agreement, and treating it as agreement
+// is how an unknown routing table comes to read as the main one.
+type pathAgreement uint8
+
+const (
+	pathNotComparable pathAgreement = iota
+	pathSame
+	pathDiffers
+)
+
+func pathAgreementOf(same bool) pathAgreement {
+	if same {
+		return pathSame
+	}
+	return pathDiffers
+}
+
+// pathComparison is two route decisions held side by side, dimension by
+// dimension, rather than collapsed into one boolean. The dimensions are the
+// ones that describe route selection itself, and each is answered separately
+// because they are known separately: an operating system that names the
+// interface and the next hop may say nothing at all about routing domains, and
+// a comparison that folded them together could not tell "the tables agree"
+// from "nobody asked".
+//
+// It is deliberately not every field of a RouteDecision. Tunnel state is a
+// property of the interface, so two paths down one interface always share it;
+// MTU is the link's, not the route's; the matched prefix and the metric
+// explain why one entry won rather than where the packet goes.
+type pathComparison struct {
+	// Iface is the egress interface, which every platform that answers at all
+	// reports.
+	Iface pathAgreement
+	// NextHop is the router the packet is handed to, where nil is the kernel
+	// saying "on-link" rather than saying nothing: all three collectors omit
+	// the gateway exactly when the destination is directly attached.
+	NextHop pathAgreement
+	// Table is the routing table or routing domain that resolved the
+	// destination, comparable only where both sides' platform named one.
+	Table pathAgreement
+	// Source is the local address the kernel would send from. It is recorded
+	// because differing source selection is a real observation, and it is
+	// deliberately kept out of every verdict below: two addresses on one
+	// interface are chosen between by ordinary source-address selection rather
+	// than by routing policy, and the three platforms do not even mean the
+	// same thing by it, Darwin reporting the interface's address rather than a
+	// per-flow choice. It is comparable only within one address family, since
+	// the two families never share a source.
+	Source pathAgreement
+}
+
+// routingDomain is the routing table dimension as a comparison can use it,
+// with the tables the kernel consults on its own reading as the ordinary case.
+//
+// A Linux machine with no policy routing whatsoever still resolves in three
+// tables: local for its own addresses, main for everything else, and default.
+// A flow that landed in one of those was not sent there by a rule, and reading
+// the difference between them as a difference in routing would report one on
+// every dual-stack host that talks to itself, since the kernel answers for
+// 127.0.0.1 out of main and for ::1 out of local. Only a table outside that
+// set is a routing domain that something selected.
+//
+// The names are the Linux collector's, which is the only one that fills this
+// field, and a platform that named no table is still unknown here.
+func routingDomain(r RouteDecision) (string, bool) {
+	if !r.TableKnown {
+		return "", false
+	}
+	switch r.Table {
+	case "", "local", "default":
+		return "", true
+	}
+	return r.Table, true
+}
+
+// comparePaths reads two kernel decisions against each other. It answers
+// nothing at all where either side is not a decision: an empty interface is
+// the zero value a platform netdoc could not ask leaves behind, and comparing
+// against it would turn silence into agreement.
+func comparePaths(a, b RouteDecision) pathComparison {
+	var out pathComparison
+	if a.Iface == "" || b.Iface == "" {
+		return out
+	}
+	out.Iface = pathAgreementOf(a.Iface == b.Iface)
+	out.NextHop = pathAgreementOf(a.Gateway.Equal(b.Gateway))
+	domainA, knownA := routingDomain(a)
+	domainB, knownB := routingDomain(b)
+	if knownA && knownB {
+		out.Table = pathAgreementOf(domainA == domainB)
+	}
+	if a.Family == b.Family && a.Source != nil && b.Source != nil {
+		out.Source = pathAgreementOf(a.Source.Equal(b.Source))
+	}
+	return out
+}
+
+// differs is the question the rest of the package asks: did the kernel make
+// materially different route decisions for these two destinations. Three
+// dimensions answer it, and each one alone is enough, because each is the
+// kernel sending the two flows somewhere different: out of another interface,
+// to another router, or through another routing domain.
+//
+// The second return is whether there was anything to compare, and it stays
+// false rather than reporting agreement when there was not.
+func (c pathComparison) differs() (bool, bool) {
+	if c.Iface == pathNotComparable {
+		return false, false
+	}
+	return c.Iface == pathDiffers || c.NextHop == pathDiffers || c.Table == pathDiffers, true
+}
+
+// familyDiffers is the same question asked across two address families, where
+// only the family-neutral dimensions can be asked. Every dual-stack host uses
+// a different next hop and a different source for IPv4 than for IPv6, so
+// reading either as a split would report one on every machine that has both.
+// A routing domain is not family-scoped in that way, and comparing it is what
+// lets one family routed through a policy table be seen even where the
+// interface names agree.
+func (c pathComparison) familyDiffers() (bool, bool) {
+	if c.Iface == pathNotComparable {
+		return false, false
+	}
+	return c.Iface == pathDiffers || c.Table == pathDiffers, true
+}
+
+// samePath reports that two decisions took the same way out, which is as much
+// as a platform that names no matched entry can say about two destinations.
 func samePath(a, b RouteDecision) bool {
-	return a.Iface == b.Iface && a.Gateway.Equal(b.Gateway)
+	differs, known := comparePaths(a, b).differs()
+	return known && !differs
 }
 
 // routeCache memoizes the operating system's route answers for the length of
@@ -296,9 +434,18 @@ func samePath(a, b RouteDecision) bool {
 // It is created per BuildProbesFromSources call, which is once per pass, so
 // Watch Mode gets a fresh cache every time and a route that really changes
 // between passes is seen as a change rather than served from here.
+//
+// It also carries the pass's source binding, because the route netdoc reports
+// has to be the route netdoc's own traffic took. Under --iface every dial in
+// the pass leaves from a chosen local address, and on the platforms whose
+// route API accepts a source, asking without one describes a flow the run
+// never made: a rule selecting on source address would send the real
+// connection somewhere else entirely. The binding is fixed for the pass, so it
+// lives here rather than in the cache key.
 type routeCache struct {
-	lookup func(net.IP) (RouteDecision, bool)
-	mu     sync.Mutex
+	lookup  func(dst, source net.IP) (RouteDecision, bool)
+	sources *SourceAddresses
+	mu      sync.Mutex
 	// answers holds a pointer so that "the platform could not answer" is
 	// cached as nil rather than retried by every later probe.
 	answers map[string]*RouteDecision
@@ -308,8 +455,20 @@ type routeCache struct {
 	reference     []RouteDecision
 }
 
-func newRouteCache(lookup func(net.IP) (RouteDecision, bool)) *routeCache {
-	return &routeCache{lookup: lookup, answers: map[string]*RouteDecision{}}
+func newRouteCache(lookup func(dst, source net.IP) (RouteDecision, bool), sources *SourceAddresses) *routeCache {
+	return &routeCache{lookup: lookup, sources: sources, answers: map[string]*RouteDecision{}}
+}
+
+// sourceFor is the local address this pass's probes dial a destination of this
+// family from, and nil when the run binds nothing and lets the kernel choose.
+func (c *routeCache) sourceFor(dst net.IP) net.IP {
+	if c.sources == nil {
+		return nil
+	}
+	if dst.To4() != nil {
+		return c.sources.IPv4
+	}
+	return c.sources.IPv6
 }
 
 func (c *routeCache) get(dst net.IP) (RouteDecision, bool) {
@@ -325,7 +484,7 @@ func (c *routeCache) get(dst net.IP) (RouteDecision, bool) {
 		}
 		return *cached, true
 	}
-	decision, ok := c.lookup(dst)
+	decision, ok := c.lookup(dst, c.sourceFor(dst))
 	if !ok {
 		c.answers[key] = nil
 		return RouteDecision{}, false
@@ -501,18 +660,11 @@ func selectedTargetRoute(res map[ProbeID]ProbeResult) (RouteDecision, bool) {
 // pathsDiffer reports whether two selected paths leave this machine
 // differently, and says nothing when either path is unknown.
 //
-// The comparison is the selected interface and nothing else. Tunnel state
-// cannot add to it: the two paths are classified by the same table on the same
-// host, so one interface name has one state, and comparing states where the
-// names already match could only ever answer "no". A policy rule that splits
-// two destinations down the same interface is real and is not visible here,
-// which is why this reports a difference and never the absence of one.
-func pathsDiffer(a, b RouteDecision) (bool, bool) {
-	if a.Iface == "" || b.Iface == "" {
-		return false, false
-	}
-	return a.Iface != b.Iface, true
-}
+// Tunnel state is deliberately not one of the dimensions: the two paths are
+// classified by the same table on the same host, so one interface name has one
+// state, and comparing states where the names already match could only ever
+// answer "no".
+func pathsDiffer(a, b RouteDecision) (bool, bool) { return comparePaths(a, b).differs() }
 
 // splitTunnelState says how the target's path relates to the path general
 // traffic takes, in a vocabulary a diagnosis and a comparison can share.
@@ -539,12 +691,12 @@ const (
 	SplitTargetBypassesTunnel = "target_bypasses_tunnel"
 )
 
-// familyPathsDiffer reports whether the target's IPv4 and IPv6 addresses leave
-// by different interfaces. It needs a decision in both families to say
+// familyPathsDiffer reports whether the target's IPv4 and IPv6 addresses take
+// materially different routes. It needs a decision in both families to say
 // anything, which a single-stack host never has.
 func familyPathsDiffer(routes []RouteDecision) (bool, bool) {
 	v4, v6 := routeByFamily(routes, counterfactualIPv4), routeByFamily(routes, counterfactualIPv6)
-	return pathsDiffer(v4, v6)
+	return comparePaths(v4, v6).familyDiffers()
 }
 
 // narrowerPathMTU reports the target path's interface MTU when it is smaller
@@ -575,6 +727,12 @@ func (r RouteDecision) Summary() string {
 	}
 	if r.Gateway != nil {
 		parts = append(parts, "via "+r.Gateway.String())
+	}
+	// The routing domain, only where a rule selected one. The tables the
+	// kernel consults by itself are the unremarkable case, and printing one on
+	// every row would be noise.
+	if domain, _ := routingDomain(r); domain != "" {
+		parts = append(parts, domain)
 	}
 	if r.Tunneled() {
 		kind := r.TunnelKind

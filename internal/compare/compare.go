@@ -720,7 +720,11 @@ func diffRoutes(d *diff, id, path string, before, after []snapshot.Route) {
 		// Metric is absent on a platform that reports none, and 0 is a real
 		// metric, so the two are spelled differently rather than both as "0".
 		d.field(SectionCheck, id, routePath+"metric", label+"metric", metricWord(b.Metric), metricWord(a.Metric))
+		// The routing domain, and separately whether the platform named one at
+		// all. Both matter: a run that stops reporting a table has lost the
+		// knowledge, which is not the same as having moved to the main one.
 		d.field(SectionCheck, id, routePath+"table", label+"routing table", b.Table, a.Table)
+		d.field(SectionCheck, id, routePath+"table_known", label+"named routing table", yesNo(b.TableKnown), yesNo(a.TableKnown))
 		d.field(SectionCheck, id, routePath+"tunnel", label+"tunnel state", b.Tunnel, a.Tunnel)
 		d.field(SectionCheck, id, routePath+"tunnel_kind", label+"tunnel kind", b.TunnelKind, a.TunnelKind)
 		d.field(SectionCheck, id, routePath+"reason", label+"selection reason", b.Reason, a.Reason)
@@ -833,11 +837,29 @@ func pathsOf(s snapshot.Snapshot) runPaths {
 	}
 	if resolver.Interface != "" && target.Interface != "" {
 		out.resolverAgreement = pathsSame
-		if resolver.Interface != target.Interface {
+		if routesDiffer(resolver, target) {
 			out.resolverAgreement = pathsDifferent
 		}
 	}
 	return out
+}
+
+// routesDiffer reports that two recorded decisions took materially different
+// paths: out of another interface, to another router, or through another
+// routing domain. It is the same question internal/diagnostic asks of the live
+// decisions, asked here of what an artifact stored, and it is more than an
+// interface comparison for the same reason: two flows can share a link and
+// still be routed apart.
+//
+// A routing table is compared only where both artifacts named one, and the
+// tables an operating system consults on its own all read as the ordinary
+// case. An absent table is unknown and never the main one, so silence on
+// either side settles nothing.
+func routesDiffer(a, b snapshot.Route) bool {
+	domainA, knownA := a.RoutingDomain()
+	domainB, knownB := b.RoutingDomain()
+	return a.Interface != b.Interface || a.Gateway != b.Gateway ||
+		knownA && knownB && domainA != domainB
 }
 
 // selectedRoute is the decision for the address the check actually used, which

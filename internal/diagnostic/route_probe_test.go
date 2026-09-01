@@ -23,7 +23,7 @@ func stubRouteOps(answers map[string]RouteDecision, asked *[]string) *netops {
 		dialContext: func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("no network in tests")
 		},
-		routeFor: func(dst net.IP) (RouteDecision, bool) {
+		routeFor: func(dst, _ net.IP) (RouteDecision, bool) {
 			mu.Lock()
 			if asked != nil {
 				*asked = append(*asked, dst.String())
@@ -33,7 +33,7 @@ func stubRouteOps(answers map[string]RouteDecision, asked *[]string) *netops {
 			return d, ok
 		},
 	}
-	o.routes = newRouteCache(o.routeFor)
+	o.routes = newRouteCache(o.routeFor, o.sources)
 	return o
 }
 
@@ -105,7 +105,9 @@ func TestOneRunAsksTheKernelOncePerDestination(t *testing.T) {
 // change, so the memoization cannot outlive the pass that created it.
 func TestEachPassGetsAFreshRouteCache(t *testing.T) {
 	iface := "eth0"
-	answers := func(dst net.IP) (RouteDecision, bool) { return RouteDecision{Iface: iface, Tunnel: TunnelDirect}, true }
+	answers := func(net.IP, net.IP) (RouteDecision, bool) {
+		return RouteDecision{Iface: iface, Tunnel: TunnelDirect}, true
+	}
 	original := defaultOps.routeFor
 	defaultOps.routeFor = answers
 	defer func() { defaultOps.routeFor = original }()
@@ -143,9 +145,9 @@ func TestAPlatformThatCannotAnswerRecordsNothing(t *testing.T) {
 		dialContext: func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("no network in tests")
 		},
-		routeFor: func(net.IP) (RouteDecision, bool) { return RouteDecision{}, false },
+		routeFor: func(net.IP, net.IP) (RouteDecision, bool) { return RouteDecision{}, false },
 	}
-	o.routes = newRouteCache(o.routeFor)
+	o.routes = newRouteCache(o.routeFor, o.sources)
 	res := map[ProbeID]ProbeResult{}
 	for _, p := range o.buildProbes(&Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}, "") {
 		if p.ID != ProbeIface && p.ID != ProbeDNS && p.ID != ProbeTargetTCP {

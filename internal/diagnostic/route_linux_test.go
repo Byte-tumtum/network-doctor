@@ -131,16 +131,23 @@ func TestParseRouteReplyReadsAViaNextHop(t *testing.T) {
 
 // A policy-routing table keeps its number, because the number is the point.
 func TestRouteTableNameKeepsPolicyTableNumbers(t *testing.T) {
-	cases := map[uint32]string{
-		unix.RT_TABLE_MAIN:    "",
-		unix.RT_TABLE_UNSPEC:  "",
-		unix.RT_TABLE_LOCAL:   "local",
-		unix.RT_TABLE_DEFAULT: "default",
-		51820:                 "table 51820",
+	cases := map[uint32]struct {
+		name  string
+		known bool
+	}{
+		// The main table is a table the kernel named, spelled as the
+		// unremarkable case; RT_TABLE_UNSPEC is the kernel naming none, and
+		// the two must not come out the same.
+		unix.RT_TABLE_MAIN:    {"", true},
+		unix.RT_TABLE_UNSPEC:  {"", false},
+		unix.RT_TABLE_LOCAL:   {"local", true},
+		unix.RT_TABLE_DEFAULT: {"default", true},
+		51820:                 {"table 51820", true},
 	}
 	for id, want := range cases {
-		if got := routeTableName(id); got != want {
-			t.Errorf("routeTableName(%d) = %q, want %q", id, got, want)
+		got, known := routeTableName(id)
+		if got != want.name || known != want.known {
+			t.Errorf("routeTableName(%d) = %q/%v, want %q/%v", id, got, known, want.name, want.known)
 		}
 	}
 	// rtm_table saturates at a byte, so the attribute has to win.
@@ -190,7 +197,7 @@ func TestParseRouteReplyNeverReadsTheEchoedPrefixLength(t *testing.T) {
 // The real kernel, on this machine, for a destination that is certainly not a
 // host route: it must not come back claiming to be one.
 func TestLookupRouteDecisionClaimsNoMatchedPrefix(t *testing.T) {
-	got, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"))
+	got, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"), nil)
 	if !ok {
 		t.Skip("the kernel did not answer a route lookup in this environment")
 	}
@@ -276,7 +283,7 @@ func TestUnreachableNetlinkErrorNamesOnlyRoutingFailures(t *testing.T) {
 // 127.0.0.1 to loopback, and a machine that does not is broken in a way this
 // test is entitled to notice.
 func TestLookupRouteDecisionAnswersForLoopback(t *testing.T) {
-	got, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"))
+	got, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"), nil)
 	if !ok {
 		t.Skip("the kernel did not answer a route lookup in this environment")
 	}
@@ -288,5 +295,140 @@ func TestLookupRouteDecisionAnswersForLoopback(t *testing.T) {
 	}
 	if got.Tunnel != TunnelDirect {
 		t.Errorf("loopback tunnel state = %q, want %q", got.Tunnel, TunnelDirect)
+	}
+}
+
+// The lookup has to ask about the flow netdoc's own probes make. Under --iface
+// every dial leaves from a chosen local address, and a policy rule selecting
+// on source address resolves differently for a packet that carries one, so the
+// request carries it too. src_len has to be set beside the attribute or the
+// kernel reads it as a zero-length prefix and ignores the constraint.
+func TestRouteLookupRequestCarriesTheBoundSource(t *testing.T) {
+	dst := netip.MustParseAddr("198.51.100.7")
+	plain := routeLookupRequest(dst, netip.Addr{})
+	if plain[2] != 0 {
+		t.Errorf("src_len = %d on an unconstrained lookup, want 0", plain[2])
+	}
+	for _, attr := range netlinkAttrs(plain[rtMsgLen:]) {
+		if attr.Type == unix.RTA_SRC {
+			t.Error("an unconstrained lookup carried a source address")
+		}
+	}
+
+	src := netip.MustParseAddr("192.168.1.20")
+	bound := routeLookupRequest(dst, src)
+	if bound[2] != 32 {
+		t.Errorf("src_len = %d, want 32 so the kernel reads the source as one address", bound[2])
+	}
+	var carried net.IP
+	for _, attr := range netlinkAttrs(bound[rtMsgLen:]) {
+		if attr.Type == unix.RTA_SRC {
+			carried = netlinkIP(attr.Value)
+		}
+	}
+	if carried == nil || carried.String() != "192.168.1.20" {
+		t.Errorf("RTA_SRC = %v, want the bound source", carried)
+	}
+
+	v6 := netip.MustParseAddr("2001:db8::7")
+	if got := routeLookupRequest(v6, netip.MustParseAddr("2001:db8::20")); got[2] != 128 {
+		t.Errorf("IPv6 src_len = %d, want 128", got[2])
+	}
+}
+
+// A source only constrains a lookup in its own family. One in the other family
+// is not a constraint the kernel could apply, so it is dropped rather than
+// sent as an attribute the reply would be wrong about.
+func TestRouteQuerySourceKeepsOnlyAUsableConstraint(t *testing.T) {
+	v4, v6 := netip.MustParseAddr("198.51.100.7"), netip.MustParseAddr("2001:db8::7")
+	if got := routeQuerySource(v4, net.ParseIP("192.168.1.20")); got.String() != "192.168.1.20" {
+		t.Errorf("IPv4 source = %v, want it kept", got)
+	}
+	// A v4-in-v6 encoded address is still an IPv4 source, which is how
+	// net.ParseIP hands one back.
+	if got := routeQuerySource(v4, net.ParseIP("::ffff:192.168.1.20")); got.String() != "192.168.1.20" {
+		t.Errorf("mapped IPv4 source = %v, want it unmapped and kept", got)
+	}
+	for _, c := range []struct {
+		name   string
+		dst    netip.Addr
+		source net.IP
+	}{
+		{"no binding at all", v4, nil},
+		{"an IPv6 source for an IPv4 lookup", v4, net.ParseIP("2001:db8::20")},
+		{"an IPv4 source for an IPv6 lookup", v6, net.ParseIP("192.168.1.20")},
+		{"nonsense", v4, net.IP{1, 2, 3}},
+	} {
+		if got := routeQuerySource(c.dst, c.source); got.IsValid() {
+			t.Errorf("%s produced the constraint %v, want none", c.name, got)
+		}
+	}
+}
+
+// The real kernel, asked the constrained question every source-bound run asks.
+// Loopback needs no network, no privileges, and no particular table: every
+// Linux machine routes 127.0.0.1 to lo from 127.0.0.1.
+func TestLookupRouteDecisionAnswersAConstrainedLookup(t *testing.T) {
+	loopback := net.ParseIP("127.0.0.1")
+	got, ok := lookupRouteDecision(loopback, loopback)
+	if !ok {
+		t.Skip("the kernel did not answer a route lookup in this environment")
+	}
+	if got.Unreachable || got.Iface == "" {
+		t.Fatalf("constrained loopback decision = %+v, want a selected interface", got)
+	}
+	// The kernel has no source selection left to report once the question
+	// carried one, and the address the flow leaves from is still known.
+	if got.Source == nil || !got.Source.Equal(loopback) {
+		t.Errorf("source = %v, want the address the lookup was constrained to", got.Source)
+	}
+	// A source in the other address family is not a constraint this lookup
+	// could carry, so it is dropped and the kernel answers the plain question.
+	other, ok := lookupRouteDecision(loopback, net.ParseIP("2001:db8::20"))
+	if !ok || other.Iface != got.Iface {
+		t.Errorf("cross-family source = %+v/%v, want the unconstrained answer for %q", other, ok, got.Iface)
+	}
+	// A source the kernel will not route from is answered as no route, which
+	// is this flow's truthful answer and not a path to invent one for: the
+	// addresses a run binds to are its own, so a flow the kernel refuses is a
+	// flow the probe would have failed to make.
+	refused, ok := lookupRouteDecision(loopback, net.ParseIP("203.0.113.9"))
+	if ok && refused.Iface != "" && refused.Iface != got.Iface {
+		t.Errorf("a refused source produced the invented path %+v", refused)
+	}
+}
+
+// The real kernel on the table distinction the shared model now carries. IPv6
+// loopback is resolved in the local table on every Linux machine and an
+// ordinary destination in main, so this proves both that a table is read and
+// that a known main table is not the same value as a known other one.
+func TestLookupRouteDecisionReadsTheRoutingTableTheKernelUsed(t *testing.T) {
+	local, ok := lookupRouteDecision(net.ParseIP("::1"), nil)
+	if !ok || local.Unreachable {
+		t.Skip("the kernel did not answer an IPv6 loopback route lookup in this environment")
+	}
+	if !local.TableKnown {
+		t.Fatal("a Linux route decision reported no table knowledge at all")
+	}
+	if local.Table != "local" {
+		t.Errorf("table = %q, want the local table the kernel resolved ::1 in", local.Table)
+	}
+	main, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"), nil)
+	if !ok || main.Unreachable {
+		t.Skip("the kernel did not answer an IPv4 loopback route lookup in this environment")
+	}
+	if !main.TableKnown || main.Table != "" {
+		t.Errorf("table = %q (known %t), want a known main table", main.Table, main.TableKnown)
+	}
+	// Both are tables the kernel consults on its own, so the pair is the same
+	// routing domain as far as any conclusion goes. A table a rule selected is
+	// not, and this machine has no such rule to offer, so it is stated here.
+	if comparePaths(main, local).Table != pathSame {
+		t.Error("the kernel's own local and main tables compared as different routing domains")
+	}
+	policy := main
+	policy.Table = "table 51820"
+	if comparePaths(main, policy).Table != pathDiffers {
+		t.Error("a known main table compared as the same domain as a policy table")
 	}
 }

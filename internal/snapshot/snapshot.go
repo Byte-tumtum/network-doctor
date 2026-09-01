@@ -92,12 +92,14 @@ const (
 	ObservationAddressFailed    = "address_failed"
 	// Route observations. Each is a fact about the path the row that carries
 	// it takes, so it stays verifiable against that row alone.
-	ObservationRouteTunneled     = "route_tunneled"
-	ObservationRouteDirect       = "route_direct"
-	ObservationRouteUnreachable  = "route_unreachable"
-	ObservationRoutePathDiffers  = "route_path_differs"
-	ObservationRouteFamilySplit  = "route_family_split"
-	ObservationRouteInterfaceMTU = "route_interface_mtu"
+	ObservationRouteTunneled       = "route_tunneled"
+	ObservationRouteDirect         = "route_direct"
+	ObservationRouteUnreachable    = "route_unreachable"
+	ObservationRoutePathDiffers    = "route_path_differs"
+	ObservationRouteNextHopDiffers = "route_next_hop_differs"
+	ObservationRouteTableDiffers   = "route_table_differs"
+	ObservationRouteFamilySplit    = "route_family_split"
+	ObservationRouteInterfaceMTU   = "route_interface_mtu"
 
 	NotEvaluatedPrerequisite  = "prerequisite_failed"
 	NotEvaluatedNotSelected   = "not_selected"
@@ -408,8 +410,17 @@ type Route struct {
 	Prefix string `json:"prefix,omitempty"`
 	Metric *int   `json:"metric,omitempty"`
 	// Table names the routing table or routing domain the decision came from,
-	// absent where the platform has one table or did not say which it used.
+	// and is meaningful only with TableKnown. The main table is written as an
+	// absent value, since a decision from it is the unremarkable case.
 	Table string `json:"table,omitempty"`
+	// TableKnown is the platform having said which routing table or routing
+	// domain resolved this destination, and is what keeps a known main table
+	// apart from a platform that never said. Both leave table absent, and a
+	// reader that took absence for the main table would report a routing
+	// domain macOS and Windows do not expose. An artifact written before this
+	// field existed has no table knowledge at all, which is unknown and never
+	// the main table.
+	TableKnown bool `json:"table_known,omitempty"`
 	// InterfaceMTU is the selected link's own MTU. It is never a measured path
 	// MTU: the path_mtu check is the only thing that measures one, and reading
 	// this as an end-to-end number is the mistake the name exists to prevent.
@@ -966,6 +977,22 @@ func observationMatches(e CausalEvidence, check Check) bool {
 		return e.Value != "" && routeMatches(check, func(r Route) bool {
 			return r.Interface != "" && r.Interface != e.Value
 		})
+	case ObservationRouteNextHopDiffers:
+		// The value names the other path's next hop. The claim is checkable
+		// from this row alone: it has a next hop of its own and it is not that
+		// one.
+		return e.Value != "" && routeMatches(check, func(r Route) bool {
+			return r.Gateway != "" && r.Gateway != e.Value
+		})
+	case ObservationRouteTableDiffers:
+		// This row's own routing domain, named by the platform and not the
+		// main one. The value stays empty because there is nothing about the
+		// other row to name: it is the main table or unknown, and neither is
+		// a value a reader could check.
+		return routeMatches(check, func(r Route) bool {
+			domain, _ := r.RoutingDomain()
+			return domain != ""
+		})
 	case ObservationRouteFamilySplit:
 		return routeFamilySplit(check)
 	case ObservationRouteInterfaceMTU:
@@ -988,23 +1015,55 @@ func routeMatches(check Check, match func(Route) bool) bool {
 	return check.Observed != nil && slices.ContainsFunc(check.Observed.Routes, match)
 }
 
-// routeFamilySplit reports that this row's IPv4 and IPv6 destinations leave by
-// different interfaces, which needs a named interface in both families.
+// RoutingDomain is the routing table this decision came from, as anything
+// reading the artifact should compare it: the tables an operating system
+// consults on its own read as the ordinary case, and only a table something
+// selected is a routing domain worth telling apart.
+//
+// Linux is the only platform that fills the field, and a machine with no
+// policy routing at all still answers out of local for its own addresses and
+// main for everything else, which is why a localhost destination lands in a
+// different table per family. The second return is whether the platform said
+// anything at all, which is not the same as saying "the ordinary one".
+func (r Route) RoutingDomain() (string, bool) {
+	if !r.TableKnown {
+		return "", false
+	}
+	switch r.Table {
+	case "", "local", "default":
+		return "", true
+	}
+	return r.Table, true
+}
+
+// routeFamilySplit reports that this row's IPv4 and IPv6 destinations take
+// materially different routes, which needs a named interface in both families.
+//
+// The dimensions are the family-neutral ones. Every dual-stack host uses a
+// different next hop and a different source for the two families, so neither
+// could ever be a split; a routing domain is not family-scoped that way, and a
+// family a rule sent to another table is a real split even where both leave by
+// one interface.
 func routeFamilySplit(check Check) bool {
 	if check.Observed == nil {
 		return false
 	}
-	v4, v6 := "", ""
+	var v4, v6 Route
 	for _, r := range check.Observed.Routes {
 		switch {
 		case r.Interface == "":
-		case r.Family == "ipv4" && v4 == "":
-			v4 = r.Interface
-		case r.Family == "ipv6" && v6 == "":
-			v6 = r.Interface
+		case r.Family == "ipv4" && v4.Interface == "":
+			v4 = r
+		case r.Family == "ipv6" && v6.Interface == "":
+			v6 = r
 		}
 	}
-	return v4 != "" && v6 != "" && v4 != v6
+	if v4.Interface == "" || v6.Interface == "" {
+		return false
+	}
+	v4Domain, v4Known := v4.RoutingDomain()
+	v6Domain, v6Known := v6.RoutingDomain()
+	return v4.Interface != v6.Interface || v4Known && v6Known && v4Domain != v6Domain
 }
 
 func familyObservation(check Check, family string) string {

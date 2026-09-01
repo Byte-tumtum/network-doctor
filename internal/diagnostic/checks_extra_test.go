@@ -940,11 +940,11 @@ func TestIfaceProbeFollowsTheReferenceRoute(t *testing.T) {
 			ssidIface = iface
 			return "Home"
 		},
-		routeFor: func(net.IP) (RouteDecision, bool) {
+		routeFor: func(net.IP, net.IP) (RouteDecision, bool) {
 			return RouteDecision{Iface: "Wi-Fi", Tunnel: TunnelDirect}, true
 		},
 	}
-	o.routes = newRouteCache(o.routeFor)
+	o.routes = newRouteCache(o.routeFor, o.sources)
 
 	r := o.ifaceProbe(context.Background(), nil)
 	if r.Status != StatusPass || r.Iface != "Wi-Fi" {
@@ -969,9 +969,9 @@ func TestIfaceProbeFallsBackToEnumerationWhenRoutingNamesNothing(t *testing.T) {
 				{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagRunning},
 			}, nil
 		},
-		routeFor: func(net.IP) (RouteDecision, bool) { return RouteDecision{}, false },
+		routeFor: func(net.IP, net.IP) (RouteDecision, bool) { return RouteDecision{}, false },
 	}
-	o.routes = newRouteCache(o.routeFor)
+	o.routes = newRouteCache(o.routeFor, o.sources)
 	r := o.ifaceProbe(context.Background(), nil)
 	if r.Status != StatusPass || r.Iface != "NpcapLoopback" {
 		t.Fatalf("ifaceProbe = %v iface %q, want fallback to the first enumerated interface", r.Status, r.Iface)
@@ -988,11 +988,11 @@ func TestIfaceProbeSkipsARoutedInterfaceThatIsNotUsable(t *testing.T) {
 				{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagRunning},
 			}, nil
 		},
-		routeFor: func(net.IP) (RouteDecision, bool) {
+		routeFor: func(net.IP, net.IP) (RouteDecision, bool) {
 			return RouteDecision{Iface: "Ethernet", Tunnel: TunnelDirect}, true
 		},
 	}
-	o.routes = newRouteCache(o.routeFor)
+	o.routes = newRouteCache(o.routeFor, o.sources)
 	r := o.ifaceProbe(context.Background(), nil)
 	if r.Status != StatusPass || r.Iface != "Wi-Fi" {
 		t.Fatalf("ifaceProbe = %v iface %q, want Wi-Fi since the routed Ethernet is down", r.Status, r.Iface)

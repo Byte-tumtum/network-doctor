@@ -895,6 +895,29 @@ func TestCompareReportsDNSAndApplicationTrafficParting(t *testing.T) {
 	}
 }
 
+// Two flows can share an interface and still be routed apart. A comparison
+// that only read interface names would call this pair the same path in both
+// captures and report no change at all.
+func TestCompareSeesTrafficPartingOnOneInterface(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	selected := check(t, &before, "target_tcp").Observed.SelectedIP
+	sameRouter := func(dst string) snapshot.Route {
+		r := onEth0(dst, "0.0.0.0/0")
+		r.Gateway, r.TableKnown = "192.168.1.1", true
+		return r
+	}
+	withRoutes(t, &before, "target_tcp", sameRouter(selected))
+	withRoutes(t, &before, "dns", sameRouter("192.168.1.53"))
+	policy := sameRouter(selected)
+	policy.Gateway, policy.Table = "10.0.0.1", "table 51820"
+	withRoutes(t, &after, "target_tcp", policy)
+	withRoutes(t, &after, "dns", sameRouter("192.168.1.53"))
+	change := changeAt(t, Snapshots(before, after), "paths.resolver.agreement")
+	if change.Before != pathsSame || change.After != pathsDifferent {
+		t.Errorf("resolver agreement = %q -> %q, want %q -> %q", change.Before, change.After, pathsSame, pathsDifferent)
+	}
+}
+
 // Per destination, the exact decision is compared field by field.
 func TestCompareReportsTheChangedRouteFields(t *testing.T) {
 	before, after := fixture(t), fixture(t)

@@ -128,6 +128,142 @@ func TestRouteEvidenceReportsSplitDNS(t *testing.T) {
 	assertEvidenceObservation(t, DiagnosisSystemDNSFailure, want, order, res)
 }
 
+// Same interface, different routers. This is the case an interface comparison
+// collapsed into "the same path": the resolver and the target both leave over
+// eth0 and are handed to different next hops, which is a routing difference
+// the run can now say out loud.
+func TestRouteEvidenceReportsADifferentNextHopOnOneInterface(t *testing.T) {
+	target := decisionTo("198.51.100.7", "eth0", "")
+	target.Gateway = net.ParseIP("192.168.1.1")
+	resolver := decisionTo("192.0.2.53", "eth0", "")
+	resolver.Gateway = net.ParseIP("192.168.1.254")
+	order, res := routeRun([]RouteDecision{target}, []RouteDecision{decisionTo("1.1.1.1", "eth0", "")}, []RouteDecision{resolver})
+	want := CausalEvidence{Kind: EvidenceSupport, Check: ProbeDNS,
+		Observation: ObservationRouteNextHopDiffers, Value: "192.168.1.1"}
+	got := routeEvidence(DiagnosisSystemDNSFailure, order, res)
+	if !hasEvidence(got, want) {
+		t.Errorf("missing %+v in %+v", want, got)
+	}
+	assertEvidenceObservation(t, DiagnosisSystemDNSFailure, want, order, res)
+	// The interface names agree, so the interface-level item would be a false
+	// statement and must not appear beside it.
+	for _, e := range got {
+		if e.Observation == ObservationRoutePathDiffers {
+			t.Errorf("an interface difference was reported for two paths on one interface: %+v", e)
+		}
+	}
+}
+
+// A resolver on the local network is reached without a router while the target
+// is reached through one. That is what having a destination on your own LAN
+// looks like, not a routing policy, and reporting it would fire on every home
+// network whose resolver is its own gateway.
+func TestRouteEvidenceStaysQuietWhenOnePathIsSimplyOnLink(t *testing.T) {
+	target := decisionTo("198.51.100.7", "eth0", "")
+	target.Gateway = net.ParseIP("192.168.1.1")
+	resolver := decisionTo("192.168.1.1", "eth0", "") // on-link, no next hop
+	order, res := routeRun([]RouteDecision{target}, []RouteDecision{decisionTo("1.1.1.1", "eth0", "")}, []RouteDecision{resolver})
+	for _, e := range routeEvidence(DiagnosisSystemDNSFailure, order, res) {
+		if e.Observation == ObservationRouteNextHopDiffers {
+			t.Errorf("an on-link resolver was reported as a routing difference: %+v", e)
+		}
+	}
+}
+
+// A destination the kernel resolved in another routing domain. The item says
+// that and only that: which rule, mark, or VRF sent it there is not something
+// a route lookup reports.
+func TestRouteEvidenceReportsAnotherRoutingDomain(t *testing.T) {
+	target := decisionTo("198.51.100.7", "eth0", "")
+	target.Gateway, target.Table, target.TableKnown = net.ParseIP("192.168.1.1"), "table 100", true
+	reference := decisionTo("1.1.1.1", "eth0", "")
+	reference.Gateway, reference.TableKnown = net.ParseIP("192.168.1.1"), true
+	order, res := routeRun([]RouteDecision{target}, []RouteDecision{reference}, nil)
+	want := CausalEvidence{Kind: EvidenceSupport, Check: ProbeTargetTCP, Observation: ObservationRouteTableDiffers}
+	got := routeEvidence(DiagnosisTargetUnreachable, order, res)
+	if !hasEvidence(got, want) {
+		t.Errorf("missing %+v in %+v", want, got)
+	}
+	assertEvidenceObservation(t, DiagnosisTargetUnreachable, want, order, res)
+}
+
+// The table items a platform's silence must never produce. A macOS or Windows
+// run reports no routing domain at all, and an unknown table compared with a
+// known one is not a difference; nor is the main table something to report,
+// since it is where traffic goes when no rule intervened.
+func TestRouteEvidenceNeverInventsARoutingDomain(t *testing.T) {
+	quiet := []struct {
+		name             string
+		target, referenc RouteDecision
+	}{
+		{"neither platform named a table", decisionTo("198.51.100.7", "eth0", ""), decisionTo("1.1.1.1", "eth0", "")},
+		{"only the target's table is known", func() RouteDecision {
+			r := decisionTo("198.51.100.7", "eth0", "")
+			r.Table, r.TableKnown = "table 100", true
+			return r
+		}(), decisionTo("1.1.1.1", "eth0", "")},
+		{"only the reference's table is known", decisionTo("198.51.100.7", "eth0", ""), func() RouteDecision {
+			r := decisionTo("1.1.1.1", "eth0", "")
+			r.TableKnown = true
+			return r
+		}()},
+		{"both came from the main table", func() RouteDecision {
+			r := decisionTo("198.51.100.7", "eth0", "")
+			r.TableKnown = true
+			return r
+		}(), func() RouteDecision {
+			r := decisionTo("1.1.1.1", "eth0", "")
+			r.TableKnown = true
+			return r
+		}()},
+	}
+	for _, c := range quiet {
+		t.Run(c.name, func(t *testing.T) {
+			order, res := routeRun([]RouteDecision{c.target}, []RouteDecision{c.referenc}, nil)
+			for _, e := range routeEvidence(DiagnosisTargetUnreachable, order, res) {
+				if e.Observation == ObservationRouteTableDiffers {
+					t.Errorf("a routing domain was claimed from silence: %+v", e)
+				}
+			}
+		})
+	}
+}
+
+// A machine whose target and resolver differ only in the local address the
+// kernel selected. Ordinary source-address selection is not a routing
+// decision, and route evidence must not turn one into a diagnosis's
+// explanation.
+func TestRouteEvidenceIgnoresOrdinarySourceSelection(t *testing.T) {
+	target := decisionTo("198.51.100.7", "eth0", "")
+	target.Gateway, target.Source = net.ParseIP("192.168.1.1"), net.ParseIP("192.168.1.20")
+	resolver := decisionTo("192.0.2.53", "eth0", "")
+	resolver.Gateway, resolver.Source = net.ParseIP("192.168.1.1"), net.ParseIP("192.168.1.21")
+	order, res := routeRun([]RouteDecision{target}, []RouteDecision{decisionTo("1.1.1.1", "eth0", "")}, []RouteDecision{resolver})
+	if got := routeEvidence(DiagnosisSystemDNSFailure, order, res); len(got) != 0 {
+		t.Errorf("source selection produced route evidence: %+v", got)
+	}
+}
+
+// The whole point of the deepened comparison, checked where it matters most:
+// none of it may reach a verdict. A healthy machine whose flows are routed
+// apart by policy is working as designed.
+func TestPolicyRoutingAloneReachesNoDiagnosis(t *testing.T) {
+	target := decisionTo("198.51.100.7", "eth0", "")
+	target.Gateway, target.Table, target.TableKnown = net.ParseIP("192.168.1.254"), "table 100", true
+	reference := decisionTo("1.1.1.1", "eth0", "")
+	reference.Gateway, reference.TableKnown = net.ParseIP("192.168.1.1"), true
+	order, res := routeRun([]RouteDecision{target}, []RouteDecision{reference}, []RouteDecision{reference})
+	for _, id := range order {
+		r := res[id]
+		r.Status = StatusPass
+		res[id] = r
+	}
+	d := Interpret(&Target{Host: "example.com", Port: 443, Proto: ProtoTLSHTTP}, order, res)
+	if len(d.Findings) != 0 {
+		t.Errorf("a healthy machine with policy routing produced findings: %+v", d.Findings)
+	}
+}
+
 // Interface MTU is offered beside a measured stall and nowhere else, and never
 // as a claim about the end-to-end path MTU.
 func TestRouteEvidenceOffersInterfaceMTUOnlyToThePathMTUFinding(t *testing.T) {

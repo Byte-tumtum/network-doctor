@@ -620,9 +620,11 @@ func evidenceGlyph(observation diagnostic.ObservationID) string {
 		return "✓"
 	case diagnostic.ObservationStatusWarn, diagnostic.ObservationClockOffset,
 		diagnostic.ObservationRouteTunneled, diagnostic.ObservationRoutePathDiffers,
+		diagnostic.ObservationRouteNextHopDiffers, diagnostic.ObservationRouteTableDiffers,
 		diagnostic.ObservationRouteFamilySplit, diagnostic.ObservationRouteInterfaceMTU:
-		// A tunnel, a split path, and a narrow link are observations about the
-		// path, not failures of the row that recorded them.
+		// A tunnel, a split path, another router, another routing table, and a
+		// narrow link are observations about the path, not failures of the row
+		// that recorded them.
 		return "!"
 	case diagnostic.ObservationStatusSkip, diagnostic.ObservationStatusNA:
 		return "⊘"
@@ -713,8 +715,21 @@ func (m model) observationLine(e diagnostic.CausalEvidence) string {
 			return name + " takes a different path from the target traffic on " + e.Value
 		}
 		return name + " takes a different path from the target traffic"
+	case diagnostic.ObservationRouteNextHopDiffers:
+		// The same link, a different router. The value names the other path's
+		// next hop, which is the whole point: the interface names agreeing is
+		// what made the two look like one path.
+		if e.Value != "" {
+			return name + " left through a next hop other than " + e.Value
+		}
+		return name + " left through a different next hop"
+	case diagnostic.ObservationRouteTableDiffers:
+		// A routing domain, and nothing about what sent the flow there. A rule,
+		// a mark, a VRF, and an application policy all look identical from a
+		// route lookup, so none of them is named.
+		return name + " was routed out of a routing table that general traffic did not use"
 	case diagnostic.ObservationRouteFamilySplit:
-		return name + " reaches IPv4 and IPv6 over different interfaces"
+		return name + " reaches IPv4 and IPv6 over materially different routes"
 	case diagnostic.ObservationRouteInterfaceMTU:
 		// The link's own MTU against the general path's link MTU. Neither side
 		// is a measured path MTU, and this never says it is.

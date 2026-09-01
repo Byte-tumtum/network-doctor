@@ -65,6 +65,7 @@ func routeEvidence(id DiagnosisID, order []ProbeID, res map[ProbeID]ProbeResult)
 		if split, known := familyPathsDiffer(res[ProbeTargetTCP].Routes); known && split {
 			out = add(out, ProbeTargetTCP, ObservationRouteFamilySplit, "")
 		}
+		out = append(out, routePolicyEvidence(add, ProbeTargetTCP, target, familyReference)...)
 		// Interface MTU, and only interface MTU. A narrower link on the
 		// selected path is consistent with an encapsulated one and is worth
 		// putting beside a measured stall; it is never itself the path MTU,
@@ -97,10 +98,41 @@ func routeEvidence(id DiagnosisID, order []ProbeID, res map[ProbeID]ProbeResult)
 		// application traffic takes is split DNS, which is a design as often
 		// as it is a fault. It is recorded as what it is: a difference.
 		if target, ok := selectedTargetRoute(res); ok {
-			if differs, known := pathsDiffer(resolver[0], target); known && differs {
+			if comparePaths(resolver[0], target).Iface == pathDiffers {
 				out = add(out, ProbeDNS, ObservationRoutePathDiffers, target.Iface)
 			}
+			out = append(out, routePolicyEvidence(add, ProbeDNS, resolver[0], target)...)
 		}
+	}
+	return out
+}
+
+// routePolicyEvidence records the path differences an interface name cannot
+// express: the same link carrying two flows to different routers, and a
+// destination the kernel resolved in another routing domain. Both are
+// observations about how this row's path was selected, and neither is a fault:
+// a machine on a split tunnel, a VRF, or a policy rule is working as designed
+// far more often than it is broken.
+//
+// A next hop is reported only where both sides have one. "On-link here, via
+// the router there" is the ordinary shape of a destination on the local
+// network rather than a routing policy, and reporting it would fire on every
+// home network whose resolver is its own gateway.
+//
+// A routing table is reported only where this row's own is known and is not
+// one the kernel consults by itself. Those are where traffic goes when no rule
+// intervened, so they are the reference and not the finding, and an unknown
+// table is neither.
+func routePolicyEvidence(add func([]CausalEvidence, ProbeID, ObservationID, string) []CausalEvidence,
+	check ProbeID, path, reference RouteDecision) []CausalEvidence {
+	var out []CausalEvidence
+	diff := comparePaths(path, reference)
+	if diff.NextHop == pathDiffers && diff.Iface == pathSame &&
+		path.Gateway != nil && reference.Gateway != nil {
+		out = add(out, check, ObservationRouteNextHopDiffers, reference.Gateway.String())
+	}
+	if domain, _ := routingDomain(path); diff.Table == pathDiffers && domain != "" {
+		out = add(out, check, ObservationRouteTableDiffers, "")
 	}
 	return out
 }

@@ -73,6 +73,172 @@ func TestUnknownTunnelStateIsNotDirect(t *testing.T) {
 	_ = known
 }
 
+// Two decisions can leave through the same interface and still take different
+// paths. The kernel-selected next hop is part of that decision.
+func TestPathsDifferDetectsDifferentNextHopsOnTheSameInterface(t *testing.T) {
+	a := RouteDecision{Iface: "eth0", Gateway: net.ParseIP("192.168.1.1")}
+	b := RouteDecision{Iface: "eth0", Gateway: net.ParseIP("192.168.1.254")}
+	if differ, known := pathsDiffer(a, b); !known || !differ {
+		t.Errorf("pathsDiffer = %v/%v, want a known difference", differ, known)
+	}
+}
+
+// routed builds a decision with the fields path comparison reads, so a case
+// states only the dimension it is about.
+func routed(family, iface, gateway, table string, tableKnown bool, source string) RouteDecision {
+	r := RouteDecision{Family: family, Iface: iface, Table: table, TableKnown: tableKnown}
+	if gateway != "" {
+		r.Gateway = net.ParseIP(gateway)
+	}
+	if source != "" {
+		r.Source = net.ParseIP(source)
+	}
+	return r
+}
+
+// Every dimension two kernel decisions can be held apart on, and what each one
+// is worth. The interface is what a comparison used to be; the next hop and
+// the routing domain are the ones an interface name hides.
+func TestComparePathsAnswersEachDimensionSeparately(t *testing.T) {
+	v4 := counterfactualIPv4
+	cases := []struct {
+		name string
+		a, b RouteDecision
+		want pathComparison
+	}{
+		{
+			"same interface and same known next hop",
+			routed(v4, "eth0", "192.168.1.1", "", true, ""),
+			routed(v4, "eth0", "192.168.1.1", "", true, ""),
+			pathComparison{Iface: pathSame, NextHop: pathSame, Table: pathSame},
+		},
+		{
+			"different interfaces",
+			routed(v4, "wg0", "10.20.0.1", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", false, ""),
+			pathComparison{Iface: pathDiffers, NextHop: pathDiffers},
+		},
+		{
+			"same interface, different known next hop",
+			routed(v4, "eth0", "192.168.1.254", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", false, ""),
+			pathComparison{Iface: pathSame, NextHop: pathDiffers},
+		},
+		{
+			// The kernel omits the gateway exactly when the destination is
+			// attached, on every platform that answers at all, so this is a
+			// real difference and not a gap. Whether it is worth reporting is
+			// a separate question, answered where the evidence is built.
+			"on-link against a routed destination",
+			routed(v4, "eth0", "", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", false, ""),
+			pathComparison{Iface: pathSame, NextHop: pathDiffers},
+		},
+		{
+			"same interface and next hop, different known routing table",
+			routed(v4, "eth0", "192.168.1.1", "table 100", true, ""),
+			routed(v4, "eth0", "192.168.1.1", "", true, ""),
+			pathComparison{Iface: pathSame, NextHop: pathSame, Table: pathDiffers},
+		},
+		{
+			// A machine with no policy routing at all still answers out of
+			// more than one table: the kernel keeps its own addresses in
+			// local and everything else in main, which is why a localhost
+			// destination resolves in a different table per family. Neither
+			// is a rule having sent traffic anywhere.
+			"the kernel's own tables against each other",
+			routed(v4, "lo", "", "", true, ""),
+			routed(counterfactualIPv6, "lo", "", "local", true, ""),
+			pathComparison{Iface: pathSame, NextHop: pathSame, Table: pathSame},
+		},
+		{
+			// The heart of the table representation: one side knowing it came
+			// from the main table and the other side never having been told
+			// are not a contradiction, and neither are they agreement.
+			"unknown routing table against a known main one",
+			routed(v4, "eth0", "192.168.1.1", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", true, ""),
+			pathComparison{Iface: pathSame, NextHop: pathSame, Table: pathNotComparable},
+		},
+		{
+			"unknown routing table against a known policy table",
+			routed(v4, "eth0", "192.168.1.1", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "table 100", true, ""),
+			pathComparison{Iface: pathSame, NextHop: pathSame, Table: pathNotComparable},
+		},
+		{
+			"different source addresses on one interface",
+			routed(v4, "eth0", "192.168.1.1", "", false, "192.168.1.20"),
+			routed(v4, "eth0", "192.168.1.1", "", false, "192.168.1.21"),
+			pathComparison{Iface: pathSame, NextHop: pathSame, Source: pathDiffers},
+		},
+		{
+			// Sources belong to a family. Comparing an IPv4 one with an IPv6
+			// one answers nothing about routing and everything about the two
+			// families existing.
+			"sources in different families are not compared",
+			routed(v4, "eth0", "192.168.1.1", "", false, "192.168.1.20"),
+			routed(counterfactualIPv6, "eth0", "", "", false, "2001:db8::20"),
+			pathComparison{Iface: pathSame, NextHop: pathDiffers},
+		},
+		{
+			"a platform that could not be asked answers nothing",
+			RouteDecision{},
+			routed(v4, "eth0", "192.168.1.1", "table 100", true, "192.168.1.20"),
+			pathComparison{},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := comparePaths(c.a, c.b); got != c.want {
+				t.Errorf("comparePaths = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// What each dimension is worth once the comparison has to answer "did these
+// two flows take materially different routes". Three dimensions count and one
+// deliberately does not.
+func TestPathsDifferCountsRouteSelectionAndNotSourceSelection(t *testing.T) {
+	v4 := counterfactualIPv4
+	cases := []struct {
+		name          string
+		a, b          RouteDecision
+		differ, known bool
+	}{
+		{"same interface and next hop", routed(v4, "eth0", "192.168.1.1", "", true, ""),
+			routed(v4, "eth0", "192.168.1.1", "", true, ""), false, true},
+		{"different interface", routed(v4, "wg0", "10.20.0.1", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", false, ""), true, true},
+		{"same interface, different next hop", routed(v4, "eth0", "192.168.1.254", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", false, ""), true, true},
+		{"same interface and next hop, different routing table", routed(v4, "eth0", "192.168.1.1", "table 100", true, ""),
+			routed(v4, "eth0", "192.168.1.1", "", true, ""), true, true},
+		{"unknown table against a known main one is not a difference",
+			routed(v4, "eth0", "192.168.1.1", "", false, ""),
+			routed(v4, "eth0", "192.168.1.1", "", true, ""), false, true},
+		// Two addresses on one interface are chosen between by ordinary
+		// source-address selection. Folding that into "different paths" would
+		// report a routing difference on a machine that has none, so the
+		// dimension is recorded and kept out of the verdict.
+		{"different source addresses alone", routed(v4, "eth0", "192.168.1.1", "", true, "192.168.1.20"),
+			routed(v4, "eth0", "192.168.1.1", "", true, "192.168.1.21"), false, true},
+		{"nothing to compare", RouteDecision{}, routed(v4, "eth0", "192.168.1.1", "", true, ""), false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			differ, known := pathsDiffer(c.a, c.b)
+			if differ != c.differ || known != c.known {
+				t.Errorf("pathsDiffer = %v/%v, want %v/%v", differ, known, c.differ, c.known)
+			}
+			if same := samePath(c.a, c.b); same != (c.known && !c.differ) {
+				t.Errorf("samePath = %v, want %v", same, c.known && !c.differ)
+			}
+		})
+	}
+}
+
 // The reason a route won, in every shape the platforms report. Nothing here is
 // re-derived from a routing table: a reason exists only where the kernel's own
 // answer supports it.
@@ -269,6 +435,51 @@ func TestFamilyPathsDifferNeedsBothFamilies(t *testing.T) {
 	}
 }
 
+// The two families are compared only on the dimensions that are not
+// family-scoped. Every dual-stack host has a different IPv4 next hop from its
+// IPv6 one and a different source in each family, so reading either as a split
+// would report one on every machine that has both stacks working.
+func TestFamilyPathsDifferIgnoresWhatIsDifferentInEveryFamily(t *testing.T) {
+	v4 := decisionTo("93.184.216.34", "eth0", "")
+	v4.Gateway, v4.Source = net.ParseIP("192.168.1.1"), net.ParseIP("192.168.1.20")
+	v6 := decisionTo("2606:2800::1", "eth0", "")
+	v6.Gateway, v6.Source = net.ParseIP("fe80::1"), net.ParseIP("2001:db8::20")
+	if differ, known := familyPathsDiffer([]RouteDecision{v4, v6}); !known || differ {
+		t.Errorf("an ordinary dual-stack host = %v/%v, want a known agreement", differ, known)
+	}
+	// pathsDiffer is the same-family question and does count the next hop, so
+	// the two verdicts are deliberately not the same function.
+	if differ, known := pathsDiffer(v4, v6); !known || !differ {
+		t.Errorf("pathsDiffer across families = %v/%v, want the next hops counted", differ, known)
+	}
+	// A routing domain is not family-scoped, so one family a rule sent to
+	// another table is a real split even down one interface.
+	v6.TableKnown, v4.TableKnown = true, true
+	v6.Table = "table 100"
+	if differ, known := familyPathsDiffer([]RouteDecision{v4, v6}); !known || !differ {
+		t.Errorf("one family in a policy table = %v/%v, want a known difference", differ, known)
+	}
+	// And an unknown table on one side settles nothing either way.
+	v6.TableKnown = false
+	if differ, known := familyPathsDiffer([]RouteDecision{v4, v6}); !known || differ {
+		t.Errorf("an unknown table = %v/%v, want no manufactured split", differ, known)
+	}
+}
+
+// A dual-stack machine talking to itself is not a machine with policy routing.
+// The kernel answers for 127.0.0.1 out of the main table and for ::1 out of
+// the local one, so reading the tables it consults by itself as a routing
+// difference would report a split on every localhost run.
+func TestFamilyPathsDifferIsNotAnnouncedByTheKernelsOwnTables(t *testing.T) {
+	routes := []RouteDecision{
+		{Destination: net.ParseIP("127.0.0.1"), Family: counterfactualIPv4, Iface: "lo", TableKnown: true},
+		{Destination: net.ParseIP("::1"), Family: counterfactualIPv6, Iface: "lo", Table: "local", TableKnown: true},
+	}
+	if split, known := familyPathsDiffer(routes); !known || split {
+		t.Errorf("familyPathsDiffer(localhost) = %v/%v, want a known absence of a split", split, known)
+	}
+}
+
 // Interface MTU only, and only when the selected path is the narrower one.
 func TestNarrowerPathMTUIsInterfaceMTUOnly(t *testing.T) {
 	narrow, wide := decisionTo("10.20.0.5", "wg0", "10.20.0.0/16"), decisionTo("1.1.1.1", "eth0", "0.0.0.0/0")
@@ -288,13 +499,13 @@ func TestNarrowerPathMTUIsInterfaceMTUOnly(t *testing.T) {
 // remembered as such rather than asked again by every later probe.
 func TestRouteCacheAsksTheKernelOncePerDestination(t *testing.T) {
 	asked := map[string]int{}
-	c := newRouteCache(func(dst net.IP) (RouteDecision, bool) {
+	c := newRouteCache(func(dst, _ net.IP) (RouteDecision, bool) {
 		asked[dst.String()]++
 		if dst.String() == "203.0.113.9" {
 			return RouteDecision{}, false
 		}
 		return RouteDecision{Iface: "eth0"}, true
-	})
+	}, nil)
 	for range 3 {
 		if _, ok := c.get(net.ParseIP("93.184.216.34")); !ok {
 			t.Fatal("cached lookup lost its answer")
@@ -314,7 +525,7 @@ func TestRouteCacheAsksTheKernelOncePerDestination(t *testing.T) {
 // The cache fills the identity fields, so a collector that reports only what
 // the kernel told it still produces a decision keyed to its destination.
 func TestRouteCacheStampsDestinationAndFamily(t *testing.T) {
-	c := newRouteCache(func(net.IP) (RouteDecision, bool) { return RouteDecision{Iface: "wg0"}, true })
+	c := newRouteCache(func(net.IP, net.IP) (RouteDecision, bool) { return RouteDecision{Iface: "wg0"}, true }, nil)
 	v6, _ := c.get(net.ParseIP("2606:2800::1"))
 	if v6.Family != counterfactualIPv6 || v6.Destination.String() != "2606:2800::1" {
 		t.Errorf("IPv6 decision = %+v, want the destination and family stamped", v6)
@@ -329,10 +540,10 @@ func TestRouteCacheStampsDestinationAndFamily(t *testing.T) {
 // cannot turn route intelligence into a scan of the address space.
 func TestRouteDecisionsAreBoundedAndDeduplicated(t *testing.T) {
 	var asked int
-	o := &netops{routes: newRouteCache(func(net.IP) (RouteDecision, bool) {
+	o := &netops{routes: newRouteCache(func(net.IP, net.IP) (RouteDecision, bool) {
 		asked++
 		return RouteDecision{Iface: "eth0"}, true
-	})}
+	}, nil)}
 	var dsts []net.IP
 	for i := range maxRouteLookups + 5 {
 		dsts = append(dsts, net.IPv4(198, 51, 100, byte(i)))
@@ -448,5 +659,43 @@ func TestRouteSummaryReportsOnlyWhatIsKnown(t *testing.T) {
 	}
 	if got := (RouteDecision{}).Summary(); got != "" {
 		t.Errorf("an empty decision rendered %q, want nothing", got)
+	}
+	// A routing domain the kernel named, and only when it is not the main one:
+	// a decision from main is the unremarkable case and printing it on every
+	// row would be noise, while an unknown table is not a table at all.
+	policy := decisionTo("10.20.0.5", "eth0", "")
+	policy.Gateway, policy.Table, policy.TableKnown = net.ParseIP("192.168.1.9"), "table 100", true
+	if got, want := policy.Summary(), "dev eth0 via 192.168.1.9 table 100"; got != want {
+		t.Errorf("Summary() = %q, want %q", got, want)
+	}
+	main := policy
+	main.Table = ""
+	if got, want := main.Summary(), "dev eth0 via 192.168.1.9"; got != want {
+		t.Errorf("Summary() = %q, want %q", got, want)
+	}
+	unknown := policy
+	unknown.TableKnown = false
+	if got, want := unknown.Summary(), "dev eth0 via 192.168.1.9"; got != want {
+		t.Errorf("Summary() = %q, want %q", got, want)
+	}
+	own := policy
+	own.Table = "local"
+	if got, want := own.Summary(), "dev eth0 via 192.168.1.9"; got != want {
+		t.Errorf("Summary() = %q, want %q", got, want)
+	}
+}
+
+// The comparison is a pure function of two decisions, so a run repeated over
+// the same evidence answers the same way every time. Route intelligence feeds
+// a diagnosis that is replayed and compared across runs, and a comparison that
+// wandered would make both meaningless.
+func TestComparePathsIsDeterministic(t *testing.T) {
+	a := routed(counterfactualIPv4, "eth0", "192.168.1.254", "table 100", true, "192.168.1.20")
+	b := routed(counterfactualIPv4, "eth0", "192.168.1.1", "", true, "192.168.1.21")
+	want := comparePaths(a, b)
+	for range 50 {
+		if got := comparePaths(a, b); got != want {
+			t.Fatalf("comparePaths = %+v, want the stable %+v", got, want)
+		}
 	}
 }

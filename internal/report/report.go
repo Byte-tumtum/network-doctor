@@ -149,7 +149,10 @@ type Route struct {
 	Source      string `json:"source,omitempty"`
 	Prefix      string `json:"prefix,omitempty"`
 	Metric      *int   `json:"metric,omitempty"`
-	Table       string `json:"table,omitempty"`
+	// Table is meaningful only with TableKnown: the main routing table is
+	// written as an absent value, and so is a platform that never named one.
+	Table      string `json:"table,omitempty"`
+	TableKnown bool   `json:"table_known,omitempty"`
 	// InterfaceMTU is the selected link's own MTU, never a measured path MTU.
 	InterfaceMTU int              `json:"interface_mtu,omitempty"`
 	Tunnel       string           `json:"tunnel,omitempty"`

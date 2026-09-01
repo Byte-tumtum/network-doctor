@@ -213,6 +213,14 @@ func assertEvidenceObservation(t *testing.T, selected DiagnosisID, evidence Caus
 		})
 	case ObservationRoutePathDiffers:
 		observed = len(r.Routes) > 0 && r.Routes[0].Iface != "" && r.Routes[0].Iface != evidence.Value
+	case ObservationRouteNextHopDiffers:
+		observed = evidence.Value != "" && slices.ContainsFunc(r.Routes, func(d RouteDecision) bool {
+			return d.Gateway != nil && d.Gateway.String() != evidence.Value
+		})
+	case ObservationRouteTableDiffers:
+		observed = slices.ContainsFunc(r.Routes, func(d RouteDecision) bool {
+			return d.TableKnown && d.Table != ""
+		})
 	case ObservationRouteFamilySplit:
 		split, known := familyPathsDiffer(r.Routes)
 		observed = known && split

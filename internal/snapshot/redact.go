@@ -351,8 +351,9 @@ func (r *redactor) check(c Check) Check {
 			Destination: r.address(route.Destination), Family: route.Family,
 			Interface: r.alias("interface", route.Interface), Gateway: r.address(route.Gateway),
 			Source: r.address(route.Source), Prefix: r.prefix(route.Prefix), Metric: route.Metric,
-			Table: r.routeTable(route.Table), InterfaceMTU: route.InterfaceMTU,
-			Tunnel: route.Tunnel, TunnelKind: route.TunnelKind,
+			Table: r.routeTable(route.Table), TableKnown: route.TableKnown,
+			InterfaceMTU: route.InterfaceMTU,
+			Tunnel:       route.Tunnel, TunnelKind: route.TunnelKind,
 			Unreachable: route.Unreachable, Reason: route.Reason,
 		}
 		for _, competing := range route.Competing {

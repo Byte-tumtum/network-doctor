@@ -41,6 +41,27 @@ func TestReplaySnapshotRoundTripSemantics(t *testing.T) {
 			},
 		},
 		{
+			name:   "target failure routed through another routing domain",
+			target: &Target{Raw: "example.invalid:443", Host: "example.invalid", Port: 443, Proto: ProtoNone, PortExplicit: true},
+			order:  []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},
+			res: map[ProbeID]ProbeResult{
+				// Same interface for both flows, so the difference the replay
+				// has to reproduce is only in the fields an interface name
+				// cannot carry: the next hop and the routing table.
+				ProbeIface: {Status: StatusPass, Routes: []RouteDecision{{
+					Destination: net.ParseIP("1.1.1.1"), Family: counterfactualIPv4, Iface: "eth0",
+					Gateway: net.ParseIP("192.168.1.1"), Tunnel: TunnelDirect, TableKnown: true,
+				}}},
+				ProbeInternet: {Status: StatusPass},
+				ProbeDNS:      {Status: StatusPass, Addrs: []net.IP{net.ParseIP("198.51.100.7")}},
+				ProbeTargetTCP: {Status: StatusFail, Routes: []RouteDecision{{
+					Destination: net.ParseIP("198.51.100.7"), Family: counterfactualIPv4, Iface: "eth0",
+					Gateway: net.ParseIP("10.0.0.1"), Tunnel: TunnelDirect,
+					Table: "table 51820", TableKnown: true,
+				}}},
+			},
+		},
+		{
 			name:   "target failure with split tunnel evidence",
 			target: &Target{Raw: "example.invalid:443", Host: "example.invalid", Port: 443, Proto: ProtoNone, PortExplicit: true},
 			order:  []ProbeID{ProbeIface, ProbeInternet, ProbeDNS, ProbeTargetTCP},

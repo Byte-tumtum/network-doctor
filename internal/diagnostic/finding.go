@@ -121,10 +121,21 @@ const (
 	// None of these is a verdict. A tunnel in the path is the normal state of
 	// a machine on a VPN, and route evidence exists to explain a conclusion
 	// the probes already reached, never to reach one on its own.
-	ObservationRouteTunneled     ObservationID = "route_tunneled"
-	ObservationRouteDirect       ObservationID = "route_direct"
-	ObservationRouteUnreachable  ObservationID = "route_unreachable"
-	ObservationRoutePathDiffers  ObservationID = "route_path_differs"
+	ObservationRouteTunneled    ObservationID = "route_tunneled"
+	ObservationRouteDirect      ObservationID = "route_direct"
+	ObservationRouteUnreachable ObservationID = "route_unreachable"
+	ObservationRoutePathDiffers ObservationID = "route_path_differs"
+	// ObservationRouteNextHopDiffers is this row's traffic being handed to a
+	// router other than the one named in Value, down what is otherwise the
+	// same interface. Two flows can leave a machine by one link and still be
+	// routed apart, and the interface name matching is exactly what hides it.
+	ObservationRouteNextHopDiffers ObservationID = "route_next_hop_differs"
+	// ObservationRouteTableDiffers is the kernel having resolved this row's
+	// destination in a routing table other than the one general traffic used.
+	// It is evidence that another routing domain was selected and nothing
+	// more: which rule, mark, VRF, or application policy sent the flow there
+	// is not something a route lookup reports, and this never claims it.
+	ObservationRouteTableDiffers ObservationID = "route_table_differs"
 	ObservationRouteFamilySplit  ObservationID = "route_family_split"
 	ObservationRouteInterfaceMTU ObservationID = "route_interface_mtu"
 )

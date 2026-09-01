@@ -29,7 +29,19 @@ const routeSocketTimeout = 500 * time.Millisecond
 // routeReplyMax bounds one reply read off the routing socket.
 const routeReplyMax = 8 << 10
 
-func lookupRouteDecision(dst net.IP) (RouteDecision, bool) {
+// lookupRouteDecision asks the kernel which route one destination takes.
+//
+// The source the pass binds its dials to is deliberately ignored. An RTM_GET
+// carries a destination and nothing the kernel would treat as the source of a
+// hypothetical packet, so there is no way to ask this routing socket the
+// constrained question, and filling RTAX_IFA in the request would be netdoc
+// asserting a constraint the kernel never applied. What comes back is the
+// machine's own decision for the destination, which is what it has always
+// been here.
+//
+// Nothing here fills Table either. A BSD routing socket reply names no routing
+// domain, so the field stays unknown rather than claiming the main table.
+func lookupRouteDecision(dst, _ net.IP) (RouteDecision, bool) {
 	addr, ok := netip.AddrFromSlice(dst)
 	if !ok {
 		return RouteDecision{}, false

@@ -53,33 +53,98 @@ func nlAlign(n int) int { return (n + netlinkAlignTo - 1) &^ (netlinkAlignTo - 1
 // different questions, so they stay separate: one classifies a failed default
 // path from the whole table, the other asks about one destination.
 
-// lookupRouteDecision asks the kernel which route one destination takes.
-func lookupRouteDecision(dst net.IP) (RouteDecision, bool) {
+// lookupRouteDecision asks the kernel which route one destination takes, for
+// the flow this run actually makes.
+//
+// source is the local address the pass binds its dials to, and it is part of
+// the question rather than decoration: `ip rule from <address> lookup <table>`
+// is policy routing's commonest shape, and the FIB lookup resolves it only
+// when the lookup carries the source the packet would carry. Asking without
+// one under --iface would describe a path the run never took.
+//
+// A kernel that refuses the constrained question is asked the plain one
+// instead. The answer is then the machine's own decision rather than this
+// flow's, which is exactly what every unbound run already records, and is
+// better than reporting no route intelligence at all.
+//
+// "No route" is deliberately not one of the refusals. The kernel answering
+// that nothing leads to the destination from this source is an answer, and it
+// is the right one: the source is an address of this machine that the run's
+// own sockets bind to, so a flow the kernel will not route is a flow the probe
+// will not make either. Retrying unconstrained there would replace the truth
+// about this run with a path it never used.
+func lookupRouteDecision(dst, source net.IP) (RouteDecision, bool) {
 	addr, ok := netip.AddrFromSlice(dst)
 	if !ok {
 		return RouteDecision{}, false
 	}
 	addr = addr.Unmap()
-	family, raw := uint8(unix.AF_INET), addr.AsSlice()
-	if !addr.Is4() {
+	src := routeQuerySource(addr, source)
+	decision, ok := routeLookup(addr, src)
+	if !ok && src.IsValid() {
+		return routeLookup(addr, netip.Addr{})
+	}
+	return decision, ok
+}
+
+// routeQuerySource is the source address a lookup for dst may carry: the
+// pass's own binding, when there is one and it is in dst's family. A source in
+// the other family is not a constraint the kernel could apply to this lookup,
+// so it is dropped rather than sent.
+func routeQuerySource(dst netip.Addr, source net.IP) netip.Addr {
+	src, ok := netip.AddrFromSlice(source)
+	if !ok {
+		return netip.Addr{}
+	}
+	if src = src.Unmap(); src.Is4() != dst.Is4() {
+		return netip.Addr{}
+	}
+	return src
+}
+
+// routeLookupRequest builds the rtmsg body of one lookup: a destination, and
+// the source the flow would carry when there is one.
+//
+// dst_len is the length of the address supplied, which is how a lookup asks
+// about one host rather than about a prefix. src_len says the same about the
+// source, and both have to be set or the kernel reads the attribute as a
+// prefix of length zero and the constraint is silently lost.
+func routeLookupRequest(dst, src netip.Addr) []byte {
+	family, raw := uint8(unix.AF_INET), dst.AsSlice()
+	if !dst.Is4() {
 		family = unix.AF_INET6
 	}
-	// dst_len is the length of the address supplied, which is how a lookup
-	// asks about one host rather than about a prefix.
 	body := make([]byte, rtMsgLen)
 	body[0] = family
 	body[1] = uint8(len(raw) * 8) // #nosec G115 -- an IP address is 4 or 16 bytes, so this is 32 or 128
 	binary.NativeEndian.PutUint32(body[8:], rtmFLookupTbl)
 	body = append(body, rtAttr(unix.RTA_DST, raw)...)
+	if src.IsValid() {
+		srcRaw := src.AsSlice()
+		body[2] = uint8(len(srcRaw) * 8) // #nosec G115 -- an IP address is 4 or 16 bytes
+		body = append(body, rtAttr(unix.RTA_SRC, srcRaw)...)
+	}
+	return body
+}
 
-	replies, err := netlinkExchange(unix.RTM_GETROUTE, body)
+// routeLookup performs one RTM_GETROUTE exchange, optionally constrained to a
+// source address.
+func routeLookup(dst, src netip.Addr) (RouteDecision, bool) {
+	replies, err := netlinkExchange(unix.RTM_GETROUTE, routeLookupRequest(dst, src))
 	if err != nil {
 		if unreachableNetlinkError(err) {
 			return RouteDecision{Unreachable: true}, true
 		}
 		return RouteDecision{}, false
 	}
-	return parseRouteReply(replies, addr)
+	decision, ok := parseRouteReply(replies, dst)
+	// A lookup that supplied the source is answered without RTA_PREFSRC,
+	// since the kernel has no selection left to report. The address the flow
+	// leaves from is still known: it is the one the question carried.
+	if ok && decision.Source == nil && !decision.Unreachable && src.IsValid() {
+		decision.Source = net.IP(src.AsSlice())
+	}
+	return decision, ok
 }
 
 // parseRouteReply reads the kernel's answer into a decision. It takes the
@@ -142,29 +207,38 @@ func parseRouteReply(replies []netlinkMessage, dst netip.Addr) (RouteDecision, b
 				}
 			}
 		}
-		out.Table = routeTableName(table)
+		out.Table, out.TableKnown = routeTableName(table)
 		out.Tunnel, out.TunnelKind = classifyTunnel(linkClassificationFacts(out.Iface, out.TunnelKind))
 		return out, true
 	}
 	return RouteDecision{}, false
 }
 
-// routeTableName spells the routing table a decision came from. The three the
-// kernel reserves get their names; any other id is reported as its number,
-// because a numbered table is exactly what policy routing installs and a
-// diagnosis that hid the number would hide the whole point. The main table is
-// reported as empty, since a decision from it is the unremarkable case and
-// saying so on every row would be noise.
-func routeTableName(id uint32) string {
+// routeTableName spells the routing table a decision came from, and says
+// whether the kernel named one at all. The three the kernel reserves get their
+// names; any other id is reported as its number, because a numbered table is
+// exactly what policy routing installs and a diagnosis that hid the number
+// would hide the whole point. The main table is spelled as empty, since a
+// decision from it is the unremarkable case and saying so on every row would
+// be noise.
+//
+// RT_TABLE_UNSPEC is the one id that is not an answer. It is the kernel
+// leaving the field alone, and it comes back as unknown rather than as the
+// main table: "this came from main" and "nobody said" are different facts, and
+// only the first one distinguishes a flow that stayed in the ordinary routing
+// domain from one that a rule sent elsewhere.
+func routeTableName(id uint32) (string, bool) {
 	switch id {
-	case unix.RT_TABLE_UNSPEC, unix.RT_TABLE_MAIN:
-		return ""
+	case unix.RT_TABLE_UNSPEC:
+		return "", false
+	case unix.RT_TABLE_MAIN:
+		return "", true
 	case unix.RT_TABLE_LOCAL:
-		return "local"
+		return "local", true
 	case unix.RT_TABLE_DEFAULT:
-		return "default"
+		return "default", true
 	}
-	return "table " + strconv.FormatUint(uint64(id), 10)
+	return "table " + strconv.FormatUint(uint64(id), 10), true
 }
 
 // linkFacts reads one interface's name, MTU, and kernel-reported device kind
