@@ -2,6 +2,7 @@ package diagnostic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
@@ -124,8 +125,15 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 		mtu := o.mtuFor(dep.Iface)
 		blackHole := "; the TCP handshake succeeded" + mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU") +
 			", consistent with a path-MTU black hole"
-		delivered, queueErr := awaitAcknowledged(measureQueued, conn, n, deadline)
+		delivered, queueErr := awaitAcknowledged(ctx, measureQueued, conn, n, deadline)
 		switch {
+		case errors.Is(queueErr, context.Canceled):
+			// The watch stopped because the run was cancelled, not because
+			// anything was read off the socket. Cancellation is not evidence
+			// about the path, so it cannot borrow a verdict from a reading
+			// that never happened.
+			r.Status = StatusNA
+			r.Detail = "path-MTU check canceled before the peer acknowledged the payload"
 		case queueErr != nil:
 			// No send-queue accounting here, so fall back to the send buffer:
 			// a write that advanced past it had to have drained some of it.
@@ -187,16 +195,31 @@ const pmtuQueueSample = 50 * time.Millisecond
 // produces one: its segments are all too big to cross, so nothing is ever
 // acknowledged and the loop runs out the deadline it was already going to
 // spend.
-func awaitAcknowledged(measure func(net.Conn) (int, error), conn net.Conn, written int, deadline time.Time) (int, error) {
+//
+// The connection was dialled with ctx, but an established socket does not care
+// that ctx was cancelled afterwards, so this watch is the only thing left that
+// can notice. It reports the cancellation rather than a reading, since nothing
+// was measured and a run being torn down is not evidence about the path.
+func awaitAcknowledged(ctx context.Context, measure func(net.Conn) (int, error), conn net.Conn, written int, deadline time.Time) (int, error) {
 	for {
 		queued, err := measure(conn)
 		if err != nil {
 			return 0, err
 		}
-		if delivered := written - queued; delivered > 0 || !time.Now().Before(deadline) {
+		delivered := written - queued
+		if delivered > 0 || !time.Now().Before(deadline) {
 			return delivered, nil
 		}
-		time.Sleep(pmtuQueueSample)
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return 0, ctx.Err()
+			}
+			// Out of budget rather than cancelled, which is the deadline above
+			// arriving from the other direction, so it answers the same way.
+			return delivered, nil
+		case <-time.After(pmtuQueueSample):
+		}
 	}
 }
 

@@ -1505,6 +1505,92 @@ func TestPMTUProbeWaitsForAcknowledgement(t *testing.T) {
 	}
 }
 
+// pmtuCancelBudget gives the cancellation case a write window wide enough that
+// only cancellation can plausibly be what ends the wait. The probe derives its
+// write deadline as budget minus pmtuHeadroom, so the wait under test is the
+// full pmtuWriteWait, and a return well inside that window is evidence the
+// deadline was not what returned it.
+const pmtuCancelBudget = pmtuHeadroom + pmtuWriteWait
+
+// Cancelling the run has to stop the acknowledgement watch. The connection is
+// dialled with the context, but an established socket does not care that the
+// context was later cancelled, so the polling loop is the only thing that can
+// notice. Without that, a cancelled probe keeps sampling until its own write
+// deadline and holds the whole run open for the rest of the window.
+func TestPMTUProbeStopsWaitingWhenCanceled(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+
+	// Closed from inside the queue reader, so cancellation cannot land before
+	// the watch is running: the first read is the one taken before the payload
+	// is written, and the third proves the loop has sampled, waited, and come
+	// back for more.
+	polling := make(chan struct{})
+	samples := 0
+	ops := &netops{
+		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
+		sendBuffer:  func(net.Conn) (int, error) { return 2 * pmtuSendBuffer, nil },
+		queued: func(net.Conn) (int, error) {
+			if samples++; samples == 3 {
+				close(polling)
+			}
+			// Never any progress, so nothing but cancellation or the deadline
+			// can end the watch.
+			return pmtuPayloadSize, nil
+		},
+	}
+	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuCancelBudget)
+	defer cancel()
+
+	done := make(chan ProbeResult, 1)
+	go func() { done <- ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps) }()
+
+	<-polling
+	start := time.Now()
+	cancel()
+
+	var r ProbeResult
+	select {
+	case r = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("cancelled PMTU probe never returned")
+	}
+	// Generous enough to survive a loaded runner, and still decisively short of
+	// the write window the unfixed probe sits out.
+	if waited := time.Since(start); waited > pmtuWriteWait/2 {
+		t.Errorf("cancelled PMTU probe returned after %v, want well inside the %v write window", waited, pmtuWriteWait)
+	}
+	// Cancellation is not evidence about the path, so it cannot borrow one of
+	// the readings' verdicts: not the black-hole WARN, not the send-buffer
+	// fallback's PASS, and not a fix hint for a problem nothing measured.
+	if r.Status != StatusNA || !strings.Contains(r.Detail, "canceled") {
+		t.Errorf("cancelled PMTU probe = %+v, want N/A naming the cancellation", r)
+	}
+	if r.Fix != "" {
+		t.Errorf("cancelled PMTU probe fix = %q, want none", r.Fix)
+	}
+}
+
+// A budget that merely ran out is not cancellation: it is the write deadline
+// arriving from the other direction, so it has to answer the way the deadline
+// does, with a reading and no error. An error here would read as a platform
+// that cannot account for its send queue, and that fallback can call a stall a
+// pass.
+func TestAwaitAcknowledgedTreatsAnExpiredBudgetAsTheDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), pmtuQueueSample)
+	defer cancel()
+
+	// A write deadline far enough out that only the expiring budget can end the
+	// watch, and a queue that never drains so nothing else can.
+	delivered, err := awaitAcknowledged(ctx, func(net.Conn) (int, error) { return pmtuPayloadSize, nil },
+		nil, pmtuPayloadSize, time.Now().Add(time.Hour))
+	if err != nil || delivered > 0 {
+		t.Errorf("awaitAcknowledged past the budget = (%d, %v), want the deadline's answer: no delivery, no error", delivered, err)
+	}
+}
+
 // A reset purges the send queue, so an empty queue after one reads as a fully
 // acknowledged payload. Inconclusive has to win over that.
 func TestPMTUProbeReportsResetOverDrainedQueue(t *testing.T) {
