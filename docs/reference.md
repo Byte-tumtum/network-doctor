@@ -54,9 +54,10 @@ The **Path MTU** row finds it from an ordinary socket instead. The TCP handshake
 
 - some of the payload is acknowledged → full-size packets cross, **Pass**, with the connection's TCP MSS when the OS exposes it,
 - the whole payload is written and none of it is acknowledged before the deadline → **Warn**, naming the evidence and an MSS/MTU experiment,
-- the peer hangs up first → **N/A**: inconclusive, and it will not guess.
+- the peer hangs up first → **N/A**: inconclusive, and it will not guess,
+- the platform cannot read the send queue and the write was accepted → **N/A**: the local kernel took the bytes, which is not evidence they crossed.
 
-A completed write is deliberately not the test: Linux treats the send-buffer size as an accounting hint rather than a ceiling, so an 8 KiB send buffer can swallow a 24 KiB write whole without a byte reaching the wire. Linux and macOS read the socket's outstanding send queue directly instead. Windows exposes no equivalent query and falls back to inferring delivery from the send buffer, so on that platform the row can miss a black hole, though the TLS/HTTP timeouts beside it still show up.
+A completed write is deliberately not the test: Linux treats the send-buffer size as an accounting hint rather than a ceiling, so an 8 KiB send buffer can swallow a 24 KiB write whole without a byte reaching the wire. Linux and macOS read the socket's outstanding send queue directly instead. Windows exposes no equivalent query, so it cannot tell a delivered payload from a buffered one and never reports Pass: an accepted write is N/A, naming what it could not verify. A write that stalls against the small send buffer is still a Warn there, and the TLS/HTTP timeouts beside it still show up.
 
 It deliberately never Fails: a peer that accepts the connection and then stops accepting data stalls the write the same way, and a normal socket cannot discover the exact path MTU when ICMP feedback is filtered. The row reports bytes written and acknowledged, the TCP MSS when available, and the local interface MTU as context, never as a measured path MTU. Only when both this write and a protocol exchange time out does the overall verdict identify a probable network-path problem; certificate and other immediate protocol failures remain service failures.
 

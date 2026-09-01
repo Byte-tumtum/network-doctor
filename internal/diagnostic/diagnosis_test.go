@@ -344,6 +344,35 @@ func TestFocusProbe(t *testing.T) {
 	}
 }
 
+// A row that measured nothing is not half of the path-MTU correlation. On a
+// platform with no send-queue accounting an unverified Path MTU row is the
+// ordinary shape of a run, so it has to reach the same answer as no Path MTU
+// row at all: the protocol stall keeps its own service verdict rather than
+// being promoted to a black hole nothing observed.
+func TestUnverifiedPathMTUIsNotBlackHoleEvidence(t *testing.T) {
+	tg := mustTarget(t, "github.com")
+	order := []ProbeID{ProbeIface, ProbeInternet, ProbeProxy, ProbeDNS, ProbeTargetTCP, ProbePMTU, ProbeTLS, ProbeHTTP, ProbeHTTPS}
+	stall := ProbeResult{Status: StatusFail, Cause: TLSCauseTimeout}
+	unverified := map[ProbeID]ProbeResult{
+		ProbeTLS: stall,
+		ProbePMTU: {Status: StatusNA,
+			Detail: "24 KiB accepted by the local TCP stack, but path-MTU delivery could not be verified: no TCP send-queue accounting on windows"},
+	}
+	summary, verdict := Diagnose(tg, order, unverified)
+	if strings.Contains(summary, "path MTU black hole") {
+		t.Errorf("summary = %q, want no black hole named: nothing measured one", summary)
+	}
+	// The comparison is the invariant: an unverified row is worth exactly as
+	// much as a row that never ran.
+	wantSummary, wantVerdict := Diagnose(tg, order, map[ProbeID]ProbeResult{ProbeTLS: stall})
+	if summary != wantSummary || verdict != wantVerdict {
+		t.Errorf("unverified Path MTU changed the answer to (%q, %q), want (%q, %q)", summary, verdict, wantSummary, wantVerdict)
+	}
+	if focus := FocusProbe(tg, order, unverified); focus == ProbePMTU {
+		t.Error("focus landed on a Path MTU row that established nothing")
+	}
+}
+
 // The service/network split is the whole point of the machine-readable
 // verdict: the same target failure classifies differently depending on
 // whether anything else proved the path usable.

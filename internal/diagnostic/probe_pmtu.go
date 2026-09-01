@@ -25,8 +25,9 @@ import (
 // hint, not a ceiling, and will absorb a 24 KiB write into a socket reporting
 // an 8 KiB send buffer without a byte reaching the wire, which is exactly what
 // a path-MTU black hole looks like from userspace. Only socketQueued separates
-// the two, so the send buffer survives here as detail and as the fallback for
-// platforms that cannot account for their send queue.
+// the two, so a platform that cannot read its send queue cannot reach a Pass
+// here at all. The send buffer survives as detail, and as the small ceiling
+// that makes a blocked write mean something.
 //
 // There is deliberately no small-write control: a small Write returns out of the
 // send buffer whether or not the bytes ever leave the machine, so it is not
@@ -135,20 +136,23 @@ func (o *netops) pmtuProbe(port int, proto Proto) func(context.Context, map[Prob
 			r.Status = StatusNA
 			r.Detail = "path-MTU check canceled before the peer acknowledged the payload"
 		case queueErr != nil:
-			// No send-queue accounting here, so fall back to the send buffer:
-			// a write that advanced past it had to have drained some of it.
-			// This over-reports Pass on any kernel that accepts more than the
-			// buffer it reports, which is why it is the fallback and not the
-			// measurement.
-			const blind = " (this platform cannot read the TCP send queue, so delivery is inferred from the send buffer and a black hole can still read as a pass)"
+			// No send-queue accounting, so an accepted write is only that:
+			// bytes the local kernel took. It is not evidence they left the
+			// machine, and a kernel that buffers past the size it reports makes
+			// a black hole look exactly like a delivery. Pass has to rest on
+			// progress something actually measured, so there is no Pass to be
+			// had on this side of the switch.
 			switch {
 			case err == nil:
-				r.Status = StatusPass
-				r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s", kib(n), kib(sendBuffer), mssNote(mss)) + blind
+				r.Status = StatusNA
+				r.Detail = fmt.Sprintf("%s accepted by the local TCP stack%s, but path-MTU delivery could not be verified: %v", kib(n), mssNote(mss), queueErr)
 			case n > sendBuffer:
-				r.Status = StatusPass
-				r.Detail = fmt.Sprintf("%s drained past the measured %s TCP send buffer%s before the write stopped (%v)", kib(n), kib(sendBuffer), mssNote(mss), err) + blind
+				r.Status = StatusNA
+				r.Detail = fmt.Sprintf("%s accepted by the local TCP stack%s before the write stopped (%v), but path-MTU delivery could not be verified: %v", kib(n), mssNote(mss), err, queueErr)
 			case timeoutError(err):
+				// A write that blocked until the deadline without ever draining
+				// a buffer smaller than the payload is measured progress, and
+				// it measured none: the buffer only clears on acknowledgement.
 				r.Status = StatusWarn
 				r.Detail = fmt.Sprintf("stalled after %s of %s without draining the measured %s TCP send buffer%s; the TCP handshake succeeded%s, consistent with a path-MTU black hole",
 					kib(n), kib(pmtuPayloadSize), kib(sendBuffer), mssNote(mss), mtuNote(dep.Iface, mtu, ", and %s advertises a %d-byte MTU"))

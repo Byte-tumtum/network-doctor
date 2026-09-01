@@ -20,8 +20,10 @@ import (
 // wrong offset would misclassify silently, which is worse than a limitation
 // that announces itself in the row.
 //
-// The path-MTU probe handles the error rather than being handed a zero, and
-// falls back to its send-buffer inference. See pmtuProbe for what that costs.
+// The path-MTU probe handles the error rather than being handed a zero. It can
+// still see a write block against a send buffer smaller than the payload, which
+// is a stall it measured, but nothing here can establish delivery, so an
+// accepted write is reported as unverified rather than as a Pass.
 func socketQueued(net.Conn) (int, error) {
 	return 0, errors.New("no TCP send-queue accounting on " + runtime.GOOS)
 }

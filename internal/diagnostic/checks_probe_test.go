@@ -1253,10 +1253,12 @@ const pmtuTestBudget = pmtuHeadroom + time.Second
 
 // The PMTU probe reads one asymmetry: a payload that must travel as full-size
 // segments either drains the (deliberately small) send buffer or stalls in it.
-// A stall is the black-hole evidence and never more than a WARN; a peer that
-// drains the payload clears the path; a peer that hangs up says nothing either
-// way. net.Pipe stands in for the socket, since its writes block until the far end
-// reads, which is exactly the behavior being classified.
+// net.Pipe has no send queue to read, so these are the cases as they look on a
+// platform without queue accounting: a stall is the black-hole evidence and
+// never more than a WARN; a write the far end took proves only that something
+// local took it; a peer that hangs up says nothing either way. net.Pipe stands
+// in for the socket, since its writes block until the far end reads, which is
+// exactly the behavior being classified.
 func TestPMTUProbeClassifiesWrite(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1273,10 +1275,14 @@ func TestPMTUProbeClassifiesWrite(t *testing.T) {
 			fix:    true,
 		},
 		{
-			name:   "payload delivered",
+			// A goroutine reading the far end of a pipe is not a path. With no
+			// send queue to read, nothing here separates that from a kernel
+			// that swallowed the write and sent none of it, so the row reports
+			// what it could not establish rather than clearing the path.
+			name:   "write accepted, delivery unmeasurable",
 			serve:  func(c net.Conn) { _, _ = io.Copy(io.Discard, c) },
-			status: StatusPass,
-			detail: "24 KiB drained past the measured 4 KiB TCP send buffer",
+			status: StatusNA,
+			detail: "path-MTU delivery could not be verified",
 		},
 		{
 			name: "peer hangs up",
@@ -1607,25 +1613,62 @@ func TestPMTUProbeReportsResetOverDrainedQueue(t *testing.T) {
 	}
 }
 
-// Windows has no send-queue query, so it keeps the send-buffer inference, and
-// says so, because that inference cannot see a black hole on a kernel that
-// buffers past the size it reports.
-func TestPMTUProbeFallsBackWithoutQueueAccounting(t *testing.T) {
-	client, server := net.Pipe()
-	t.Cleanup(func() { _ = server.Close() })
-	go func() { _, _ = io.Copy(io.Discard, server) }()
-	ops := &netops{
-		dialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
-		sendBuffer:  func(net.Conn) (int, error) { return pmtuSendBuffer, nil },
-		queued:      func(net.Conn) (int, error) { return 0, errors.New("no TCP send-queue accounting on windows") },
-	}
-	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
-	ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
-	defer cancel()
+// blackHoleConn is what a path-MTU black hole looks like from userspace on a
+// kernel that accepts more than the send buffer it reports: the whole payload
+// is taken locally and not one byte reaches a peer. There is no peer.
+type blackHoleConn struct{ fakeConn }
 
-	r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps)
-	if r.Status != StatusPass || !strings.Contains(r.Detail, "cannot read the TCP send queue") {
-		t.Errorf("pmtu without queue accounting = %+v, want PASS disclosing the limitation", r)
+func (blackHoleConn) Write(b []byte) (int, error)      { return len(b), nil }
+func (blackHoleConn) SetWriteDeadline(time.Time) error { return nil }
+
+// overrunConn takes more than the send buffer it reports and then stops, which
+// is the shape the old inference read as delivery. Bytes past the buffer are
+// still bytes a kernel holds, not bytes a peer took.
+type overrunConn struct{ fakeConn }
+
+func (overrunConn) Write([]byte) (int, error) {
+	return 2 * pmtuSendBuffer, fmt.Errorf("wrapped write: %w", syscall.ECONNRESET)
+}
+func (overrunConn) SetWriteDeadline(time.Time) error { return nil }
+
+// Without send-queue accounting nothing can tell the write above apart from a
+// delivered one. A completed Write says the local kernel took the bytes and
+// nothing more: not that they left the machine, and not that the peer
+// acknowledged them, so it cannot be a PASS. With no reading to contradict it
+// either, it is not a black-hole WARN: the limitation is in the observer, not
+// the path.
+func TestPMTUProbeWithoutQueueAccountingCannotPass(t *testing.T) {
+	// Both writes the send-buffer inference used to read as delivery.
+	for _, tc := range []struct {
+		name string
+		conn net.Conn
+	}{
+		{"whole payload accepted", blackHoleConn{}},
+		{"write overruns the send buffer, then stops", overrunConn{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ops := &netops{
+				dialContext: func(context.Context, string, string) (net.Conn, error) { return tc.conn, nil },
+				sendBuffer:  func(net.Conn) (int, error) { return pmtuSendBuffer, nil },
+				queued:      func(net.Conn) (int, error) { return 0, errors.New("no TCP send-queue accounting on windows") },
+			}
+			deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("192.0.2.1")}}
+			ctx, cancel := context.WithTimeout(context.Background(), pmtuTestBudget)
+			defer cancel()
+
+			r := ops.pmtuProbe(443, ProtoTLSHTTP)(ctx, deps)
+			if r.Status != StatusNA {
+				t.Errorf("pmtu without queue accounting = %+v, want N/A: the write was accepted locally and nothing measured what became of it", r)
+			}
+			if !strings.Contains(r.Detail, "could not be verified") {
+				t.Errorf("pmtu detail = %q, want it to name the delivery it could not verify", r.Detail)
+			}
+			// Nothing demonstrated a path-MTU defect, so nothing may be
+			// recommended for one.
+			if r.Fix != "" {
+				t.Errorf("pmtu fix = %q, want none: no black hole was demonstrated", r.Fix)
+			}
+		})
 	}
 }
 
