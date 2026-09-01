@@ -92,7 +92,7 @@ func TestRouteDecisionFromBestRouteReadsThePrefixItWasGiven(t *testing.T) {
 // The real API, asked about the loopback address. It needs no privileges and
 // no network.
 func TestLookupRouteDecisionAnswersForLoopback(t *testing.T) {
-	got, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"))
+	got, ok := lookupRouteDecision(net.ParseIP("127.0.0.1"), nil)
 	if !ok {
 		t.Skip("Windows did not answer a route lookup in this environment")
 	}
