@@ -744,11 +744,10 @@ func (r RouteDecision) Summary() string {
 	return strings.Join(parts, " ")
 }
 
-// resolverIP reads the address out of the resolver dial target the Go resolver
-// reported, and returns nil for anything that is not one. The value comes from
-// the resolver's own dial hook, so it is already an address and never a name,
-// but it is parsed rather than trusted: nil simply means no resolver path is
-// recorded for this run.
+// resolverIP reads the address out of one resolver Dial target and returns nil
+// for anything that is not one. The Go resolver already supplies a numeric
+// address, but it is parsed rather than trusted: nil simply means no path is
+// recorded for this target.
 //
 // A loopback resolver is deliberately one of those cases. A local stub, which
 // is what 127.0.0.53 and friends are on most Linux desktops, is reached over
@@ -756,8 +755,8 @@ func (r RouteDecision) Summary() string {
 // path to the stub is therefore always different and never means what "the
 // resolver is reached over another interface" is supposed to mean: the stub's
 // own upstream path is the interesting one and netdoc cannot see it. Recording
-// no resolver path is the honest answer, and the row still names the server it
-// talked to.
+// no resolver path is the honest answer, and the row still names the target it
+// tried.
 func resolverIP(server string) net.IP {
 	if server == "" {
 		return nil

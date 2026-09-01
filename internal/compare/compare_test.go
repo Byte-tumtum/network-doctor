@@ -321,6 +321,19 @@ func TestSecondOpinionResolverChange(t *testing.T) {
 	}
 }
 
+func TestResolverTargetsCompareAsASet(t *testing.T) {
+	before, after := fixture(t), fixture(t)
+	check(t, &before, "dns").Observed.ResolverTargets = []string{"192.0.2.53:53", "[2001:db8::53]:53"}
+	dns := check(t, &after, "dns").Observed
+	dns.ResolverTargets = []string{"[2001:db8::53]:53", "192.0.2.53:53"}
+	mustNotChange(t, Snapshots(before, after), "resolver target ordering")
+	dns.ResolverTargets = append(dns.ResolverTargets, "198.51.100.53:53")
+	change := changeAt(t, Snapshots(before, after), "checks.dns.observed.resolver_targets.198.51.100.53:53")
+	if change.Kind != KindAdded || change.After != "198.51.100.53:53" {
+		t.Errorf("resolver target change = %+v", change)
+	}
+}
+
 // Switching the second opinion off entirely is not the same as pointing it
 // somewhere else, and the empty value has to survive as a removal.
 func TestSecondOpinionTurnedOffIsARemoval(t *testing.T) {
@@ -892,6 +905,20 @@ func TestCompareReportsDNSAndApplicationTrafficParting(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(change.Summary), "wrong") || strings.Contains(strings.ToLower(change.Summary), "broken") {
 		t.Errorf("the summary calls a split a fault: %q", change.Summary)
+	}
+}
+
+func TestCompareChecksEveryResolverTargetPath(t *testing.T) {
+	s := fixture(t)
+	selected := check(t, &s, "target_tcp").Observed.SelectedIP
+	withRoutes(t, &s, "target_tcp", onEth0(selected, "0.0.0.0/0"))
+	withRoutes(t, &s, "dns",
+		onEth0("192.0.2.53", "192.0.2.0/24"),
+		onWG0("2001:db8::53", "::/0"),
+	)
+	paths := pathsOf(s)
+	if paths.resolverIface != "eth0,wg0" || paths.resolverAgreement != pathsDifferent {
+		t.Errorf("resolver paths = %+v, want both interfaces and a difference", paths)
 	}
 }
 

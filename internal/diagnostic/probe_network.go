@@ -39,10 +39,10 @@ func opsFromSources(sources *SourceAddresses) *netops {
 		}
 		return tlsConn, nil
 	}
-	o.lookupIP = func(ctx context.Context, host string) ([]net.IP, string, error) {
+	o.lookupIP = func(ctx context.Context, host string) ([]net.IP, []string, error) {
 		return lookupIPWithDial(ctx, host, o.dialContext)
 	}
-	o.lookupPublicIP = func(ctx context.Context, host, server string) ([]net.IP, error) {
+	o.lookupPublicIP = func(ctx context.Context, host, server string) ([]net.IP, []string, error) {
 		return lookupIPPublicWithDial(ctx, host, o.dialContext, server)
 	}
 	o.portalCheck = func(ctx context.Context) (int, string, time.Time, error) {

@@ -1046,7 +1046,11 @@ func TestBuildReport(t *testing.T) {
 	}
 	results := map[diagnostic.ProbeID]diagnostic.ProbeResult{
 		diagnostic.ProbeIface: {ID: diagnostic.ProbeIface, Status: diagnostic.StatusPass, Detail: "interface eth0 is up", Iface: "eth0", Dur: 7 * time.Millisecond},
-		diagnostic.ProbeDNS:   {ID: diagnostic.ProbeDNS, Status: diagnostic.StatusFail, Detail: "cannot resolve example.com", Fix: "check DNS", Dur: 1200 * time.Millisecond},
+		diagnostic.ProbeDNS: {
+			ID: diagnostic.ProbeDNS, Status: diagnostic.StatusFail, Detail: "cannot resolve example.com",
+			Fix: "check DNS", Dur: 1200 * time.Millisecond,
+			ResolverTargets: []string{"192.0.2.53:53", "[2001:db8::53]:53"},
+		},
 		// One row carrying every address field: buildReport stringifies them the
 		// same way regardless of which probe produced them.
 		diagnostic.ProbeTargetTCP: {
@@ -1079,6 +1083,9 @@ func TestBuildReport(t *testing.T) {
 	}
 	if rep.Checks[1].Status != "FAIL" || rep.Checks[1].Fix != "check DNS" {
 		t.Errorf("dns check = %+v", rep.Checks[1])
+	}
+	if got := rep.Checks[1].ResolverTargets; !reflect.DeepEqual(got, []string{"192.0.2.53:53", "[2001:db8::53]:53"}) {
+		t.Errorf("dns resolver targets = %v", got)
 	}
 	if rep.Checks[0].Ms != 7 || rep.Checks[1].Ms != 1200 {
 		t.Errorf("timings = %d, %d ms; want 7, 1200", rep.Checks[0].Ms, rep.Checks[1].Ms)
@@ -1142,20 +1149,21 @@ func TestReportJSONContract(t *testing.T) {
 				Version: "1.2.3",
 				Target:  &report.Target{Host: "example.com", Port: 443, Protocol: "tls+http"},
 				Checks: []report.Check{{
-					ID:         "target_tcp",
-					Name:       "Target TCP",
-					Status:     "WARN",
-					Cause:      "client_dns_failure",
-					Families:   &report.Families{IPv4: "reachable", IPv6: "unreachable"},
-					Ms:         46,
-					Detail:     "slow",
-					Fix:        "check firewall",
-					Addrs:      []string{"192.0.2.1"},
-					SelectedIP: "192.0.2.1",
-					Source:     "192.0.2.2",
-					Iface:      "eth0",
-					Network:    "office",
-					Portal:     &report.Portal{RedirectURL: "https://portal.example/signin"},
+					ID:              "target_tcp",
+					Name:            "Target TCP",
+					Status:          "WARN",
+					Cause:           "client_dns_failure",
+					Families:        &report.Families{IPv4: "reachable", IPv6: "unreachable"},
+					Ms:              46,
+					Detail:          "slow",
+					Fix:             "check firewall",
+					Addrs:           []string{"192.0.2.1"},
+					ResolverTargets: []string{"192.0.2.53:53", "[2001:db8::53]:53"},
+					SelectedIP:      "192.0.2.1",
+					Source:          "192.0.2.2",
+					Iface:           "eth0",
+					Network:         "office",
+					Portal:          &report.Portal{RedirectURL: "https://portal.example/signin"},
 					Attempts: []report.Attempt{
 						{IP: "192.0.2.1", Ms: 12},
 						{IP: "192.0.2.3", Ms: 34, Err: "timeout"},
@@ -1166,7 +1174,7 @@ func TestReportJSONContract(t *testing.T) {
 				FailedStage: "tls",
 				OK:          true,
 			},
-			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","cause":"client_dns_failure","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","portal":{"redirect_url":"https://portal.example/signin"},"attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
+			want: `{"version":"1.2.3","target":{"host":"example.com","port":443,"protocol":"tls+http"},"checks":[{"id":"target_tcp","name":"Target TCP","status":"WARN","cause":"client_dns_failure","address_families":{"ipv4":"reachable","ipv6":"unreachable"},"ms":46,"detail":"slow","fix":"check firewall","addrs":["192.0.2.1"],"resolver_targets":["192.0.2.53:53","[2001:db8::53]:53"],"selected_ip":"192.0.2.1","source":"192.0.2.2","iface":"eth0","network":"office","portal":{"redirect_url":"https://portal.example/signin"},"attempts":[{"ip":"192.0.2.1","ms":12},{"ip":"192.0.2.3","ms":34,"error":"timeout"}]}],"summary":"degraded","verdict":"degraded","failed_stage":"tls","ok":true}`,
 		},
 		{
 			// Findings serialize between failed_stage and ok, and an empty

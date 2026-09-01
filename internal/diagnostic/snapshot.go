@@ -130,6 +130,7 @@ func observedFrom(r ProbeResult) *snapshot.Observed {
 	o := snapshot.Observed{
 		DNSNotFound:        r.DNSNotFound,
 		Resolver:           r.resolver,
+		ResolverTargets:    append([]string(nil), r.ResolverTargets...),
 		Interface:          r.Iface,
 		SSID:               r.Network,
 		Timeout:            r.timedOut,

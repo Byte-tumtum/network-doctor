@@ -562,6 +562,7 @@ func diffObserved(d *diff, id string, before, after snapshot.Observed) {
 	d.field(SectionCheck, id, path+"dns_not_found", id+" resolver answered with no records",
 		yesNo(before.DNSNotFound), yesNo(after.DNSNotFound))
 	d.field(SectionCheck, id, path+"resolver", id+" resolver", before.Resolver, after.Resolver)
+	diffSet(d, id, path+"resolver_targets", id+" resolver target tried", before.ResolverTargets, after.ResolverTargets)
 	d.field(SectionCheck, id, path+"source_ip", id+" source address", before.SourceIP, after.SourceIP)
 	d.field(SectionCheck, id, path+"interface", id+" interface", before.Interface, after.Interface)
 	d.field(SectionCheck, id, path+"interface_ambiguous", id+" interface is ambiguous",
@@ -777,7 +778,7 @@ func competingWord(routes []snapshot.CompetingRoute) string {
 
 // diffPaths reports how traffic left the machine, in the terms a person asks
 // about: which interface the target's traffic took, whether it was tunnelled,
-// and whether the resolver's traffic went the same way.
+// and whether traffic to every recorded resolver target went the same way.
 //
 // It is derived on both sides from the routes the checks already recorded, so
 // two snapshots written by different netdoc versions are read the same way.
@@ -795,7 +796,7 @@ func diffPaths(d *diff, before, after snapshot.Snapshot) {
 	d.field(SectionPaths, "", "paths.target.reason", "target route selection", b.targetReason, a.targetReason)
 	d.field(SectionPaths, "", "paths.target.tunnel", "target tunnel state", b.targetTunnel, a.targetTunnel)
 	d.field(SectionPaths, "", "paths.reference.interface", "general Internet interface", b.referenceIface, a.referenceIface)
-	d.field(SectionPaths, "", "paths.resolver.interface", "resolver interface", b.resolverIface, a.resolverIface)
+	d.field(SectionPaths, "", "paths.resolver.interface", "resolver target interface", b.resolverIface, a.resolverIface)
 	d.field(SectionPaths, "", "paths.resolver.agreement", "DNS and application traffic",
 		b.resolverAgreement, a.resolverAgreement)
 }
@@ -823,25 +824,51 @@ func pathsOf(s snapshot.Snapshot) runPaths {
 	checks := checksByID(s.Checks)
 	target := selectedRoute(checks["target_tcp"])
 	reference := firstRoute(checks["iface"])
-	resolver := firstRoute(checks["dns"])
+	var resolvers []snapshot.Route
+	if observed := checks["dns"].Observed; observed != nil {
+		resolvers = observed.Routes
+	}
 	out := runPaths{
 		targetIface:    target.Interface,
 		targetPrefix:   target.Prefix,
 		targetReason:   target.Reason,
 		targetTunnel:   target.Tunnel,
 		referenceIface: reference.Interface,
-		resolverIface:  resolver.Interface,
+		resolverIface:  resolverInterfaces(resolvers),
 	}
 	if target.Unreachable {
 		out.targetPrefix = "no route"
 	}
-	if resolver.Interface != "" && target.Interface != "" {
-		out.resolverAgreement = pathsSame
+	allKnown := len(resolvers) > 0 && target.Interface != ""
+	for _, resolver := range resolvers {
+		if resolver.Interface == "" {
+			allKnown = false
+			continue
+		}
 		if routesDiffer(resolver, target) {
 			out.resolverAgreement = pathsDifferent
+			return out
 		}
 	}
+	if allKnown {
+		out.resolverAgreement = pathsSame
+	}
 	return out
+}
+
+func resolverInterfaces(routes []snapshot.Route) string {
+	seen := make(map[string]bool, len(routes))
+	for _, route := range routes {
+		if route.Interface != "" {
+			seen[route.Interface] = true
+		}
+	}
+	interfaces := make([]string, 0, len(seen))
+	for iface := range seen {
+		interfaces = append(interfaces, iface)
+	}
+	slices.Sort(interfaces)
+	return strings.Join(interfaces, ",")
 }
 
 // routesDiffer reports that two recorded decisions took materially different

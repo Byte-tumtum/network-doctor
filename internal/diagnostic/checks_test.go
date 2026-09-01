@@ -109,12 +109,12 @@ func TestDisabledPublicDNSNeverQueriesTheResolver(t *testing.T) {
 	o := &netops{
 		interfaces:     func() ([]net.Interface, error) { return nil, nil },
 		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) { return nil, nil },
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("192.0.2.1")}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("192.0.2.1")}, []string{"192.0.2.53:53"}, nil
 		},
-		lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, error) {
+		lookupPublicIP: func(_ context.Context, _, server string) ([]net.IP, []string, error) {
 			t.Errorf("queried %q with the public-DNS check disabled", server)
-			return nil, nil
+			return nil, nil, nil
 		},
 		proxyFromEnv: func(*http.Request) (*url.URL, error) { return nil, nil },
 		ssid:         func(context.Context, string) string { return "" },

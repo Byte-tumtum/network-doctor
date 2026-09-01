@@ -64,13 +64,14 @@ func fixtureRun() (*Target, []Probe, map[ProbeID]ProbeResult) {
 		},
 		ProbeDNS: {
 			ID: ProbeDNS, Status: StatusPass, Dur: 12 * time.Millisecond,
-			Addrs:  []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("2606:2800:220:1:248:1893:25c8:1946")},
-			Detail: "example.com resolved to 2 addresses",
+			Addrs:           []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("2606:2800:220:1:248:1893:25c8:1946")},
+			ResolverTargets: []string{"192.0.2.53:53", "[2001:db8::53]:53"},
+			Detail:          "example.com resolved to 2 addresses",
 		},
 		ProbeDNSPublic: {
 			ID: ProbeDNSPublic, Status: StatusPass, Dur: 19 * time.Millisecond,
-			resolver: "8.8.8.8", Addrs: []net.IP{net.ParseIP("93.184.216.34")},
-			Detail: "8.8.8.8 agrees on 93.184.216.34",
+			resolver: "8.8.8.8", ResolverTargets: []string{"8.8.8.8:53"},
+			Addrs: []net.IP{net.ParseIP("93.184.216.34")}, Detail: "8.8.8.8 agrees on 93.184.216.34",
 		},
 		ProbeTargetTCP: {
 			ID: ProbeTargetTCP, Status: StatusFail, Dur: 33 * time.Millisecond,

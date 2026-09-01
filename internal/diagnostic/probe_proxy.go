@@ -275,15 +275,11 @@ func (o *netops) socks5Probe(ctx context.Context, addr string, remoteDNS bool, d
 	}
 	destination := socks5Destination{host: ConnectivityProbeHost, port: 443, remoteDNS: remoteDNS}
 	if !remoteDNS {
-		ips, server, lookupErr := o.lookupIP(ctx, ConnectivityProbeHost)
+		ips, targets, lookupErr := o.lookupIP(ctx, ConnectivityProbeHost)
 		if lookupErr != nil || len(ips) == 0 {
 			r.Status = StatusFail
 			r.Cause = ProxyCauseClientDNS
-			via := ""
-			if server != "" {
-				via = " via " + dnsServerLabel(server)
-			}
-			r.Detail = "SOCKS5 proxy " + addr + " is reachable, but local DNS cannot resolve " + ConnectivityProbeHost + via
+			r.Detail = "SOCKS5 proxy " + addr + " is reachable, but local DNS cannot resolve " + ConnectivityProbeHost + resolverTargetsNote(targets)
 			if lookupErr != nil {
 				r.Detail += ": " + lookupErr.Error()
 			}

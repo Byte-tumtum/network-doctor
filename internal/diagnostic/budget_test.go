@@ -418,12 +418,14 @@ func (f *budgetFixture) ops() *netops {
 			return []net.Interface{{Index: 1, Name: "netdoc0", Flags: net.FlagUp | net.FlagRunning}}, nil
 		},
 		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) { return nil, nil },
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return f.loopbacks, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return f.loopbacks, []string{"192.0.2.53:53"}, nil
 		},
-		lookupPublicIP: func(context.Context, string, string) ([]net.IP, error) { return f.loopbacks, nil },
-		dialContext:    f.dial,
-		tlsRootCAs:     f.roots,
+		lookupPublicIP: func(context.Context, string, string) ([]net.IP, []string, error) {
+			return f.loopbacks, []string{"8.8.8.8:53"}, nil
+		},
+		dialContext: f.dial,
+		tlsRootCAs:  f.roots,
 		quicHandshake: func(context.Context, net.Conn, *tls.Config) (quicState, error) {
 			return quicState{version: "1", alpn: "h3"}, nil
 		},
@@ -548,12 +550,13 @@ func (s *budgetStall) ops() *netops {
 			return []net.Interface{{Index: 1, Name: "netdoc0", Flags: net.FlagUp | net.FlagRunning}}, nil
 		},
 		interfaceAddrs: func(*net.Interface) ([]net.Addr, error) { return nil, nil },
-		lookupIP: func(ctx context.Context, _ string) ([]net.IP, string, error) {
+		lookupIP: func(ctx context.Context, _ string) ([]net.IP, []string, error) {
 			ips, err := block(ctx, []net.IP(nil))
-			return ips, "", err
+			return ips, nil, err
 		},
-		lookupPublicIP: func(ctx context.Context, _, _ string) ([]net.IP, error) {
-			return block(ctx, []net.IP(nil))
+		lookupPublicIP: func(ctx context.Context, _, _ string) ([]net.IP, []string, error) {
+			ips, err := block(ctx, []net.IP(nil))
+			return ips, nil, err
 		},
 		dialContext: s.pipe.dial,
 		quicHandshake: func(ctx context.Context, _ net.Conn, _ *tls.Config) (quicState, error) {

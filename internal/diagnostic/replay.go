@@ -142,6 +142,7 @@ func replayResult(id ProbeID, status Status, check snapshot.Check) (ProbeResult,
 	}
 	result.DNSNotFound = observed.DNSNotFound
 	result.resolver = observed.Resolver
+	result.ResolverTargets = append([]string(nil), observed.ResolverTargets...)
 	result.Iface = observed.Interface
 	result.Network = observed.SSID
 	result.timedOut = observed.Timeout

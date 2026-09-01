@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"encoding/binary"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -179,6 +180,9 @@ func (r *redactor) collectSnapshot(s Snapshot) {
 		}
 		r.collectIP(o.SelectedIP, false)
 		r.collectIP(o.Resolver, true)
+		for _, target := range o.ResolverTargets {
+			r.collectResolverTarget(target, check.ID == "dns_public")
+		}
 		r.collectIP(o.SourceIP, false)
 		r.alias("interface", o.Interface)
 		r.alias("ssid", o.SSID)
@@ -329,6 +333,9 @@ func (r *redactor) check(c Check) Check {
 		SourceIP: r.address(o.SourceIP), Interface: r.alias("interface", o.Interface),
 		SSID: r.alias("ssid", o.SSID), Timeout: o.Timeout,
 		InterfaceAmbiguous: o.InterfaceAmbiguous, ClockOffsetMs: o.ClockOffsetMs,
+	}
+	for _, target := range o.ResolverTargets {
+		observed.ResolverTargets = append(observed.ResolverTargets, r.resolverTarget(target))
 	}
 	for _, address := range o.Addresses {
 		observed.Addresses = append(observed.Addresses, r.address(address))
@@ -512,6 +519,22 @@ func (r *redactor) address(value string) string {
 	}
 	r.ips[key] = alias
 	return alias
+}
+
+func (r *redactor) collectResolverTarget(target string, retain bool) {
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		host = target
+	}
+	r.collectIP(host, retain)
+}
+
+func (r *redactor) resolverTarget(target string) string {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return r.address(target)
+	}
+	return net.JoinHostPort(r.address(host), port)
 }
 
 // redactedAddress and redactedURL replace a value that should have been an

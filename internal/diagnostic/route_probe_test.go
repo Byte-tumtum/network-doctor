@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -17,8 +18,8 @@ func stubRouteOps(answers map[string]RouteDecision, asked *[]string) *netops {
 		interfaces: func() ([]net.Interface, error) {
 			return []net.Interface{{Name: "eth0", Flags: net.FlagUp | net.FlagRunning}}, nil
 		},
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("198.51.100.7")}, "192.168.1.1:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("198.51.100.7")}, []string{"192.168.1.1:53"}, nil
 		},
 		dialContext: func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("no network in tests")
@@ -38,8 +39,8 @@ func stubRouteOps(answers map[string]RouteDecision, asked *[]string) *netops {
 }
 
 // Each row records the decisions for the destinations it is about: general
-// Internet endpoints on the interface row, the configured resolver on the DNS
-// row, and every resolved address on the target row.
+// Internet endpoints on the interface row, each recorded resolver target on the
+// DNS row, and every resolved address on the target row.
 func TestProbesRecordTheRoutesForTheirOwnDestinations(t *testing.T) {
 	answers := map[string]RouteDecision{
 		internetEndpointCloudflareIPv4: {Iface: "eth0", Tunnel: TunnelDirect},
@@ -70,6 +71,27 @@ func TestProbesRecordTheRoutesForTheirOwnDestinations(t *testing.T) {
 		if _, expected := answers[dst]; !expected {
 			t.Errorf("looked up %q, which is not a destination this run is about", dst)
 		}
+	}
+}
+
+func TestDNSProbeRecordsEveryResolverTargetRoute(t *testing.T) {
+	answers := map[string]RouteDecision{
+		internetEndpointCloudflareIPv4: {Iface: "eth0", Tunnel: TunnelDirect},
+		internetEndpointCloudflareIPv6: {Iface: "eth0", Tunnel: TunnelDirect},
+		"192.0.2.53":                   {Iface: "eth0", Tunnel: TunnelDirect},
+		"2001:db8::53":                 {Iface: "wg0", Tunnel: TunnelKnown},
+	}
+	o := stubRouteOps(answers, nil)
+	o.lookupIP = func(context.Context, string) ([]net.IP, []string, error) {
+		return []net.IP{net.ParseIP("198.51.100.7")}, []string{"192.0.2.53:53", "[2001:db8::53]:53"}, nil
+	}
+	r := o.dnsProbe("example.com", nil)(context.Background(), nil)
+	if got := r.ResolverTargets; !slices.Equal(got, []string{"192.0.2.53:53", "[2001:db8::53]:53"}) {
+		t.Fatalf("resolver targets = %v", got)
+	}
+	if len(r.Routes) != 2 || r.Routes[0].Destination.String() != "192.0.2.53" ||
+		r.Routes[1].Destination.String() != "2001:db8::53" {
+		t.Errorf("resolver routes = %+v, want both targets in evidence order", r.Routes)
 	}
 }
 
@@ -139,8 +161,8 @@ func TestAPlatformThatCannotAnswerRecordsNothing(t *testing.T) {
 		interfaces: func() ([]net.Interface, error) {
 			return []net.Interface{{Name: "eth0", Flags: net.FlagUp | net.FlagRunning}}, nil
 		},
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("198.51.100.7")}, "192.168.1.1:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("198.51.100.7")}, []string{"192.168.1.1:53"}, nil
 		},
 		dialContext: func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("no network in tests")

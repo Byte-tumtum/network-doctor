@@ -308,7 +308,7 @@ func TestResolverDialsFromSourceLoopback(t *testing.T) {
 	// machine; send every query to the stub instead. What is under test is the
 	// dialer the source produced, not which server the host would have picked.
 	dial := dialContextFromSources(sourceAddresses([]net.Addr{&net.IPAddr{IP: net.ParseIP("127.0.0.1")}}))
-	ips, server, err := lookupIPWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, _ string) (net.Conn, error) {
+	ips, targets, err := lookupIPWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return dial(ctx, network, stub.addr())
 	})
 	if err != nil {
@@ -317,8 +317,8 @@ func TestResolverDialsFromSourceLoopback(t *testing.T) {
 	if !containsIP(ips, net.ParseIP("192.0.2.7")) {
 		t.Errorf("ips = %v, want 192.0.2.7", ips)
 	}
-	if server == "" {
-		t.Error("server should report the resolver that was dialed")
+	if len(targets) == 0 {
+		t.Error("lookup should report the resolver target that was tried")
 	}
 	stub.wantSources(t, net.ParseIP("127.0.0.1"))
 }
@@ -335,7 +335,7 @@ func TestPublicResolverDialsFromSourceLoopback(t *testing.T) {
 		targets []string
 	)
 	dial := dialContextFromSources(sourceAddresses([]net.Addr{&net.IPAddr{IP: net.ParseIP("127.0.0.1")}}))
-	ips, err := lookupIPPublicWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, addr string) (net.Conn, error) {
+	ips, targets, err := lookupIPPublicWithDial(ctx, "netdoc.test.", func(ctx context.Context, network, addr string) (net.Conn, error) {
 		mu.Lock()
 		targets = append(targets, addr)
 		mu.Unlock()
@@ -346,6 +346,9 @@ func TestPublicResolverDialsFromSourceLoopback(t *testing.T) {
 	}
 	if !containsIP(ips, net.ParseIP("192.0.2.8")) {
 		t.Errorf("ips = %v, want 192.0.2.8", ips)
+	}
+	if len(targets) != 1 || targets[0] != publicDNSServer(DefaultPublicDNS) {
+		t.Errorf("resolver targets = %v, want %s", targets, publicDNSServer(DefaultPublicDNS))
 	}
 	mu.Lock()
 	defer mu.Unlock()

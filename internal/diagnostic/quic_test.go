@@ -16,9 +16,9 @@ func TestQUICProbeUsesFixedEndpointAndFamilyDialer(t *testing.T) {
 	var lookedUp, network, address string
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
-		lookupIP: func(_ context.Context, host string) ([]net.IP, string, error) {
+		lookupIP: func(_ context.Context, host string) ([]net.IP, []string, error) {
 			lookedUp = host
-			return []net.IP{wantIP}, "192.0.2.53:53", nil
+			return []net.IP{wantIP}, []string{"192.0.2.53:53"}, nil
 		},
 		dialContext: func(_ context.Context, gotNetwork, gotAddress string) (net.Conn, error) {
 			network, address = gotNetwork, gotAddress
@@ -41,8 +41,8 @@ func TestQUICProbeUsesFixedEndpointAndFamilyDialer(t *testing.T) {
 func TestQUICProbeDoesNotCrossBindMissingSourceFamily(t *testing.T) {
 	ops := &netops{
 		sources: &SourceAddresses{IPv4: net.ParseIP("192.0.2.10")},
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("2001:db8::44")}, "[2001:db8::53]:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("2001:db8::44")}, []string{"[2001:db8::53]:53"}, nil
 		},
 		dialContext: func(context.Context, string, string) (net.Conn, error) {
 			t.Fatal("IPv6 destination was dialed with an IPv4-only source selection")
@@ -62,8 +62,8 @@ func TestQUICProbeUsesCompatibleFamilyWhenSelectedInterfaceLacksOtherFamily(t *t
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
 		sources:    &SourceAddresses{IPv4: net.ParseIP("192.0.2.10")},
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("2001:db8::44"), v4}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("2001:db8::44"), v4}, []string{"192.0.2.53:53"}, nil
 		},
 		dialContext: func(_ context.Context, gotNetwork, _ string) (net.Conn, error) {
 			network = gotNetwork
@@ -85,8 +85,8 @@ func TestQUICProbeUsesIPv6Destination(t *testing.T) {
 	var network string
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{wantIP}, "[2001:db8::53]:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{wantIP}, []string{"[2001:db8::53]:53"}, nil
 		},
 		dialContext: func(_ context.Context, gotNetwork, _ string) (net.Conn, error) {
 			network = gotNetwork
@@ -121,8 +121,8 @@ func TestQUICProbeRacesBlackHoledIPv6WithWorkingIPv4(t *testing.T) {
 	conns := make(chan *quicTestConn, 2)
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{v6, v4}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{v6, v4}, []string{"192.0.2.53:53"}, nil
 		},
 		dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			family, local := 6, net.ParseIP("2001:db8::10")
@@ -168,8 +168,8 @@ func TestQUICProbeImmediateFamilyFailureDoesNotPoisonSuccess(t *testing.T) {
 	v6 := net.ParseIP("2001:db8::44")
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{v6, v4}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{v6, v4}, []string{"192.0.2.53:53"}, nil
 		},
 		dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			if network == "udp6" {
@@ -192,8 +192,8 @@ func TestQUICProbeAllFamiliesFailDeterministically(t *testing.T) {
 	v4 := net.ParseIP("192.0.2.44")
 	v6 := net.ParseIP("2001:db8::44")
 	ops := &netops{
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{v4, v6}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{v4, v6}, []string{"192.0.2.53:53"}, nil
 		},
 		dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			return nil, errors.New(network + " unreachable")
@@ -210,8 +210,8 @@ func TestQUICProbeAllFamiliesFailDeterministically(t *testing.T) {
 func TestQUICProbePreservesAttemptTimeoutCause(t *testing.T) {
 	ops := &netops{
 		interfaces: func() ([]net.Interface, error) { return nil, nil },
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("2001:db8::44"), net.ParseIP("192.0.2.44")}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("2001:db8::44"), net.ParseIP("192.0.2.44")}, []string{"192.0.2.53:53"}, nil
 		},
 		dialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			local := net.ParseIP("2001:db8::10")

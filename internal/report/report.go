@@ -116,21 +116,24 @@ type Target struct {
 }
 
 type Check struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Status     string    `json:"status"`
-	Cause      string    `json:"cause,omitempty"`
-	Families   *Families `json:"address_families,omitempty"`
-	Ms         int64     `json:"ms"` // wall time, truncated but floored at 1; 0 means the check never ran
-	Detail     string    `json:"detail"`
-	Fix        string    `json:"fix,omitempty"`
-	Addrs      []string  `json:"addrs,omitempty"`
-	SelectedIP string    `json:"selected_ip,omitempty"`
-	Source     string    `json:"source,omitempty"`
-	Iface      string    `json:"iface,omitempty"`
-	Network    string    `json:"network,omitempty"`
-	Portal     *Portal   `json:"portal,omitempty"`
-	Attempts   []Attempt `json:"attempts,omitempty"`
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Status   string    `json:"status"`
+	Cause    string    `json:"cause,omitempty"`
+	Families *Families `json:"address_families,omitempty"`
+	Ms       int64     `json:"ms"` // wall time, truncated but floored at 1; 0 means the check never ran
+	Detail   string    `json:"detail"`
+	Fix      string    `json:"fix,omitempty"`
+	Addrs    []string  `json:"addrs,omitempty"`
+	// ResolverTargets are DNS service addresses recorded as tried. They are
+	// attempt evidence, not answering-resolver or per-address provenance.
+	ResolverTargets []string  `json:"resolver_targets,omitempty"`
+	SelectedIP      string    `json:"selected_ip,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	Iface           string    `json:"iface,omitempty"`
+	Network         string    `json:"network,omitempty"`
+	Portal          *Portal   `json:"portal,omitempty"`
+	Attempts        []Attempt `json:"attempts,omitempty"`
 	// Routes are the operating system's own route decisions for the
 	// destinations this check is about, one per destination address. Additive
 	// and omitted where the platform cannot answer, which is never the same as

@@ -102,6 +102,29 @@ func TestReplaySnapshotRoundTripSemantics(t *testing.T) {
 	}
 }
 
+func TestResolverTargetsSurviveSnapshotReplay(t *testing.T) {
+	targets := []string{"192.0.2.53:53", "[2001:db8::53]:53"}
+	probes := []Probe{{ID: ProbeDNS, Name: "DNS"}}
+	artifact := BuildSnapshot(nil, probes, map[ProbeID]ProbeResult{
+		ProbeDNS: {Status: StatusPass, ResolverTargets: targets},
+	})
+	data, err := snapshot.Encode(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err = snapshot.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := replayResult(ProbeDNS, StatusPass, artifact.Checks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.ResolverTargets, targets) {
+		t.Errorf("resolver targets = %v, want %v", result.ResolverTargets, targets)
+	}
+}
+
 func TestReplaySnapshotIgnoresHistoricalDiagnosisAndProse(t *testing.T) {
 	artifact := snapshot.Snapshot{
 		Schema: snapshot.Schema,

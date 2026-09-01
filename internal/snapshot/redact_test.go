@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"net"
 	"net/netip"
 	"net/url"
 	"reflect"
@@ -37,7 +38,8 @@ func supportFixture() Snapshot {
 			Observed: &Observed{
 				Addresses:  []string{"10.23.45.67", "10.23.45.68", "93.184.216.34"},
 				SelectedIP: "10.23.45.67", Resolver: "10.23.45.68",
-				SourceIP: "203.0.113.99", Interface: "unique-wg-interface",
+				ResolverTargets: []string{"10.23.45.68:53", "[fd12:3456::68]:5353"},
+				SourceIP:        "203.0.113.99", Interface: "unique-wg-interface",
 				SSID: "Unique Support SSID", Families: &Families{IPv4: "reachable", IPv6: "unreachable"},
 				Portal: &Portal{RedirectURL: portalURL},
 				Attempts: []Attempt{
@@ -87,7 +89,7 @@ func TestSupportSerializationContainsNoSensitiveOriginals(t *testing.T) {
 		"proxy-user", "proxy-password", "portal-user", "portal-password",
 		"unique-bearer-token", "unique-query-token", "unique-cookie", "unique-nested-token",
 		"unique-password", "unique-finding-token", "10.23.45.67", "10.23.45.68",
-		"10.23.45.0/24", "fd12:3456::67", "203.0.113.99", "93.184.216.34",
+		"10.23.45.0/24", "fd12:3456::67", "fd12:3456::68", "203.0.113.99", "93.184.216.34",
 		"unique-cert-name", "unique-private-key",
 		"unique-env-secret",
 	} {
@@ -125,6 +127,11 @@ func TestSupportPseudonymsPreserveRelationshipsAndRoundTrip(t *testing.T) {
 	}
 	if observed.Addresses[0] == observed.Addresses[1] {
 		t.Errorf("distinct private IPs collapsed to %q", observed.Addresses[0])
+	}
+	if observed.ResolverTargets[0] != net.JoinHostPort(observed.Addresses[1], "53") ||
+		strings.Contains(strings.Join(observed.ResolverTargets, ","), "10.23.45.68") ||
+		!strings.HasSuffix(observed.ResolverTargets[1], "]:5353") {
+		t.Errorf("resolver targets lost redaction or ports: %v", observed.ResolverTargets)
 	}
 	rawTarget, err := url.Parse(first.Target.Raw)
 	if err != nil || first.Target.Host == "" || first.Target.Host != rawTarget.Hostname() {

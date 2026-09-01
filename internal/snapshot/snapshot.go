@@ -350,8 +350,13 @@ type Observed struct {
 	// DNSNotFound distinguishes "the resolver answered, with nothing" from
 	// "the resolver did not answer", which have different fixes.
 	DNSNotFound bool `json:"dns_not_found,omitempty"`
-	// Resolver is the second-opinion DNS server this row queried.
+	// Resolver is the configured second-opinion DNS server this row queried.
+	// It remains for compatibility; ResolverTargets is the direct Dial evidence
+	// available to both system and second-opinion lookups.
 	Resolver string `json:"resolver,omitempty"`
+	// ResolverTargets are DNS service addresses recorded as tried. They do not
+	// identify which target answered or supplied an address.
+	ResolverTargets []string `json:"resolver_targets,omitempty"`
 	// SourceIP and Interface are the local end of the connection this probe
 	// made, as the kernel chose it.
 	SourceIP  string `json:"source_ip,omitempty"`

@@ -65,7 +65,7 @@ func routeEvidence(id DiagnosisID, order []ProbeID, res map[ProbeID]ProbeResult)
 		if split, known := familyPathsDiffer(res[ProbeTargetTCP].Routes); known && split {
 			out = add(out, ProbeTargetTCP, ObservationRouteFamilySplit, "")
 		}
-		out = append(out, routePolicyEvidence(add, ProbeTargetTCP, target, familyReference)...)
+		out = routePolicyEvidence(add, out, ProbeTargetTCP, target, familyReference)
 		// Interface MTU, and only interface MTU. A narrower link on the
 		// selected path is consistent with an encapsulated one and is worth
 		// putting beside a measured stall; it is never itself the path MTU,
@@ -86,22 +86,26 @@ func routeEvidence(id DiagnosisID, order []ProbeID, res map[ProbeID]ProbeResult)
 			}
 		}
 	case DiagnosisSystemDNSFailure, DiagnosisDNSFailure, DiagnosisDNSDisagreement:
-		resolver := res[ProbeDNS].Routes
-		if len(resolver) == 0 {
+		resolvers := res[ProbeDNS].Routes
+		if len(resolvers) == 0 {
 			return nil
 		}
-		if resolver[0].Unreachable {
-			out = add(out, ProbeDNS, ObservationRouteUnreachable, resolver[0].Destination.String())
-			return out
-		}
-		// The resolver answering over a different path from the one the
-		// application traffic takes is split DNS, which is a design as often
-		// as it is a fault. It is recorded as what it is: a difference.
-		if target, ok := selectedTargetRoute(res); ok {
-			if comparePaths(resolver[0], target).Iface == pathDiffers {
+		target, targetKnown := selectedTargetRoute(res)
+		for _, resolver := range resolvers {
+			if resolver.Unreachable {
+				out = add(out, ProbeDNS, ObservationRouteUnreachable, resolver.Destination.String())
+				continue
+			}
+			// A resolver target tried over a different path from the one the
+			// application traffic takes is split DNS, which is a design as often
+			// as it is a fault. It is recorded as what it is: a difference.
+			if !targetKnown {
+				continue
+			}
+			if comparePaths(resolver, target).Iface == pathDiffers {
 				out = add(out, ProbeDNS, ObservationRoutePathDiffers, target.Iface)
 			}
-			out = append(out, routePolicyEvidence(add, ProbeDNS, resolver[0], target)...)
+			out = routePolicyEvidence(add, out, ProbeDNS, resolver, target)
 		}
 	}
 	return out
@@ -123,9 +127,11 @@ func routeEvidence(id DiagnosisID, order []ProbeID, res map[ProbeID]ProbeResult)
 // one the kernel consults by itself. Those are where traffic goes when no rule
 // intervened, so they are the reference and not the finding, and an unknown
 // table is neither.
+//
+// It appends through add, so a resolver whose policy difference another
+// resolver target already reported is recorded once.
 func routePolicyEvidence(add func([]CausalEvidence, ProbeID, ObservationID, string) []CausalEvidence,
-	check ProbeID, path, reference RouteDecision) []CausalEvidence {
-	var out []CausalEvidence
+	out []CausalEvidence, check ProbeID, path, reference RouteDecision) []CausalEvidence {
 	diff := comparePaths(path, reference)
 	if diff.NextHop == pathDiffers && diff.Iface == pathSame &&
 		path.Gateway != nil && reference.Gateway != nil {

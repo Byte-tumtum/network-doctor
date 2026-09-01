@@ -128,6 +128,19 @@ func TestRouteEvidenceReportsSplitDNS(t *testing.T) {
 	assertEvidenceObservation(t, DiagnosisSystemDNSFailure, want, order, res)
 }
 
+func TestRouteEvidenceChecksEveryResolverTarget(t *testing.T) {
+	target := decisionTo("198.51.100.7", "eth0", "0.0.0.0/0")
+	resolvers := []RouteDecision{
+		decisionTo("192.0.2.53", "eth0", "192.0.2.0/24"),
+		decisionTo("2001:db8::53", "wg0", "::/0"),
+	}
+	order, res := routeRun([]RouteDecision{target}, nil, resolvers)
+	want := CausalEvidence{Kind: EvidenceSupport, Check: ProbeDNS, Observation: ObservationRoutePathDiffers, Value: "eth0"}
+	if got := routeEvidence(DiagnosisSystemDNSFailure, order, res); !hasEvidence(got, want) {
+		t.Errorf("missing evidence from the second resolver target: got %+v", got)
+	}
+}
+
 // Same interface, different routers. This is the case an interface comparison
 // collapsed into "the same path": the resolver and the target both leave over
 // eth0 and are handed to different next hops, which is a routing difference

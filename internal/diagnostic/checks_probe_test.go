@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +30,126 @@ import (
 	"testing"
 	"time"
 )
+
+// splitDNSFixture is a two-resolver DNS network for the real Go resolver.
+//
+// LookupIP(ctx, "ip", host) asks A and AAAA as independent queries, each with
+// its own Dial and its own failover, so on a machine whose resolv.conf names
+// more than one server the two halves of a single hostname lookup can be
+// answered by two different resolvers. The fixture is that machine's network:
+// each dial lands on the next simulated resolver, and each resolver answers
+// only the one query it was handed.
+type splitDNSFixture struct {
+	mu        sync.Mutex
+	dialed    []string
+	exchanges []splitDNSExchange
+}
+
+// splitDNSExchange is one query answered by one simulated resolver: who
+// answered it, what was asked, and the single address that answer carried.
+type splitDNSExchange struct {
+	server string
+	qtype  uint16
+	answer string
+}
+
+const (
+	dnsTypeAAAA      = 28
+	splitDNSAnswerA  = "192.0.2.7"
+	splitDNSAnswer6  = "2001:db8::7"
+	splitDNSAnswerIn = 60 // TTL
+)
+
+var splitDNSServers = [...]string{"192.0.2.53:53", "[2001:db8::53]:53"}
+
+// dial gives each query its own resolver and records the address the Go
+// resolver actually asked for, which is the ground truth the recorder under
+// test has to reproduce.
+func (f *splitDNSFixture) dial(_ context.Context, _, addr string) (net.Conn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.dialed) >= len(splitDNSServers) {
+		return nil, fmt.Errorf("unexpected resolver dial %d", len(f.dialed)+1)
+	}
+	conn := &splitDNSConn{fixture: f, server: splitDNSServers[len(f.dialed)]}
+	f.dialed = append(f.dialed, addr)
+	return conn, nil
+}
+
+// served is read after the lookup returns, by which point both exchanges have
+// completed: LookupIP("ip") waits for both families before combining them.
+func (f *splitDNSFixture) served() (dialed []string, exchanges []splitDNSExchange) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.dialed...), append([]splitDNSExchange(nil), f.exchanges...)
+}
+
+// splitDNSConn is one resolver on the other end of one connection. It is not a
+// PacketConn, so the Go resolver frames queries the way it does over TCP.
+type splitDNSConn struct {
+	fixture *splitDNSFixture
+	server  string
+	reply   []byte
+}
+
+func (c *splitDNSConn) Read(p []byte) (int, error) {
+	if len(c.reply) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, c.reply)
+	c.reply = c.reply[n:]
+	return n, nil
+}
+
+func (c *splitDNSConn) Write(p []byte) (int, error) {
+	if len(p) < dnsHeaderLen+2 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	query := p[2:] // past the two-byte length prefix
+	i := dnsHeaderLen
+	for i < len(query) && query[i] != 0 {
+		i += int(query[i]) + 1
+	}
+	if i+5 > len(query) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	qtype := binary.BigEndian.Uint16(query[i+1:])
+	response := append([]byte(nil), query[:i+5]...)
+	response[2], response[3] = 0x81, 0x80 // response, recursion available
+	binary.BigEndian.PutUint16(response[6:], 1)
+	binary.BigEndian.PutUint16(response[8:], 0)
+	binary.BigEndian.PutUint16(response[10:], 0)
+	response = append(response, 0xc0, 0x0c) // pointer to the question's name
+	response = binary.BigEndian.AppendUint16(response, qtype)
+	response = append(response, 0, 1, 0, 0, 0, splitDNSAnswerIn)
+	answer := splitDNSAnswerA
+	switch qtype {
+	case dnsTypeA:
+		response = append(response, 0, 4)
+		response = append(response, net.ParseIP(splitDNSAnswerA).To4()...)
+	case dnsTypeAAAA:
+		answer = splitDNSAnswer6
+		response = append(response, 0, 16)
+		response = append(response, net.ParseIP(splitDNSAnswer6).To16()...)
+	default:
+		return 0, errors.New("unexpected DNS query type")
+	}
+	c.fixture.mu.Lock()
+	c.fixture.exchanges = append(c.fixture.exchanges, splitDNSExchange{c.server, qtype, answer})
+	c.fixture.mu.Unlock()
+	// #nosec G115 -- the response is this fixture's own header, question and
+	// one record, tens of bytes and never near the 16-bit length prefix.
+	c.reply = binary.BigEndian.AppendUint16(nil, uint16(len(response)))
+	c.reply = append(c.reply, response...)
+	return len(p), nil
+}
+
+func (*splitDNSConn) Close() error                     { return nil }
+func (*splitDNSConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (*splitDNSConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (*splitDNSConn) SetDeadline(time.Time) error      { return nil }
+func (*splitDNSConn) SetReadDeadline(time.Time) error  { return nil }
+func (*splitDNSConn) SetWriteDeadline(time.Time) error { return nil }
 
 // silentConn simulates a server that accepts the connection but never sends a
 // banner: every read fails immediately as a deadline timeout, so the test
@@ -245,18 +367,102 @@ func TestInterleaveFamilies(t *testing.T) {
 	}
 }
 
+// One hostname lookup, two resolvers. Go asks A and AAAA as independent
+// queries that dial and fail over independently, so a machine with more than
+// one nameserver can have the two halves of a result answered by two different
+// servers. The DNS row used to keep one dial target and credit the whole
+// combined answer to it, and this run is a counterexample to that claim: each
+// resolver supplied exactly one of the two addresses that came back, so naming
+// either as the source of both is false.
+func TestLookupIPNeverCreditsOneResolverWithACombinedAnswer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fixture := &splitDNSFixture{}
+	ips, targets, err := lookupIPWithDial(ctx, "resolver-attribution.test.", fixture.dial)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	dialed, exchanges := fixture.served()
+
+	// The real resolver split one lookup into two exchanges, one per address
+	// family, each on its own connection to its own resolver.
+	if len(exchanges) != 2 || exchanges[0].server == exchanges[1].server {
+		t.Fatalf("exchanges = %+v, want one on each resolver", exchanges)
+	}
+	byType := map[uint16]string{}
+	for _, e := range exchanges {
+		byType[e.qtype] = e.server
+	}
+	if byType[dnsTypeA] == "" || byType[dnsTypeAAAA] == "" {
+		t.Fatalf("exchanges = %+v, want A and AAAA answered separately", exchanges)
+	}
+
+	// Both halves came back as one address set, and neither resolver served the
+	// other's half. "These addresses came via <resolver>" is therefore false of
+	// this result whichever resolver it names.
+	answers := make(map[string]bool, len(ips))
+	for _, ip := range ips {
+		answers[ip.String()] = true
+	}
+	for _, e := range exchanges {
+		if !answers[e.answer] {
+			t.Fatalf("addresses %v are missing %s, which %s served", ips, e.answer, e.server)
+		}
+	}
+	if len(answers) != len(exchanges) {
+		t.Fatalf("addresses = %v, want one from each of the %d resolvers", ips, len(exchanges))
+	}
+
+	// What the run may report is what Dial saw, all of it: one target per
+	// exchange, deduplicated and ordered. A single overwritten slot could not
+	// hold two exchanges, which is what made the old row's claim unprovable.
+	if len(dialed) != len(exchanges) {
+		t.Errorf("%d dials for %d exchanges, want one target recorded per exchange", len(dialed), len(exchanges))
+	}
+	want := append([]string(nil), dialed...)
+	slices.Sort(want)
+	want = slices.Compact(want)
+	if !slices.Equal(targets, want) {
+		t.Errorf("recorded targets = %v, want every address the resolver dialed, %v", targets, want)
+	}
+}
+
+// A target is recorded when DNS is dialed and never otherwise. Under the usual
+// "hosts: files dns" ordering a name the hosts file answers costs no query, so
+// the row has no resolver to name and must not invent one; this is also why the
+// second-opinion lookup needs no hosts-file probe of its own to tell a local
+// override from a real answer. It is only that ordering: see
+// TestDNSProbeNeverCreditsTheOnlyResolverWithTheAnswer for the other one.
+func TestLookupIPRecordsATargetOnlyWhenDNSIsDialed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var dials atomic.Int32
+	ips, targets, err := lookupIPWithDial(ctx, "localhost", func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("no resolver is reachable in this test")
+	})
+	if (dials.Load() == 0) != (len(targets) == 0) {
+		t.Fatalf("%d dials recorded targets %v; a target may only come from a dial", dials.Load(), targets)
+	}
+	// Where the hosts file answers, as it does wherever localhost is in it, the
+	// lookup succeeded having contacted nothing.
+	if dials.Load() == 0 && (err != nil || len(ips) == 0) {
+		t.Fatalf("hosts-file answer = %v, %v; want addresses with no resolver contacted", ips, err)
+	}
+}
+
 // DNS failure modes: resolver error and an empty (no A record) answer both
 // fail with an actionable detail, never panic or pass.
 func TestDNSProbeErrors(t *testing.T) {
-	ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-		return nil, "192.168.1.1:53", errors.New("SERVFAIL")
+	ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+		return nil, []string{"192.168.1.1:53"}, errors.New("SERVFAIL")
 	}}
 	r := ops.dnsProbe("example.com", nil)(context.Background(), nil)
-	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot resolve example.com via 192.168.1.1") || r.Fix == "" {
-		t.Errorf("lookup error = %+v, want FAIL naming the resolver, plus a fix", r)
+	if r.Status != StatusFail || !strings.Contains(r.Detail, "cannot resolve example.com (resolver tried: 192.168.1.1)") || r.Fix == "" {
+		t.Errorf("lookup error = %+v, want FAIL naming the one resolver dialed, plus a fix", r)
 	}
 
-	ops.lookupIP = func(context.Context, string) ([]net.IP, string, error) { return nil, "", nil }
+	ops.lookupIP = func(context.Context, string) ([]net.IP, []string, error) { return nil, nil, nil }
 	r = ops.dnsProbe("example.com", nil)(context.Background(), nil)
 	if r.Status != StatusFail || !strings.Contains(r.Detail, "no A/AAAA records") {
 		t.Errorf("empty answer = %+v, want FAIL with 'no A/AAAA records'", r)
@@ -274,25 +480,33 @@ func TestDNSProbeRetriesTransientFailure(t *testing.T) {
 		first    error
 		want     Status
 		attempts int
+		targets  []string
 	}{
-		{"recovered resolver passes on the retry", timeout, StatusPass, 2},
-		{"down resolver still fails", timeout, StatusFail, 2},
-		{"nxdomain is not retried", notFound, StatusFail, 1},
+		{"recovered resolver passes on the retry", timeout, StatusPass, 2, []string{"192.0.2.53:53", "198.51.100.53:53"}},
+		{"down resolver still fails", timeout, StatusFail, 2, []string{"192.0.2.53:53", "198.51.100.53:53"}},
+		{"nxdomain is not retried", notFound, StatusFail, 1, []string{"192.0.2.53:53"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attempts := 0
-			ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, string, error) {
+			ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
 				attempts++
-				if attempts == 1 || tc.want == StatusFail {
-					return nil, "", tc.first
+				target := "192.0.2.53:53"
+				if attempts == 2 {
+					target = "198.51.100.53:53"
 				}
-				return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+				if attempts == 1 || tc.want == StatusFail {
+					return nil, []string{target}, tc.first
+				}
+				return []net.IP{net.ParseIP("192.0.2.1")}, []string{target}, nil
 			}}
 			ctx, cancel := context.WithTimeout(context.Background(), DefaultProbeTimeout)
 			defer cancel()
 			r := ops.dnsProbe("example.com", nil)(ctx, nil)
 			if r.Status != tc.want || attempts != tc.attempts {
 				t.Errorf("status = %v after %d lookups, want %v after %d", r.Status, attempts, tc.want, tc.attempts)
+			}
+			if !slices.Equal(r.ResolverTargets, tc.targets) {
+				t.Errorf("resolver targets = %v, want completed samples %v", r.ResolverTargets, tc.targets)
 			}
 		})
 	}
@@ -316,17 +530,17 @@ func TestDNSProbeResamplesWithoutCuttingTheFirstQuery(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var attempts atomic.Int32
 			start := time.Now()
-			ops := &netops{lookupIP: func(ctx context.Context, _ string) ([]net.IP, string, error) {
+			ops := &netops{lookupIP: func(ctx context.Context, _ string) ([]net.IP, []string, error) {
 				attempts.Add(1)
 				if time.Since(start) < tc.answers {
 					<-ctx.Done() // sent too early to ever be answered
-					return nil, "", &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
+					return nil, nil, &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
 				}
 				select {
 				case <-time.After(300 * time.Millisecond):
-					return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+					return []net.IP{net.ParseIP("192.0.2.1")}, nil, nil
 				case <-ctx.Done():
-					return nil, "", &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
+					return nil, nil, &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}
 				}
 			}}
 			ctx, cancel := context.WithTimeout(context.Background(), tc.budget)
@@ -343,34 +557,34 @@ func TestDNSProbeResamplesWithoutCuttingTheFirstQuery(t *testing.T) {
 // parent stops the probe at two queries rather than letting the retry outlive
 // the context it was handed or wait out a budget that is already gone.
 func TestDNSProbeResampleStaysInsideTheParentContext(t *testing.T) {
-	answer := func(context.Context, string) ([]net.IP, string, error) {
-		return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+	answer := func(context.Context, string) ([]net.IP, []string, error) {
+		return []net.IP{net.ParseIP("192.0.2.1")}, nil, nil
 	}
 	for _, tc := range []struct {
 		name     string
-		lookup   func(context.Context, string) ([]net.IP, string, error)
+		lookup   func(context.Context, string) ([]net.IP, []string, error)
 		cancel   bool
 		want     Status
 		attempts int32
 	}{
 		{"an answered query is not resampled", answer, false, StatusPass, 1},
-		{"a cancelled parent stops at the one resample", func(ctx context.Context, _ string) ([]net.IP, string, error) {
+		{"a cancelled parent stops at the one resample", func(ctx context.Context, _ string) ([]net.IP, []string, error) {
 			// Bounded rather than a bare <-ctx.Done(): a query handed a context
 			// detached from the parent would otherwise wedge here until the
 			// suite timeout instead of failing on the assertions below.
 			select {
 			case <-ctx.Done():
 			case <-time.After(2 * time.Second):
-				return []net.IP{net.ParseIP("192.0.2.1")}, "", nil
+				return []net.IP{net.ParseIP("192.0.2.1")}, nil, nil
 			}
-			return nil, "", &net.DNSError{Err: ctx.Err().Error(), Name: "example.com"}
+			return nil, nil, &net.DNSError{Err: ctx.Err().Error(), Name: "example.com"}
 		}, true, StatusFail, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var attempts atomic.Int32
 			var mu sync.Mutex
 			var seen []context.Context
-			ops := &netops{lookupIP: func(ctx context.Context, host string) ([]net.IP, string, error) {
+			ops := &netops{lookupIP: func(ctx context.Context, host string) ([]net.IP, []string, error) {
 				attempts.Add(1)
 				mu.Lock()
 				seen = append(seen, ctx)
@@ -407,20 +621,24 @@ func TestDNSProbeResampleStaysInsideTheParentContext(t *testing.T) {
 	}
 }
 
-// The DNS row names the resolver that answered when the platform reveals it, and
-// says nothing rather than "unknown" when it doesn't (Windows).
-func TestDNSProbeNamesResolver(t *testing.T) {
+// One resolver dialed is provenance and keeps the "via" the row has always
+// read: nothing else was asked. Several are attempts and are named as such,
+// sorted so the row is the same on every run. None is said as nothing at all.
+func TestDNSProbeNamesResolverTargets(t *testing.T) {
 	for _, tc := range []struct {
-		name, server, want string
+		name    string
+		targets []string
+		want    string
 	}{
-		{"standard port is bare", "192.168.1.1:53", "example.com → 192.0.2.1 (via 192.168.1.1)"},
-		{"odd port is kept", "127.0.0.1:5353", "example.com → 192.0.2.1 (via 127.0.0.1:5353)"},
-		{"IPv6 resolver", "[2001:db8::1]:53", "example.com → 192.0.2.1 (via 2001:db8::1)"},
-		{"unknown resolver omitted", "", "example.com → 192.0.2.1"},
+		{"standard port is bare", []string{"192.168.1.1:53"}, "example.com → 192.0.2.1 (resolver tried: 192.168.1.1)"},
+		{"odd port is kept", []string{"127.0.0.1:5353"}, "example.com → 192.0.2.1 (resolver tried: 127.0.0.1:5353)"},
+		{"IPv6 resolver", []string{"[2001:db8::1]:53"}, "example.com → 192.0.2.1 (resolver tried: 2001:db8::1)"},
+		{"several are attempts too", []string{"192.0.2.53:53", "[2001:db8::53]:53"}, "example.com → 192.0.2.1 (resolvers tried: 192.0.2.53, 2001:db8::53)"},
+		{"no DNS target omitted", nil, "example.com → 192.0.2.1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-				return []net.IP{net.ParseIP("192.0.2.1")}, tc.server, nil
+			ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+				return []net.IP{net.ParseIP("192.0.2.1")}, tc.targets, nil
 			}}
 			r := ops.dnsProbe("example.com", nil)(context.Background(), nil)
 			if r.Status != StatusPass || r.Detail != tc.want {
@@ -430,27 +648,56 @@ func TestDNSProbeNamesResolver(t *testing.T) {
 	}
 }
 
+// One dialed target is not provenance either, so the row credits it with
+// nothing. Go queries DNS before the hosts file wherever the host is configured
+// "hosts: dns files", and reads the hosts file only when the queries came back
+// with nothing (net/dnsclient_unix.go, goLookupIPCNAMEOrder). A lookup there can
+// dial exactly one server, be answered by no server at all, and still return
+// addresses, which is the case "via <server>" would have described wrongly. It
+// cannot be built in process, because the ordering is read from the host's own
+// nsswitch.conf, so what is pinned here is the claim the row is allowed to make.
+func TestDNSProbeNeverCreditsTheOnlyResolverWithTheAnswer(t *testing.T) {
+	ops := &netops{lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+		return []net.IP{net.ParseIP("192.0.2.1")}, []string{"192.0.2.53:53"}, nil
+	}}
+	r := ops.dnsProbe("example.com", nil)(context.Background(), nil)
+	if !strings.Contains(r.Detail, "192.0.2.53") {
+		t.Errorf("detail = %q, want the resolver the lookup dialed", r.Detail)
+	}
+	// "via" is the whole difference: it reads as "this answer came from there",
+	// which no single Dial record establishes.
+	if strings.Contains(r.Detail, "via") {
+		t.Errorf("detail = %q, want the answer credited to no resolver", r.Detail)
+	}
+	if !strings.Contains(r.Detail, "tried") {
+		t.Errorf("detail = %q, want one target reported as an attempt, as several are", r.Detail)
+	}
+}
+
 func TestPublicDNSProbe(t *testing.T) {
 	notFound := &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}
 	for _, tc := range []struct {
 		name    string
 		ips     []net.IP
+		targets []string
 		err     error
 		litIP   net.IP
 		status  Status
 		missing bool
 	}{
-		{"answer", []net.IP{net.ParseIP("192.0.2.1")}, nil, nil, StatusPass, false},
-		{"nxdomain is evidence", nil, notFound, nil, StatusPass, true},
-		{"unreachable is unavailable", nil, errors.New("network unreachable"), nil, StatusNA, false},
-		{"literal is not applicable", nil, nil, net.ParseIP("192.0.2.2"), StatusNA, false},
+		{"answer", []net.IP{net.ParseIP("192.0.2.1")}, []string{"8.8.8.8:53"}, nil, nil, StatusPass, false},
+		{"nxdomain is evidence", nil, []string{"8.8.8.8:53"}, notFound, nil, StatusPass, true},
+		{"unreachable is unavailable", nil, []string{"8.8.8.8:53"}, errors.New("network unreachable"), nil, StatusNA, false},
+		{"hosts-file answer is not public DNS evidence", []net.IP{net.ParseIP("192.0.2.1")}, nil, nil, nil, StatusNA, false},
+		{"a tried resolver does not make a hosts-file answer one", []net.IP{net.ParseIP("192.0.2.1")}, []string{"8.8.8.8:53"}, errHostsFileAnswer, nil, StatusNA, false},
+		{"literal is not applicable", nil, nil, nil, net.ParseIP("192.0.2.2"), StatusNA, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			called := false
 			server := ""
-			ops := &netops{lookupPublicIP: func(_ context.Context, _, srv string) ([]net.IP, error) {
+			ops := &netops{lookupPublicIP: func(_ context.Context, _, srv string) ([]net.IP, []string, error) {
 				called, server = true, srv
-				return tc.ips, tc.err
+				return tc.ips, tc.targets, tc.err
 			}}
 			r := ops.publicDNSProbe("example.com", tc.litIP, DefaultPublicDNS)(context.Background(), nil)
 			if called && server != "8.8.8.8:53" {
@@ -459,10 +706,94 @@ func TestPublicDNSProbe(t *testing.T) {
 			if r.Status != tc.status || r.DNSNotFound != tc.missing {
 				t.Errorf("result = %+v, want status %s, not-found %v", r, tc.status, tc.missing)
 			}
+			if len(tc.targets) == 0 && (len(r.ResolverTargets) != 0 || strings.Contains(r.Detail, "via ")) {
+				t.Errorf("result = %+v, claimed public DNS without a resolver Dial", r)
+			}
 			if tc.litIP != nil && called {
 				t.Error("literal IP must not contact public DNS")
 			}
 		})
+	}
+}
+
+// A PASS on the public row means an independent resolver answered, and the
+// diagnosis spends it as exactly that: publicResolves promotes a system-DNS
+// failure to system_dns_failure, contradicts dns_failure, and rules out
+// dns_name_not_found. So the row may only carry Addrs it can prove came from
+// the server, and a resolver target having been dialed proves nothing on its
+// own: under "hosts: dns files" the Go resolver queries DNS first and reads the
+// hosts file only when that came back empty, so a real dial to the public
+// server can be followed by a local answer it never sent.
+func TestPublicDNSNeedsMoreThanAResolverAttempt(t *testing.T) {
+	ops := &netops{lookupPublicIP: func(context.Context, string, string) ([]net.IP, []string, error) {
+		// What lookupIPPublicWithDial reports for the case above: the server was
+		// dialed, and the answer that came back is not the server's.
+		return []net.IP{net.ParseIP("198.51.100.77")}, []string{"8.8.8.8:53"}, errHostsFileAnswer
+	}}
+	r := ops.publicDNSProbe("example.com", nil, DefaultPublicDNS)(context.Background(), nil)
+	if r.Status != StatusNA {
+		t.Errorf("status = %s, want %s: an attempted resolver is not an answering one", r.Status, StatusNA)
+	}
+	// Addrs is the load-bearing field, not the prose: len(Addrs) > 0 is what
+	// publicResolves and ObservationDNSAnswers both read.
+	if len(r.Addrs) != 0 {
+		t.Errorf("addrs = %v, want none: the public resolver did not supply them", r.Addrs)
+	}
+	if r.DNSNotFound {
+		t.Error("DNSNotFound set: the public resolver reported nothing either way")
+	}
+	// The attempt evidence still belongs on the row; only the answer was unproven.
+	if !slices.Equal(r.ResolverTargets, []string{"8.8.8.8:53"}) {
+		t.Errorf("resolver targets = %v, want the dialed target kept as an attempt", r.ResolverTargets)
+	}
+	// N/A here is not the resolver being unreachable: it answered, or did not,
+	// and this run cannot tell. Saying "unavailable" would send the reader after
+	// an egress problem that the probe never observed.
+	if strings.Contains(r.Detail, "unavailable") || strings.Contains(r.Detail, "via ") {
+		t.Errorf("detail = %q, want the reason given as an unprovable answer, not an unreachable server", r.Detail)
+	}
+}
+
+// answeredWithoutDNS is what separates the two. It resolves with every dial
+// refused, so an answer that still comes back came from somewhere other than
+// DNS, whichever side of the query this host reads its hosts file on.
+func TestAnsweredWithoutDNSSeesOnlyNonDNSAnswers(t *testing.T) {
+	ctx := context.Background()
+	// A literal needs no name source at all, which is the same shape as a hosts
+	// hit: an answer no query produced. Deterministic on every platform, unlike
+	// an entry in the developer machine's own hosts file.
+	if !answeredWithoutDNS(ctx, "127.0.0.1") {
+		t.Error("an answer that needed no query was not recognized as one")
+	}
+	// .invalid is reserved as never resolvable, and no hosts file ships one.
+	if answeredWithoutDNS(ctx, "no-such-name.invalid") {
+		t.Error("a name nothing can answer was reported as answered without DNS")
+	}
+	// An expired budget must not read as "nothing to say": that would restore
+	// the false PASS by the back door.
+	expired, cancel := context.WithCancel(ctx)
+	cancel()
+	if !answeredWithoutDNS(expired, "127.0.0.1") {
+		t.Error("a cancelled context suppressed a local answer that exists")
+	}
+}
+
+// The guard lives in lookupIPPublicWithDial rather than in the probe, so no
+// future caller of the public lookup can forget it.
+func TestLookupIPPublicRefusesAnAnswerDNSDidNotSupply(t *testing.T) {
+	dial := func(context.Context, string, string) (net.Conn, error) {
+		t.Error("the public lookup dialed for a name that needs no query")
+		return nil, errors.New("must not dial")
+	}
+	ips, targets, err := lookupIPPublicWithDial(context.Background(), "127.0.0.1", dial, "8.8.8.8:53")
+	if !errors.Is(err, errHostsFileAnswer) {
+		t.Errorf("err = %v, want the answer refused as unprovable", err)
+	}
+	if len(ips) != 0 {
+		t.Errorf("ips = %v, want none returned to be credited to the public resolver", ips)
+	}
+	if len(targets) != 0 {
+		t.Errorf("targets = %v, want none: nothing was dialed", targets)
 	}
 }
 

@@ -302,8 +302,8 @@ func TestNetopsInjection(t *testing.T) {
 		interfaces: func() ([]net.Interface, error) {
 			return []net.Interface{{Name: "fake0", Flags: net.FlagUp | net.FlagRunning}}, nil
 		},
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("192.0.2.1")}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("192.0.2.1")}, []string{"192.0.2.53:53"}, nil
 		},
 		ssid: func(context.Context, string) string { return "FakeNet" },
 	}
@@ -383,8 +383,8 @@ func proxyOps(proxy string, dial func(context.Context, string, string) (net.Conn
 			return url.Parse(proxy)
 		},
 		dialContext: dial,
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("192.0.2.10")}, "192.0.2.53:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("192.0.2.10")}, []string{"192.0.2.53:53"}, nil
 		},
 	}
 }
@@ -451,8 +451,8 @@ func TestProxyProbeSocks5LocalDNSFailure(t *testing.T) {
 	ops := proxyOps("socks5://proxy.corp:1080", func(context.Context, string, string) (net.Conn, error) {
 		return conn, nil
 	})
-	ops.lookupIP = func(context.Context, string) ([]net.IP, string, error) {
-		return nil, "192.0.2.53:53", errors.New("no such host")
+	ops.lookupIP = func(context.Context, string) ([]net.IP, []string, error) {
+		return nil, []string{"192.0.2.53:53"}, errors.New("no such host")
 	}
 	r := ops.proxyProbe(context.Background(), nil)
 	if r.Status != StatusFail || !strings.Contains(r.Detail, "is reachable, but local DNS cannot resolve") ||
@@ -933,8 +933,8 @@ func TestIfaceProbeFollowsTheReferenceRoute(t *testing.T) {
 				{Name: "Wi-Fi", Flags: net.FlagUp | net.FlagRunning},
 			}, nil
 		},
-		lookupIP: func(context.Context, string) ([]net.IP, string, error) {
-			return []net.IP{net.ParseIP("198.51.100.7")}, "192.168.1.1:53", nil
+		lookupIP: func(context.Context, string) ([]net.IP, []string, error) {
+			return []net.IP{net.ParseIP("198.51.100.7")}, []string{"192.168.1.1:53"}, nil
 		},
 		ssid: func(_ context.Context, iface string) string {
 			ssidIface = iface

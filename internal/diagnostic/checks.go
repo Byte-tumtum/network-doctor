@@ -149,13 +149,17 @@ type ProbeResult struct {
 	Portal      *Portal  // non-nil when egress is intercepted, not dead.
 	Addrs       []net.IP // DNS publishes all A records here
 	DNSNotFound bool     // the resolver found no A/AAAA records
-	SelectedIP  net.IP   // winning/pinned IP used by this probe
-	Source      net.IP
-	Iface       string
-	Network     string // connected Wi-Fi SSID, empty when wired/unknown
+	// ResolverTargets are DNS service addresses recorded as passed to the Go
+	// resolver's Dial hook. They prove where a lookup was attempted, not which
+	// target answered or supplied any returned address.
+	ResolverTargets []string
+	SelectedIP      net.IP // winning/pinned IP used by this probe
+	Source          net.IP
+	Iface           string
+	Network         string // connected Wi-Fi SSID, empty when wired/unknown
 	// Routes are the operating system's own route decisions for the
 	// destinations this row is about: the reference Internet endpoints on the
-	// interface row, the configured resolver on the DNS row, and every
+	// interface row, each resolver target recorded on the DNS row, and every
 	// resolved address on the target row. Empty where the platform cannot
 	// answer, which is never the same as "there is no route".
 	Routes   []RouteDecision
@@ -324,12 +328,12 @@ type netops struct {
 	interfaces     func() ([]net.Interface, error)
 	interfaceAddrs func(*net.Interface) ([]net.Addr, error)
 	sources        *SourceAddresses
-	// lookupIP resolves host and reports the resolver that was dialed, as a
-	// host:port string. An empty server means "couldn't tell", not "none".
-	lookupIP func(ctx context.Context, host string) ([]net.IP, string, error)
+	// lookupIP resolves host and reports every resolver target its Dial hook
+	// saw. An empty list means no DNS connection was attempted.
+	lookupIP func(ctx context.Context, host string) ([]net.IP, []string, error)
 	// lookupPublicIP resolves host against server (a host:port second-opinion
 	// resolver), bypassing whatever the system is configured to use.
-	lookupPublicIP func(ctx context.Context, host, server string) ([]net.IP, error)
+	lookupPublicIP func(ctx context.Context, host, server string) ([]net.IP, []string, error)
 	dialContext    func(ctx context.Context, network, addr string) (net.Conn, error)
 	quicHandshake  func(context.Context, net.Conn, *tls.Config) (quicState, error)
 	sendBuffer     func(net.Conn) (int, error)
@@ -380,10 +384,10 @@ type SourceAddresses struct {
 var defaultOps = &netops{
 	interfaces:     net.Interfaces,
 	interfaceAddrs: (*net.Interface).Addrs,
-	lookupIP: func(ctx context.Context, host string) ([]net.IP, string, error) {
+	lookupIP: func(ctx context.Context, host string) ([]net.IP, []string, error) {
 		return lookupIPWithDial(ctx, host, new(net.Dialer).DialContext)
 	},
-	lookupPublicIP: func(ctx context.Context, host, server string) ([]net.IP, error) {
+	lookupPublicIP: func(ctx context.Context, host, server string) ([]net.IP, []string, error) {
 		return lookupIPPublicWithDial(ctx, host, new(net.Dialer).DialContext, server)
 	},
 	dialContext:   new(net.Dialer).DialContext,

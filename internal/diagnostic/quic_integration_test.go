@@ -133,8 +133,8 @@ func TestQUICProbeCancellationReturnsPromptly(t *testing.T) {
 	}
 }
 
-func loopbackQUICLookup(context.Context, string) ([]net.IP, string, error) {
-	return []net.IP{net.ParseIP("127.0.0.1")}, "127.0.0.1:53", nil
+func loopbackQUICLookup(context.Context, string) ([]net.IP, []string, error) {
+	return []net.IP{net.ParseIP("127.0.0.1")}, []string{"127.0.0.1:53"}, nil
 }
 
 func quicLoopbackOps() *netops {
