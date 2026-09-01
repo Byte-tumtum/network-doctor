@@ -141,11 +141,18 @@ func TestPMTUProbeLoopbackSilentPeerDoesNotWarn(t *testing.T) {
 	defer cancel()
 	deps := map[ProbeID]ProbeResult{ProbeTargetTCP: {SelectedIP: net.ParseIP("127.0.0.1")}}
 	r := defaultOps.pmtuProbe(port, ProtoNone)(ctx, deps)
+	want := StatusPass
 	if conn := <-accepted; conn != nil {
+		// Where the kernel reports no send queue, delivery cannot be proven and
+		// the probe says so instead of passing. Either verdict is silence,
+		// which is the property under test; a warn is what may never appear.
+		if _, err := socketQueued(conn); err != nil {
+			want = StatusNA
+		}
 		conn.Close()
 	}
-	if r.Status != StatusPass {
-		t.Errorf("silent-but-healthy peer = %+v, want PASS (%d KiB must fit in its receive buffer)", r, pmtuPayloadSize>>10)
+	if r.Status != want {
+		t.Errorf("silent-but-healthy peer = %+v, want %v (%d KiB must fit in its receive buffer)", r, want, pmtuPayloadSize>>10)
 	}
 }
 
