@@ -14,7 +14,7 @@
 # rather than shipping a site of broken links and 404 assets.
 title: Network Doctor
 description: >-
-  Find exactly where a connection breaks. Network Doctor is a cross-platform
+  Find the layer where a connection breaks. Network Doctor is a cross-platform
   network troubleshooting TUI that turns interface, DNS, TCP, TLS, HTTP, proxy,
   and path-MTU checks into one plain-English diagnosis.
 url: https://heymaikol.github.io

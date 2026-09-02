@@ -1,6 +1,6 @@
 .TH NETDOC 1 "2026-08-31" "network-doctor" "User Commands"
 .SH NAME
-netdoc \- diagnose network connectivity and explain where the connection breaks
+netdoc \- diagnose network connectivity and name the layer where the connection breaks
 .SH SYNOPSIS
 .B netdoc
 .RI [ flags ]
@@ -43,8 +43,8 @@ netdoc \- diagnose network connectivity and explain where the connection breaks
 .RI [ target ]
 .SH DESCRIPTION
 .B netdoc
-diagnoses network connectivity layer by layer and reports where the path
-breaks in plain English. With no
+walks the network stack layer by layer and reports, in plain English, the
+layer at which the path breaks. With no
 .I target
 it runs the generic local and internet checks; with a
 .I target

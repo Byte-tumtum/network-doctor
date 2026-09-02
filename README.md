@@ -5,7 +5,7 @@
 [![License: Apache-2.0](https://img.shields.io/github/license/heymaikol/network-doctor)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-heymaikol.github.io-1f6feb)](https://heymaikol.github.io/network-doctor/)
 
-**Find exactly where your connection breaks.** Network Doctor is a
+**Find the layer where your connection breaks.** Network Doctor is a
 cross-platform network troubleshooting TUI that turns interface, DNS, TCP,
 TLS, HTTP, proxy, and path-MTU checks into one plain-English diagnosis.
 
@@ -17,8 +17,9 @@ path, or at the service?**
 
 ## Why Network Doctor
 
-- **Pinpoints the failed layer.** Independent probes distinguish local-link,
-  DNS, egress, target, TLS, HTTP, proxy, and path-MTU failures.
+- **Isolates the failing layer.** Independent probes distinguish local-link,
+  DNS, egress, target, TLS, HTTP, proxy, and path-MTU failures, and say so when
+  the evidence stops short of naming one.
 - **Explains what to do next.** Results include evidence and targeted fix hints,
   with familiar drill-down tools one keypress away.
 - **Needs no root access.** Even the path-MTU check and LAN map use unprivileged

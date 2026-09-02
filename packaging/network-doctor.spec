@@ -9,7 +9,7 @@ Name:           network-doctor
 # changelog entry) only when you want a manual build of a newer version.
 Version:        1.10.8
 Release:        1%{?dist}
-Summary:        Terminal UI that diagnoses network connectivity and explains where the connection breaks
+Summary:        Terminal UI that diagnoses network connectivity and names the layer where the connection breaks
 
 License:        Apache-2.0
 URL:            https://github.com/heymaikol/network-doctor
@@ -19,10 +19,10 @@ Source1:        %{url}/releases/download/v%{version}/%{name}-%{version}-vendor.t
 BuildRequires:  golang >= 1.27.0
 
 %description
-Network Doctor diagnoses network connectivity and tells you where the
-connection breaks in plain English, instead of a wall of tool output. Probes
-run unprivileged and time-bounded, and form a dependency graph with
-independent branches so an unrelated failure never hides a working path.
+Network Doctor diagnoses network connectivity layer by layer and names the
+layer where the connection breaks in plain English, instead of a wall of tool
+output. Probes run unprivileged and time-bounded, and form a dependency graph
+with independent branches so an unrelated failure never hides a working path.
 
 The installed binaries are netdoc, the diagnostic itself, and netdoc-sim, the
 Linux-only simulator that builds throwaway virtual networks to test netdoc
