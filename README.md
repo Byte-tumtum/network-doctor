@@ -438,10 +438,11 @@ both native hosts. It builds the release-shaped `netdoc` and holds its native
 route evidence to observations the binary did not produce: the source address
 the kernel selects for a connected datagram socket, and the platform's own route
 tool, `Find-NetRoute` on Windows and `/sbin/route` on macOS. It also exercises
-loopback and the built-in route, socket, and ping drill-down commands. Nothing
-there sends traffic, because a route lookup and a connected UDP socket are both
-local decisions. It keeps `-count=1` so a cached result can never stand in for a
-run that actually touched the host.
+loopback and the built-in route, socket, and ping drill-down commands. The route
+oracles send no application data: a route lookup and a connected UDP socket are
+local decisions, while the drill-down checks stay on loopback. It keeps
+`-count=1` so a cached result can never stand in for a run that actually touched
+the host.
 
 Three layers of evidence sit behind a release, and none of them substitutes for
 another:
@@ -450,9 +451,13 @@ another:
   engine against controlled topologies. They prove nothing about whether the
   Windows or macOS adapter reads its own operating system correctly.
 - **Native macOS and Windows acceptance** proves that reading, for the semantics
-  a GitHub-hosted runner genuinely exposes: which interface and source address
-  the stack selects for a routed destination, the next hop and route entry
-  behind it, and the kind of link the selected interface is.
+  a GitHub-hosted runner genuinely exposes: route existence, the selected
+  interface, the IPv4 source address where the native API supplies it, IPv6
+  source ownership, the next hop, and the matched route entry. Windows also
+  checks the source and interface index/alias reported by `Find-NetRoute`. A
+  runner with no real tunnel cannot
+  prove VPN classification, so acceptance checks only that the native adapter
+  populated a structurally valid link classification.
 - **Field validation on real networks** is the only evidence for what CI cannot
   manufacture: a real VPN tunnel, a captive portal, split DNS under enterprise
   or VPN routing policy, an IPv6-only or DNS64/NAT64 network, live LAN DNS-SD

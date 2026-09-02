@@ -4,9 +4,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -34,14 +38,34 @@ func hostRouteLookup(t *testing.T, dst netip.Addr) (hostRoute, bool) {
 		if ctx.Err() != nil {
 			t.Fatalf("route -n get %s did not finish: %v\n%s", dst, err, out)
 		}
-		// route exits non-zero for a destination it has no route to, which is
-		// an answer, and it exits non-zero when it cannot run at all, which is
-		// not. It prints its reason either way, and the caller turns a missing
-		// route into a failure, so the reason is logged rather than guessed at.
-		t.Logf("route -n get %s exited %v:\n%s", dst, err, out)
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("run /sbin/route for %s: %v", dst, err)
+		}
+		t.Fatalf("route -n get %s exited %v:\n%s", dst, err, out)
+	}
+	if darwinNoRouteOutput(out) {
+		t.Logf("route -n get found no route to %s:\n%s", dst, out)
 		return hostRoute{}, false
 	}
+	got, err := parseDarwinRouteOutput(dst, out)
+	if err != nil {
+		t.Fatalf("parse route -n get %s: %v\n%s", dst, err, out)
+	}
+	return got, true
+}
 
+func darwinNoRouteOutput(out []byte) bool {
+	text := string(out)
+	for _, code := range []syscall.Errno{syscall.ESRCH, syscall.ENETDOWN, syscall.ENETUNREACH, syscall.EHOSTUNREACH} {
+		if strings.Contains(text, fmt.Sprintf("message indicates error %d:", code)) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseDarwinRouteOutput(dst netip.Addr, out []byte) (hostRoute, error) {
 	// Every field route prints is "name: value" with the first colon as the
 	// separator, which leaves an IPv6 value intact.
 	fields := map[string]string{}
@@ -54,16 +78,115 @@ func hostRouteLookup(t *testing.T, dst netip.Addr) (hostRoute, bool) {
 	}
 	got := hostRoute{Iface: fields["interface"]}
 	if got.Iface == "" {
-		t.Fatalf("route -n get %s named no interface:\n%s", dst, out)
+		return hostRoute{}, errors.New("route named no interface")
 	}
-	// An on-link route's next hop is a link layer address such as link#5, which
-	// is not an IP and is netdoc's absent gateway. Everything else is parsed,
-	// and parseAddr drops the zone a link-local next hop carries, because
-	// netdoc's gateway field never carries one.
-	got.Gateway = parseAddr(fields["gateway"])
-	// route reports neither the source address nor the matched prefix in a form
-	// that can be compared without rebuilding netdoc's own netmask arithmetic
-	// here, so both stay unset. The kernel's source selection covers the first
-	// in TestNativeSelectedInterfaceIsTheOneTheKernelRoutesThrough.
-	return got, true
+	if raw := fields["gateway"]; raw != "" {
+		gateway, err := netip.ParseAddr(raw)
+		if err == nil {
+			gateway = gateway.Unmap().WithZone("")
+			if !gateway.IsUnspecified() {
+				got.Gateway = gateway
+			}
+		} else if !strings.HasPrefix(raw, "link#") && !strings.HasPrefix(raw, "index:") {
+			return hostRoute{}, fmt.Errorf("route named unreadable gateway %q", raw)
+		}
+	}
+	prefix, err := darwinRoutePrefix(dst, fields)
+	if err != nil {
+		return hostRoute{}, err
+	}
+	got.Prefix = prefix
+	return got, nil
+}
+
+func darwinRoutePrefix(dst netip.Addr, fields map[string]string) (netip.Prefix, error) {
+	rawDestination := fields["destination"]
+	if rawDestination == "" {
+		return netip.Prefix{}, errors.New("route named no matched destination")
+	}
+	if rawDestination == "default" {
+		return netip.PrefixFrom(dst, 0).Masked(), nil
+	}
+	matched, err := netip.ParseAddr(rawDestination)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("route named unreadable destination %q", rawDestination)
+	}
+	matched = matched.Unmap().WithZone("")
+	if matched.Is4() != dst.Is4() {
+		return netip.Prefix{}, fmt.Errorf("route destination %s has the wrong family for %s", matched, dst)
+	}
+	flags := "," + strings.Trim(fields["flags"], "<>") + ","
+	bits := dst.BitLen()
+	if !strings.Contains(flags, ",HOST,") {
+		rawMask := fields["mask"]
+		if rawMask == "" {
+			return netip.Prefix{}, errors.New("non-host route named no mask")
+		}
+		if rawMask == "default" {
+			bits = 0
+		} else {
+			mask, err := netip.ParseAddr(rawMask)
+			if err != nil {
+				return netip.Prefix{}, fmt.Errorf("route named unreadable mask %q", rawMask)
+			}
+			mask = mask.Unmap()
+			if mask.Is4() != dst.Is4() {
+				return netip.Prefix{}, fmt.Errorf("route mask %s has the wrong family for %s", mask, dst)
+			}
+			var total int
+			bits, total = net.IPMask(mask.AsSlice()).Size()
+			if total != dst.BitLen() {
+				return netip.Prefix{}, fmt.Errorf("route mask %s is not contiguous", mask)
+			}
+		}
+	}
+	prefix := netip.PrefixFrom(matched, bits).Masked()
+	if !prefix.Contains(dst) {
+		return netip.Prefix{}, fmt.Errorf("route prefix %s does not contain queried destination %s", prefix, dst)
+	}
+	return prefix, nil
+}
+
+func TestNativeDarwinRouteOutputParser(t *testing.T) {
+	cases := []struct {
+		name, dst, output, prefix, gateway string
+	}{
+		{"IPv4 default", "1.1.1.1", `route to: 1.1.1.1
+destination: default
+       mask: default
+    gateway: 192.0.2.1
+  interface: en0
+      flags: <UP,GATEWAY,DONE,STATIC>
+`, "0.0.0.0/0", "192.0.2.1"},
+		{"IPv6 network on link", "2606:4700:4700::1111", `route to: 2606:4700:4700::1111
+destination: 2606:4700::
+       mask: ffff:ffff::
+    gateway: link#7
+  interface: en0
+      flags: <UP,DONE,STATIC>
+`, "2606:4700::/32", ""},
+		{"IPv6 host", "2001:db8::7", `route to: 2001:db8::7
+destination: 2001:db8::7
+  interface: utun3
+      flags: <UP,HOST,DONE,IFSCOPE>
+`, "2001:db8::7/128", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseDarwinRouteOutput(netip.MustParseAddr(c.dst), []byte(c.output))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Prefix.String() != c.prefix || got.Gateway.String() != c.gateway || got.Iface == "" {
+				t.Errorf("parsed route = %+v, want prefix %s gateway %s and an interface", got, c.prefix, c.gateway)
+			}
+		})
+	}
+	if _, err := parseDarwinRouteOutput(netip.MustParseAddr("1.1.1.1"), []byte("destination: 192.0.2.0\ninterface: en0\n")); err == nil {
+		t.Error("a non-host route without a mask was accepted")
+	}
+	if !darwinNoRouteOutput([]byte("route: message indicates error 51: Network is unreachable\n")) ||
+		darwinNoRouteOutput([]byte("route: message indicates error 55: No buffer space available\n")) {
+		t.Error("no-route kernel errors were not separated from route-tool failures")
+	}
 }

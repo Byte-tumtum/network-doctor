@@ -1,23 +1,8 @@
 //go:build acceptance && (darwin || windows)
 
-// Native acceptance: the release-shaped netdoc binary run against the real
-// Windows or macOS network stack, checked against an observation of that stack
-// netdoc did not produce.
-//
-// The Linux namespace simulator proves the diagnosis engine against controlled
-// topologies. It cannot prove that the Windows or macOS adapter reads its own
-// operating system correctly, and a wrong reading there is not hypothetical:
-// interface enumeration once named the Npcap loopback adapter as the machine's
-// interface while routing was leaving through a real NIC, with every piece of
-// generic logic behaving perfectly. So the oracle here is never netdoc's own
-// parser or a fixture of its output. It is the kernel's own source-address
-// selection and the platform's own documented route tool, both asked the same
-// question netdoc asked and both answering through machinery netdoc does not
-// use.
-//
-// Nothing here sends traffic. A route lookup and a connected datagram socket
-// are decisions the stack makes locally, so these tests neither depend on
-// reaching any third party nor put anything on the wire.
+// Native acceptance runs the release-shaped netdoc binary against the real
+// Windows or macOS network stack and checks its platform route evidence against
+// observations the binary did not produce.
 
 package main
 
@@ -32,17 +17,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/heymaikol/network-doctor/internal/report"
 )
 
+// These are duplicated deliberately. They are the independently known first
+// IPv4 and IPv6 reference destinations the interface row is required to
+// describe. Reading destinations out of that row would let a wrong or missing
+// production reference select the question its oracle is asked.
+var nativeReferenceDestinations = []netip.Addr{
+	netip.MustParseAddr("1.1.1.1"),
+	netip.MustParseAddr("2606:4700:4700::1111"),
+}
+
+const nativeObservationAttempts = 3
+
 // hostRoute is what the platform's own route tool answered about one
-// destination. A field the tool does not report stays zero, and the tests
-// assert only what it was actually told.
+// destination. A field the tool does not report stays zero.
 type hostRoute struct {
 	Iface   string
 	Gateway netip.Addr
@@ -50,10 +47,22 @@ type hostRoute struct {
 	Prefix  netip.Prefix
 }
 
+type hostRouteObservation struct {
+	Route hostRoute
+	Found bool
+}
+
+type kernelRouteObservation struct {
+	Source netip.Addr
+	Owners []string
+	Err    string
+}
+
 // TestNativeBinaryUsesLoopbackInterface proves the release-shaped binary can
 // resolve and inspect a real host interface, then run the host's SSID fallback.
 func TestNativeBinaryUsesLoopbackInterface(t *testing.T) {
-	got, code := runNetdoc(t, "--json", "--check", "iface,ssid", "--iface", "127.0.0.1", "--public-dns=")
+	bin := buildNetdoc(t)
+	got, code := runNetdoc(t, bin, "--json", "--check", "iface,ssid", "--iface", "127.0.0.1", "--public-dns=")
 	if code != 0 {
 		t.Fatalf("netdoc exited %d, want 0 for a run whose checks all pass: %+v", code, got)
 	}
@@ -74,126 +83,150 @@ func TestNativeBinaryUsesLoopbackInterface(t *testing.T) {
 }
 
 // TestNativeSelectedInterfaceIsTheOneTheKernelRoutesThrough checks netdoc's
-// route evidence against the stack's own egress decision.
-//
-// The independent observation is a connected datagram socket. connect() on a
-// UDP socket makes the kernel perform its route lookup and pick the local
-// address it would send from, and it puts nothing on the wire. On Windows that
-// selection happens in the transport stack and netdoc's answer comes from the
-// IP Helper API; on macOS it happens in the socket layer and netdoc's answer
-// comes from a PF_ROUTE query. Neither platform can produce a matching pair by
-// echoing netdoc back at itself, which is what makes disagreement here evidence
-// about netdoc.
-//
-// This is the regression gate for the Npcap-adapter class of defect: naming an
-// interface that routing did not choose fails here even when every generic
-// decision in the run is correct.
+// route evidence against the stack's source and interface selection. Connecting
+// a UDP socket performs that selection locally and sends no datagram.
 func TestNativeSelectedInterfaceIsTheOneTheKernelRoutesThrough(t *testing.T) {
-	check := nativeIfaceCheck(t)
-	if len(check.Routes) == 0 {
-		t.Fatalf("the interface row carried no route evidence: %+v; %s must answer a route lookup for the reference endpoints", check, runtime.GOOS)
+	bin := buildNetdoc(t)
+	var check report.Check
+	var kernel map[netip.Addr]kernelRouteObservation
+	for attempt := 1; attempt <= nativeObservationAttempts; attempt++ {
+		before := kernelRouteObservations(t)
+		check = nativeIfaceCheck(t, bin)
+		after := kernelRouteObservations(t)
+		if reflect.DeepEqual(before, after) {
+			kernel = after
+			break
+		}
+		t.Logf("kernel route/source state changed during observation %d: before=%+v after=%+v", attempt, before, after)
+	}
+	if kernel == nil {
+		t.Fatalf("kernel route/source state did not stay stable across %d bounded observations", nativeObservationAttempts)
 	}
 
-	var routed *report.Route
-	for i := range check.Routes {
-		r := check.Routes[i]
-		if !r.Unreachable && routed == nil {
-			routed = &check.Routes[i]
+	routes := referenceRoutes(t, check)
+	var headlineDst netip.Addr
+	for _, dst := range nativeReferenceDestinations {
+		r := routes[dst]
+		if !r.Unreachable && !headlineDst.IsValid() {
+			headlineDst = dst
 		}
-		t.Run(r.Destination, func(t *testing.T) {
-			dst := mustAddr(t, r.Destination)
-			source, err := kernelEgressSource(t, dst)
+		t.Run(dst.String(), func(t *testing.T) {
+			observed := kernel[dst]
 			if r.Unreachable {
-				if err == nil {
-					t.Fatalf("netdoc reported no route to %s, but the kernel selected source %s for it", dst, source)
+				if observed.Err == "" {
+					t.Fatalf("netdoc reported no route to %s, but the kernel selected source %s on %v", dst, observed.Source, observed.Owners)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("netdoc reported a route to %s through %q, but the kernel selected no path for it: %v", dst, r.Interface, err)
+			if observed.Err != "" {
+				t.Fatalf("netdoc reported a route to %s through %q, but a connected UDP socket selected no path: %s", dst, r.Interface, observed.Err)
 			}
-			owners := interfacesHolding(t, source)
-			if !slices.Contains(owners, r.Interface) {
-				t.Fatalf("netdoc routed %s through %q, but the kernel sources that destination from %s, which is assigned to %v",
-					dst, r.Interface, source, owners)
+			if !slices.Contains(observed.Owners, r.Interface) {
+				t.Fatalf("netdoc routed %s through %q, but the kernel sources it from %s, which is assigned to %v",
+					dst, r.Interface, observed.Source, observed.Owners)
 			}
-			assertReportedSource(t, r, source, owners)
-			assertLinkKind(t, r)
+			assertReportedSource(t, r, observed.Source, observed.Owners)
+			assertLinkClassificationPresent(t, r)
 		})
 	}
 
-	if routed == nil {
-		t.Fatalf("every reference route was unreachable: %+v; this host has no routed path to check", check.Routes)
+	if !headlineDst.IsValid() {
+		t.Fatalf("both independently selected reference destinations were unreachable: %+v", check.Routes)
 	}
-	// The headline interface, checked against the same independent source
-	// selection rather than against the route row beside it. An enumeration
-	// order that names a pseudo-adapter fails here.
-	source, err := kernelEgressSource(t, mustAddr(t, routed.Destination))
-	if err != nil {
-		t.Fatalf("the kernel selected no path to %s: %v", routed.Destination, err)
-	}
-	if owners := interfacesHolding(t, source); !slices.Contains(owners, check.Iface) {
+	routed, observed := routes[headlineDst], kernel[headlineDst]
+	if observed.Err == "" && !slices.Contains(observed.Owners, check.Iface) {
 		t.Errorf("the interface row names %q, but traffic to %s leaves from %s, which is assigned to %v",
-			check.Iface, routed.Destination, source, owners)
+			check.Iface, headlineDst, observed.Source, observed.Owners)
 	}
 	if check.Iface != routed.Interface {
-		t.Errorf("the interface row names %q while its own route evidence selected %q; the row must report the interface routing chose",
+		t.Errorf("the interface row names %q while its route evidence selected %q; the row must report the interface routing chose",
 			check.Iface, routed.Interface)
 	}
 }
 
-// TestNativeRouteEvidenceMatchesTheHostRouteTool checks the same decisions
-// against the platform's documented route tool, which reaches the routing
-// state through a different subsystem than netdoc does: the NetTCPIP CIM
-// provider on Windows, and /sbin/route on macOS. It covers the parts of a
-// decision a socket cannot show, above all the next hop and the route entry
-// that matched.
+// TestNativeRouteEvidenceMatchesTheHostRouteTool checks route existence,
+// interface, next hop, source where available, and matched prefix against the
+// platform's route tool. The observation is made before and after netdoc so a
+// legitimate route change is never mistaken for an adapter defect.
 func TestNativeRouteEvidenceMatchesTheHostRouteTool(t *testing.T) {
-	check := nativeIfaceCheck(t)
-	checked := 0
-	for _, r := range check.Routes {
-		if r.Unreachable {
-			continue
+	bin := buildNetdoc(t)
+	var check report.Check
+	var observed map[netip.Addr]hostRouteObservation
+	for attempt := 1; attempt <= nativeObservationAttempts; attempt++ {
+		before := hostRouteObservations(t)
+		check = nativeIfaceCheck(t, bin)
+		after := hostRouteObservations(t)
+		if reflect.DeepEqual(before, after) {
+			observed = after
+			break
 		}
-		checked++
-		t.Run(r.Destination, func(t *testing.T) {
-			dst := mustAddr(t, r.Destination)
-			host, found := hostRouteLookup(t, dst)
-			if !found {
+		t.Logf("%s route state changed during observation %d: before=%+v after=%+v", hostRouteTool, attempt, before, after)
+	}
+	if observed == nil {
+		t.Fatalf("%s route state did not stay stable across %d bounded observations", hostRouteTool, nativeObservationAttempts)
+	}
+
+	routes := referenceRoutes(t, check)
+	reachable := 0
+	for _, dst := range nativeReferenceDestinations {
+		r, host := routes[dst], observed[dst]
+		t.Run(dst.String(), func(t *testing.T) {
+			if host.Found == r.Unreachable {
+				if host.Found {
+					t.Fatalf("%s found a route to %s through %q, but netdoc reported no route", hostRouteTool, dst, host.Route.Iface)
+				}
 				t.Fatalf("%s found no route to %s, but netdoc reported one through %q", hostRouteTool, dst, r.Interface)
 			}
-			if host.Iface != r.Interface {
-				t.Errorf("%s routes %s through %q, netdoc reported %q", hostRouteTool, dst, host.Iface, r.Interface)
+			if !host.Found {
+				return
 			}
-			if got := parseAddr(r.Gateway); got != host.Gateway {
-				t.Errorf("%s reports next hop %v for %s, netdoc reported %q", hostRouteTool, host.Gateway, dst, r.Gateway)
+			reachable++
+			if host.Route.Iface != r.Interface {
+				t.Errorf("%s routes %s through %q, netdoc reported %q", hostRouteTool, dst, host.Route.Iface, r.Interface)
 			}
-			if host.Source.IsValid() && parseAddr(r.Source) != host.Source {
-				t.Errorf("%s selects source %v for %s, netdoc reported %q", hostRouteTool, host.Source, dst, r.Source)
+			if got := optionalReportedAddr(t, r.Gateway); got != host.Route.Gateway {
+				t.Errorf("%s reports next hop %v for %s, netdoc reported %q", hostRouteTool, host.Route.Gateway, dst, r.Gateway)
 			}
-			if host.Prefix.IsValid() && r.Prefix != "" && mustPrefix(t, r.Prefix) != host.Prefix {
-				t.Errorf("%s matched route entry %v for %s, netdoc reported %q", hostRouteTool, host.Prefix, dst, r.Prefix)
+			if host.Route.Source.IsValid() {
+				assertRouteToolSource(t, dst, r, host.Route.Source)
+			}
+			if !host.Route.Prefix.IsValid() {
+				t.Fatalf("%s returned no matched prefix for reachable destination %s", hostRouteTool, dst)
+			}
+			if got := mustPrefix(t, r.Prefix); got != host.Route.Prefix {
+				t.Errorf("%s matched route entry %v for %s, netdoc reported %q", hostRouteTool, host.Route.Prefix, dst, r.Prefix)
 			}
 		})
 	}
-	if checked == 0 {
+	if reachable == 0 {
 		t.Fatalf("no reachable reference route to check against %s: %+v", hostRouteTool, check.Routes)
 	}
 }
 
-// assertReportedSource holds netdoc's reported source address to the one the
-// kernel picked.
-//
-// IPv4 is asserted exactly. IPv6 is asserted one step weaker on purpose: a host
-// with privacy extensions sends from a temporary address while the route entry
-// names the interface's own address, and both answers are correct, so the claim
-// there is that netdoc named an address on the interface the kernel chose.
+func assertRouteToolSource(t *testing.T, dst netip.Addr, r report.Route, hostSource netip.Addr) {
+	t.Helper()
+	reported := mustAddr(t, r.Source)
+	if dst.Is4() {
+		if reported != hostSource {
+			t.Errorf("%s selects source %v for %s, netdoc reported %q", hostRouteTool, hostSource, dst, r.Source)
+		}
+		return
+	}
+	if holders := interfacesHolding(t, reported); !slices.Contains(holders, r.Interface) {
+		t.Errorf("netdoc reported IPv6 source %s for %s on %q, but that address is assigned to %v; %s selected %s",
+			reported, dst, r.Interface, holders, hostRouteTool, hostSource)
+	}
+}
+
+// IPv4 is asserted exactly. IPv6 is deliberately weaker because privacy
+// addressing can make a per-flow source differ from the stable interface
+// address a route entry reports; both must still belong to the selected link.
 func assertReportedSource(t *testing.T, r report.Route, kernel netip.Addr, owners []string) {
 	t.Helper()
 	if r.Source == "" {
-		// macOS omits RTAX_IFA from some replies, and netdoc reports unknown
-		// rather than inventing one. Nothing to hold it to.
-		t.Logf("netdoc reported no source address for %s; the kernel would use %s on %v", r.Destination, kernel, owners)
+		if runtime.GOOS == "windows" {
+			t.Errorf("netdoc omitted the source address GetBestRoute2 supplies for %s", r.Destination)
+		}
 		return
 	}
 	source := mustAddr(t, r.Source)
@@ -204,35 +237,59 @@ func assertReportedSource(t *testing.T, r report.Route, kernel netip.Addr, owner
 		return
 	}
 	if holders := interfacesHolding(t, source); !slices.Contains(holders, r.Interface) {
-		t.Errorf("netdoc reported source %s for %s on %q, but that address is assigned to %v",
-			source, r.Destination, r.Interface, holders)
+		t.Errorf("netdoc reported source %s for %s on %q, but that address is assigned to %v; kernel source %s is assigned to %v",
+			source, r.Destination, r.Interface, holders, kernel, owners)
 	}
 }
 
-// assertLinkKind holds netdoc's tunnel classification of the selected link to
-// the link's independently observed shape. Go's interface list is a different
-// read of the adapter than the one netdoc's platform code makes, so a Windows
-// interface type mapped to the wrong kind, or a macOS flag misread, surfaces as
-// the runner's ordinary NIC being reported as a VPN.
-func assertLinkKind(t *testing.T, r report.Route) {
+// The runner does not prove whether an Ethernet-shaped virtual adapter carries
+// a VPN, so this checks only the adapter contract: a selected real interface is
+// classified, and a claimed known tunnel names its operating-system kind.
+func assertLinkClassificationPresent(t *testing.T, r report.Route) {
 	t.Helper()
-	if r.Tunnel == "" {
-		t.Errorf("netdoc left the link kind of %q unclassified; %s reports enough about an adapter to classify it", r.Interface, runtime.GOOS)
-		return
+	switch r.Tunnel {
+	case "direct", "likely":
+		if r.TunnelKind != "" {
+			t.Errorf("netdoc reported tunnel=%q with unexpected kind %q on %q", r.Tunnel, r.TunnelKind, r.Interface)
+		}
+	case "tunnel":
+		if r.TunnelKind == "" {
+			t.Errorf("netdoc reported a known tunnel on %q without its operating-system kind", r.Interface)
+		}
+	default:
+		t.Errorf("netdoc left the selected link %q unclassified: tunnel=%q kind=%q", r.Interface, r.Tunnel, r.TunnelKind)
 	}
-	link, err := net.InterfaceByName(r.Interface)
-	if err != nil {
-		t.Fatalf("netdoc named interface %q, which the host does not have: %v", r.Interface, err)
+}
+
+func kernelRouteObservations(t *testing.T) map[netip.Addr]kernelRouteObservation {
+	t.Helper()
+	out := make(map[netip.Addr]kernelRouteObservation, len(nativeReferenceDestinations))
+	for _, dst := range nativeReferenceDestinations {
+		source, err := kernelEgressSource(t, dst)
+		if err != nil {
+			out[dst] = kernelRouteObservation{Err: err.Error()}
+			continue
+		}
+		owners := interfacesHolding(t, source)
+		sort.Strings(owners)
+		out[dst] = kernelRouteObservation{Source: source, Owners: owners}
 	}
-	if len(link.HardwareAddr) > 0 && link.Flags&net.FlagPointToPoint == 0 && r.Tunnel != "direct" {
-		t.Errorf("netdoc reported %q as tunnel=%q kind=%q; a link with hardware address %s that is not point to point carries no encapsulation of its own",
-			r.Interface, r.Tunnel, r.TunnelKind, link.HardwareAddr)
+	return out
+}
+
+func hostRouteObservations(t *testing.T) map[netip.Addr]hostRouteObservation {
+	t.Helper()
+	out := make(map[netip.Addr]hostRouteObservation, len(nativeReferenceDestinations))
+	for _, dst := range nativeReferenceDestinations {
+		route, found := hostRouteLookup(t, dst)
+		out[dst] = hostRouteObservation{Route: route, Found: found}
 	}
+	return out
 }
 
 // kernelEgressSource asks the operating system which local address it would
-// send to dst from. A datagram socket's connect() performs the stack's own
-// route lookup and source-address selection and transmits nothing.
+// use for dst. UDP connect performs route and source selection without writing
+// application data.
 func kernelEgressSource(t *testing.T, dst netip.Addr) (netip.Addr, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -248,15 +305,14 @@ func kernelEgressSource(t *testing.T, dst netip.Addr) (netip.Addr, error) {
 		return netip.Addr{}, fmt.Errorf("local address %v is not a UDP address", conn.LocalAddr())
 	}
 	addr, ok := netip.AddrFromSlice(local.IP)
-	if !ok {
-		return netip.Addr{}, fmt.Errorf("local address %v is not an IP", local.IP)
+	if !ok || addr.IsUnspecified() {
+		return netip.Addr{}, fmt.Errorf("connected socket selected invalid local address %v", local.IP)
 	}
 	return addr.Unmap().WithZone(""), nil
 }
 
-// interfacesHolding names every interface the address is assigned to. More than
-// one is not an error here: it is the ambiguity netdoc's own interface matching
-// has to cope with, and the tests assert membership rather than a single name.
+// interfacesHolding names every interface the address is assigned to. More
+// than one is kept as an explicit ambiguity rather than resolved by order.
 func interfacesHolding(t *testing.T, ip netip.Addr) []string {
 	t.Helper()
 	ifaces, err := net.Interfaces()
@@ -283,13 +339,47 @@ func interfacesHolding(t *testing.T, ip netip.Addr) []string {
 	return names
 }
 
-// nativeIfaceCheck runs the release-shaped binary for the interface row alone
-// and returns it. That row carries the run's reference route decisions, which
-// the operating system answers out of its own routing state, so this reaches no
-// network and no third party.
-func nativeIfaceCheck(t *testing.T) report.Check {
+func referenceRoutes(t *testing.T, check report.Check) map[netip.Addr]report.Route {
 	t.Helper()
-	got, _ := runNetdoc(t, "--json", "--check", "iface")
+	if len(check.Routes) != len(nativeReferenceDestinations) {
+		t.Fatalf("interface routes = %+v, want exactly the independently known reference destinations %v", check.Routes, nativeReferenceDestinations)
+	}
+	want := map[netip.Addr]bool{}
+	for _, dst := range nativeReferenceDestinations {
+		want[dst] = true
+	}
+	got := make(map[netip.Addr]report.Route, len(check.Routes))
+	for _, r := range check.Routes {
+		dst := mustAddr(t, r.Destination)
+		if !want[dst] {
+			t.Fatalf("interface row reported unexpected reference destination %s; want %v", dst, nativeReferenceDestinations)
+		}
+		if _, duplicate := got[dst]; duplicate {
+			t.Fatalf("interface row reported reference destination %s more than once", dst)
+		}
+		family := "ipv6"
+		if dst.Is4() {
+			family = "ipv4"
+		}
+		if r.Family != family {
+			t.Errorf("route to %s reports family %q, want %q", dst, r.Family, family)
+		}
+		got[dst] = r
+	}
+	for _, dst := range nativeReferenceDestinations {
+		if _, ok := got[dst]; !ok {
+			t.Fatalf("interface row omitted independently selected reference destination %s", dst)
+		}
+	}
+	return got
+}
+
+func nativeIfaceCheck(t *testing.T, bin string) report.Check {
+	t.Helper()
+	got, code := runNetdoc(t, bin, "--json", "--check", "iface")
+	if code != 0 {
+		t.Fatalf("netdoc exited %d for its interface-only run: %+v", code, got)
+	}
 	for _, check := range got.Checks {
 		if check.ID != "iface" {
 			continue
@@ -303,28 +393,29 @@ func nativeIfaceCheck(t *testing.T) report.Check {
 	return report.Check{}
 }
 
-// runNetdoc builds the release-shaped binary and runs it, returning the decoded
-// report and the exit code. A run whose checks did not all pass exits non-zero
-// and still prints a complete report, so the code is returned rather than
-// treated as a failure: these tests read evidence, not verdicts.
-func runNetdoc(t *testing.T, args ...string) (report.Report, int) {
+func buildNetdoc(t *testing.T) string {
 	t.Helper()
 	suffix := ""
 	if runtime.GOOS == "windows" {
 		suffix = ".exe"
 	}
 	bin := filepath.Join(t.TempDir(), "netdoc"+suffix)
-	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancelBuild()
-	build := exec.CommandContext(buildCtx, "go", "build", "-o", bin, ".")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build netdoc: %v\n%s", err, out)
 	}
+	return bin
+}
 
-	runCtx, cancelRun := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelRun()
-	cmd := exec.CommandContext(runCtx, bin, args...)
+// runNetdoc returns a complete JSON report even when a diagnosis exits 1.
+func runNetdoc(t *testing.T, bin string, args ...string) (report.Report, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	code := 0
@@ -332,6 +423,9 @@ func runNetdoc(t *testing.T, args ...string) (report.Report, int) {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
 			t.Fatalf("run netdoc %v: %v\n%s", args, err, stderr.String())
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("run netdoc %v did not finish: %v\nstdout: %s\nstderr: %s", args, ctx.Err(), stdout.String(), stderr.String())
 		}
 		code = exit.ExitCode()
 	}
@@ -342,33 +436,28 @@ func runNetdoc(t *testing.T, args ...string) (report.Report, int) {
 	return got, code
 }
 
-// mustAddr parses an address netdoc printed. A value that is not one is a
-// report defect, not a test setup problem.
 func mustAddr(t *testing.T, s string) netip.Addr {
 	t.Helper()
 	addr, err := netip.ParseAddr(s)
 	if err != nil {
-		t.Fatalf("netdoc reported %q, which is not an IP address: %v", s, err)
+		t.Fatalf("%q is not an IP address: %v", s, err)
 	}
 	return addr.Unmap().WithZone("")
+}
+
+func optionalReportedAddr(t *testing.T, s string) netip.Addr {
+	t.Helper()
+	if s == "" {
+		return netip.Addr{}
+	}
+	return mustAddr(t, s)
 }
 
 func mustPrefix(t *testing.T, s string) netip.Prefix {
 	t.Helper()
 	prefix, err := netip.ParsePrefix(s)
 	if err != nil {
-		t.Fatalf("netdoc reported route entry %q, which is not a prefix: %v", s, err)
+		t.Fatalf("%q is not an IP prefix: %v", s, err)
 	}
 	return prefix
-}
-
-// parseAddr reads an optional address field, answering the zero Addr for the
-// empty string netdoc uses to mean "none", and for anything unparseable, which
-// a comparison then reports as a mismatch.
-func parseAddr(s string) netip.Addr {
-	addr, err := netip.ParseAddr(s)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return addr.Unmap().WithZone("")
 }
