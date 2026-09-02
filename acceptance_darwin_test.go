@@ -57,6 +57,9 @@ func hostRouteLookup(t *testing.T, dst netip.Addr) (hostRoute, bool) {
 
 func darwinNoRouteOutput(out []byte) bool {
 	text := string(out)
+	if strings.Contains(text, "route: writing to routing socket: not in table") {
+		return true
+	}
 	for _, code := range []syscall.Errno{syscall.ESRCH, syscall.ENETDOWN, syscall.ENETUNREACH, syscall.EHOSTUNREACH} {
 		if strings.Contains(text, fmt.Sprintf("message indicates error %d:", code)) {
 			return true
@@ -177,7 +180,11 @@ destination: 2001:db8::7
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Prefix.String() != c.prefix || got.Gateway.String() != c.gateway || got.Iface == "" {
+			gateway := ""
+			if got.Gateway.IsValid() {
+				gateway = got.Gateway.String()
+			}
+			if got.Prefix.String() != c.prefix || gateway != c.gateway || got.Iface == "" {
 				t.Errorf("parsed route = %+v, want prefix %s gateway %s and an interface", got, c.prefix, c.gateway)
 			}
 		})
@@ -185,7 +192,8 @@ destination: 2001:db8::7
 	if _, err := parseDarwinRouteOutput(netip.MustParseAddr("1.1.1.1"), []byte("destination: 192.0.2.0\ninterface: en0\n")); err == nil {
 		t.Error("a non-host route without a mask was accepted")
 	}
-	if !darwinNoRouteOutput([]byte("route: message indicates error 51: Network is unreachable\n")) ||
+	if !darwinNoRouteOutput([]byte("route: writing to routing socket: not in table\n")) ||
+		!darwinNoRouteOutput([]byte("route: message indicates error 51: Network is unreachable\n")) ||
 		darwinNoRouteOutput([]byte("route: message indicates error 55: No buffer space available\n")) {
 		t.Error("no-route kernel errors were not separated from route-tool failures")
 	}
