@@ -1044,7 +1044,7 @@ func reconcileDNS(res map[ProbeID]ProbeResult) {
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
 	case system.Status == StatusPass && len(public.Addrs) > 0 && !answersAgree(system.Addrs, public.Addrs):
 		public.Status = StatusWarn
-		public.Detail = "answers point elsewhere; system: " + joinIPs(system.Addrs) + "; public " + public.resolver + ": " + joinIPs(public.Addrs) + " (split DNS may be intentional)"
+		public.Detail = "answers point elsewhere; system: " + joinIPs(system.Addrs) + " (" + allocationPrefixes(system.Addrs) + "); public " + public.resolver + ": " + joinIPs(public.Addrs) + " (" + allocationPrefixes(public.Addrs) + ") (split DNS may be intentional)"
 	case system.Status == StatusFail && len(public.Addrs) > 0:
 		system.Detail += ", but public DNS resolves it"
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
@@ -1099,6 +1099,30 @@ func routePrefix(ip net.IP) (netip.Prefix, bool) {
 	}
 	p, err := addr.Prefix(bits)
 	return p, err == nil
+}
+
+// allocationPrefixes reports the distinct RIR-allocation blocks (see
+// routePrefix) an answer set spans, sorted, as the operator-visible place its
+// addresses point to: e.g. "142.250.0.0/16, 2607:f8b0::/32". It exists only to
+// enrich the disagreement message, never to decide it. The verdict still
+// rests on answersAgree, and because it is derived from the same deterministic
+// prefix rule, a support artifact replays with identical text.
+func allocationPrefixes(ips []net.IP) string {
+	seen := map[netip.Prefix]struct{}{}
+	for _, ip := range ips {
+		if p, ok := routePrefix(ip); ok {
+			seen[p] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return "no public block"
+	}
+	prefixes := make([]string, 0, len(seen))
+	for p := range seen {
+		prefixes = append(prefixes, p.String())
+	}
+	slices.Sort(prefixes)
+	return strings.Join(prefixes, ", ")
 }
 
 // downgradeEgress rewrites a direct-egress failure to Warn once another path
