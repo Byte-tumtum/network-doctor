@@ -1044,7 +1044,7 @@ func reconcileDNS(res map[ProbeID]ProbeResult) {
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
 	case system.Status == StatusPass && len(public.Addrs) > 0 && !answersAgree(system.Addrs, public.Addrs):
 		public.Status = StatusWarn
-		public.Detail = "answers point elsewhere; system: " + joinIPs(system.Addrs) + " (" + allocationPrefixes(system.Addrs) + "); public " + public.resolver + ": " + joinIPs(public.Addrs) + " (" + allocationPrefixes(public.Addrs) + ") (split DNS may be intentional)"
+		public.Detail = "answers point elsewhere; system: " + joinIPs(system.Addrs) + " (" + comparisonPrefixes(system.Addrs) + "); public " + public.resolver + ": " + joinIPs(public.Addrs) + " (" + comparisonPrefixes(public.Addrs) + ") (split DNS may be intentional)"
 	case system.Status == StatusFail && len(public.Addrs) > 0:
 		system.Detail += ", but public DNS resolves it"
 		system.Fix = "check the configured resolver, VPN, or DNS filter"
@@ -1101,13 +1101,15 @@ func routePrefix(ip net.IP) (netip.Prefix, bool) {
 	return p, err == nil
 }
 
-// allocationPrefixes reports the distinct RIR-allocation blocks (see
-// routePrefix) an answer set spans, sorted, as the operator-visible place its
-// addresses point to: e.g. "142.250.0.0/16, 2607:f8b0::/32". It exists only to
-// enrich the disagreement message, never to decide it. The verdict still
-// rests on answersAgree, and because it is derived from the same deterministic
-// prefix rule, a support artifact replays with identical text.
-func allocationPrefixes(ips []net.IP) string {
+// comparisonPrefixes reports the distinct prefixes an answer set masks down
+// to under routePrefix, sorted: e.g. "142.250.0.0/16, 2607:f8b0::/32". These
+// are the values answersAgree compares, nothing more: they name no RIR
+// allocation, ASN, or operator, and say nothing about public routability. The
+// function exists only to show the reader what the comparison saw, never to
+// decide it. The verdict still rests on answersAgree, and because the text is
+// derived from the same deterministic masking, a support artifact replays with
+// identical text.
+func comparisonPrefixes(ips []net.IP) string {
 	seen := map[netip.Prefix]struct{}{}
 	for _, ip := range ips {
 		if p, ok := routePrefix(ip); ok {
@@ -1115,7 +1117,7 @@ func allocationPrefixes(ips []net.IP) string {
 		}
 	}
 	if len(seen) == 0 {
-		return "no public block"
+		return "no comparison prefix"
 	}
 	prefixes := make([]string, 0, len(seen))
 	for p := range seen {
