@@ -31,6 +31,7 @@ complete -c netdoc -o via -l via -r -f \
     -d 'Run remotely, or provide side B for live two-sided diagnosis'
 complete -c netdoc -o check -l check -r -d 'Run stable probe IDs (comma-separated; repeatable)'
 complete -c netdoc -o skip -l skip -r -d 'Skip stable probe IDs (comma-separated; repeatable)'
+complete -c netdoc -o no-reference-egress -l no-reference-egress -d "Don't contact netdoc's own built-in reference services"
 complete -c netdoc -o no-history -l no-history -d "Don't read or write the saved target history"
 complete -c netdoc -o version -l version -d 'Print version and exit'
 complete -c netdoc -s h -o help -l help -d 'Print usage and exit'

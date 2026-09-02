@@ -74,6 +74,7 @@ _netdoc() {
         -via --via
         -check --check
         -skip --skip
+        -no-reference-egress --no-reference-egress
         -iface --iface
         -public-dns --public-dns
         -no-history --no-history

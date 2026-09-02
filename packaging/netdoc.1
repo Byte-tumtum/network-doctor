@@ -458,6 +458,30 @@ harmless: it selects no row with
 and changes nothing with
 .BR \-skip .
 .TP
+.B \-no-reference-egress
+Make no connections to netdoc's own built-in reference services. The fixed
+internet reference addresses, the captive-portal observation points, the
+built-in second-opinion resolver, the fixed QUIC endpoint, the encrypted-DNS
+provider, the proxy tunnel's compiled-in destination, and the compiled-in
+hostname a targetless run would otherwise resolve are all removed from the
+probe DAG, along with any check that depended on one.
+.IP
+This is not an offline switch. The target you named is still resolved and
+connected to, the endpoints of an explicitly selected
+.B \-profile
+are still contacted, this machine's configured resolver and routing table are
+still used, and a
+.B \-via
+destination is still reached; the remote run then applies the same policy. A
+resolver you name with
+.B \-public-dns
+is your choice rather than netdoc's, so that check still runs; without it the
+automatic second opinion does not. Combining this flag with a
+.B \-check
+that names one of the removed probes is a usage error rather than a silent
+override, and exits
+.BR 2 .
+.TP
 .BI \-iface " name\fR|\fPaddress"
 Bind probe traffic to an interface name or to an exact local IP address, so
 the checks follow a specific link (a VPN tunnel, a second NIC) rather than the

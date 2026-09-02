@@ -252,6 +252,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var checks, skips probeList
 	fs.Var(&checks, "check", "run stable probe IDs in `probe[,probe...]` form; repeatable")
 	fs.Var(&skips, "skip", "skip stable probe IDs in `probe[,probe...]` form; repeatable")
+	noReferenceEgress := fs.Bool("no-reference-egress", false, "make no connections to netdoc's own built-in reference services; the target, profile endpoints, and this machine's configured DNS and routing still apply")
 	noHistory := fs.Bool("no-history", false, "don't read or write the saved target history")
 	keys := fs.String("keys", "", "keybinding `preset` for the TUI: "+strings.Join(ui.KeyPresets(), " or "))
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -363,7 +364,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if peerMode {
 		setFlags := setFlagNames(fs)
-		for _, name := range []string{"toolbox", "watch", "profile", "check", "skip", "public-dns", "no-history", "keys", "save", "support", "via"} {
+		for _, name := range []string{"toolbox", "watch", "profile", "check", "skip", "no-reference-egress", "public-dns", "no-history", "keys", "save", "support", "via"} {
 			if setFlags[name] {
 				fmt.Fprintf(stderr, "netdoc: -%s cannot be combined with peer mode\n", name)
 				return 2
@@ -497,6 +498,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 		t = parsed
 	}
 	selection := diagnostic.ProbeSelection{Check: checks.set(), Skip: skips.set()}
+	if *noReferenceEgress {
+		// Resolved once, against the shape this invocation has: which rows are
+		// built-in reference egress depends on whether a target was named, and
+		// on whether the second-opinion resolver was.
+		reference := diagnostic.ReferenceEgressProbes(t != nil || profilePlan != nil, !publicDNSAuto)
+		// The safety property is absolute, so a selector that asks for one of
+		// these is a contradiction rather than a later word that wins. Refused
+		// before a probe runs, and named, so it is clear which half to drop.
+		for _, id := range reference {
+			if _, requested := selection.Check[id]; requested {
+				fmt.Fprintf(stderr, "netdoc: -check %s runs a built-in reference service, which -no-reference-egress forbids; drop one of the two\n", id)
+				return 2
+			}
+		}
+		// Lowered into the ordinary skip list, so the settings that describe
+		// this run already carry it: the snapshot records it, and a --via
+		// worker honors it without needing to know the flag exists.
+		skips = append(skips, reference...)
+		selection.Skip = skips.set()
+		// That list is right for the run as invoked, and the TUI can restart
+		// on a target the command line never saw, which changes which rows are
+		// reference rows. From here on the graph's own marks decide.
+		selection.NoReferenceEgress = true
+	}
 	if err := selection.Validate(); err != nil {
 		fmt.Fprintln(stderr, "netdoc:", err)
 		return 2
@@ -784,7 +809,7 @@ func setFlagNames(fs *flag.FlagSet) map[string]bool {
 // something.
 var artifactReadingFlags = []string{
 	"toolbox", "watch", "save", "support", "peer-listen", "peer-connect", "via",
-	"profile", "check", "skip", "iface", "public-dns", "no-history", "keys", "timeout",
+	"profile", "check", "skip", "no-reference-egress", "iface", "public-dns", "no-history", "keys", "timeout",
 }
 
 // Live two-sided mode performs one ordinary run per machine. Probe settings
@@ -1173,6 +1198,9 @@ func runProfilePass(ctx context.Context, base headless, plan profile.Plan) (prof
 		h := base
 		h.target = spec.Target
 		h.selection, h.check = profileSelection(spec, base.check, base.skip)
+		// A profile composes its own selection per component. The run-wide
+		// reference-egress decision is not a component's to drop.
+		h.selection.NoReferenceEgress = base.selection.NoReferenceEgress
 		outputs[i] = diagnoseHeadless(ctx, h)
 	}
 	if base.via != "" {

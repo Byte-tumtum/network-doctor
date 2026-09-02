@@ -2,6 +2,7 @@ package diagnostic
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 )
@@ -10,6 +11,18 @@ import (
 type ProbeSelection struct {
 	Check map[ProbeID]struct{}
 	Skip  map[ProbeID]struct{}
+	// NoReferenceEgress drops every node the graph marked as built-in
+	// reference egress, and with it, through the same closure Skip already
+	// walks, everything that depended on one.
+	//
+	// It is a flag rather than a set of IDs because which IDs those are is a
+	// property of the run: a DNS row asked about the user's target is not the
+	// row that resolves a compiled-in name because there is no target. The
+	// graph that was built is what knows, so this reads Probe.Reference rather
+	// than a list resolved somewhere else and possibly for another run. That
+	// matters in the TUI, where a target switch rebuilds the graph in a shape
+	// the command line never saw.
+	NoReferenceEgress bool
 }
 
 // Validate rejects IDs that are not stable nodes in any normal probe DAG.
@@ -67,7 +80,19 @@ func selectableProbeIDs() []ProbeID {
 // actual dependency closure; Skip removes a node and every node that can no
 // longer satisfy its dependencies.
 func (s ProbeSelection) Apply(probes []Probe) []Probe {
-	if len(s.Check) == 0 && len(s.Skip) == 0 {
+	skip := s.Skip
+	// Folded into the skip set rather than filtered separately, so a reference
+	// row removes its dependents exactly the way an explicit --skip does.
+	if s.NoReferenceEgress {
+		skip = make(map[ProbeID]struct{}, len(s.Skip)+len(probes))
+		maps.Copy(skip, s.Skip)
+		for _, p := range probes {
+			if p.Reference {
+				skip[p.ID] = struct{}{}
+			}
+		}
+	}
+	if len(s.Check) == 0 && len(skip) == 0 {
 		return probes
 	}
 	byID := make(map[ProbeID]Probe, len(probes))
@@ -101,7 +126,7 @@ func (s ProbeSelection) Apply(probes []Probe) []Probe {
 			}
 		}
 	}
-	for id := range s.Skip {
+	for id := range skip {
 		delete(keep, id)
 	}
 

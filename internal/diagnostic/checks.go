@@ -199,6 +199,12 @@ type Probe struct {
 	Name string
 	Deps []ProbeID
 	Run  func(ctx context.Context, deps map[ProbeID]ProbeResult) ProbeResult
+	// Reference marks a node whose traffic goes to Network Doctor's own
+	// built-in reference infrastructure rather than to anything the user or
+	// this machine's configuration named. reference_policy.go decides it, for
+	// the shape of the run the graph was built for, and ProbeSelection drops
+	// the marked nodes when the run asked for no reference egress.
+	Reference bool
 }
 
 // DefaultProbeTimeout bounds a single probe when the caller names no other
@@ -556,10 +562,22 @@ func cleanResult(r ProbeResult) ProbeResult {
 	return r
 }
 
-// buildProbes assembles the DAG. publicDNS is the second-opinion resolver;
+// buildProbes assembles the DAG and marks which of its nodes are built-in
+// reference egress. The mark is applied here, over the finished graph, so
+// there is one place a new probe has to pass through to acquire it, and so it
+// is decided against the shape of the run the graph was actually built for.
+func (o *netops) buildProbes(t *Target, publicDNS string, publicDNSAuto bool) []Probe {
+	probes := o.buildProbeGraph(t, publicDNS, publicDNSAuto)
+	for i := range probes {
+		probes[i].Reference = referenceEgress(probes[i].ID, t != nil, !publicDNSAuto)
+	}
+	return probes
+}
+
+// buildProbeGraph assembles the DAG. publicDNS is the second-opinion resolver;
 // "" leaves the row out entirely rather than emitting a skipped one, and
 // publicDNSAuto lets an unnamed one cross to the other address family.
-func (o *netops) buildProbes(t *Target, publicDNS string, publicDNSAuto bool) []Probe {
+func (o *netops) buildProbeGraph(t *Target, publicDNS string, publicDNSAuto bool) []Probe {
 	publicDNSResolvers := PublicDNSCandidates(publicDNS, publicDNSAuto)
 	// The interface row carries the run's reference paths: where traffic to
 	// the general Internet goes, per family. Every other route decision in the
