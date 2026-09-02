@@ -7,12 +7,20 @@ the result with `case.json`. It is a data-only path: it builds no probes, opens
 no sockets, resolves no names, and reads nothing about the host it runs on, so
 it produces the same answer on a machine with no network at all.
 
-The Linux simulator and this corpus cover different boundaries:
+The Linux simulator, the native acceptance lane, and this corpus cover
+different boundaries:
 
 * The simulator tests network mechanics and probe behavior against controlled
   broken networks.
+* Native macOS and Windows acceptance tests the per-OS adapters against the
+  operating system's own answers, on hosts the simulator cannot model.
 * Field replay tests current diagnostic reasoning against evidence observed in
   an earlier run.
+
+None of the three replaces real-network field validation. A VPN tunnel, a
+captive portal, split DNS under routing policy, an IPv6-only or DNS64/NAT64
+network, live LAN DNS-SD devices, and a proxy-only managed network are all
+outside what CI can manufacture, which is why this corpus exists at all.
 
 The `bootstrap-*` cases are synthetic fixtures generated from typed in-memory
 observations. They prove the harness while the real-network corpus is empty.

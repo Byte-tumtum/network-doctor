@@ -46,9 +46,13 @@ jobs:
           go test -covermode=set -coverprofile=coverage/unit.out ./...
       - if: runner.os != 'Linux'
         run: go test -tags integration ./internal/diagnostic ./internal/peer ./internal/simulation
+      # Required gate on both native hosts: it holds the built binary's route,
+      # interface, and source-address evidence to what Windows and macOS
+      # themselves report, which is the one thing the Linux simulator cannot
+      # check. -count=1 because a cached result would not have touched the host.
       - if: runner.os != 'Linux'
         name: Run native OS acceptance tests
-        run: go test -tags acceptance -run '^TestNative' . ./internal/ui
+        run: go test -tags acceptance -count=1 -run '^TestNative' . ./internal/ui
       - if: runner.os == 'Linux'
         name: Run loopback integration tests with coverage
         run: go test -covermode=set -coverprofile=coverage/integration.out -tags integration ./internal/diagnostic ./internal/peer ./internal/simulation

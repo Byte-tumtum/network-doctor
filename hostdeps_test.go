@@ -27,6 +27,10 @@ var optInTags = map[string]bool{
 	"integration":       true,
 	"netns_integration": true,
 	"container":         true,
+	// Native acceptance is the one lane whose whole purpose is the host: it
+	// runs the built binary against the real Windows or macOS stack and checks
+	// it against that stack's own answers. `go test ./...` never builds it.
+	"acceptance": true,
 }
 
 // hostCalls names the calls that reach the machine running the test. It is

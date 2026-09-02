@@ -381,7 +381,7 @@ go vet ./...
 CGO_ENABLED=0 go build ./...
 go test ./...
 go test -tags integration ./internal/diagnostic ./internal/peer ./internal/simulation
-go test -tags acceptance -run '^TestNative' . ./internal/ui
+go test -tags acceptance -count=1 -run '^TestNative' . ./internal/ui
 go test -tags netns_integration -count=1 -v ./internal/simulation
 go test -race ./...
 go test -race -tags integration ./internal/diagnostic ./internal/peer ./internal/simulation
@@ -433,9 +433,31 @@ namespaces; they never need root. That gate keeps `-v` because a skipped run and
 a real one both print just `ok` otherwise, and `-count=1` because a cached
 result would not have exercised any namespace at all.
 
-The `acceptance` command has tests only on macOS and Windows. CI runs it on both
-native hosts to exercise the built `netdoc` binary against loopback and to run
-the platform's built-in route, socket, and ping drill-down commands.
+The `acceptance` command has tests only on macOS and Windows, and CI runs it on
+both native hosts. It builds the release-shaped `netdoc` and holds its native
+route evidence to observations the binary did not produce: the source address
+the kernel selects for a connected datagram socket, and the platform's own route
+tool, `Find-NetRoute` on Windows and `/sbin/route` on macOS. It also exercises
+loopback and the built-in route, socket, and ping drill-down commands. Nothing
+there sends traffic, because a route lookup and a connected UDP socket are both
+local decisions. It keeps `-count=1` so a cached result can never stand in for a
+run that actually touched the host.
+
+Three layers of evidence sit behind a release, and none of them substitutes for
+another:
+
+- **Deterministic tests and the Linux namespace simulator** prove the diagnosis
+  engine against controlled topologies. They prove nothing about whether the
+  Windows or macOS adapter reads its own operating system correctly.
+- **Native macOS and Windows acceptance** proves that reading, for the semantics
+  a GitHub-hosted runner genuinely exposes: which interface and source address
+  the stack selects for a routed destination, the next hop and route entry
+  behind it, and the kind of link the selected interface is.
+- **Field validation on real networks** is the only evidence for what CI cannot
+  manufacture: a real VPN tunnel, a captive portal, split DNS under enterprise
+  or VPN routing policy, an IPv6-only or DNS64/NAT64 network, live LAN DNS-SD
+  devices, and a managed proxy-only network. Those stay open as field-validation
+  issues, and a green CI run never closes one.
 
 ## Development
 
